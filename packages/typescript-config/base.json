@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -11,7 +12,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["bun-types"]
-  },
-  "exclude": ["node_modules", "**/node_modules", "**/dist", "**/.turbo"]
+    "declaration": true,
+    "declarationMap": true,
+    "verbatimModuleSyntax": true
+  }
 }
