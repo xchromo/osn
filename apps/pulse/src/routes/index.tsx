@@ -1,5 +1,4 @@
 import { createResource, For, Show } from "solid-js";
-import "./App.css";
 
 type Event = {
   id: string;
@@ -70,7 +69,7 @@ function EventCard(props: { event: Event }) {
   );
 }
 
-export default function App() {
+export default function Home() {
   const [events] = createResource(fetchEvents);
 
   return (
