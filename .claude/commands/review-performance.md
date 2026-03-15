@@ -25,6 +25,11 @@ Read all changed source files in the affected workspaces and examine them for th
 - **Turbo cache misses** — overly broad `outputs` globs or missing `inputs` declarations in `turbo.json` tasks that cause unnecessary re-runs
 - **Redundant build steps** — tasks that duplicate work already handled by a dependent task in the pipeline
 
+## Changesets
+
+- An **empty changeset** (frontmatter fences only, no package entries) is correct and expected when the branch contains only CI/infra changes (`.claude/`, `.github/`, `turbo.json`, `lefthook.yml`, root `package.json`, `.changeset/` itself). Do not flag this as an issue.
+- Only flag a missing or empty changeset as a concern if workspace package source files were also changed.
+
 ---
 
 Report findings as a prioritised list using these labels:
