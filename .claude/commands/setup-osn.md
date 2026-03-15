@@ -84,7 +84,37 @@ The `gh` CLI is used by `/prep-pr` to open pull requests and by `/new-feat` to c
 
 ---
 
-## Step 6 — Git configuration
+## Step 6 — SSH signing key
+
+Git supports SSH keys for commit signing (simpler than GPG). Check and configure it before applying git config.
+
+1. **Check for an existing SSH key**: run `ls ~/.ssh/*.pub`. If none exist, generate one:
+   ```
+   ssh-keygen -t ed25519 -C "your@email.com"
+   ```
+
+2. **Add the public key to GitHub as a signing key** — this is separate from your auth key:
+   - Go to **GitHub → Settings → SSH and GPG keys → New SSH key**
+   - Set **Key type** to **Signing Key**
+   - Paste the contents of `~/.ssh/id_ed25519.pub` (or whichever key you chose)
+
+3. **Configure git to use SSH for signing**:
+   ```
+   git config --global gpg.format ssh
+   git config --global user.signingkey ~/.ssh/id_ed25519.pub
+   ```
+
+4. **Set up an allowed signers file** for local verification:
+   ```
+   echo "$(git config --global user.email) namespaces=\"git\" $(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
+   git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+   ```
+
+Once configured, the `commit.gpgsign` setting in the next step will sign all commits with your SSH key.
+
+---
+
+## Step 6b — Git configuration
 
 Check and apply the following recommended git settings. For each one, run the check command — if it is not already set, show the user what it does and ask whether to apply it. Apply all confirmed settings with `git config --global`.
 
@@ -93,8 +123,9 @@ Check and apply the following recommended git settings. For each one, run the ch
 | `rerere.enabled` | `git config --global rerere.enabled` | `git config --global rerere.enabled true` | Records how you resolve merge conflicts and replays the same resolution automatically next time — saves time on long-lived feature branches |
 | `push.autoSetupRemote` | `git config --global push.autoSetupRemote` | `git config --global push.autoSetupRemote true` | Makes `git push` work on new branches without needing `-u origin HEAD` every time |
 | `pull.rebase` | `git config --global pull.rebase` | `git config --global pull.rebase false` | Uses merge (not rebase) on `git pull`, keeping history straightforward and avoiding accidental rebase surprises |
+| `commit.gpgsign` | `git config --global commit.gpgsign` | `git config --global commit.gpgsign true` | Signs all commits with your GPG key — required for verified commits on GitHub |
 
-After applying, confirm by running `git config --global --list | grep -E 'rerere|push.auto|pull.rebase'`.
+After applying, confirm by running `git config --global --list | grep -E 'rerere|push.auto|pull.rebase|gpgsign'`.
 
 ---
 
