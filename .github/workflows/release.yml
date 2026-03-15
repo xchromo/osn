@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,12 +29,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Version packages
-        run: bun run version
-
-      - name: Commit and push if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git diff --quiet && git diff --staged --quiet || \
-            (git add -A && git commit -m "chore: version packages" && git push)
+      - name: Create Release PR or publish
+        uses: changesets/action@v1
+        with:
+          version: bun run version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
