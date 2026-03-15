@@ -106,7 +106,7 @@ Git supports SSH keys for commit signing (simpler than GPG). Check and configure
 
 4. **Set up an allowed signers file** for local verification:
    ```
-   echo "$(git config --global user.email) namespaces=\"git\" $(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
+   printf '%s namespaces="git" %s\n' "$(git config --global user.email)" "$(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
    git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
    ```
 
