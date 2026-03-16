@@ -12,9 +12,7 @@
     "db:migrate": "bunx drizzle-kit generate",
     "db:push": "bunx drizzle-kit push",
     "db:studio": "bunx drizzle-kit studio",
-    "check": "tsc --noEmit",
-    "test": "bunx --bun vitest",
-    "test:run": "bunx --bun vitest run"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@utils/db": "workspace:*",
