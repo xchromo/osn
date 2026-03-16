@@ -28,6 +28,7 @@ packages/
   api/                 # ✓ Elysia + Eden
   osn-db/              # ✓ @osn/db — Drizzle + SQLite (OSN Core: users, sessions, passkeys)
   pulse-db/            # ✓ @pulse/db — Drizzle + SQLite (Pulse: events, RSVPs)
+  utils-db/            # ✓ @utils/db — shared DB utilities (createDrizzleClient, makeDbLive)
   ui/                  # ✓ Placeholder (shared components)
   core/                # ✓ Placeholder (shared business logic)
   crypto/              # ✓ Placeholder (Signal protocol)
