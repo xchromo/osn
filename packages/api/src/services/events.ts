@@ -26,6 +26,17 @@ const DateFromISOString = Schema.transform(ValidDateString, Schema.DateFromSelf,
   encode: (d) => d.toISOString(),
 });
 
+const ValidUrl = Schema.String.pipe(
+  Schema.filter((s) => {
+    try {
+      new URL(s);
+      return true;
+    } catch {
+      return false;
+    }
+  }),
+);
+
 const InsertEventSchema = Schema.Struct({
   title: Schema.NonEmptyString,
   description: Schema.optional(Schema.String),
@@ -35,7 +46,7 @@ const InsertEventSchema = Schema.Struct({
   startTime: DateFromISOString,
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
-  imageUrl: Schema.optional(Schema.String),
+  imageUrl: Schema.optional(ValidUrl),
 });
 
 const UpdateEventSchema = Schema.Struct({
@@ -47,7 +58,7 @@ const UpdateEventSchema = Schema.Struct({
   startTime: Schema.optional(DateFromISOString),
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
-  imageUrl: Schema.optional(Schema.String),
+  imageUrl: Schema.optional(ValidUrl),
 });
 
 interface ListEventsParams {
