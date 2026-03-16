@@ -41,20 +41,19 @@ it.effect("getEvent fails with EventNotFound for unknown id", () =>
 it.effect("listEvents returns empty list when no events", () =>
   provide(
     Effect.gen(function* () {
-      const events = yield* listEvents({ upcoming: "false" });
+      const events = yield* listEvents({});
       expect(events).toEqual([]);
     }),
   ),
 );
 
-it.effect("listEvents returns future events by default", () =>
+it.effect("listEvents returns all events regardless of time", () =>
   provide(
     Effect.gen(function* () {
       yield* createEvent({ title: "Future", startTime: FUTURE });
       yield* createEvent({ title: "Past", startTime: PAST });
       const events = yield* listEvents({});
-      expect(events.length).toBe(1);
-      expect(events[0]!.title).toBe("Future");
+      expect(events.length).toBe(2);
     }),
   ),
 );
@@ -64,7 +63,7 @@ it.effect("listEvents filters by status", () =>
     Effect.gen(function* () {
       yield* createEvent({ title: "Upcoming Event", startTime: FUTURE });
       yield* createEvent({ title: "Ongoing Event", startTime: STARTED });
-      const events = yield* listEvents({ upcoming: "false", status: "ongoing" });
+      const events = yield* listEvents({ status: "ongoing" });
       expect(events.length).toBe(1);
       expect(events[0]!.title).toBe("Ongoing Event");
     }),
@@ -272,7 +271,7 @@ it.effect("listEvents returns transitioned statuses", () =>
   provide(
     Effect.gen(function* () {
       yield* createEvent({ title: "Started", startTime: STARTED });
-      const results = yield* listEvents({ upcoming: "false" });
+      const results = yield* listEvents({});
       const started = results.find((e) => e.title === "Started");
       expect(started?.status).toBe("ongoing");
     }),

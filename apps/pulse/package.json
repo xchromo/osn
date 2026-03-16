@@ -1,6 +1,6 @@
 {
   "name": "@osn/pulse",
-  "version": "0.0.2",
+  "version": "0.1.1",
   "private": true,
   "description": "Pulse - Events platform for OSN",
   "type": "module",
@@ -16,6 +16,7 @@
   "license": "GPL-3.0",
   "dependencies": {
     "@osn/api": "workspace:*",
+    "@osn/client": "workspace:*",
     "@osn/core": "workspace:*",
     "@osn/ui": "workspace:*",
     "@tailwindcss/vite": "^4.2.1",
