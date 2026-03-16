@@ -63,19 +63,26 @@ function LocationInput(props: { value: string; onValue: (v: string) => void }) {
       setOpen(false);
       return;
     }
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
           `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=en`,
+          { signal: controller.signal },
         );
         const json = (await res.json()) as { features: PhotonFeature[] };
         setSuggestions(json.features ?? []);
         setOpen(json.features.length > 0);
-      } catch {
-        // ignore fetch errors silently
+      } catch (err) {
+        if (!(err instanceof Error && err.name === "AbortError")) {
+          // ignore non-abort fetch errors silently
+        }
       }
     }, 300);
-    onCleanup(() => clearTimeout(timer));
+    onCleanup(() => {
+      clearTimeout(timer);
+      controller.abort();
+    });
   });
 
   function select(feature: PhotonFeature) {
@@ -207,7 +214,7 @@ function CreateEventForm(props: { onSuccess: () => void; onCancel: () => void })
             class={`rounded-md border px-3 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring bg-background ${endTimeError() ? "border-destructive" : "border-input"}`}
           />
           <Show when={endTimeError()}>
-            <p class="text-xs text-destructive">{endTimeError()}</p>
+            {(err) => <p class="text-xs text-destructive">{err()}</p>}
           </Show>
         </div>
       </div>
@@ -284,7 +291,9 @@ function EventCard(props: { event: EventItem; onDelete: (id: string) => void }) 
         </div>
         <div class="mt-3 flex justify-end">
           <button
-            onClick={() => props.onDelete(e.id)}
+            onClick={() => {
+              if (confirm(`Delete "${e.title}"?`)) props.onDelete(e.id);
+            }}
             class="text-xs text-destructive hover:text-destructive/80"
           >
             Delete
@@ -303,7 +312,8 @@ export default function App() {
     api
       .events({ id })
       .delete()
-      .then(() => refetch());
+      .then(() => refetch())
+      .catch((err) => console.error("Failed to delete event:", err));
   }
 
   function handleFormSuccess() {
