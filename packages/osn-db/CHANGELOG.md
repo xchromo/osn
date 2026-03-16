@@ -1,4 +1,4 @@
-# @osn/api
+# @osn/db
 
 ## 0.2.1
 
@@ -14,26 +14,6 @@
 
 ### Patch Changes
 
+- 880e762: Add `@utils/db` package (`packages/utils-db`) with shared database utilities — `createDrizzleClient` and `makeDbLive` — eliminating boilerplate duplication between `@osn/db` and `@pulse/db`. Both db packages now delegate client creation and Layer setup to `@utils/db`. Also removes the unused singleton `client.ts` export from both db packages.
 - Updated dependencies [880e762]
-- Updated dependencies [880e762]
-  - @pulse/db@0.2.0
-
-## 0.1.1
-
-### Patch Changes
-
-- 51abbcc: Add events CRUD UI to Pulse: create-event form with validation, location autocomplete via Photon (Komoot), delete support, Eden typed API client replacing raw fetch, shadcn design tokens, and fix for newly created events not appearing in the list due to datetime truncation.
-- Updated dependencies [51abbcc]
-  - @osn/db@0.1.1
-
-## 0.1.0
-
-### Minor Changes
-
-- efcf464: Apply auto transition for event lifecycle
-- 96c406d: Added testing framework
-
-### Patch Changes
-
-- Updated dependencies [96c406d]
-  - @osn/db@0.1.0
+  - @utils/db@0.2.0
