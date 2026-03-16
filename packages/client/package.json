@@ -5,11 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./solid": "./src/solid/index.ts",
-    "./react": "./src/react/index.ts"
+    "./solid": "./src/solid/index.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc -p tsconfig.react.json --noEmit",
+    "check": "tsc --noEmit",
     "test": "bunx --bun vitest",
     "test:run": "bunx --bun vitest run"
   },
@@ -18,18 +17,11 @@
     "valibot": "^1.0.0"
   },
   "peerDependencies": {
-    "react": ">=18.0.0",
     "solid-js": ">=1.0.0"
-  },
-  "peerDependenciesMeta": {
-    "react": { "optional": true },
-    "solid-js": { "optional": true }
   },
   "devDependencies": {
     "@effect/vitest": "^0.27.0",
     "@osn/typescript-config": "workspace:*",
-    "@types/react": "^18.0.0",
-    "react": "^18.0.0",
     "solid-js": "^1.9.3",
     "vitest": "^4.0.18"
   }
