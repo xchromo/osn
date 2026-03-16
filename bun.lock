@@ -55,11 +55,10 @@
       "dependencies": {
         "@elysiajs/cors": "^1.4.0",
         "@elysiajs/eden": "^1.2.0",
-        "@osn/db": "workspace:*",
+        "@pulse/db": "workspace:*",
         "drizzle-orm": "^0.38.0",
         "effect": "^3.19.19",
         "elysia": "^1.2.0",
-        "valibot": "^1.0.0",
       },
       "devDependencies": {
         "@effect/vitest": "^0.27.0",
@@ -105,9 +104,28 @@
         "@osn/typescript-config": "workspace:*",
       },
     },
-    "packages/db": {
+    "packages/osn-db": {
       "name": "@osn/db",
       "version": "0.1.0",
+<<<<<<< HEAD
+=======
+      "dependencies": {
+        "drizzle-orm": "^0.38.0",
+        "effect": "^3.19.19",
+      },
+      "devDependencies": {
+        "@effect/vitest": "^0.27.0",
+        "@osn/typescript-config": "workspace:*",
+        "@types/better-sqlite3": "^7.6.13",
+        "better-sqlite3": "^12.5.0",
+        "drizzle-kit": "^0.30.0",
+        "vitest": "^4.0.18",
+      },
+    },
+    "packages/pulse-db": {
+      "name": "@pulse/db",
+      "version": "0.1.0",
+>>>>>>> 4fb0c28 (refactor: split db into osn-db + pulse-db, replace Valibot with Effect Schema)
       "dependencies": {
         "drizzle-orm": "^0.38.0",
         "effect": "^3.19.19",
@@ -397,7 +415,7 @@
 
     "@osn/crypto": ["@osn/crypto@workspace:packages/crypto"],
 
-    "@osn/db": ["@osn/db@workspace:packages/db"],
+    "@osn/db": ["@osn/db@workspace:packages/osn-db"],
 
     "@osn/landing": ["@osn/landing@workspace:apps/landing"],
 
@@ -440,6 +458,8 @@
     "@oxlint/win32-x64": ["@oxlint/win32-x64@0.16.12", "", { "os": "win32", "cpu": "x64" }, "sha512-Ae1fx7wmAcMVqzS8rLINaFRpAdh29QzHh133bEYMHzfWBYyK/hLu9g4GLwC/lEIVQu9884b8qutGfdOk6Qia3w=="],
 
     "@petamoriken/float16": ["@petamoriken/float16@3.9.3", "", {}, "sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g=="],
+
+    "@pulse/db": ["@pulse/db@workspace:packages/pulse-db"],
 
     "@rollup/pluginutils": ["@rollup/pluginutils@5.3.0", "", { "dependencies": { "@types/estree": "^1.0.0", "estree-walker": "^2.0.2", "picomatch": "^4.0.2" }, "peerDependencies": { "rollup": "^1.20.0||^2.0.0||^3.0.0||^4.0.0" }, "optionalPeers": ["rollup"] }, "sha512-5EdhGZtnu3V88ces7s53hhfK5KSASnJZv8Lulpc04cWO3REESroJXg73DFsOmgbU2BhwV0E20bu2IDZb3VKW4Q=="],
 
@@ -1472,8 +1492,6 @@
     "update-browserslist-db": ["update-browserslist-db@1.2.3", "", { "dependencies": { "escalade": "^3.2.0", "picocolors": "^1.1.1" }, "peerDependencies": { "browserslist": ">= 4.21.0" }, "bin": { "update-browserslist-db": "cli.js" } }, "sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w=="],
 
     "util-deprecate": ["util-deprecate@1.0.2", "", {}, "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw=="],
-
-    "valibot": ["valibot@1.2.0", "", { "peerDependencies": { "typescript": ">=5" }, "optionalPeers": ["typescript"] }, "sha512-mm1rxUsmOxzrwnX5arGS+U4T25RdvpPjPN4yR0u9pUBov9+zGVtO84tif1eY4r6zWxVxu3KzIyknJy3rxfRZZg=="],
 
     "vfile": ["vfile@6.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "vfile-message": "^4.0.0" } }, "sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q=="],
 

@@ -17,7 +17,7 @@ export class Db extends Context.Tag("@osn/db/Db")<Db, DbService>() {}
 export const DbLive = Layer.effect(
   Db,
   Effect.sync(() => {
-    const dbPath = process.env.DATABASE_URL || resolve(__dirname, "../../../data/osn.db");
+    const dbPath = process.env.OSN_DATABASE_URL || resolve(__dirname, "../../../data/osn.db");
     const sqlite = new Database(dbPath);
     const db = drizzle(sqlite, { schema });
     return { db };
