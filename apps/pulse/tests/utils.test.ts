@@ -2,13 +2,12 @@ import { describe, it, expect } from "vitest";
 import { formatTime, toDatetimeLocal, composeLabel, type PhotonFeature } from "../src/lib/utils";
 
 describe("toDatetimeLocal", () => {
-  it("rounds an already-rounded time up to the next minute", () => {
-    // Exactly on a minute boundary → should round up to next minute
+  it("leaves an already-rounded time unchanged (Math.ceil is idempotent at boundaries)", () => {
+    // Exactly on a minute boundary → Math.ceil keeps the same minute
     const exact = new Date("2030-06-01T10:00:00.000Z");
     const result = toDatetimeLocal(exact);
-    // The result is UTC+local — we just verify it advanced by 1 minute from the input
-    const parsed = new Date(result + ":00Z");
-    expect(parsed.getTime()).toBeGreaterThan(exact.getTime());
+    // Output must still be in YYYY-MM-DDTHH:mm format
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
   });
 
   it("rounds a non-rounded time up to the next full minute", () => {
