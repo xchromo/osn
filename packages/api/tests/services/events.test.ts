@@ -288,3 +288,36 @@ it.effect("listTodayEvents returns transitioned statuses", () =>
     }),
   ),
 );
+
+it.effect("listEvents respects limit param", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* createEvent({ title: "Event 1", startTime: FUTURE });
+      yield* createEvent({ title: "Event 2", startTime: FUTURE });
+      yield* createEvent({ title: "Event 3", startTime: FUTURE });
+      const events = yield* listEvents({ limit: "2" });
+      expect(events.length).toBe(2);
+    }),
+  ),
+);
+
+it.effect("createEvent fails with ValidationError for invalid status", () =>
+  provide(
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        createEvent({ title: "Test", startTime: FUTURE, status: "invalid" }),
+      );
+      expect(error._tag).toBe("ValidationError");
+    }),
+  ),
+);
+
+it.effect("updateEvent fails with ValidationError for invalid status", () =>
+  provide(
+    Effect.gen(function* () {
+      const created = yield* createEvent({ title: "Original", startTime: FUTURE });
+      const error = yield* Effect.flip(updateEvent(created.id, { status: "invalid" }));
+      expect(error._tag).toBe("ValidationError");
+    }),
+  ),
+);
