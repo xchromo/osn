@@ -4,7 +4,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Current Status
 
-Events API fully operational with Effect.ts service pattern and test coverage. Pulse backend has complete CRUD for events (list, today, get, create, update, delete) with Effect Schema validation and proper error types. 29 tests cover service layer (Effect) and HTTP routes (integration). Frontend surfaces events via Eden client. DB split into `@osn/db` (OSN Core, placeholder) and `@pulse/db` (Pulse events). Ready to build out event discovery, lifecycle transitions, and the Pulse UI.
+OSN Core auth system implemented. `packages/core` (`@osn/core`) provides a full OIDC-style auth server: passkey (WebAuthn), OTP, and magic-link flows, JWT issuance/verification, PKCE authorization endpoint, token exchange and refresh. `packages/osn-db` schema updated with `users` + `passkeys` tables. `apps/osn` scaffolded as the auth server entry point. `@osn/client` receives a `getSession()` expiry check and `handleCallback` exposed from `AuthProvider`. `apps/pulse` gains a `CallbackHandler` component. 25 service tests + route integration tests in `packages/core`.
 
 ---
 
@@ -49,8 +49,9 @@ Decisions to revisit later. Add new items as they come up.
 
 ### OSN Core (`apps/osn`)
 - [ ] Initialize Tauri app (`bunx tauri init`)
-- [ ] OAuth/OIDC provider implementation
-- [ ] User registration/login
+- [x] OAuth/OIDC provider implementation (`packages/core` — passkey, OTP, magic link, PKCE, JWT)
+- [x] User registration/login (passkey + OTP + magic link in `@osn/core`)
+- [x] `apps/osn` scaffolded (package.json, tsconfig, src/index.ts, .env.example)
 - [ ] Social graph data model (connections, close friends, blocks)
 - [ ] Per-app vs global blocking logic
 - [ ] Interest profile selection (onboarding)
@@ -109,7 +110,7 @@ Decisions to revisit later. Add new items as they come up.
 - [ ] Evaluate Photon (Komoot) geocoding privacy: keystrokes sent to third-party with no user notice — add consent UI or proxy — M1
 - [ ] Cap `limit` query parameter in `listEvents` (min 1, max 100) and guard `NaN` → no-limit fallback — M2
 - [ ] Lock down CORS `origin` before any non-local deployment — M3
-- [ ] `getSession()` returns expired tokens without checking `expiresAt` — add expiry check + silent refresh — M4
+- [x] `getSession()` returns expired tokens without checking `expiresAt` — expiry check added — M4
 - [ ] `imageUrl` allows `data:` URIs; add CSP `img-src` header — L1
 - [ ] Failed OAuth callback leaves PKCE verifier in `localStorage` — clear on state mismatch — L2
 - [ ] `REDIRECT_URI` derived from `window.location.origin` at runtime — prefer explicit env var — L3
@@ -117,8 +118,8 @@ Decisions to revisit later. Add new items as they come up.
 ### Database (`packages/osn-db` → `@osn/db`, `packages/pulse-db` → `@pulse/db`)
 - [x] Split DB into per-app packages (osn-db, pulse-db)
 - [x] Pulse: Drizzle + SQLite setup, event schema, migrations, schema smoke tests (3 tests)
-- [ ] OSN Core: User schema (users, passkey credentials)
-- [ ] OSN Core: Session schema (sessions, refresh tokens)
+- [x] OSN Core: User schema (users + passkeys tables, migration generated)
+- [ ] OSN Core: Session schema (sessions, refresh tokens — JWT-based for now, no DB storage)
 - [ ] OSN Core: Social graph schema (connections, blocks)
 - [ ] Pulse: Event series schema
 - [ ] Pulse: Chat/Message schema (via messaging backend)
