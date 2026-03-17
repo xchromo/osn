@@ -107,19 +107,34 @@ Decisions to revisit later. Add new items as they come up.
 ### Security (follow-up PR)
 - [ ] Add authentication/authorisation middleware to all API routes (OWASP A01) — H1
 - [ ] Add ownership model to mutating event operations (create/update/delete) — H2
+- [ ] Open redirect in `/magic/verify`: `redirect_uri` not validated against an allowlist — attacker can steal auth codes — H3
+- [ ] PKCE check is optional: `/token` skips PKCE verification when `state` is absent — make mandatory — H4
 - [ ] Evaluate Photon (Komoot) geocoding privacy: keystrokes sent to third-party with no user notice — add consent UI or proxy — M1
 - [ ] Cap `limit` query parameter in `listEvents` (min 1, max 100) and guard `NaN` → no-limit fallback — M2
-- [ ] Lock down CORS `origin` before any non-local deployment — M3
+- [ ] Lock down CORS `origin` before any non-local deployment (auth server currently uses wildcard) — M3
 - [x] `getSession()` returns expired tokens without checking `expiresAt` — expiry check added — M4
 - [x] OTP generated with `Math.random()` (not cryptographically secure) — replaced with `crypto.getRandomValues` — M5
-- [ ] OTP stored in process memory (`otpStore` Map) — lost on restart, not safe for multi-process; move to DB or Redis — M6
+- [ ] All auth state in process memory (`otpStore`, `magicStore`, `pkceStore`, etc.) — lost on restart, unsafe for multi-process; move to DB or Redis — M6
 - [ ] Magic-link tokens generated with `Math.random()`-seeded `btoa` — replace with `crypto.getRandomValues` — M7
 - [ ] No brute-force / rate-limit protection on OTP or magic-link verify endpoints — M8
 - [ ] `jwtSecret` falls back to `"dev-secret"` when env var is absent; enforce required secret in production — M9
+- [ ] `redirect_uri` at `/token` not matched against the value stored in `pkceStore` during `/authorize` (RFC 6749 §4.1.3) — M10
+- [ ] `/passkey/register/begin` accepts arbitrary `userId` with no auth check — require a short-lived token from OTP/magic-link flow — M11
 - [ ] `imageUrl` allows `data:` URIs; add CSP `img-src` header — L1
 - [ ] Failed OAuth callback leaves PKCE verifier in `localStorage` — clear on state mismatch — L2
 - [ ] `REDIRECT_URI` derived from `window.location.origin` at runtime — prefer explicit env var — L3
 - [ ] PKCE `state` param not validated against a stored nonce before use — L4
+- [ ] OTP codes and magic link URLs logged to stdout when `sendEmail` is not configured — guard with `NODE_ENV` check — L5
+- [ ] Sign-in page loads `@simplewebauthn/browser` from unpkg CDN without SRI hash — self-host or add `integrity` attribute — L6
+- [ ] `jose` and `@simplewebauthn/server` use caret version ranges — pin to exact versions — L7
+
+### Performance (follow-up PR)
+- [ ] In-memory auth Maps (`otpStore`, `magicStore`, `pkceStore`, `registrationChallenges`, `loginChallenges`) never evict expired entries — add a periodic sweep — P1
+- [ ] `new TextEncoder()` allocated on every JWT sign/verify call — cache the encoded secret or import a `CryptoKey` once — P2
+- [ ] `new TextEncoder()` allocated on every `verifyPkceChallenge` call — move to module scope — P3
+- [ ] `AuthProvider` in `packages/client` reconstructs the Effect `Layer` on every render — wrap with `createMemo` — P4
+- [ ] `completePasskeyLogin` calls `findUserByEmail` redundantly — `pk.userId` is already available from the passkey row — P5
+- [ ] Duplicate index on `users.email` in `osn-db` schema — `unique()` already creates an implicit index; remove the explicit one — P6
 
 ### Database (`packages/osn-db` → `@osn/db`, `packages/pulse-db` → `@pulse/db`)
 - [x] Split DB into per-app packages (osn-db, pulse-db)
