@@ -1,4 +1,4 @@
-import { createResource, createSignal, createMemo, For, Show } from "solid-js";
+import { createResource, createSignal, createMemo, For, Show, onMount } from "solid-js";
 import { api } from "./lib/api";
 import { formatTime, toDatetimeLocal, isEndBeforeOrAtStart } from "./lib/utils";
 import { LocationInput } from "./lib/LocationInput";
@@ -277,15 +277,18 @@ function EventList() {
 
 function CallbackHandler() {
   const { handleCallback } = useAuth();
-  const params = new URLSearchParams(window.location.search);
-  const code = params.get("code");
-  const state = params.get("state");
 
-  if (code && state) {
-    handleCallback({ code, state, redirectUri: REDIRECT_URI }).then(() => {
-      window.history.replaceState({}, "", window.location.pathname);
-    });
-  }
+  onMount(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+
+    if (code && state) {
+      handleCallback({ code, state, redirectUri: REDIRECT_URI }).then(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+      });
+    }
+  });
 
   return null;
 }

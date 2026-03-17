@@ -111,9 +111,15 @@ Decisions to revisit later. Add new items as they come up.
 - [ ] Cap `limit` query parameter in `listEvents` (min 1, max 100) and guard `NaN` → no-limit fallback — M2
 - [ ] Lock down CORS `origin` before any non-local deployment — M3
 - [x] `getSession()` returns expired tokens without checking `expiresAt` — expiry check added — M4
+- [x] OTP generated with `Math.random()` (not cryptographically secure) — replaced with `crypto.getRandomValues` — M5
+- [ ] OTP stored in process memory (`otpStore` Map) — lost on restart, not safe for multi-process; move to DB or Redis — M6
+- [ ] Magic-link tokens generated with `Math.random()`-seeded `btoa` — replace with `crypto.getRandomValues` — M7
+- [ ] No brute-force / rate-limit protection on OTP or magic-link verify endpoints — M8
+- [ ] `jwtSecret` falls back to `"dev-secret"` when env var is absent; enforce required secret in production — M9
 - [ ] `imageUrl` allows `data:` URIs; add CSP `img-src` header — L1
 - [ ] Failed OAuth callback leaves PKCE verifier in `localStorage` — clear on state mismatch — L2
 - [ ] `REDIRECT_URI` derived from `window.location.origin` at runtime — prefer explicit env var — L3
+- [ ] PKCE `state` param not validated against a stored nonce before use — L4
 
 ### Database (`packages/osn-db` → `@osn/db`, `packages/pulse-db` → `@pulse/db`)
 - [x] Split DB into per-app packages (osn-db, pulse-db)

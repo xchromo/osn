@@ -520,7 +520,9 @@ export function createAuthService(config: AuthConfig) {
       );
 
       const user = yield* upsertUser(email);
-      const code = Math.floor(100_000 + Math.random() * 900_000).toString();
+      const buf = new Uint32Array(1);
+      crypto.getRandomValues(buf);
+      const code = (100_000 + (buf[0] % 900_000)).toString();
 
       otpStore.set(email, {
         code,
