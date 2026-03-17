@@ -2,13 +2,14 @@ import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { composeLabel, type PhotonFeature } from "./utils";
 
 export function LocationInput(props: { value: string; onValue: (v: string) => void }) {
-  const [query, setQuery] = createSignal(props.value);
+  const [inputValue, setInputValue] = createSignal(props.value);
+  const [searchQuery, setSearchQuery] = createSignal(props.value);
   const [suggestions, setSuggestions] = createSignal<PhotonFeature[]>([]);
   const [open, setOpen] = createSignal(false);
   let selecting = false;
 
   createEffect(() => {
-    const q = query();
+    const q = searchQuery();
     if (q.length < 2) {
       setSuggestions([]);
       setOpen(false);
@@ -38,7 +39,7 @@ export function LocationInput(props: { value: string; onValue: (v: string) => vo
 
   function select(feature: PhotonFeature) {
     const label = composeLabel(feature.properties);
-    setQuery(label);
+    setInputValue(label); // update display only — does not re-trigger search
     props.onValue(label);
     setSuggestions([]);
     setOpen(false);
@@ -46,7 +47,8 @@ export function LocationInput(props: { value: string; onValue: (v: string) => vo
 
   function handleInput(e: InputEvent & { currentTarget: HTMLInputElement }) {
     const v = e.currentTarget.value;
-    setQuery(v);
+    setInputValue(v);
+    setSearchQuery(v); // triggers the fetch effect
     props.onValue(v);
   }
 
@@ -60,7 +62,7 @@ export function LocationInput(props: { value: string; onValue: (v: string) => vo
       <input
         id="location"
         type="text"
-        value={query()}
+        value={inputValue()}
         onInput={handleInput}
         onBlur={handleBlur}
         onFocus={() => suggestions().length > 0 && setOpen(true)}
