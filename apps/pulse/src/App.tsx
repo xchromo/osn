@@ -197,7 +197,10 @@ function EventCard(props: { event: EventItem; onDelete: (id: string) => void }) 
 function EventList() {
   const { session, login, logout } = useAuth();
   const accessToken = () => session()?.accessToken ?? null;
-  const [events, { refetch }] = createResource(accessToken, fetchEvents);
+  const [events, { refetch }] = createResource(
+    () => ({ token: accessToken() }),
+    ({ token }) => fetchEvents(token),
+  );
   const [showForm, setShowForm] = createSignal(false);
 
   function handleDelete(id: string) {
@@ -272,9 +275,25 @@ function EventList() {
   );
 }
 
+function CallbackHandler() {
+  const { handleCallback } = useAuth();
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const state = params.get("state");
+
+  if (code && state) {
+    handleCallback({ code, state, redirectUri: REDIRECT_URI }).then(() => {
+      window.history.replaceState({}, "", window.location.pathname);
+    });
+  }
+
+  return null;
+}
+
 export default function App() {
   return (
     <AuthProvider config={{ issuerUrl: OSN_ISSUER_URL, clientId: OSN_CLIENT_ID }}>
+      <CallbackHandler />
       <EventList />
     </AuthProvider>
   );
