@@ -68,21 +68,45 @@ describe("auth routes", () => {
       expect(res.status).toBe(400);
     });
 
-    it("returns tokens for a valid code exchange", async () => {
-      // Manually issue a code using the service
-      const auth = createAuthService(config);
-      const user = await Effect.runPromise(
-        auth.upsertUser("judy@example.com").pipe(Effect.provide(layer)),
+    it("returns tokens for a valid authorization_code grant", async () => {
+      // Use OTP flow to obtain a real auth code, then exchange it via the route
+      let capturedOtp: string | undefined;
+      const authHelper = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/code is: (\d{6})/);
+          if (m) capturedOtp = m[1];
+        },
+      });
+      await Effect.runPromise(authHelper.beginOtp("judy@example.com").pipe(Effect.provide(layer)));
+      const { code } = await Effect.runPromise(
+        authHelper.completeOtp("judy@example.com", capturedOtp!).pipe(Effect.provide(layer)),
       );
-      const tokens = await Effect.runPromise(
-        auth.issueTokens(user.id, user.email).pipe(Effect.provide(layer)),
+
+      const res = await app.handle(
+        new Request("http://localhost/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            grant_type: "authorization_code",
+            code,
+            redirect_uri: "http://localhost:5173/callback",
+            client_id: "pulse",
+            code_verifier: "test-verifier",
+          }),
+        }),
       );
-      // issueTokens gives access+refresh but we need a code
-      // Exchange via refreshTokens → get new tokens to verify flow
-      const refreshed = await Effect.runPromise(
-        auth.refreshTokens(tokens.refreshToken).pipe(Effect.provide(layer)),
-      );
-      expect(refreshed.accessToken).toBeTruthy();
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        access_token: string;
+        refresh_token: string;
+        token_type: string;
+        expires_in: number;
+      };
+      expect(json.access_token).toBeTruthy();
+      expect(json.refresh_token).toBeTruthy();
+      expect(json.token_type).toBe("Bearer");
+      expect(json.expires_in).toBe(3600);
     });
   });
 
@@ -146,6 +170,47 @@ describe("auth routes", () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as { sent: boolean };
       expect(json.sent).toBe(true);
+    });
+  });
+
+  describe("GET /magic/verify", () => {
+    it("returns 302 redirect for a valid magic token", async () => {
+      let capturedToken: string | undefined;
+      const authHelper = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/token=([^\s]+)/);
+          if (m) capturedToken = m[1];
+        },
+      });
+      await Effect.runPromise(
+        authHelper.beginMagic("magic-route@example.com").pipe(Effect.provide(layer)),
+      );
+
+      const encodedRedirect = encodeURIComponent("http://localhost:5173/callback");
+      const res = await app.handle(
+        new Request(
+          `http://localhost/magic/verify?token=${capturedToken}&redirect_uri=${encodedRedirect}&state=abc123`,
+        ),
+      );
+      // Elysia sets status 302; Location header may not be readable via app.handle()
+      // so we confirm the redirect is issued and the route succeeded
+      expect(res.status).toBe(302);
+    });
+
+    it("returns 400 for an unknown token", async () => {
+      const res = await app.handle(
+        new Request(
+          "http://localhost/magic/verify?token=bad-token&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fcallback&state=xyz",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 422 when required query params are missing", async () => {
+      const res = await app.handle(new Request("http://localhost/magic/verify?token=something"));
+      // Elysia TypeBox validation returns 422 for missing required params
+      expect(res.status).toBe(422);
     });
   });
 

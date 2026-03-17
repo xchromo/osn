@@ -39,6 +39,7 @@
       },
       "devDependencies": {
         "@osn/typescript-config": "workspace:*",
+        "vitest": "^4.0.18",
       },
     },
     "apps/pulse": {

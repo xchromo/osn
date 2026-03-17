@@ -50,13 +50,44 @@ describe("findUserByEmail", () => {
 });
 
 describe("issueTokens + exchangeCode", () => {
-  it.effect("exchanges a valid code for access + refresh tokens", () =>
+  it.effect("issueTokens returns access + refresh tokens with correct shape", () =>
     Effect.gen(function* () {
       const user = yield* auth.upsertUser("dan@example.com");
       const tokens = yield* auth.issueTokens(user.id, user.email);
       expect(tokens.accessToken).toBeTruthy();
       expect(tokens.refreshToken).toBeTruthy();
       expect(tokens.expiresIn).toBe(3600);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("exchangeCode returns tokens for a valid auth code", () =>
+    Effect.gen(function* () {
+      const user = yield* auth.upsertUser("dan-exchange@example.com");
+      // Get a real code via completeOtp
+      let capturedCode: string | undefined;
+      const authSpy = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/code is: (\d{6})/);
+          if (m) capturedCode = m[1];
+        },
+      });
+      yield* authSpy.beginOtp("dan-exchange@example.com");
+      const { code } = yield* authSpy.completeOtp("dan-exchange@example.com", capturedCode!);
+      const tokens = yield* auth.exchangeCode(code);
+      expect(tokens.accessToken).toBeTruthy();
+      expect(tokens.refreshToken).toBeTruthy();
+      expect(tokens.expiresIn).toBe(3600);
+      // Access token should be verifiable
+      const claims = yield* auth.verifyAccessToken(tokens.accessToken);
+      expect(claims.userId).toBe(user.id);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("exchangeCode fails with invalid code", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(auth.exchangeCode("not.a.valid.jwt"));
+      expect(error._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
@@ -96,6 +127,47 @@ describe("OTP flow", () => {
       expect(error._tag).toBe("ValidationError");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("second beginOtp overwrites the first code", () =>
+    Effect.gen(function* () {
+      let firstCode: string | undefined;
+      let callCount = 0;
+      const authSpy = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/code is: (\d{6})/);
+          if (m) {
+            callCount++;
+            if (callCount === 1) firstCode = m[1];
+          }
+        },
+      });
+      yield* authSpy.beginOtp("overwrite@example.com");
+      yield* authSpy.beginOtp("overwrite@example.com");
+      // The first code is no longer valid — the store was overwritten
+      const error = yield* Effect.flip(authSpy.completeOtp("overwrite@example.com", firstCode!));
+      expect(error._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+describe("passkey registration", () => {
+  it.effect("beginPasskeyRegistration returns options for an existing user", () =>
+    Effect.gen(function* () {
+      const user = yield* auth.upsertUser("passkey-reg@example.com");
+      const result = yield* auth.beginPasskeyRegistration(user.id);
+      expect(result.options).toBeTruthy();
+      expect(result.options.challenge).toBeTruthy();
+      expect(result.options.user.name).toBe("passkey-reg@example.com");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("beginPasskeyRegistration fails for an unknown userId", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(auth.beginPasskeyRegistration("usr_nonexistent"));
+      expect(error._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("magic link flow", () => {
@@ -131,6 +203,13 @@ describe("magic link flow", () => {
       expect(error._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("beginMagic fails with invalid email", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(auth.beginMagic("not-an-email"));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("token refresh", () => {
@@ -141,6 +220,13 @@ describe("token refresh", () => {
       const refreshed = yield* auth.refreshTokens(tokens.refreshToken);
       expect(refreshed.accessToken).toBeTruthy();
       expect(refreshed.expiresIn).toBe(3600);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("refreshTokens fails with an invalid token", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(auth.refreshTokens("not.a.token"));
+      expect(error._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
