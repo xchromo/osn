@@ -21,11 +21,14 @@ export function EventList() {
   const tokenSource = createMemo(() => ({ token: accessToken() }));
   const [events, { refetch }] = createResource(tokenSource, ({ token }) => fetchEvents(token));
   const [showForm, setShowForm] = createSignal(false);
+  const [deletingIds, setDeletingIds] = createSignal(new Set<string>());
 
   function handleDelete(id: string) {
+    if (deletingIds().has(id)) return;
     const headers: Record<string, string> = {};
     const token = accessToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    setDeletingIds((prev) => new Set([...prev, id]));
     api
       .events({ id })
       .delete(undefined, { headers })
@@ -33,7 +36,17 @@ export function EventList() {
         toast.success("Event deleted");
         refetch();
       })
-      .catch(() => toast.error("Failed to delete event"));
+      .catch((err) => {
+        if (import.meta.env.DEV) console.error("Failed to delete event:", err);
+        toast.error("Failed to delete event");
+      })
+      .finally(() => {
+        setDeletingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      });
   }
 
   function handleFormSuccess() {
@@ -90,7 +103,13 @@ export function EventList() {
         </Show>
         <div class="flex flex-col gap-4">
           <For each={events()}>
-            {(event) => <EventCard event={event} onDelete={handleDelete} />}
+            {(event) => (
+              <EventCard
+                event={event}
+                onDelete={handleDelete}
+                deleting={deletingIds().has(event.id)}
+              />
+            )}
           </For>
         </div>
       </Show>

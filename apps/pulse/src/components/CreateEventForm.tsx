@@ -37,6 +37,7 @@ export function CreateEventForm(props: {
         { headers },
       );
       if (error) {
+        if (import.meta.env.DEV) console.error("Failed to create event:", error);
         toast.error("Failed to create event");
         return;
       }
