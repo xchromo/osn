@@ -1,5 +1,5 @@
 import { createSignal, createMemo, Show } from "solid-js";
-import toast from "solid-toast";
+import { toast } from "solid-toast";
 import { api } from "../lib/api";
 import { LocationInput } from "../lib/LocationInput";
 import { toDatetimeLocal, isEndBeforeOrAtStart } from "../lib/utils";

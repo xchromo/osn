@@ -1,6 +1,6 @@
 import { createResource, createSignal, createMemo, For, Show } from "solid-js";
 import { useAuth } from "@osn/client/solid";
-import toast from "solid-toast";
+import { toast } from "solid-toast";
 import { api } from "../lib/api";
 import type { EventItem } from "../lib/types";
 import { REDIRECT_URI } from "../lib/auth";
