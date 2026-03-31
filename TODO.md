@@ -4,7 +4,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Current Status
 
-`@osn/core` — full OIDC-style auth server: passkey (WebAuthn), OTP, magic-link, PKCE, JWT, OIDC discovery. `@osn/db` — users + passkeys schema. `apps/osn` — auth server entry point on port 4000. `@osn/client` — session expiry check, `handleCallback`. `apps/pulse` — auth callback handler, event CRUD UI, location autocomplete. `@osn/api` — events domain fully tested. 99 tests passing across 8 packages.
+`@osn/core` — full OIDC-style auth server: passkey (WebAuthn), OTP, magic-link, PKCE, JWT, OIDC discovery. `@osn/db` — users + passkeys schema. `apps/osn` — auth server entry point on port 4000. `@osn/client` — session expiry check, `handleCallback`. `apps/pulse` — auth callback handler, event CRUD UI, location autocomplete; component test suite expanded to EventCard, CreateEventForm, EventList (41 tests). `@osn/api` — events domain fully tested. 109 tests passing across 8 packages.
 
 ---
 
@@ -32,6 +32,7 @@ Highest-priority items across all areas.
 - [x] Location autocomplete (`LocationInput` with debounce/abort)
 - [x] Auth callback handler (`CallbackHandler`)
 - [x] Test coverage: utils, LocationInput, CreateEventForm end-time validation
+- [x] Test coverage: EventCard, CreateEventForm (full), EventList (auth/unauth)
 - [ ] Toast notification system (errors, warnings, info)
 - [ ] "What's on today" default view
 - [ ] Prompt for max event duration when creating events without an endTime
