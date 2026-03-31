@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, createMemo, For, Show } from "solid-js";
 import { useAuth } from "@osn/client/solid";
 import { api } from "../lib/api";
 import type { EventItem } from "../lib/types";
@@ -17,10 +17,8 @@ async function fetchEvents(accessToken: string | null): Promise<EventItem[]> {
 export function EventList() {
   const { session, login, logout } = useAuth();
   const accessToken = () => session()?.accessToken ?? null;
-  const [events, { refetch }] = createResource(
-    () => ({ token: accessToken() }),
-    ({ token }) => fetchEvents(token),
-  );
+  const tokenSource = createMemo(() => ({ token: accessToken() }));
+  const [events, { refetch }] = createResource(tokenSource, ({ token }) => fetchEvents(token));
   const [showForm, setShowForm] = createSignal(false);
 
   function handleDelete(id: string) {
@@ -46,7 +44,7 @@ export function EventList() {
         <div class="flex gap-2">
           <Show when={!session()}>
             <button
-              onClick={() => login(REDIRECT_URI)}
+              onClick={() => login(REDIRECT_URI())}
               class="rounded-md px-3 py-1.5 text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80"
             >
               Sign in with OSN

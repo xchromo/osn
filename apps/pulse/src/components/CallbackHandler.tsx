@@ -11,7 +11,7 @@ export function CallbackHandler() {
     const state = params.get("state");
 
     if (code && state) {
-      handleCallback({ code, state, redirectUri: REDIRECT_URI }).then(() => {
+      handleCallback({ code, state, redirectUri: REDIRECT_URI() }).then(() => {
         window.history.replaceState({}, "", window.location.pathname);
       });
     }
