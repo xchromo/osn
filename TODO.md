@@ -13,7 +13,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 Highest-priority items across all areas.
 
 - [ ] OSN Core: social graph data model (connections, close friends, blocks)
-- [ ] Pulse: toast notification system (errors currently logged to console or dropped)
+- [x] Pulse: toast notification system (solid-toast)
 - [ ] Pulse: "What's on today" default view
 - [ ] Landing page: design and content
 - [ ] Security: fix open redirect in `/magic/verify` before any deployment — H3
@@ -33,7 +33,7 @@ Highest-priority items across all areas.
 - [x] Auth callback handler (`CallbackHandler`)
 - [x] Test coverage: utils, LocationInput, CreateEventForm end-time validation
 - [x] Test coverage: EventCard, CreateEventForm (full), EventList (auth/unauth)
-- [ ] Toast notification system (errors, warnings, info)
+- [x] Toast notification system (solid-toast: event created, deleted, create/delete errors)
 - [ ] "What's on today" default view
 - [ ] Prompt for max event duration when creating events without an endTime
 - [ ] Event discovery (location, category, datetime, friends, interests)
