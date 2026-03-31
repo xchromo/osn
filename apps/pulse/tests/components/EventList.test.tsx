@@ -3,6 +3,12 @@ import { render, cleanup, fireEvent } from "@solidjs/testing-library";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { EventList } from "../../src/components/EventList";
 
+vi.mock("solid-toast", async () => {
+  const { solidToastMock } = await import("../helpers/toast");
+  return solidToastMock();
+});
+import { mockToastError, mockToastSuccess } from "../helpers/toast";
+
 const mockLogin = vi.fn();
 const mockLogout = vi.fn();
 let mockSession: () => { accessToken: string } | null = () => null;
@@ -108,6 +114,8 @@ describe("EventList — authenticated", () => {
     mockLogout.mockReset();
     mockPost.mockReset();
     mockDelete.mockReset();
+    mockToastError.mockReset();
+    mockToastSuccess.mockReset();
   });
 
   afterEach(() => {
@@ -181,12 +189,11 @@ describe("EventList — authenticated", () => {
     );
   });
 
-  it("failed delete → console.error called (catch branch)", async () => {
+  it("failed delete → toast.error called (catch branch)", async () => {
     vi.stubGlobal(
       "confirm",
       vi.fn(() => true),
     );
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGet.mockResolvedValue({
       data: {
         events: [
@@ -208,11 +215,10 @@ describe("EventList — authenticated", () => {
     // Flush microtasks so the rejected promise reaches the catch handler
     await Promise.resolve();
     await Promise.resolve();
-    expect(consoleError).toHaveBeenCalledWith("Failed to delete event:", expect.any(Error));
-    consoleError.mockRestore();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to delete event");
   });
 
-  it("successful form submit hides the form (handleFormSuccess)", async () => {
+  it("successful form submit hides the form and shows success toast", async () => {
     mockGet.mockReturnValue(new Promise(() => {}));
     mockPost.mockResolvedValue({ error: null });
 
@@ -232,5 +238,6 @@ describe("EventList — authenticated", () => {
     await Promise.resolve();
 
     expect(queryByText("Create")).toBeNull();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Event created");
   });
 });
