@@ -4,7 +4,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Current Status
 
-`@osn/core` — full OIDC-style auth server: passkey (WebAuthn), OTP, magic-link, PKCE, JWT, OIDC discovery. `@osn/db` — users + passkeys schema. `apps/osn` — auth server entry point on port 4000. `@osn/client` — session expiry check, `handleCallback`. `apps/pulse` — auth callback handler, event CRUD UI, location autocomplete; component test suite expanded to EventCard, CreateEventForm, EventList (41 tests). `@osn/api` — events domain fully tested. 109 tests passing across 8 packages.
+`@osn/core` — full OIDC-style auth server: passkey (WebAuthn), OTP, magic-link, PKCE, JWT, OIDC discovery. `@osn/db` — users + passkeys schema. `apps/osn` — auth server entry point on port 4000. `@osn/client` — session expiry check, `handleCallback`. `apps/pulse` — auth callback handler, event CRUD UI, location autocomplete, toast notifications (solid-toast), double-click guard on delete; 56 component tests. `@osn/api` — events domain fully tested. 109 tests passing across 8 packages.
 
 ---
 
@@ -163,8 +163,8 @@ Address **High** items before any non-local deployment.
 - [ ] PKCE `state` not validated against a stored nonce — L4
 - [ ] `jose` and `@simplewebauthn/server` use caret version ranges — pin to exact versions — L7
 - [ ] Pulse `auth.ts` exports only public/build-time config — add comment discouraging secrets in that file — L8
-- [ ] `EventList` `console.error` logs raw server error objects — guard with `NODE_ENV` check before web deployment — L9
-- [ ] `@vitest/coverage-istanbul` uses caret version range in `apps/pulse/package.json` — pin to exact version — L10
+- [x] `EventList` `console.error` logs raw server error objects — guarded with `import.meta.env.DEV` — L9
+- ~~`@vitest/coverage-istanbul` uses caret version range — L10~~ dismissed: caret ranges are the project standard
 
 ---
 
