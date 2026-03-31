@@ -1,8 +1,8 @@
-# @osn/client
+# @osn/core
 
-## 0.0.3
+## 0.1.0
 
-### Patch Changes
+### Minor Changes
 
 - 75f801b: Implement OSN Core auth system.
 
@@ -13,8 +13,7 @@
   - `@osn/pulse`: `CallbackHandler` handles OAuth redirect on page load; fix events resource to load without waiting for auth; fix location autocomplete re-triggering search after selection
   - `@osn/api`: HTTP-level route tests for category filter and invalid startTime/endTime
 
-## 0.0.2
-
 ### Patch Changes
 
-- 880e762: Add @osn/client package with OAuth 2.0 + PKCE auth core, SolidJS and React adapters. Wire AuthProvider into Pulse.
+- Updated dependencies [75f801b]
+  - @osn/db@0.2.2
