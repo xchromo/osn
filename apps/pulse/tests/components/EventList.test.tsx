@@ -159,7 +159,7 @@ describe("EventList — authenticated", () => {
     expect(mockLogout).toHaveBeenCalled();
   });
 
-  it("delete button on event card → calls api.events delete with event id", async () => {
+  it("delete button on event card → calls api.events delete with event id and shows success toast", async () => {
     vi.stubGlobal(
       "confirm",
       vi.fn(() => true),
@@ -187,6 +187,9 @@ describe("EventList — authenticated", () => {
       undefined,
       expect.objectContaining({ headers: expect.any(Object) }),
     );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Event deleted");
   });
 
   it("failed delete → toast.error called (catch branch)", async () => {
