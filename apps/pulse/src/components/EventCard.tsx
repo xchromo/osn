@@ -1,23 +1,21 @@
-import { Show, createMemo } from "solid-js";
+import { Show } from "solid-js";
 import type { EventItem } from "../lib/types";
 import { formatTime } from "../lib/utils";
+
+function mapsUrl(event: EventItem): string | null {
+  if (event.latitude != null && event.longitude != null) {
+    return `https://maps.google.com/?q=${event.latitude},${event.longitude}`;
+  }
+  const query = [event.venue, event.location].filter(Boolean).join(", ");
+  if (query) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  return null;
+}
 
 export function EventCard(props: {
   event: EventItem;
   onDelete: (id: string) => void;
   deleting?: boolean;
 }) {
-  const mapsUrl = createMemo(() => {
-    const { latitude, longitude, location, venue } = props.event;
-    if (latitude != null && longitude != null) {
-      return `https://maps.google.com/?q=${latitude},${longitude}`;
-    }
-    const query = [venue, location].filter(Boolean).join(", ");
-    if (query)
-      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    return null;
-  });
-
   return (
     <div class="rounded-xl border border-border bg-card overflow-hidden">
       <Show when={props.event.imageUrl}>
@@ -50,7 +48,7 @@ export function EventCard(props: {
           <span>{formatTime(props.event.startTime)}</span>
         </div>
         <div class="mt-3 flex items-center justify-between">
-          <Show when={mapsUrl()}>
+          <Show when={mapsUrl(props.event)}>
             {(url) => (
               <a
                 href={url()}
