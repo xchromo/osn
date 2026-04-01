@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { Show, createMemo } from "solid-js";
 import type { EventItem } from "../lib/types";
 import { formatTime } from "../lib/utils";
 
@@ -7,6 +7,17 @@ export function EventCard(props: {
   onDelete: (id: string) => void;
   deleting?: boolean;
 }) {
+  const mapsUrl = createMemo(() => {
+    const { latitude, longitude, location, venue } = props.event;
+    if (latitude != null && longitude != null) {
+      return `https://maps.google.com/?q=${latitude},${longitude}`;
+    }
+    const query = [venue, location].filter(Boolean).join(", ");
+    if (query)
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+    return null;
+  });
+
   return (
     <div class="rounded-xl border border-border bg-card overflow-hidden">
       <Show when={props.event.imageUrl}>
@@ -38,7 +49,19 @@ export function EventCard(props: {
           </Show>
           <span>{formatTime(props.event.startTime)}</span>
         </div>
-        <div class="mt-3 flex justify-end">
+        <div class="mt-3 flex items-center justify-between">
+          <Show when={mapsUrl()}>
+            {(url) => (
+              <a
+                href={url()}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-xs text-primary hover:underline"
+              >
+                Open in Maps
+              </a>
+            )}
+          </Show>
           <button
             onClick={() => {
               if (confirm(`Delete "${props.event.title}"?`)) props.onDelete(props.event.id);
