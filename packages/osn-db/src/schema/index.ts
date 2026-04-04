@@ -11,7 +11,9 @@ export const users = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("users_email_idx").on(t.email), index("users_handle_idx").on(t.handle)],
+  // users_email_idx kept for explicit query planning; handle UNIQUE constraint
+  // already provides an implicit index so no separate handle index is needed.
+  (t) => [index("users_email_idx").on(t.email)],
 );
 
 export const passkeys = sqliteTable(

@@ -209,7 +209,6 @@ describe("OTP flow", () => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(auth.beginOtp("ghost@example.com"));
       expect(error._tag).toBe("AuthError");
-      expect(error.message).toContain("No account found");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

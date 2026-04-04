@@ -18,5 +18,4 @@ ALTER TABLE `__new_users` RENAME TO `users`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
 CREATE UNIQUE INDEX `users_handle_unique` ON `users` (`handle`);--> statement-breakpoint
 CREATE UNIQUE INDEX `users_email_unique` ON `users` (`email`);--> statement-breakpoint
-CREATE INDEX `users_email_idx` ON `users` (`email`);--> statement-breakpoint
-CREATE INDEX `users_handle_idx` ON `users` (`handle`);
+CREATE INDEX `users_email_idx` ON `users` (`email`);
