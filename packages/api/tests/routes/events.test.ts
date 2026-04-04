@@ -6,8 +6,10 @@ import { createTestLayer } from "../helpers/db";
 const FUTURE = "2030-06-01T10:00:00.000Z";
 const TEST_JWT_SECRET = "test-secret";
 
-async function makeToken(userId: string): Promise<string> {
-  return new SignJWT({ sub: userId })
+async function makeToken(userId: string, email?: string): Promise<string> {
+  const payload: Record<string, string> = { sub: userId };
+  if (email) payload.email = email;
+  return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .sign(new TextEncoder().encode(TEST_JWT_SECRET));
 }
@@ -176,7 +178,7 @@ describe("events routes", () => {
   });
 
   it("DELETE /events/:id returns 404 for nonexistent event", async () => {
-    const res = await del(app, "/events/nonexistent");
+    const res = await del(app, "/events/nonexistent", aliceToken);
     expect(res.status).toBe(404);
   });
 
@@ -260,20 +262,15 @@ describe("events routes", () => {
 
   // ── Ownership ──────────────────────────────────────────────────────────────
 
-  it("POST /events stores createdByUserId from JWT and createdByName from body", async () => {
-    const token = await makeToken("usr_alice");
-    const res = await post(
-      app,
-      "/events",
-      { title: "My Event", startTime: FUTURE, createdByName: "Alice" },
-      token,
-    );
+  it("POST /events stores createdByUserId from JWT; derives createdByName from email claim", async () => {
+    const token = await makeToken("usr_alice", "alice@example.com");
+    const res = await post(app, "/events", { title: "My Event", startTime: FUTURE }, token);
     expect(res.status).toBe(201);
     const body = (await res.json()) as {
       event: { createdByUserId: string; createdByName: string };
     };
     expect(body.event.createdByUserId).toBe("usr_alice");
-    expect(body.event.createdByName).toBe("Alice");
+    expect(body.event.createdByName).toBe("alice");
   });
 
   it("DELETE /events/:id returns 403 when requester does not own the event", async () => {
@@ -312,10 +309,26 @@ describe("events routes", () => {
     expect(res.status).toBe(403);
   });
 
-  it("DELETE /events/:id returns 403 when no auth token provided", async () => {
+  it("PATCH /events/:id returns 200 when requester owns the event", async () => {
+    const createRes = await post(app, "/events", { title: "Mine", startTime: FUTURE }, aliceToken);
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await patch(app, `/events/${event.id}`, { title: "Updated Mine" }, aliceToken);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { event: { title: string } };
+    expect(body.event.title).toBe("Updated Mine");
+  });
+
+  it("PATCH /events/:id returns 401 when no auth token provided", async () => {
+    const createRes = await post(app, "/events", { title: "Mine", startTime: FUTURE }, aliceToken);
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await patch(app, `/events/${event.id}`, { title: "Hijack" });
+    expect(res.status).toBe(401);
+  });
+
+  it("DELETE /events/:id returns 401 when no auth token provided", async () => {
     const createRes = await post(app, "/events", { title: "Mine", startTime: FUTURE }, aliceToken);
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await del(app, `/events/${event.id}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 });

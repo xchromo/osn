@@ -62,6 +62,36 @@ describe("users schema", () => {
     ).rejects.toThrow();
   });
 
+  it("displayName and avatarUrl round-trip correctly", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.users).values({
+      id: "usr_display",
+      email: "display@example.com",
+      displayName: "Alice Chen",
+      avatarUrl: "https://example.com/avatar.jpg",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const [row] = await db.select().from(schema.users).where(eq(schema.users.id, "usr_display"));
+    expect(row!.displayName).toBe("Alice Chen");
+    expect(row!.avatarUrl).toBe("https://example.com/avatar.jpg");
+  });
+
+  it("displayName and avatarUrl default to null", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.users).values({
+      id: "usr_nodisplay",
+      email: "nodisplay@example.com",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const [row] = await db.select().from(schema.users).where(eq(schema.users.id, "usr_nodisplay"));
+    expect(row!.displayName).toBeNull();
+    expect(row!.avatarUrl).toBeNull();
+  });
+
   it("createdAt round-trips as Date via timestamp mode", async () => {
     const db = createTestDb();
     const ts = new Date("2030-01-15T08:00:00.000Z");
