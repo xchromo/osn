@@ -94,13 +94,10 @@ describe("buildSeedEvents", () => {
     expect(new Set(categories).size).toBeGreaterThanOrEqual(7);
   });
 
-  it("8 of 9 events have a createdByUserId and createdByName; 1 is null (legacy)", () => {
+  it("all 9 events have a createdByUserId and createdByName", () => {
     const rows = buildSeedEvents(new Date());
-    const withOwner = rows.filter((r) => r.createdByUserId !== null);
-    const withoutOwner = rows.filter((r) => r.createdByUserId === null);
-    expect(withOwner).toHaveLength(8);
-    expect(withoutOwner).toHaveLength(1);
-    for (const r of withOwner) {
+    for (const r of rows) {
+      expect(typeof r.createdByUserId).toBe("string");
       expect(typeof r.createdByName).toBe("string");
     }
   });

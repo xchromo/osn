@@ -20,7 +20,7 @@ export function createTestLayer() {
       image_url TEXT,
       latitude REAL,
       longitude REAL,
-      created_by_user_id TEXT,
+      created_by_user_id TEXT NOT NULL,
       created_by_name TEXT,
       created_by_avatar TEXT,
       created_at INTEGER NOT NULL,

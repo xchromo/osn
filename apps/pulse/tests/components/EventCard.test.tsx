@@ -83,7 +83,11 @@ describe("EventCard", () => {
     );
     const onDelete = vi.fn();
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={onDelete} currentUserId="usr_test" />
+      <EventCard
+        event={{ ...mockEvent, createdByUserId: "usr_test" }}
+        onDelete={onDelete}
+        currentUserId="usr_test"
+      />
     ));
     fireEvent.click(getByText("Delete"));
     expect(onDelete).toHaveBeenCalledWith("evt_1");
@@ -96,7 +100,11 @@ describe("EventCard", () => {
     );
     const onDelete = vi.fn();
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={onDelete} currentUserId="usr_test" />
+      <EventCard
+        event={{ ...mockEvent, createdByUserId: "usr_test" }}
+        onDelete={onDelete}
+        currentUserId="usr_test"
+      />
     ));
     fireEvent.click(getByText("Delete"));
     expect(onDelete).not.toHaveBeenCalled();
@@ -134,7 +142,12 @@ describe("EventCard", () => {
 
   it("deleting=true → button shows 'Deleting…' and is disabled", () => {
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={() => {}} deleting={true} currentUserId="usr_test" />
+      <EventCard
+        event={{ ...mockEvent, createdByUserId: "usr_test" }}
+        onDelete={() => {}}
+        deleting={true}
+        currentUserId="usr_test"
+      />
     ));
     const btn = getByText("Deleting…") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
@@ -176,7 +189,12 @@ describe("EventCard", () => {
     );
     const onDelete = vi.fn();
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={onDelete} deleting={true} currentUserId="usr_test" />
+      <EventCard
+        event={{ ...mockEvent, createdByUserId: "usr_test" }}
+        onDelete={onDelete}
+        deleting={true}
+        currentUserId="usr_test"
+      />
     ));
     fireEvent.click(getByText("Deleting…"));
     expect(onDelete).not.toHaveBeenCalled();

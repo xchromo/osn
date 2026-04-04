@@ -55,9 +55,11 @@ const del = (app: ReturnType<typeof createEventsRoutes>, path: string, token?: s
 
 describe("events routes", () => {
   let app: ReturnType<typeof createEventsRoutes>;
+  let aliceToken: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     app = createEventsRoutes(createTestLayer(), TEST_JWT_SECRET);
+    aliceToken = await makeToken("usr_alice");
   });
 
   it("GET /events returns 200 empty list", async () => {
@@ -77,8 +79,13 @@ describe("events routes", () => {
     expect(res.status).toBe(404);
   });
 
-  it("POST /events creates event and returns 201", async () => {
+  it("POST /events returns 401 when not authenticated", async () => {
     const res = await post(app, "/events", { title: "Concert", startTime: FUTURE });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /events creates event and returns 201", async () => {
+    const res = await post(app, "/events", { title: "Concert", startTime: FUTURE }, aliceToken);
     expect(res.status).toBe(201);
     const body = (await res.json()) as { event: { id: string; title: string } };
     expect(body.event.id).toMatch(/^evt_/);
@@ -86,60 +93,85 @@ describe("events routes", () => {
   });
 
   it("POST /events returns 422 for missing title", async () => {
-    const res = await post(app, "/events", { startTime: FUTURE });
+    const res = await post(app, "/events", { startTime: FUTURE }, aliceToken);
     expect(res.status).toBe(422);
   });
 
   it("POST /events returns 422 for empty title", async () => {
-    const res = await post(app, "/events", { title: "", startTime: FUTURE });
+    const res = await post(app, "/events", { title: "", startTime: FUTURE }, aliceToken);
     expect(res.status).toBe(422);
   });
 
   it("POST /events returns 422 for invalid imageUrl", async () => {
-    const res = await post(app, "/events", {
-      title: "Concert",
-      startTime: FUTURE,
-      imageUrl: "not-a-url",
-    });
+    const res = await post(
+      app,
+      "/events",
+      {
+        title: "Concert",
+        startTime: FUTURE,
+        imageUrl: "not-a-url",
+      },
+      aliceToken,
+    );
     expect(res.status).toBe(422);
   });
 
   it("POST /events accepts valid imageUrl", async () => {
-    const res = await post(app, "/events", {
-      title: "Concert",
-      startTime: FUTURE,
-      imageUrl: "https://example.com/image.jpg",
-    });
+    const res = await post(
+      app,
+      "/events",
+      {
+        title: "Concert",
+        startTime: FUTURE,
+        imageUrl: "https://example.com/image.jpg",
+      },
+      aliceToken,
+    );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { event: { imageUrl: string } };
     expect(body.event.imageUrl).toBe("https://example.com/image.jpg");
   });
 
   it("PATCH /events/:id updates event and returns 200", async () => {
-    const createRes = await post(app, "/events", { title: "Original", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Original", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
-    const res = await patch(app, `/events/${event.id}`, { title: "Updated" });
+    const res = await patch(app, `/events/${event.id}`, { title: "Updated" }, aliceToken);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { event: { title: string } };
     expect(body.event.title).toBe("Updated");
   });
 
   it("PATCH /events/:id returns 404 for nonexistent event", async () => {
-    const res = await patch(app, "/events/nonexistent", { title: "Updated" });
+    const res = await patch(app, "/events/nonexistent", { title: "Updated" }, aliceToken);
     expect(res.status).toBe(404);
   });
 
   it("PATCH /events/:id returns 422 for invalid imageUrl", async () => {
-    const createRes = await post(app, "/events", { title: "Original", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Original", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
-    const res = await patch(app, `/events/${event.id}`, { imageUrl: "not-a-url" });
+    const res = await patch(app, `/events/${event.id}`, { imageUrl: "not-a-url" }, aliceToken);
     expect(res.status).toBe(422);
   });
 
   it("DELETE /events/:id returns 204", async () => {
-    const createRes = await post(app, "/events", { title: "To Delete", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "To Delete", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
-    const res = await del(app, `/events/${event.id}`);
+    const res = await del(app, `/events/${event.id}`, aliceToken);
     expect(res.status).toBe(204);
   });
 
@@ -149,7 +181,12 @@ describe("events routes", () => {
   });
 
   it("GET /events/:id returns 200 with event body", async () => {
-    const createRes = await post(app, "/events", { title: "My Event", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "My Event", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await app.handle(new Request(`http://localhost/events/${event.id}`));
     expect(res.status).toBe(200);
@@ -159,8 +196,8 @@ describe("events routes", () => {
 
   it("GET /events?status=upcoming filters results", async () => {
     const STARTED = new Date(Date.now() - 60_000).toISOString();
-    await post(app, "/events", { title: "Upcoming Event", startTime: FUTURE });
-    await post(app, "/events", { title: "Ongoing Event", startTime: STARTED });
+    await post(app, "/events", { title: "Upcoming Event", startTime: FUTURE }, aliceToken);
+    await post(app, "/events", { title: "Ongoing Event", startTime: STARTED }, aliceToken);
     const res = await app.handle(new Request("http://localhost/events?status=upcoming"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: { title: string }[] };
@@ -169,8 +206,8 @@ describe("events routes", () => {
   });
 
   it("GET /events?limit=1 returns at most 1 event", async () => {
-    await post(app, "/events", { title: "Event A", startTime: FUTURE });
-    await post(app, "/events", { title: "Event B", startTime: FUTURE });
+    await post(app, "/events", { title: "Event A", startTime: FUTURE }, aliceToken);
+    await post(app, "/events", { title: "Event B", startTime: FUTURE }, aliceToken);
     const res = await app.handle(new Request("http://localhost/events?limit=1"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: unknown[] };
@@ -178,8 +215,18 @@ describe("events routes", () => {
   });
 
   it("GET /events?category=music filters by category", async () => {
-    await post(app, "/events", { title: "Music Night", startTime: FUTURE, category: "music" });
-    await post(app, "/events", { title: "Sports Day", startTime: FUTURE, category: "sports" });
+    await post(
+      app,
+      "/events",
+      { title: "Music Night", startTime: FUTURE, category: "music" },
+      aliceToken,
+    );
+    await post(
+      app,
+      "/events",
+      { title: "Sports Day", startTime: FUTURE, category: "sports" },
+      aliceToken,
+    );
     const res = await app.handle(new Request("http://localhost/events?category=music"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: { title: string }[] };
@@ -188,16 +235,26 @@ describe("events routes", () => {
   });
 
   it("PATCH /events/:id returns 422 for invalid startTime", async () => {
-    const createRes = await post(app, "/events", { title: "Original", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Original", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
-    const res = await patch(app, `/events/${event.id}`, { startTime: "not-a-date" });
+    const res = await patch(app, `/events/${event.id}`, { startTime: "not-a-date" }, aliceToken);
     expect(res.status).toBe(422);
   });
 
   it("PATCH /events/:id returns 422 for invalid endTime", async () => {
-    const createRes = await post(app, "/events", { title: "Original", startTime: FUTURE });
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Original", startTime: FUTURE },
+      aliceToken,
+    );
     const { event } = (await createRes.json()) as { event: { id: string } };
-    const res = await patch(app, `/events/${event.id}`, { endTime: "not-a-date" });
+    const res = await patch(app, `/events/${event.id}`, { endTime: "not-a-date" }, aliceToken);
     expect(res.status).toBe(422);
   });
 
@@ -255,10 +312,10 @@ describe("events routes", () => {
     expect(res.status).toBe(403);
   });
 
-  it("DELETE /events/:id with no auth deletes null-owner event", async () => {
-    const createRes = await post(app, "/events", { title: "Unowned", startTime: FUTURE });
+  it("DELETE /events/:id returns 403 when no auth token provided", async () => {
+    const createRes = await post(app, "/events", { title: "Mine", startTime: FUTURE }, aliceToken);
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await del(app, `/events/${event.id}`);
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(403);
   });
 });
