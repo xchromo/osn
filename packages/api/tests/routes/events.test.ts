@@ -1,34 +1,63 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { SignJWT } from "jose";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer } from "../helpers/db";
 
 const FUTURE = "2030-06-01T10:00:00.000Z";
+const TEST_JWT_SECRET = "test-secret";
+
+async function makeToken(userId: string): Promise<string> {
+  return new SignJWT({ sub: userId })
+    .setProtectedHeader({ alg: "HS256" })
+    .sign(new TextEncoder().encode(TEST_JWT_SECRET));
+}
 
 const json = (body: unknown) => JSON.stringify(body);
-const post = (app: ReturnType<typeof createEventsRoutes>, path: string, body: unknown) =>
+const post = (
+  app: ReturnType<typeof createEventsRoutes>,
+  path: string,
+  body: unknown,
+  token?: string,
+) =>
   app.handle(
     new Request(`http://localhost${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: json(body),
     }),
   );
-const patch = (app: ReturnType<typeof createEventsRoutes>, path: string, body: unknown) =>
+const patch = (
+  app: ReturnType<typeof createEventsRoutes>,
+  path: string,
+  body: unknown,
+  token?: string,
+) =>
   app.handle(
     new Request(`http://localhost${path}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: json(body),
     }),
   );
-const del = (app: ReturnType<typeof createEventsRoutes>, path: string) =>
-  app.handle(new Request(`http://localhost${path}`, { method: "DELETE" }));
+const del = (app: ReturnType<typeof createEventsRoutes>, path: string, token?: string) =>
+  app.handle(
+    new Request(`http://localhost${path}`, {
+      method: "DELETE",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }),
+  );
 
 describe("events routes", () => {
   let app: ReturnType<typeof createEventsRoutes>;
 
   beforeEach(() => {
-    app = createEventsRoutes(createTestLayer());
+    app = createEventsRoutes(createTestLayer(), TEST_JWT_SECRET);
   });
 
   it("GET /events returns 200 empty list", async () => {
@@ -170,5 +199,66 @@ describe("events routes", () => {
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await patch(app, `/events/${event.id}`, { endTime: "not-a-date" });
     expect(res.status).toBe(422);
+  });
+
+  // ── Ownership ──────────────────────────────────────────────────────────────
+
+  it("POST /events stores createdByUserId from JWT and createdByName from body", async () => {
+    const token = await makeToken("usr_alice");
+    const res = await post(
+      app,
+      "/events",
+      { title: "My Event", startTime: FUTURE, createdByName: "Alice" },
+      token,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      event: { createdByUserId: string; createdByName: string };
+    };
+    expect(body.event.createdByUserId).toBe("usr_alice");
+    expect(body.event.createdByName).toBe("Alice");
+  });
+
+  it("DELETE /events/:id returns 403 when requester does not own the event", async () => {
+    const aliceToken = await makeToken("usr_alice");
+    const bobToken = await makeToken("usr_bob");
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Alice's Event", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await del(app, `/events/${event.id}`, bobToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("DELETE /events/:id returns 204 when requester owns the event", async () => {
+    const token = await makeToken("usr_alice");
+    const createRes = await post(app, "/events", { title: "Mine", startTime: FUTURE }, token);
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await del(app, `/events/${event.id}`, token);
+    expect(res.status).toBe(204);
+  });
+
+  it("PATCH /events/:id returns 403 when requester does not own the event", async () => {
+    const aliceToken = await makeToken("usr_alice");
+    const bobToken = await makeToken("usr_bob");
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Alice's Event", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await patch(app, `/events/${event.id}`, { title: "Hijacked" }, bobToken);
+    expect(res.status).toBe(403);
+  });
+
+  it("DELETE /events/:id with no auth deletes null-owner event", async () => {
+    const createRes = await post(app, "/events", { title: "Unowned", startTime: FUTURE });
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await del(app, `/events/${event.id}`);
+    expect(res.status).toBe(204);
   });
 });

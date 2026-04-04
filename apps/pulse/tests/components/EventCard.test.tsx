@@ -82,7 +82,9 @@ describe("EventCard", () => {
       vi.fn(() => true),
     );
     const onDelete = vi.fn();
-    const { getByText } = render(() => <EventCard event={mockEvent} onDelete={onDelete} />);
+    const { getByText } = render(() => (
+      <EventCard event={mockEvent} onDelete={onDelete} currentUserId="usr_test" />
+    ));
     fireEvent.click(getByText("Delete"));
     expect(onDelete).toHaveBeenCalledWith("evt_1");
   });
@@ -93,9 +95,27 @@ describe("EventCard", () => {
       vi.fn(() => false),
     );
     const onDelete = vi.fn();
-    const { getByText } = render(() => <EventCard event={mockEvent} onDelete={onDelete} />);
+    const { getByText } = render(() => (
+      <EventCard event={mockEvent} onDelete={onDelete} currentUserId="usr_test" />
+    ));
     fireEvent.click(getByText("Delete"));
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("delete button hidden when currentUserId not provided", () => {
+    const { queryByText } = render(() => <EventCard event={mockEvent} onDelete={() => {}} />);
+    expect(queryByText("Delete")).toBeNull();
+  });
+
+  it("delete button hidden when event is owned by another user", () => {
+    const { queryByText } = render(() => (
+      <EventCard
+        event={{ ...mockEvent, createdByUserId: "usr_alice" }}
+        onDelete={() => {}}
+        currentUserId="usr_bob"
+      />
+    ));
+    expect(queryByText("Delete")).toBeNull();
   });
 
   it("renders ongoing status with green styling", () => {
@@ -114,7 +134,7 @@ describe("EventCard", () => {
 
   it("deleting=true → button shows 'Deleting…' and is disabled", () => {
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={() => {}} deleting={true} />
+      <EventCard event={mockEvent} onDelete={() => {}} deleting={true} currentUserId="usr_test" />
     ));
     const btn = getByText("Deleting…") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
@@ -156,7 +176,7 @@ describe("EventCard", () => {
     );
     const onDelete = vi.fn();
     const { getByText } = render(() => (
-      <EventCard event={mockEvent} onDelete={onDelete} deleting={true} />
+      <EventCard event={mockEvent} onDelete={onDelete} deleting={true} currentUserId="usr_test" />
     ));
     fireEvent.click(getByText("Deleting…"));
     expect(onDelete).not.toHaveBeenCalled();

@@ -217,6 +217,86 @@ it.effect("deleteEvent fails with EventNotFound for unknown id", () =>
   ),
 );
 
+// ── Ownership ────────────────────────────────────────────────────────────────
+
+it.effect("createEvent stores createdByUserId, createdByName, createdByAvatar", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent(
+        { title: "Owned", startTime: FUTURE },
+        { createdByUserId: "usr_alice", createdByName: "Alice", createdByAvatar: null },
+      );
+      expect(event.createdByUserId).toBe("usr_alice");
+      expect(event.createdByName).toBe("Alice");
+      expect(event.createdByAvatar).toBeNull();
+    }),
+  ),
+);
+
+it.effect("deleteEvent succeeds when requestingUserId matches createdByUserId", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent(
+        { title: "Mine", startTime: FUTURE },
+        { createdByUserId: "usr_alice", createdByName: "Alice", createdByAvatar: null },
+      );
+      yield* deleteEvent(event.id, "usr_alice");
+      const error = yield* Effect.flip(getEvent(event.id));
+      expect(error._tag).toBe("EventNotFound");
+    }),
+  ),
+);
+
+it.effect("deleteEvent fails with NotEventOwner when requestingUserId does not match", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent(
+        { title: "Not Mine", startTime: FUTURE },
+        { createdByUserId: "usr_alice", createdByName: "Alice", createdByAvatar: null },
+      );
+      const error = yield* Effect.flip(deleteEvent(event.id, "usr_bob"));
+      expect(error._tag).toBe("NotEventOwner");
+    }),
+  ),
+);
+
+it.effect("deleteEvent succeeds on null-owner event regardless of requestingUserId", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent({ title: "Unowned", startTime: FUTURE });
+      yield* deleteEvent(event.id, "usr_anyone");
+      const error = yield* Effect.flip(getEvent(event.id));
+      expect(error._tag).toBe("EventNotFound");
+    }),
+  ),
+);
+
+it.effect("updateEvent fails with NotEventOwner when requestingUserId does not match", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent(
+        { title: "Not Mine", startTime: FUTURE },
+        { createdByUserId: "usr_alice", createdByName: "Alice", createdByAvatar: null },
+      );
+      const error = yield* Effect.flip(updateEvent(event.id, { title: "Hijacked" }, "usr_bob"));
+      expect(error._tag).toBe("NotEventOwner");
+    }),
+  ),
+);
+
+it.effect("updateEvent succeeds when requestingUserId matches createdByUserId", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* createEvent(
+        { title: "Mine", startTime: FUTURE },
+        { createdByUserId: "usr_alice", createdByName: "Alice", createdByAvatar: null },
+      );
+      const updated = yield* updateEvent(event.id, { title: "Updated" }, "usr_alice");
+      expect(updated.title).toBe("Updated");
+    }),
+  ),
+);
+
 it.effect("getEvent auto-transitions upcoming → ongoing when startTime passed", () =>
   provide(
     Effect.gen(function* () {
