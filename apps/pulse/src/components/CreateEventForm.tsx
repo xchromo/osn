@@ -6,6 +6,8 @@ import { toDatetimeLocal, isEndBeforeOrAtStart } from "../lib/utils";
 
 export function CreateEventForm(props: {
   accessToken: string | null;
+  createdByName?: string | null;
+  createdByAvatar?: string | null;
   onSuccess: () => void;
   onCancel: () => void;
 }) {
@@ -37,6 +39,8 @@ export function CreateEventForm(props: {
           latitude: latitude(),
           longitude: longitude(),
           description: description() || undefined,
+          createdByName: props.createdByName ?? undefined,
+          createdByAvatar: props.createdByAvatar ?? undefined,
         },
         { headers },
       );
