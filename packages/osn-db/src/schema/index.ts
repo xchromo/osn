@@ -4,13 +4,14 @@ export const users = sqliteTable(
   "users",
   {
     id: text("id").primaryKey(), // "usr_" prefix
+    handle: text("handle").notNull().unique(), // @handle — immutable social identity
     email: text("email").notNull().unique(),
     displayName: text("display_name"),
     avatarUrl: text("avatar_url"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("users_email_idx").on(t.email)],
+  (t) => [index("users_email_idx").on(t.email), index("users_handle_idx").on(t.handle)],
 );
 
 export const passkeys = sqliteTable(

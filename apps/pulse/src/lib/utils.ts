@@ -57,15 +57,21 @@ export function getUserIdFromToken(accessToken: string | null): string | null {
 }
 
 /**
- * Derives a display name from the `email` claim in an access token.
- * Uses the local-part of the email (before @) as a fallback until a
- * proper user profile endpoint is available.
+ * Derives a display name from an access token.
+ * Prefers the `displayName` claim, falls back to `@handle`, then to the email local-part.
  */
 export function getDisplayNameFromToken(accessToken: string | null): string | null {
   if (!accessToken) return null;
   const payload = decodeJwtPayload(accessToken);
-  if (typeof payload?.email === "string") {
-    return payload.email.split("@")[0] ?? null;
-  }
+  if (typeof payload?.displayName === "string") return payload.displayName;
+  if (typeof payload?.handle === "string") return `@${payload.handle}`;
+  if (typeof payload?.email === "string") return payload.email.split("@")[0] ?? null;
   return null;
+}
+
+/** Extracts the `handle` claim from an access token, without the @ sigil. */
+export function getHandleFromToken(accessToken: string | null): string | null {
+  if (!accessToken) return null;
+  const payload = decodeJwtPayload(accessToken);
+  return typeof payload?.handle === "string" ? payload.handle : null;
 }
