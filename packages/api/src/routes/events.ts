@@ -20,15 +20,18 @@ const statusEnum = t.Optional(
   ]),
 );
 
-/** Extracts the JWT sub claim from a Bearer token. Returns null on any failure. */
-async function extractUserId(
+/** Extracts verified claims from a Bearer token. Returns null on any failure. */
+async function extractClaims(
   authHeader: string | undefined,
   secret: Uint8Array,
-): Promise<string | null> {
+): Promise<{ userId: string; email: string | null } | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
   try {
     const { payload } = await jwtVerify(authHeader.slice(7), secret);
-    return typeof payload.sub === "string" ? payload.sub : null;
+    const userId = typeof payload.sub === "string" ? payload.sub : null;
+    if (!userId) return null;
+    const email = typeof payload.email === "string" ? payload.email : null;
+    return { userId, email };
   } catch {
     return null;
   }
@@ -85,15 +88,15 @@ export const createEventsRoutes = (
     .post(
       "/",
       async ({ body, headers, set }) => {
-        const userId = await extractUserId(headers["authorization"], secretBytes);
-        if (!userId) {
+        const claims = await extractClaims(headers["authorization"], secretBytes);
+        if (!claims) {
           set.status = 401;
           return { message: "Unauthorized" } as const;
         }
         const creator = {
-          createdByUserId: userId,
-          createdByName: body.createdByName ?? null,
-          createdByAvatar: body.createdByAvatar ?? null,
+          createdByUserId: claims.userId,
+          createdByName: claims.email ? (claims.email.split("@")[0] ?? null) : null,
+          createdByAvatar: null,
         };
         const result = await Effect.runPromise(
           createEvent(body, creator).pipe(
@@ -123,15 +126,18 @@ export const createEventsRoutes = (
           endTime: t.Optional(t.String({ format: "date-time" })),
           status: statusEnum,
           imageUrl: t.Optional(t.String()),
-          createdByName: t.Optional(t.String()),
-          createdByAvatar: t.Optional(t.String()),
         }),
       },
     )
     .patch(
       "/:id",
       async ({ params, body, headers, set }) => {
-        const userId = await extractUserId(headers["authorization"], secretBytes);
+        const claims = await extractClaims(headers["authorization"], secretBytes);
+        if (!claims) {
+          set.status = 401;
+          return { message: "Unauthorized" } as const;
+        }
+        const userId = claims.userId;
         const result = await Effect.runPromise(
           updateEvent(params.id, body, userId).pipe(
             Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
@@ -178,7 +184,12 @@ export const createEventsRoutes = (
     .delete(
       "/:id",
       async ({ params, headers, set }) => {
-        const userId = await extractUserId(headers["authorization"], secretBytes);
+        const claims = await extractClaims(headers["authorization"], secretBytes);
+        if (!claims) {
+          set.status = 401;
+          return { message: "Unauthorized" } as const;
+        }
+        const userId = claims.userId;
         const result = await Effect.runPromise(
           deleteEvent(params.id, userId).pipe(
             Effect.catchTag("EventNotFound", () => Effect.succeed(null)),

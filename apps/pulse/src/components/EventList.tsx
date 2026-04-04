@@ -19,8 +19,11 @@ async function fetchEvents(accessToken: string | null): Promise<EventItem[]> {
 export function EventList() {
   const { session, login, logout } = useAuth();
   const accessToken = () => session()?.accessToken ?? null;
-  const currentUserId = createMemo(() => getUserIdFromToken(accessToken()));
-  const currentDisplayName = createMemo(() => getDisplayNameFromToken(accessToken()));
+  const authClaims = createMemo(() => {
+    const token = accessToken();
+    return { userId: getUserIdFromToken(token), displayName: getDisplayNameFromToken(token) };
+  });
+  const currentUserId = () => authClaims().userId;
   const tokenSource = createMemo(() => ({ token: accessToken() }));
   const [events, { refetch }] = createResource(tokenSource, ({ token }) => fetchEvents(token));
   const [showForm, setShowForm] = createSignal(false);
@@ -90,7 +93,6 @@ export function EventList() {
       <Show when={showForm()}>
         <CreateEventForm
           accessToken={accessToken()}
-          createdByName={currentDisplayName()}
           onSuccess={handleFormSuccess}
           onCancel={() => setShowForm(false)}
         />

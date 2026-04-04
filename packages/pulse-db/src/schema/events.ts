@@ -27,7 +27,10 @@ export const events = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date()),
   },
-  (t) => [index("events_start_time_idx").on(t.startTime)],
+  (t) => [
+    index("events_start_time_idx").on(t.startTime),
+    index("events_created_by_user_id_idx").on(t.createdByUserId),
+  ],
 );
 
 export type Event = typeof events.$inferSelect;

@@ -122,7 +122,9 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
           .from(events)
           .where(filters.length > 0 ? and(...filters) : undefined)
           .orderBy(events.startTime)
-          .limit(params.limit ? Number(params.limit) : 20) as Promise<Event[]>,
+          .limit(params.limit ? Math.min(Math.max(1, Number(params.limit)), 100) : 20) as Promise<
+          Event[]
+        >,
       catch: (cause) => new DatabaseError({ cause }),
     });
 
@@ -213,16 +215,20 @@ export const updateEvent = (
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 
+    const now = new Date();
     yield* Effect.tryPromise({
       try: () =>
         db
           .update(events)
-          .set({ ...validated, updatedAt: new Date() })
+          .set({ ...validated, updatedAt: now })
           .where(eq(events.id, id)),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    return yield* getEvent(id);
+    // Build the updated event in-memory rather than re-fetching from DB.
+    // applyTransition is still called in case startTime/endTime changed.
+    const updated = { ...existing, ...validated, updatedAt: now } as Event;
+    return yield* applyTransition(updated);
   });
 
 export const deleteEvent = (
