@@ -86,6 +86,10 @@ export const createEventsRoutes = (
       "/",
       async ({ body, headers, set }) => {
         const userId = await extractUserId(headers["authorization"], secretBytes);
+        if (!userId) {
+          set.status = 401;
+          return { message: "Unauthorized" } as const;
+        }
         const creator = {
           createdByUserId: userId,
           createdByName: body.createdByName ?? null,

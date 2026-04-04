@@ -166,14 +166,14 @@ export const getEvent = (id: string): Effect.Effect<Event, EventNotFound | Datab
   });
 
 interface CreatorInfo {
-  createdByUserId: string | null;
+  createdByUserId: string;
   createdByName: string | null;
   createdByAvatar: string | null;
 }
 
 export const createEvent = (
   data: unknown,
-  creator: CreatorInfo = { createdByUserId: null, createdByName: null, createdByAvatar: null },
+  creator: CreatorInfo,
 ): Effect.Effect<Event, ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -205,7 +205,7 @@ export const updateEvent = (
     const { db } = yield* Db;
 
     const existing = yield* getEvent(id);
-    if (existing.createdByUserId !== null && existing.createdByUserId !== requestingUserId) {
+    if (existing.createdByUserId !== requestingUserId) {
       return yield* Effect.fail(new NotEventOwner({ id }));
     }
 
@@ -233,7 +233,7 @@ export const deleteEvent = (
     const { db } = yield* Db;
 
     const existing = yield* getEvent(id);
-    if (existing.createdByUserId !== null && existing.createdByUserId !== requestingUserId) {
+    if (existing.createdByUserId !== requestingUserId) {
       return yield* Effect.fail(new NotEventOwner({ id }));
     }
 

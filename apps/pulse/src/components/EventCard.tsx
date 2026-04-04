@@ -27,10 +27,8 @@ export function EventCard(props: {
   deleting?: boolean;
   currentUserId?: string | null;
 }) {
-  // null and undefined both mean "unowned" — allow delete for any authenticated user
   const canDelete = () =>
-    !!props.currentUserId &&
-    (props.event.createdByUserId == null || props.event.createdByUserId === props.currentUserId);
+    !!props.currentUserId && props.event.createdByUserId === props.currentUserId;
 
   return (
     <div class="rounded-xl border border-border bg-card overflow-hidden">

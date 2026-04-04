@@ -17,7 +17,7 @@ export const events = sqliteTable(
       .notNull()
       .default("upcoming"),
     imageUrl: text("image_url"),
-    createdByUserId: text("created_by_user_id"),
+    createdByUserId: text("created_by_user_id").notNull(),
     createdByName: text("created_by_name"),
     createdByAvatar: text("created_by_avatar"),
     createdAt: integer("created_at", { mode: "timestamp" })
