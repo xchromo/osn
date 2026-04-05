@@ -1,5 +1,5 @@
 import { Data, Effect } from "effect";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { users, connections, closeFriends, blocks } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 
@@ -20,6 +20,17 @@ export class DatabaseError extends Data.TaggedError("DatabaseError")<{
 }> {}
 
 // ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface ListOptions {
+  /** Maximum rows to return. Clamped to 1–100. Default: 50. */
+  limit?: number;
+  /** Zero-based row offset for pagination. Default: 0. */
+  offset?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -29,6 +40,10 @@ function genId(prefix: string): string {
 
 function now(): Date {
   return new Date();
+}
+
+function clampLimit(limit: number | undefined): number {
+  return Math.min(Math.max(limit ?? 50, 1), 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -58,16 +73,28 @@ export function createGraphService() {
       return result.length > 0;
     });
 
-  /** Returns true if either party has blocked the other. */
+  /**
+   * Returns true if either party has blocked the other.
+   * Single query via OR — O(1) round-trips regardless of direction.
+   */
   const eitherBlocked = (userA: string, userB: string): Effect.Effect<boolean, DatabaseError, Db> =>
     Effect.gen(function* () {
-      const [aBlocksB, bBlocksA] = yield* Effect.all(
-        [isBlocked(userA, userB), isBlocked(userB, userA)],
-        {
-          concurrency: "unbounded",
-        },
-      );
-      return aBlocksB || bBlocksA;
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select()
+            .from(blocks)
+            .where(
+              or(
+                and(eq(blocks.blockerId, userA), eq(blocks.blockedId, userB)),
+                and(eq(blocks.blockerId, userB), eq(blocks.blockedId, userA)),
+              ),
+            )
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return result.length > 0;
     });
 
   // -------------------------------------------------------------------------
@@ -87,7 +114,6 @@ export function createGraphService() {
   ): Effect.Effect<"none" | "pending_sent" | "pending_received" | "connected", DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
-      // Check both directions in one query
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
@@ -254,11 +280,13 @@ export function createGraphService() {
 
   const listConnections = (
     userId: string,
+    options: ListOptions = {},
   ): Effect.Effect<{ user: typeof users.$inferSelect; connectedAt: Date }[], DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      const limit = clampLimit(options.limit);
+      const offset = options.offset ?? 0;
 
-      // Fetch accepted rows where user is either party
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
@@ -269,63 +297,61 @@ export function createGraphService() {
                 or(eq(connections.requesterId, userId), eq(connections.addresseeId, userId)),
                 eq(connections.status, "accepted"),
               ),
-            ),
+            )
+            .limit(limit)
+            .offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       if (rows.length === 0) return [];
 
-      // Collect peer IDs
       const peerIds = rows.map((r) => (r.requesterId === userId ? r.addresseeId : r.requesterId));
       const updatedAtMap = new Map(
         rows.map((r) => [r.requesterId === userId ? r.addresseeId : r.requesterId, r.updatedAt]),
       );
 
-      // Fetch all peers concurrently
-      const peers = yield* Effect.all(
-        peerIds.map((peerId) =>
-          Effect.tryPromise({
-            try: () => db.select().from(users).where(eq(users.id, peerId)).limit(1),
-            catch: (cause) => new DatabaseError({ cause }),
-          }).pipe(Effect.map((r) => r[0] ?? null)),
-        ),
-        { concurrency: "unbounded" },
-      );
+      const peers = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(inArray(users.id, peerIds)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
 
-      return peers
-        .filter((u): u is typeof users.$inferSelect => u !== null)
-        .map((u) => ({ user: u, connectedAt: updatedAtMap.get(u.id) ?? new Date() }));
+      return peers.map((u) => ({ user: u, connectedAt: updatedAtMap.get(u.id) ?? new Date() }));
     });
 
   const listPendingRequests = (
     userId: string,
+    options: ListOptions = {},
   ): Effect.Effect<{ user: typeof users.$inferSelect; requestedAt: Date }[], DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      const limit = clampLimit(options.limit);
+      const offset = options.offset ?? 0;
+
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
             .select()
             .from(connections)
-            .where(and(eq(connections.addresseeId, userId), eq(connections.status, "pending"))),
+            .where(and(eq(connections.addresseeId, userId), eq(connections.status, "pending")))
+            .limit(limit)
+            .offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       if (rows.length === 0) return [];
 
-      const requesters = yield* Effect.all(
-        rows.map((row) =>
-          Effect.tryPromise({
-            try: () => db.select().from(users).where(eq(users.id, row.requesterId)).limit(1),
-            catch: (cause) => new DatabaseError({ cause }),
-          }).pipe(Effect.map((r) => ({ user: r[0] ?? null, requestedAt: row.createdAt }))),
-        ),
-        { concurrency: "unbounded" },
-      );
+      const requesterIds = rows.map((r) => r.requesterId);
+      const requestedAtMap = new Map(rows.map((r) => [r.requesterId, r.createdAt]));
 
-      return requesters.filter(
-        (r): r is { user: typeof users.$inferSelect; requestedAt: Date } => r.user !== null,
-      );
+      const requesters = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(inArray(users.id, requesterIds)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      return requesters.map((u) => ({
+        user: u,
+        requestedAt: requestedAtMap.get(u.id) ?? new Date(),
+      }));
     });
 
   // -------------------------------------------------------------------------
@@ -343,7 +369,6 @@ export function createGraphService() {
         );
       }
 
-      // Must be connected first
       const status = yield* getConnectionStatus(userId, friendId);
       if (status !== "connected") {
         return yield* Effect.fail(
@@ -390,27 +415,34 @@ export function createGraphService() {
 
   const listCloseFriends = (
     userId: string,
+    options: ListOptions = {},
   ): Effect.Effect<(typeof users.$inferSelect)[], DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      const limit = clampLimit(options.limit);
+      const offset = options.offset ?? 0;
+
       const rows = yield* Effect.tryPromise({
-        try: () => db.select().from(closeFriends).where(eq(closeFriends.userId, userId)),
+        try: () =>
+          db
+            .select()
+            .from(closeFriends)
+            .where(eq(closeFriends.userId, userId))
+            .limit(limit)
+            .offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       if (rows.length === 0) return [];
 
-      const friends = yield* Effect.all(
-        rows.map((row) =>
-          Effect.tryPromise({
-            try: () => db.select().from(users).where(eq(users.id, row.friendId)).limit(1),
-            catch: (cause) => new DatabaseError({ cause }),
-          }).pipe(Effect.map((r) => r[0] ?? null)),
-        ),
-        { concurrency: "unbounded" },
-      );
+      const friendIds = rows.map((r) => r.friendId);
 
-      return friends.filter((u): u is typeof users.$inferSelect => u !== null);
+      const friends = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(inArray(users.id, friendIds)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      return friends;
     });
 
   // -------------------------------------------------------------------------
@@ -428,47 +460,33 @@ export function createGraphService() {
 
       const { db } = yield* Db;
 
-      // Remove any existing connection silently
-      const connRows = yield* Effect.tryPromise({
+      // Remove any existing connection directly — no SELECT needed
+      yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
-            .from(connections)
+            .delete(connections)
             .where(
               or(
                 and(eq(connections.requesterId, blockerId), eq(connections.addresseeId, blockedId)),
                 and(eq(connections.requesterId, blockedId), eq(connections.addresseeId, blockerId)),
               ),
-            )
-            .limit(1),
+            ),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      if (connRows.length > 0) {
-        yield* Effect.tryPromise({
-          try: () => db.delete(connections).where(eq(connections.id, connRows[0].id)),
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-      }
-
-      // Also remove from close friends in both directions
-      yield* Effect.all(
-        [
-          Effect.tryPromise({
-            try: () =>
-              db
-                .delete(closeFriends)
-                .where(
-                  or(
-                    and(eq(closeFriends.userId, blockerId), eq(closeFriends.friendId, blockedId)),
-                    and(eq(closeFriends.userId, blockedId), eq(closeFriends.friendId, blockerId)),
-                  ),
-                ),
-            catch: (cause) => new DatabaseError({ cause }),
-          }),
-        ],
-        { concurrency: "unbounded" },
-      );
+      // Remove close-friend entries in both directions
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .delete(closeFriends)
+            .where(
+              or(
+                and(eq(closeFriends.userId, blockerId), eq(closeFriends.friendId, blockedId)),
+                and(eq(closeFriends.userId, blockedId), eq(closeFriends.friendId, blockerId)),
+              ),
+            ),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
 
       yield* Effect.tryPromise({
         try: () =>
@@ -508,27 +526,29 @@ export function createGraphService() {
 
   const listBlocks = (
     userId: string,
+    options: ListOptions = {},
   ): Effect.Effect<(typeof users.$inferSelect)[], DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      const limit = clampLimit(options.limit);
+      const offset = options.offset ?? 0;
+
       const rows = yield* Effect.tryPromise({
-        try: () => db.select().from(blocks).where(eq(blocks.blockerId, userId)),
+        try: () =>
+          db.select().from(blocks).where(eq(blocks.blockerId, userId)).limit(limit).offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       if (rows.length === 0) return [];
 
-      const blocked = yield* Effect.all(
-        rows.map((row) =>
-          Effect.tryPromise({
-            try: () => db.select().from(users).where(eq(users.id, row.blockedId)).limit(1),
-            catch: (cause) => new DatabaseError({ cause }),
-          }).pipe(Effect.map((r) => r[0] ?? null)),
-        ),
-        { concurrency: "unbounded" },
-      );
+      const blockedIds = rows.map((r) => r.blockedId);
 
-      return blocked.filter((u): u is typeof users.$inferSelect => u !== null);
+      const blocked = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(inArray(users.id, blockedIds)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      return blocked;
     });
 
   return {

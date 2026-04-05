@@ -39,6 +39,7 @@ export function createTestLayer() {
       UNIQUE (requester_id, addressee_id)
     )
   `);
+  sqlite.run(`CREATE INDEX connections_requester_idx ON connections (requester_id)`);
   sqlite.run(`CREATE INDEX connections_addressee_idx ON connections (addressee_id)`);
   sqlite.run(`
     CREATE TABLE close_friends (
@@ -59,6 +60,7 @@ export function createTestLayer() {
       UNIQUE (blocker_id, blocked_id)
     )
   `);
+  sqlite.run(`CREATE INDEX blocks_blocker_idx ON blocks (blocker_id)`);
   sqlite.run(`CREATE INDEX blocks_blocked_idx ON blocks (blocked_id)`);
   const db = drizzle(sqlite, { schema });
   return Layer.succeed(Db, { db });

@@ -60,6 +60,7 @@ export const connections = sqliteTable(
   },
   (t) => [
     unique("connections_pair_idx").on(t.requesterId, t.addresseeId),
+    index("connections_requester_idx").on(t.requesterId),
     index("connections_addressee_idx").on(t.addresseeId),
   ],
 );
@@ -96,6 +97,7 @@ export const blocks = sqliteTable(
   },
   (t) => [
     unique("blocks_pair_idx").on(t.blockerId, t.blockedId),
+    index("blocks_blocker_idx").on(t.blockerId),
     index("blocks_blocked_idx").on(t.blockedId),
   ],
 );

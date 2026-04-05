@@ -540,11 +540,11 @@ describe("graph routes", () => {
     expect(json.blocked).toBe(true);
   });
 
-  it("GET /graph/is-blocked/:handle returns true when target blocked caller", async () => {
+  it("GET /graph/is-blocked/:handle returns false when only target has blocked caller (M1: one-directional)", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     const bob = await registerAndGetToken("bob@example.com", "bob");
 
-    // Bob blocks alice
+    // Bob blocks alice — but alice has NOT blocked bob
     await graphApp.handle(
       new Request("http://localhost/graph/blocks/alice", {
         method: "POST",
@@ -552,14 +552,14 @@ describe("graph routes", () => {
       }),
     );
 
-    // Alice queries — should still see blocked=true (eitherBlocked)
+    // Alice queries is-blocked/bob → false: she has not blocked him
     const res = await graphApp.handle(
       new Request("http://localhost/graph/is-blocked/bob", {
         headers: { Authorization: `Bearer ${alice.token}` },
       }),
     );
     const json = (await res.json()) as { blocked: boolean };
-    expect(json.blocked).toBe(true);
+    expect(json.blocked).toBe(false);
   });
 
   it("block removes existing connection", async () => {
