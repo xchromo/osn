@@ -272,5 +272,23 @@ export function createGraphRoutes(authConfig: AuthConfig, dbLayer: Layer.Layer<D
           })),
         };
       })
+      // -----------------------------------------------------------------------
+      // Block status check (used by Messaging and other services)
+      // -----------------------------------------------------------------------
+      .get(
+        "/is-blocked/:handle",
+        async ({ params, headers, set }) => {
+          const caller = await requireAuth(headers.authorization, set);
+          if (!caller) return { error: "Unauthorized" };
+
+          const targetId = await resolveHandle(params.handle, set);
+          if (!targetId) return { error: "User not found" };
+
+          // Returns true if caller blocked target OR target blocked caller
+          const blocked = await run(graph.eitherBlocked(caller.userId, targetId));
+          return { blocked };
+        },
+        { params: t.Object({ handle: t.String() }) },
+      )
   );
 }

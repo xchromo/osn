@@ -292,13 +292,34 @@ describe("blockUser", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("removes close friend entries when blocking", () =>
+  it.effect("removes close friend entries when blocking (blocker's list)", () =>
     Effect.gen(function* () {
       const { alice, bob } = yield* setupConnected;
       yield* graph.addCloseFriend(alice.id, bob.id);
       yield* graph.blockUser(alice.id, bob.id);
       const list = yield* graph.listCloseFriends(alice.id);
       expect(list).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("removes close friend entries when blocking (blockee's list)", () =>
+    Effect.gen(function* () {
+      const { alice, bob } = yield* setupConnected;
+      // Bob has alice as a close friend
+      yield* graph.addCloseFriend(bob.id, alice.id);
+      // Alice blocks bob — should clear bob's list too
+      yield* graph.blockUser(alice.id, bob.id);
+      const list = yield* graph.listCloseFriends(bob.id);
+      expect(list).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("eitherBlocked is true when either party blocks", () =>
+    Effect.gen(function* () {
+      const { alice, bob } = yield* setupTwoUsers;
+      yield* graph.blockUser(bob.id, alice.id); // bob blocks alice
+      const either = yield* graph.eitherBlocked(alice.id, bob.id);
+      expect(either).toBe(true);
     }).pipe(Effect.provide(createTestLayer())),
   );
 

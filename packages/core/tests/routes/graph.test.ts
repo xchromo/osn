@@ -381,6 +381,97 @@ describe("graph routes", () => {
     expect(json.blocks[0].handle).toBe("bob");
   });
 
+  // -------------------------------------------------------------------------
+  // Routing: static "pending" segment must not be swallowed by /:handle
+  // -------------------------------------------------------------------------
+
+  it("GET /graph/connections/pending is not confused with handle 'pending'", async () => {
+    // Register a user whose handle is literally "pending"
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const pending = await registerAndGetToken("pending@example.com", "pending");
+
+    // Alice sends a request to the user called "pending"
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/pending", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    // GET /graph/connections/pending from pending's perspective should return
+    // the incoming request list (alice), not a status check for handle "pending"
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/connections/pending", {
+        headers: { Authorization: `Bearer ${pending.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { pending: { handle: string }[] };
+    // This should be the pending-requests list, not a status object
+    expect(Array.isArray(json.pending)).toBe(true);
+    expect(json.pending[0].handle).toBe("alice");
+  });
+
+  // -------------------------------------------------------------------------
+  // isBlocked
+  // -------------------------------------------------------------------------
+
+  it("GET /graph/is-blocked/:handle returns false when no block", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    await registerAndGetToken("bob@example.com", "bob");
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/is-blocked/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { blocked: boolean };
+    expect(json.blocked).toBe(false);
+  });
+
+  it("GET /graph/is-blocked/:handle returns true when caller blocked target", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    await registerAndGetToken("bob@example.com", "bob");
+
+    await graphApp.handle(
+      new Request("http://localhost/graph/blocks/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/is-blocked/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const json = (await res.json()) as { blocked: boolean };
+    expect(json.blocked).toBe(true);
+  });
+
+  it("GET /graph/is-blocked/:handle returns true when target blocked caller", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    // Bob blocks alice
+    await graphApp.handle(
+      new Request("http://localhost/graph/blocks/alice", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${bob.token}` },
+      }),
+    );
+
+    // Alice queries — should still see blocked=true (eitherBlocked)
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/is-blocked/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const json = (await res.json()) as { blocked: boolean };
+    expect(json.blocked).toBe(true);
+  });
+
   it("block removes existing connection", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     const bob = await registerAndGetToken("bob@example.com", "bob");
