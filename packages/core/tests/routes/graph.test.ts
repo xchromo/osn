@@ -243,6 +243,38 @@ describe("graph routes", () => {
   // Close friends
   // -------------------------------------------------------------------------
 
+  it("PATCH /graph/connections/:handle reject → none", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/connections/alice", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bob.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "reject" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const statusRes = await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const json = (await statusRes.json()) as { status: string };
+    expect(json.status).toBe("none");
+  });
+
   it("POST /graph/close-friends/:handle → 201 after connecting", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     const bob = await registerAndGetToken("bob@example.com", "bob");
@@ -327,6 +359,64 @@ describe("graph routes", () => {
   // -------------------------------------------------------------------------
   // Blocks
   // -------------------------------------------------------------------------
+
+  it("DELETE /graph/close-friends/:handle removes from list", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    // Connect and add as close friend
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/alice", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bob.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "accept" }),
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const listRes = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const json = (await listRes.json()) as { closeFriends: unknown[] };
+    expect(json.closeFriends).toHaveLength(0);
+  });
+
+  it("DELETE /graph/close-friends/:handle → 400 if not in list", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    await registerAndGetToken("bob@example.com", "bob");
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
 
   it("POST /graph/blocks/:handle → 201 blocks a user", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
