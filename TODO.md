@@ -4,7 +4,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Current Status
 
-`@osn/core` — full OIDC-style auth server: passkey (WebAuthn), OTP, magic-link, PKCE, JWT, OIDC discovery. `@osn/db` — users + passkeys + social graph schema (connections, close friends, blocks). `apps/osn` — auth server entry point on port 4000. `@osn/client` — session expiry check, `handleCallback`. `apps/pulse` — auth callback handler, event CRUD UI, location autocomplete (with coordinate capture), Maps button on EventCard, toast notifications (solid-toast), double-click guard on delete; 59 component tests. `@pulse/db` — lat/lng columns + dynamic seed data. `@osn/api` — events domain fully tested with coordinate range validation. 124 tests passing across 11 files.
+`@osn/core` — full OIDC-style auth server (passkey, OTP, magic-link, PKCE, JWT, OIDC discovery) + complete social graph service + HTTP routes (connections, close friends, blocks) with rate limiting, input validation, pagination, N+1-free list queries, and safe error responses. `@osn/db` — users + passkeys + social graph schema. `apps/osn` — auth + graph server on port 4000. `apps/pulse` — full event CRUD UI (59 component tests), location autocomplete, Maps button, toast, double-click guard. `@pulse/db` — lat/lng + dynamic seed. `@osn/api` — events domain with coordinate range validation. 127 tests passing across 12 files.
 
 ---
 
@@ -187,6 +187,14 @@ Address **High** items before any non-local deployment.
 - [ ] No reserved-handle blocklist in DB — currently enforced in app layer only (`RESERVED_HANDLES` set in `@osn/core`); consider a DB-level check constraint or migration-managed table — L11
 - [x] `EventList` `console.error` logs raw server error objects — guarded with `import.meta.env.DEV` — L9
 - ~~`@vitest/coverage-istanbul` uses caret version range — L10~~ dismissed: caret ranges are the project standard
+- [x] Graph GET endpoints unguarded — all GET handlers now wrapped in try/catch; generic "Request failed" on unexpected errors — H2-graph (fixed in feat/social-graph-data-model)
+- [x] `is-blocked` route used `eitherBlocked`, leaking whether target had blocked caller — route now uses `isBlocked(caller, target)` only — M1-graph (fixed in feat/social-graph-data-model)
+- [x] No rate limiting on graph write endpoints — module-level fixed-window limiter added (60/user/min) — M2-graph (fixed in feat/social-graph-data-model)
+- [x] Raw DB/Effect errors surfaced in graph responses — `safeError()` helper added; only `GraphError`/`NotFoundError` messages exposed — M3-graph (fixed in feat/social-graph-data-model)
+- [x] No input validation on `:handle` route param in graph routes — TypeBox `HandleParam` with regex `^[a-z0-9_]+$` + length bounds added — M4-graph (fixed in feat/social-graph-data-model)
+- [ ] Graph rate-limit store (`rateLimitStore`) never evicts expired windows — same eviction gap as auth stores; add periodic sweep — L12-graph
+- [x] `displayName` returned as `undefined` in graph list responses when absent — normalised to `null` via `userProjection()` — L3-graph (fixed in feat/social-graph-data-model)
+- [ ] `jwtSecret` falls back to `"dev-secret"` in graph auth (pre-existing from auth service) — throw at startup in production — already tracked as M9
 
 ---
 
@@ -202,6 +210,11 @@ Address **High** items before any non-local deployment.
 - [x] Eliminate extra `getEvent` round-trips in `updateEvent` — P8 (returns in-memory merged result; applyTransition called locally)
 - [ ] Eliminate extra `getEvent` round-trip in `createEvent` via `RETURNING *` — P9
 - [ ] Add index on `created_by_user_id` in pulse-db events — done in feat/event-ownership; move to done once merged
+- [x] N+1 queries in graph list functions — replaced with `inArray` batch fetches — P1-graph (fixed in feat/social-graph-data-model)
+- [x] `eitherBlocked` made two sequential `isBlocked` calls — collapsed to single OR query — P2-graph (fixed in feat/social-graph-data-model)
+- [x] `blockUser` used SELECT-then-DELETE pattern — replaced with direct `DELETE WHERE OR` — P3-graph (fixed in feat/social-graph-data-model)
+- [ ] `resolveHandle` re-fetches user from DB even when the handler already has the User row — minor; consolidate once graph routes grow — P10-graph
+- [ ] Graph list endpoints load entire result set before slicing — add DB-level `LIMIT`/`OFFSET` once pagination is a user-facing concern — P11-graph (low priority; clamped to 100 rows today)
 
 ---
 
