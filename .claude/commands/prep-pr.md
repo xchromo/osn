@@ -79,13 +79,29 @@ Read the file `.claude/commands/review-performance.md` and execute its instructi
 **Agent 2 — Security review** (general-purpose agent):
 Read the file `.claude/commands/review-security.md` and execute its instructions, passing the list of affected workspaces and the branch name as context.
 
-Wait for both agents to complete. Present both reports to the user in full.
+Wait for both agents to complete. Present both reports to the user in full, using the finding IDs from each review (e.g. S-H1, P-W2) so they can be referenced in the PR description.
 
 Ask the user: "Do you want to address any findings before pushing?" If yes, pause and let the user make changes, then re-run steps 3 and 4 before continuing.
 
 ---
 
-## Step 7 — Push and open PR
+## Step 7 — Update documentation
+
+Before pushing, update the relevant docs to reflect the changes made on this branch.
+
+**Always check and update as needed:**
+
+- **`TODO.md` — Current Status**: rewrite the snapshot to reflect what this branch ships. One concise paragraph or table row per logical area changed. Keep it tight.
+- **`TODO.md` — Security/Performance backlogs**: add any new `S-*` / `P-*` findings from Step 6. Use the finding ID as the item label (e.g. `- [ ] S-M1 — No rate limit on /foo endpoint`). Mark any findings that were resolved on this branch with `[x]` + a short note.
+- **`TODO.md` — App/Platform sections**: check off any items completed by this branch.
+- **`TODO.md` — Up Next**: prune completed items; add new high-priority items if they surfaced.
+- **`CLAUDE.md`**: update if this branch introduces a new pattern, package, convention, or architectural decision that future AI sessions need to know about. Do not add noise — only update if the change is genuinely reusable context.
+
+Commit any doc updates with the message: `docs: update TODO and CLAUDE for <branch-summary>`.
+
+---
+
+## Step 8 — Push and open PR
 
 Run `git push -u origin HEAD`.
 
@@ -103,7 +119,14 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 - <list of affected packages/apps, or "CI/infra only">
 
 ## Decisions & issues
-- <every non-trivial decision made during implementation or prep, and every issue found and how it was resolved — e.g. lint fixes, test failures, security/perf findings accepted or addressed, library choices, approach changes. One bullet per item. Be specific: name the problem and the fix.>
+
+<For every non-trivial decision, lint/type error, test failure, or security/perf finding — use this format per item:>
+
+**[S-H1 / P-W2 / approach / etc.]** — <short title>
+- **Issue:** What the problem was.
+- **Why:** Why it mattered — risk, correctness, or design concern.
+- **Solution:** What was done to address it.
+- **Rationale:** Why this is the right fix.
 
 ## Test plan
 - <checklist of what to verify when reviewing>
@@ -113,11 +136,6 @@ EOF
 )"
 ```
 
-**The "Decisions & issues" section is mandatory.** It must capture:
-- Any approach changes (e.g. switched library, changed architecture)
-- Any lint/format/type errors encountered and how they were fixed
-- Any test failures found during prep and how they were resolved
-- Security or performance findings from the review, and whether each was addressed or dismissed (with rationale)
-- Any non-obvious implementation choices that a reviewer might question
+**The "Decisions & issues" section is mandatory.** Every entry must use the four-field format above. Entries that were dismissed rather than fixed must still appear — include the rationale for dismissal in the Rationale field.
 
 Report the PR URL once created.

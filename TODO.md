@@ -4,7 +4,16 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Current Status
 
-`@osn/crypto` — ARC token system for S2S auth: ES256 key pair generation, JWT creation/verification, scope validation, public key resolution from DB, in-memory token cache with 30s-before-expiry eviction. `@osn/db` — `service_accounts` table added for ARC key registration. `@osn/core` — full OIDC-style auth server (passkey, OTP, magic-link, PKCE, JWT, OIDC discovery) + complete social graph service + HTTP routes (connections, close friends, blocks) with rate limiting, input validation, pagination, N+1-free list queries, and safe error responses. `apps/osn` — auth + graph server on port 4000. `apps/pulse` — full event CRUD UI (59 component tests), location autocomplete, Maps button, toast, double-click guard. `@pulse/db` — lat/lng + dynamic seed. `@osn/api` — events domain with coordinate range validation. 143 tests passing across 13 files.
+| Area | What shipped |
+|------|-------------|
+| `@osn/crypto` | ARC S2S auth — ES256 key pairs, JWT create/verify, scope gates, 30s-before-expiry in-memory cache |
+| `@osn/db` | `service_accounts` table for ARC public key registration |
+| `@osn/core` | Full OIDC auth (passkey, OTP, magic-link, PKCE, JWT, discovery) + social graph (connections, close friends, blocks) — rate limiting, pagination, N+1-free queries, safe error responses |
+| `apps/osn` | Auth + graph server on port 4000 |
+| `apps/pulse` | Event CRUD UI + location autocomplete + Maps button + toast notifications + coordinate storage; 59 component tests |
+| `@pulse/db` | lat/lng columns + dynamic seed |
+| `@osn/api` | Events domain with coordinate range validation |
+| Tests | 143 passing across 13 files |
 
 ---
 

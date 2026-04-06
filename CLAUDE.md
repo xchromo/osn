@@ -157,6 +157,24 @@ Generate a key pair once at service setup with `generateArcKeyPair()`, store the
 
 **Current S2S strategy:** Pulse API imports `createGraphService()` from `@osn/core` directly (zero network overhead). ARC tokens guard HTTP-based S2S (`/graph/internal/*`) — needed when scaling to multi-process, and immediately for any third-party app. See the "S2S scaling" deferred decision in TODO.md.
 
+## Review Finding IDs
+
+All review skills (`/review-security`, `/review-performance`, `/review-tests`) tag findings with short IDs so they can be referenced precisely (e.g. "fix S-H1 before merging", "P-C2 still open").
+
+| Prefix | Skill | Tiers |
+|--------|-------|-------|
+| `S-C`, `S-H`, `S-M`, `S-L` | review-security | Critical / High / Medium / Low |
+| `P-C`, `P-W`, `P-I` | review-performance | Critical / Warning / Info |
+| `T-M`, `T-U`, `T-E`, `T-R`, `T-S` | review-tests | Missing file / Untested export / Error path / Route test / Suggestion |
+
+Counters increment within each tier across the full report (`S-H1`, `S-H2`, …). Each finding uses a four-field format: **Issue** / **Why** / **Solution** / **Rationale**.
+
+When adding findings to the TODO.md Security or Performance backlogs, use the finding ID as the item label:
+```
+- [ ] S-M3 — No rate limit on /foo endpoint
+- [x] P-W1 — N+1 in listEvents (fixed: inArray batch fetch)
+```
+
 ## Conventions
 
 - Tauri apps created via CLI (`bunx create-tauri-app`), not manually
