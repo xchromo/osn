@@ -27,22 +27,32 @@ function createTestDb() {
       updated_at INTEGER NOT NULL
     )
   `);
+  sqlite.run(`
+    CREATE TABLE event_rsvps (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id),
+      user_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'going',
+      created_at INTEGER NOT NULL,
+      UNIQUE (event_id, user_id)
+    )
+  `);
   return drizzle(sqlite, { schema });
 }
 
 describe("buildSeedEvents", () => {
-  it("returns 9 events", () => {
+  it("returns 15 events", () => {
     const rows = buildSeedEvents(new Date());
-    expect(rows).toHaveLength(9);
+    expect(rows).toHaveLength(15);
   });
 
-  it("status distribution: 1 finished, 3 ongoing, 5 upcoming", () => {
+  it("status distribution: 2 finished, 4 ongoing, 9 upcoming", () => {
     const rows = buildSeedEvents(new Date());
     const counts = { finished: 0, ongoing: 0, upcoming: 0, cancelled: 0 };
     for (const r of rows) counts[r.status as keyof typeof counts]++;
-    expect(counts.finished).toBe(1);
-    expect(counts.ongoing).toBe(3);
-    expect(counts.upcoming).toBe(5);
+    expect(counts.finished).toBe(2);
+    expect(counts.ongoing).toBe(4);
+    expect(counts.upcoming).toBe(9);
   });
 
   it("finished events: startTime and endTime are both in the past", () => {
@@ -94,7 +104,7 @@ describe("buildSeedEvents", () => {
     expect(new Set(categories).size).toBeGreaterThanOrEqual(7);
   });
 
-  it("all 9 events have a createdByUserId and createdByName", () => {
+  it("all events have a createdByUserId and createdByName", () => {
     const rows = buildSeedEvents(new Date());
     for (const r of rows) {
       expect(typeof r.createdByUserId).toBe("string");
@@ -121,7 +131,7 @@ describe("seed idempotency", () => {
     await db.insert(schema.events).values(seedData).onConflictDoNothing();
 
     const rows = await db.select().from(schema.events);
-    expect(rows).toHaveLength(9);
+    expect(rows).toHaveLength(15);
   });
 
   it("second insert does not throw", async () => {
