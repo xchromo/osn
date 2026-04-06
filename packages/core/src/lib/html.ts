@@ -16,7 +16,6 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sign in — OSN</title>
-  <script src="https://unpkg.com/@simplewebauthn/browser@13/dist/bundle/index.es5.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
@@ -241,18 +240,31 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   </div>
 </div>
 
+<script src="https://unpkg.com/@simplewebauthn/browser@13/dist/bundle/index.es5.umd.min.js"></script>
 <script>
 (function () {
   var P = ${escaped};
   var issuer = P.issuerUrl;
 
   // ---------------------------------------------------------------------------
+  // Cached DOM references (queried once at init)
+  // ---------------------------------------------------------------------------
+  var tabs = document.querySelectorAll('.tab');
+  var panels = document.querySelectorAll('.panel');
+  // Tracks which input mode is active per sign-in panel group
+  var activeMode = { passkey: 'email', otp: 'email', magic: 'email' };
+  // Closure state for multi-step flows
+  var otpIdentifier = '';
+  var _regEmail = '';
+  var _regUserId = '';
+
+  // ---------------------------------------------------------------------------
   // Tab switching
   // ---------------------------------------------------------------------------
-  document.querySelectorAll('.tab').forEach(function(btn) {
+  tabs.forEach(function(btn) {
     btn.addEventListener('click', function() {
-      document.querySelectorAll('.tab').forEach(function(b) { b.classList.remove('active'); });
-      document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+      tabs.forEach(function(b) { b.classList.remove('active'); });
+      panels.forEach(function(p) { p.classList.remove('active'); });
       btn.classList.add('active');
       document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
       document.getElementById('page-title').textContent =
@@ -265,21 +277,22 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   // ---------------------------------------------------------------------------
   document.querySelectorAll('.id-toggle').forEach(function(toggle) {
     var group = toggle.dataset.group;
+    var emailInput = document.getElementById(group + '-email');
+    var handleWrap = document.getElementById(group + '-handle-wrap');
+    var handleInput = document.getElementById(group + '-handle');
     toggle.querySelectorAll('.id-opt').forEach(function(btn) {
       btn.addEventListener('click', function() {
         toggle.querySelectorAll('.id-opt').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
-        var mode = btn.dataset.mode;
-        var emailInput = document.getElementById(group + '-email');
-        var handleWrap = document.getElementById(group + '-handle-wrap');
-        if (mode === 'email') {
+        activeMode[group] = btn.dataset.mode;
+        if (btn.dataset.mode === 'email') {
           emailInput.classList.remove('hidden');
           handleWrap.classList.add('hidden');
           emailInput.focus();
         } else {
           emailInput.classList.add('hidden');
           handleWrap.classList.remove('hidden');
-          document.getElementById(group + '-handle').focus();
+          handleInput.focus();
         }
       });
     });
@@ -287,12 +300,9 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
 
   /** Returns the current identifier value for a given panel group. */
   function getIdentifier(group) {
-    var toggle = document.querySelector('.id-toggle[data-group="' + group + '"]');
-    var activeMode = toggle.querySelector('.id-opt.active').dataset.mode;
-    if (activeMode === 'handle') {
-      return document.getElementById(group + '-handle').value.trim();
-    }
-    return document.getElementById(group + '-email').value.trim();
+    return activeMode[group] === 'handle'
+      ? document.getElementById(group + '-handle').value.trim()
+      : document.getElementById(group + '-email').value.trim();
   }
 
   function showErr(id, msg) {
@@ -363,15 +373,13 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
 
       if (beginRes.error) {
         // No account or no passkeys — pre-fill OTP panel and switch to it
-        var otpToggle = document.querySelector('.id-toggle[data-group="otp"]');
-        var activeMode = otpToggle.querySelector('.id-opt.active').dataset.mode;
-        if (activeMode === 'handle' && !identifier.includes('@')) {
+        if (activeMode.otp === 'handle' && !identifier.includes('@')) {
           document.getElementById('otp-handle').value = identifier;
         } else {
           document.getElementById('otp-email').value = identifier;
         }
-        document.querySelectorAll('.tab').forEach(function(b) { b.classList.remove('active'); });
-        document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+        tabs.forEach(function(b) { b.classList.remove('active'); });
+        panels.forEach(function(p) { p.classList.remove('active'); });
         document.querySelector('.tab[data-tab="otp"]').classList.add('active');
         document.getElementById('panel-otp').classList.add('active');
         showErr('otp-err', 'No passkey found — receive a one-time code instead.');
@@ -395,7 +403,6 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   // ---------------------------------------------------------------------------
   // OTP sign-in
   // ---------------------------------------------------------------------------
-  var otpIdentifier = '';
 
   document.getElementById('otp-send-btn').addEventListener('click', async function() {
     hideErr('otp-err');
@@ -467,7 +474,6 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
     var input = this;
 
     input.classList.remove('valid', 'invalid');
-    hint.classList.add('hidden');
     hint.className = 'hint hidden';
     handleAvailable = false;
 
@@ -477,14 +483,12 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
     if (!/^[a-z0-9_]{1,30}$/.test(handle)) {
       hint.textContent = 'Handles can only contain lowercase letters, numbers, and underscores (max 30 chars).';
       hint.className = 'hint bad';
-      hint.classList.remove('hidden');
       input.classList.add('invalid');
       return;
     }
 
     hint.textContent = 'Checking\u2026';
     hint.className = 'hint';
-    hint.classList.remove('hidden');
 
     handleCheckTimer = setTimeout(async function() {
       try {
@@ -502,11 +506,9 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
           input.classList.add('invalid');
           handleAvailable = false;
         }
-        hint.classList.remove('hidden');
       } catch(e) {
         hint.textContent = 'Could not check handle availability.';
         hint.className = 'hint bad';
-        hint.classList.remove('hidden');
       }
     }, 350);
   });
@@ -559,9 +561,9 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
         showErr('reg-otp-err', 'Account created but could not send code: ' + otpSent.error);
       }
 
-      // Store email for the verify step
-      window._regEmail = email;
-      window._regUserId = res.userId;
+      // Store for the OTP verify step (closure vars, not window globals)
+      _regEmail = email;
+      _regUserId = res.userId;
     } catch(e) {
       showErr('reg-err', e.message || 'Registration failed.');
       document.getElementById('reg-btn').disabled = false;
@@ -576,10 +578,10 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
       var res = await fetch(issuer + '/otp/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: window._regEmail, code: code })
+        body: JSON.stringify({ identifier: _regEmail, code: code })
       }).then(function(r) { return r.json(); });
       if (res.error) { showErr('reg-otp-err', res.error); return; }
-      showPasskeyPrompt(window._regUserId, function() { completeAuth(res.code); });
+      showPasskeyPrompt(_regUserId, function() { completeAuth(res.code); });
     } catch(e) {
       showErr('reg-otp-err', e.message || 'Verification failed.');
     }
