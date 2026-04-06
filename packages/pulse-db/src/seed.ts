@@ -407,7 +407,7 @@ const seed = Effect.gen(function* () {
     catch: (cause) => new SeedError({ cause }),
   });
 
-  console.log("Seed complete — 15 events + 72 RSVPs inserted (existing rows skipped).");
+  console.log("Seed complete — 15 events + 73 RSVPs inserted (existing rows skipped).");
 }).pipe(Effect.provide(DbLive));
 
 Effect.runPromise(seed).catch(console.error);

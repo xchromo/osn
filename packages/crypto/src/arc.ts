@@ -35,6 +35,8 @@ export interface ArcTokenPayload extends ArcTokenClaims {
 const ARC_ALG = "ES256";
 const DEFAULT_TTL_SECONDS = 300; // 5 minutes
 const CACHE_REISSUE_BUFFER_SECONDS = 30;
+const MAX_CACHE_SIZE = 1000;
+const SCOPE_PATTERN = /^[a-z0-9_:]+$/;
 
 // ---------------------------------------------------------------------------
 // Key generation
@@ -61,19 +63,67 @@ export async function exportKeyToJwk(key: CryptoKey): Promise<string> {
 }
 
 /**
- * Imports a JWK (JSON string or object) to a CryptoKey for verification.
+ * Validates that a parsed JWK has the expected ES256 (EC P-256) structure.
+ * Prevents algorithm confusion attacks from malicious JWK material.
  */
-export async function importKeyFromJwk(
-  jwk: string | Record<string, unknown>,
-  _usage: "sign" | "verify",
-): Promise<CryptoKey> {
-  const parsed = typeof jwk === "string" ? JSON.parse(jwk) : jwk;
+function validateEs256Jwk(jwk: Record<string, unknown>): void {
+  if (jwk.kty !== "EC") {
+    throw new ArcTokenError({
+      message: `Invalid JWK: expected kty "EC", got "${String(jwk.kty)}"`,
+    });
+  }
+  if (jwk.crv !== "P-256") {
+    throw new ArcTokenError({
+      message: `Invalid JWK: expected crv "P-256", got "${String(jwk.crv)}"`,
+    });
+  }
+  if (typeof jwk.x !== "string" || typeof jwk.y !== "string") {
+    throw new ArcTokenError({ message: "Invalid JWK: missing x or y coordinates" });
+  }
+}
+
+/**
+ * Imports a JWK (JSON string or object) to a CryptoKey.
+ * Validates that the JWK is an ES256 (EC P-256) key before importing.
+ */
+export async function importKeyFromJwk(jwk: string | Record<string, unknown>): Promise<CryptoKey> {
+  const parsed = typeof jwk === "string" ? (JSON.parse(jwk) as Record<string, unknown>) : jwk;
+  validateEs256Jwk(parsed);
   return importJWK(parsed, ARC_ALG) as Promise<CryptoKey>;
+}
+
+// ---------------------------------------------------------------------------
+// Scope helpers
+// ---------------------------------------------------------------------------
+
+/** Normalises and validates a comma-separated scope string. */
+function normaliseScopes(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** Validates that every scope token matches the allowed pattern. */
+function validateScopeFormat(scopes: string[]): void {
+  for (const s of scopes) {
+    if (!SCOPE_PATTERN.test(s)) {
+      throw new ArcTokenError({ message: `Invalid scope format: "${s}"` });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Token creation
 // ---------------------------------------------------------------------------
+
+function validateTtl(ttl: number): void {
+  if (ttl <= 0 || ttl > 600) {
+    throw new ArcTokenError({
+      message: `Invalid TTL: ${ttl}. Must be between 1 and 600 seconds.`,
+    });
+  }
+}
 
 /**
  * Creates a signed ARC token (ES256 JWT).
@@ -87,11 +137,12 @@ export async function createArcToken(
   claims: ArcTokenClaims,
   ttl: number = DEFAULT_TTL_SECONDS,
 ): Promise<string> {
-  if (ttl <= 0 || ttl > 600) {
-    throw new ArcTokenError({ message: `Invalid TTL: ${ttl}. Must be between 1 and 600 seconds.` });
-  }
+  validateTtl(ttl);
 
-  return new SignJWT({ scope: claims.scope })
+  const scopes = normaliseScopes(claims.scope);
+  validateScopeFormat(scopes);
+
+  return new SignJWT({ scope: scopes.join(",") })
     .setProtectedHeader({ alg: ARC_ALG })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
@@ -131,8 +182,8 @@ export async function verifyArcToken(
   }
 
   if (requiredScope) {
-    const scopes = scope.split(",").map((s) => s.trim());
-    if (!scopes.includes(requiredScope)) {
+    const scopes = normaliseScopes(scope);
+    if (!scopes.includes(requiredScope.trim().toLowerCase())) {
       throw new ArcTokenError({
         message: `ARC token missing required scope: ${requiredScope}`,
       });
@@ -152,18 +203,42 @@ export async function verifyArcToken(
 // Public key resolution (Effect-based, requires Db)
 // ---------------------------------------------------------------------------
 
+/** In-memory cache for resolved CryptoKeys (service_id → { key, expiresAt }). */
+const publicKeyCache = new Map<string, { key: CryptoKey; expiresAt: number }>();
+const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
+
 /**
  * Resolves a service's public key from the `service_accounts` table.
- * For first-party services registered in the DB.
+ * Also validates that the token's scopes are within the service's `allowed_scopes`.
+ *
+ * Results are cached in-memory for 5 minutes to avoid repeated DB + JWK import.
  */
-export const resolvePublicKey = (issuer: string): Effect.Effect<CryptoKey, ArcTokenError, Db> =>
+export const resolvePublicKey = (
+  issuer: string,
+  tokenScopes?: string[],
+): Effect.Effect<CryptoKey, ArcTokenError, Db> =>
   Effect.gen(function* () {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Check CryptoKey cache first
+    const cached = publicKeyCache.get(issuer);
+    if (cached && cached.expiresAt > now) {
+      // Still need to validate scopes against DB if tokenScopes provided
+      // but skip the DB query for key material — we fetch allowedScopes below
+      if (!tokenScopes || tokenScopes.length === 0) {
+        return cached.key;
+      }
+    }
+
     const { db } = yield* Db;
 
     const rows = yield* Effect.tryPromise({
       try: () =>
         db
-          .select({ publicKeyJwk: serviceAccounts.publicKeyJwk })
+          .select({
+            publicKeyJwk: serviceAccounts.publicKeyJwk,
+            allowedScopes: serviceAccounts.allowedScopes,
+          })
           .from(serviceAccounts)
           .where(eq(serviceAccounts.serviceId, issuer))
           .limit(1),
@@ -174,14 +249,47 @@ export const resolvePublicKey = (issuer: string): Effect.Effect<CryptoKey, ArcTo
       return yield* Effect.fail(new ArcTokenError({ message: `Unknown service: ${issuer}` }));
     }
 
-    return yield* Effect.tryPromise({
-      try: () => importKeyFromJwk(rows[0].publicKeyJwk, "verify"),
+    const { publicKeyJwk, allowedScopes } = rows[0];
+
+    // Validate token scopes against registered allowedScopes
+    if (tokenScopes && tokenScopes.length > 0) {
+      const allowed = normaliseScopes(allowedScopes);
+      for (const s of tokenScopes) {
+        if (!allowed.includes(s.trim().toLowerCase())) {
+          return yield* Effect.fail(
+            new ArcTokenError({
+              message: `Service "${issuer}" not authorised for scope: ${s}`,
+            }),
+          );
+        }
+      }
+    }
+
+    // Use cached CryptoKey if still valid (we only needed DB for scope check)
+    if (cached && cached.expiresAt > now) {
+      return cached.key;
+    }
+
+    const key = yield* Effect.tryPromise({
+      try: () => importKeyFromJwk(publicKeyJwk),
       catch: (cause) => new ArcTokenError({ message: `Invalid public key for ${issuer}`, cause }),
     });
+
+    // Cache the resolved CryptoKey
+    publicKeyCache.set(issuer, { key, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
+
+    return key;
   });
 
+/**
+ * Clears the public key cache. Useful for testing and key rotation.
+ */
+export function clearPublicKeyCache(): void {
+  publicKeyCache.clear();
+}
+
 // ---------------------------------------------------------------------------
-// In-memory token cache
+// In-memory token cache (bounded)
 // ---------------------------------------------------------------------------
 
 interface CachedToken {
@@ -197,22 +305,35 @@ function cacheKey(iss: string, aud: string, scope: string): string {
 
 /**
  * Returns a cached ARC token if it's still valid (with 30s buffer),
- * or creates a new one.
+ * or creates a new one. The cache is bounded to MAX_CACHE_SIZE entries;
+ * expired entries are evicted on every call.
  */
 export async function getOrCreateArcToken(
   privateKey: CryptoKey,
   claims: ArcTokenClaims,
   ttl: number = DEFAULT_TTL_SECONDS,
 ): Promise<string> {
+  validateTtl(ttl);
+
   const key = cacheKey(claims.iss, claims.aud, claims.scope);
-  const cached = tokenCache.get(key);
   const now = Math.floor(Date.now() / 1000);
 
+  // Auto-evict expired entries on every access
+  evictExpiredTokens();
+
+  const cached = tokenCache.get(key);
   if (cached && cached.expiresAt - CACHE_REISSUE_BUFFER_SECONDS > now) {
     return cached.token;
   }
 
   const token = await createArcToken(privateKey, claims, ttl);
+
+  // Enforce max cache size — evict oldest entry if full
+  if (tokenCache.size >= MAX_CACHE_SIZE) {
+    const oldest = tokenCache.keys().next().value;
+    if (oldest !== undefined) tokenCache.delete(oldest);
+  }
+
   tokenCache.set(key, { token, expiresAt: now + ttl });
   return token;
 }
@@ -225,7 +346,8 @@ export function clearTokenCache(): void {
 }
 
 /**
- * Evicts expired entries from the cache. Can be called periodically.
+ * Evicts expired entries from the token cache.
+ * Called automatically by getOrCreateArcToken on every access.
  */
 export function evictExpiredTokens(): void {
   const now = Math.floor(Date.now() / 1000);
@@ -234,4 +356,9 @@ export function evictExpiredTokens(): void {
       tokenCache.delete(key);
     }
   }
+}
+
+/** Exposed for testing — returns the current token cache size. */
+export function tokenCacheSize(): number {
+  return tokenCache.size;
 }

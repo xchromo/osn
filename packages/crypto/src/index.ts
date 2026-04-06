@@ -14,8 +14,10 @@ export {
   verifyArcToken,
   // Public key resolution (Effect-based)
   resolvePublicKey,
+  clearPublicKeyCache,
   // Token cache
   getOrCreateArcToken,
   clearTokenCache,
   evictExpiredTokens,
+  tokenCacheSize,
 } from "./arc";

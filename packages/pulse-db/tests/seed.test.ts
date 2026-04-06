@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../src/schema";
-import { buildSeedEvents } from "../src/seed";
+import { buildSeedEvents, buildSeedRsvps } from "../src/seed";
 
 function createTestDb() {
   const sqlite = new Database(":memory:");
@@ -142,5 +142,71 @@ describe("seed idempotency", () => {
     await expect(
       db.insert(schema.events).values(seedData).onConflictDoNothing(),
     ).resolves.not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSeedRsvps
+// ---------------------------------------------------------------------------
+
+describe("buildSeedRsvps", () => {
+  it("returns 73 RSVPs", () => {
+    const rsvps = buildSeedRsvps();
+    expect(rsvps).toHaveLength(73);
+  });
+
+  it("all IDs use rsvp_seed_ prefix", () => {
+    for (const r of buildSeedRsvps()) {
+      expect(r.id).toMatch(/^rsvp_seed_/);
+    }
+  });
+
+  it("all eventIds reference valid seed events", () => {
+    const eventIds = new Set(buildSeedEvents(new Date()).map((e) => e.id));
+    for (const r of buildSeedRsvps()) {
+      expect(eventIds.has(r.eventId)).toBe(true);
+    }
+  });
+
+  it("all userIds use usr_seed_ prefix", () => {
+    for (const r of buildSeedRsvps()) {
+      expect(r.userId).toMatch(/^usr_seed_/);
+    }
+  });
+
+  it("no duplicate (eventId, userId) pairs", () => {
+    const pairs = new Set<string>();
+    for (const r of buildSeedRsvps()) {
+      const pair = `${r.eventId}:${r.userId}`;
+      expect(pairs.has(pair)).toBe(false);
+      pairs.add(pair);
+    }
+  });
+
+  it("status values are only 'going' or 'interested'", () => {
+    for (const r of buildSeedRsvps()) {
+      expect(["going", "interested"]).toContain(r.status);
+    }
+  });
+
+  it("has both going and interested statuses", () => {
+    const rsvps = buildSeedRsvps();
+    expect(rsvps.some((r) => r.status === "going")).toBe(true);
+    expect(rsvps.some((r) => r.status === "interested")).toBe(true);
+  });
+});
+
+describe("RSVP seed idempotency", () => {
+  it("inserting RSVPs twice does not duplicate rows", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.events).values(buildSeedEvents(now)).onConflictDoNothing();
+    const rsvps = buildSeedRsvps();
+
+    await db.insert(schema.eventRsvps).values(rsvps).onConflictDoNothing();
+    await db.insert(schema.eventRsvps).values(rsvps).onConflictDoNothing();
+
+    const rows = await db.select().from(schema.eventRsvps);
+    expect(rows).toHaveLength(73);
   });
 });
