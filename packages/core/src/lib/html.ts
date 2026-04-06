@@ -67,6 +67,31 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
     input:focus { border-color: #111; }
     input.valid { border-color: #16a34a; }
     input.invalid { border-color: #c00; }
+    .id-toggle {
+      display: flex;
+      background: #f0f0f0;
+      border-radius: 6px;
+      padding: 2px;
+      gap: 2px;
+      margin-bottom: 0.5rem;
+    }
+    .id-opt {
+      flex: 1;
+      padding: 0.375rem 0.5rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: #666;
+      transition: background 0.12s, color 0.12s;
+    }
+    .id-opt.active {
+      background: #fff;
+      color: #111;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
     button.primary {
       width: 100%;
       padding: 0.625rem;
@@ -117,8 +142,15 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   <!-- Passkey tab -->
   <div class="panel active" id="panel-passkey">
     <div class="field">
-      <label for="passkey-identifier">Email or @handle</label>
-      <input type="text" id="passkey-identifier" autocomplete="username webauthn" placeholder="you@example.com or @handle" />
+      <div class="id-toggle" data-group="passkey">
+        <button class="id-opt active" data-mode="email">Email</button>
+        <button class="id-opt" data-mode="handle">Handle</button>
+      </div>
+      <input type="email" id="passkey-email" autocomplete="email webauthn" placeholder="you@example.com" />
+      <div class="handle-wrap hidden" id="passkey-handle-wrap">
+        <span class="at">@</span>
+        <input type="text" id="passkey-handle" autocomplete="username" placeholder="yourhandle" maxlength="30" />
+      </div>
     </div>
     <button class="primary" id="passkey-btn">Sign in with passkey</button>
     <p class="err hidden" id="passkey-err"></p>
@@ -127,8 +159,15 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   <!-- OTP tab -->
   <div class="panel" id="panel-otp">
     <div class="field">
-      <label for="otp-identifier">Email or @handle</label>
-      <input type="text" id="otp-identifier" autocomplete="username" placeholder="you@example.com or @handle" />
+      <div class="id-toggle" data-group="otp">
+        <button class="id-opt active" data-mode="email">Email</button>
+        <button class="id-opt" data-mode="handle">Handle</button>
+      </div>
+      <input type="email" id="otp-email" autocomplete="email" placeholder="you@example.com" />
+      <div class="handle-wrap hidden" id="otp-handle-wrap">
+        <span class="at">@</span>
+        <input type="text" id="otp-handle" autocomplete="username" placeholder="yourhandle" maxlength="30" />
+      </div>
     </div>
     <button class="primary" id="otp-send-btn">Send code</button>
     <div id="otp-verify-section" class="hidden" style="display:flex;flex-direction:column;gap:0.75rem;">
@@ -144,8 +183,15 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   <!-- Magic link tab -->
   <div class="panel" id="panel-magic">
     <div class="field">
-      <label for="magic-identifier">Email or @handle</label>
-      <input type="text" id="magic-identifier" autocomplete="username" placeholder="you@example.com or @handle" />
+      <div class="id-toggle" data-group="magic">
+        <button class="id-opt active" data-mode="email">Email</button>
+        <button class="id-opt" data-mode="handle">Handle</button>
+      </div>
+      <input type="email" id="magic-email" autocomplete="email" placeholder="you@example.com" />
+      <div class="handle-wrap hidden" id="magic-handle-wrap">
+        <span class="at">@</span>
+        <input type="text" id="magic-handle" autocomplete="username" placeholder="yourhandle" maxlength="30" />
+      </div>
     </div>
     <button class="primary" id="magic-btn">Send magic link</button>
     <p class="msg hidden" id="magic-msg">Check your email for the sign-in link.</p>
@@ -214,6 +260,41 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Email / Handle toggle (shared across passkey, otp, magic panels)
+  // ---------------------------------------------------------------------------
+  document.querySelectorAll('.id-toggle').forEach(function(toggle) {
+    var group = toggle.dataset.group;
+    toggle.querySelectorAll('.id-opt').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        toggle.querySelectorAll('.id-opt').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        var mode = btn.dataset.mode;
+        var emailInput = document.getElementById(group + '-email');
+        var handleWrap = document.getElementById(group + '-handle-wrap');
+        if (mode === 'email') {
+          emailInput.classList.remove('hidden');
+          handleWrap.classList.add('hidden');
+          emailInput.focus();
+        } else {
+          emailInput.classList.add('hidden');
+          handleWrap.classList.remove('hidden');
+          document.getElementById(group + '-handle').focus();
+        }
+      });
+    });
+  });
+
+  /** Returns the current identifier value for a given panel group. */
+  function getIdentifier(group) {
+    var toggle = document.querySelector('.id-toggle[data-group="' + group + '"]');
+    var activeMode = toggle.querySelector('.id-opt.active').dataset.mode;
+    if (activeMode === 'handle') {
+      return document.getElementById(group + '-handle').value.trim();
+    }
+    return document.getElementById(group + '-email').value.trim();
+  }
+
   function showErr(id, msg) {
     var el = document.getElementById(id);
     el.textContent = msg;
@@ -271,7 +352,7 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   // ---------------------------------------------------------------------------
   document.getElementById('passkey-btn').addEventListener('click', async function() {
     hideErr('passkey-err');
-    var identifier = document.getElementById('passkey-identifier').value.trim();
+    var identifier = getIdentifier('passkey');
     if (!identifier) { showErr('passkey-err', 'Please enter your email or handle.'); return; }
     try {
       var beginRes = await fetch(issuer + '/passkey/login/begin', {
@@ -281,13 +362,19 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
       }).then(function(r) { return r.json(); });
 
       if (beginRes.error) {
-        // No account or no passkeys — offer OTP instead
-        document.getElementById('otp-identifier').value = identifier;
+        // No account or no passkeys — pre-fill OTP panel and switch to it
+        var otpToggle = document.querySelector('.id-toggle[data-group="otp"]');
+        var activeMode = otpToggle.querySelector('.id-opt.active').dataset.mode;
+        if (activeMode === 'handle' && !identifier.includes('@')) {
+          document.getElementById('otp-handle').value = identifier;
+        } else {
+          document.getElementById('otp-email').value = identifier;
+        }
         document.querySelectorAll('.tab').forEach(function(b) { b.classList.remove('active'); });
         document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
         document.querySelector('.tab[data-tab="otp"]').classList.add('active');
         document.getElementById('panel-otp').classList.add('active');
-        showErr('otp-err', 'No passkey found — enter your email or handle to receive a one-time code instead.');
+        showErr('otp-err', 'No passkey found — receive a one-time code instead.');
         return;
       }
 
@@ -312,7 +399,7 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
 
   document.getElementById('otp-send-btn').addEventListener('click', async function() {
     hideErr('otp-err');
-    otpIdentifier = document.getElementById('otp-identifier').value.trim();
+    otpIdentifier = getIdentifier('otp');
     if (!otpIdentifier) { showErr('otp-err', 'Please enter your email or handle.'); return; }
     try {
       var res = await fetch(issuer + '/otp/begin', {
@@ -351,7 +438,7 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   // ---------------------------------------------------------------------------
   document.getElementById('magic-btn').addEventListener('click', async function() {
     hideErr('magic-err');
-    var identifier = document.getElementById('magic-identifier').value.trim();
+    var identifier = getIdentifier('magic');
     if (!identifier) { showErr('magic-err', 'Please enter your email or handle.'); return; }
     try {
       var res = await fetch(issuer + '/magic/begin', {
