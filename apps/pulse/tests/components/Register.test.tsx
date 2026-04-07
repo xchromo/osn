@@ -138,6 +138,21 @@ describe("Register component", () => {
       });
     });
 
+    it("shows a network error (not a format error) when checkHandle throws", async () => {
+      // Regression: a thrown checkHandle used to flip the status to "invalid",
+      // which rendered the "1–30 chars…" format error even though the user's
+      // input was perfectly valid. Network/server failures must surface
+      // separately so the user isn't told their handle is the wrong shape.
+      hoisted.stub.checkHandle.mockRejectedValue(new Error("network down"));
+      render(() => <Register onCancel={() => {}} />);
+      fillHandle("alice");
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        expect(screen.getByText(/Couldn.t check availability/)).toBeTruthy();
+      });
+      expect(screen.queryByText(/1.30 chars/)).toBeNull();
+    });
+
     it("submit is disabled while handle status is 'checking'", () => {
       hoisted.stub.checkHandle.mockImplementation(
         () => new Promise(() => {}), // never resolves

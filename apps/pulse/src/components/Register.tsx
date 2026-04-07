@@ -37,8 +37,12 @@ export function Register(props: RegisterProps) {
   const [enrollmentToken, setEnrollmentToken] = createSignal<string | null>(null);
 
   // Live handle availability check (debounced).
+  // "invalid" = local format check failed; "error" = server/network failure
+  // while checking availability. Keeping these distinct prevents us from
+  // telling the user their perfectly-valid handle is the wrong format just
+  // because OSN was unreachable.
   const [handleStatus, setHandleStatus] = createSignal<
-    "idle" | "checking" | "available" | "taken" | "invalid"
+    "idle" | "checking" | "available" | "taken" | "invalid" | "error"
   >("idle");
   let handleTimer: ReturnType<typeof setTimeout> | null = null;
   onCleanup(() => {
@@ -65,8 +69,11 @@ export function Register(props: RegisterProps) {
         if (handle() !== next) return;
         setHandleStatus(available ? "available" : "taken");
       } catch {
+        // Local format was already validated above, so any error here is a
+        // network/server failure — surface that rather than lying about the
+        // format.
         if (handle() !== next) return;
-        setHandleStatus("invalid");
+        setHandleStatus("error");
       }
     }, 300);
   }
@@ -215,6 +222,11 @@ export function Register(props: RegisterProps) {
             <Show when={handleStatus() === "invalid"}>
               <span class="text-xs text-destructive">
                 1–30 chars: lowercase letters, numbers, underscores
+              </span>
+            </Show>
+            <Show when={handleStatus() === "error"}>
+              <span class="text-xs text-destructive">
+                Couldn&apos;t check availability — try again
               </span>
             </Show>
           </label>
