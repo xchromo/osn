@@ -1,5 +1,5 @@
-import { createSignal, createMemo, Show, onCleanup } from "solid-js";
-import { startRegistration } from "@simplewebauthn/browser";
+import { createSignal, createMemo, Show, onCleanup, createEffect } from "solid-js";
+import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { useAuth } from "@osn/client/solid";
 import { createRegistrationClient, type RegistrationClient } from "@osn/client";
 import { toast } from "solid-toast";
@@ -29,6 +29,12 @@ export function Register(props: RegisterProps) {
   const [busy, setBusy] = createSignal(false);
   const [userId, setUserId] = createSignal<string | null>(null);
   const [authCode, setAuthCode] = createSignal<string | null>(null);
+
+  // WebAuthn feature detection. On native Tauri the system webview may not
+  // expose a platform authenticator, in which case we skip step 3 entirely and
+  // finish sign-in with just the verified email. Users can add a passkey later
+  // from account settings once we ship that screen.
+  const passkeySupported = browserSupportsWebAuthn();
 
   // Live handle availability check (debounced).
   const [handleStatus, setHandleStatus] = createSignal<
@@ -102,6 +108,14 @@ export function Register(props: RegisterProps) {
       setBusy(false);
     }
   }
+
+  // If the environment can't do WebAuthn, don't stall the user on a step they
+  // can't complete — finish sign-in as soon as we reach the passkey step.
+  createEffect(() => {
+    if (step() === "passkey" && !passkeySupported && !busy() && authCode()) {
+      void skipPasskeyForNow();
+    }
+  });
 
   async function enrollPasskey() {
     const id = userId();
@@ -254,28 +268,38 @@ export function Register(props: RegisterProps) {
       </Show>
 
       <Show when={step() === "passkey"}>
-        <div class="flex flex-col gap-4">
-          <p class="text-sm text-muted-foreground">
-            Set up a passkey so you can sign back in with Face ID, Touch ID, or your device PIN — no
-            password required.
-          </p>
-          <button
-            type="button"
-            onClick={enrollPasskey}
-            disabled={busy()}
-            class="rounded-md bg-primary text-primary-foreground py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
-          >
-            {busy() ? "Setting up…" : "Create passkey"}
-          </button>
-          <button
-            type="button"
-            onClick={skipPasskeyForNow}
-            disabled={busy()}
-            class="text-xs text-muted-foreground hover:text-foreground"
-          >
-            Skip for now (you can add one later)
-          </button>
-        </div>
+        <Show
+          when={passkeySupported}
+          fallback={
+            <p class="text-sm text-muted-foreground">
+              Signing you in… (passkeys aren&apos;t supported in this environment — you can add one
+              later once we ship the mobile app).
+            </p>
+          }
+        >
+          <div class="flex flex-col gap-4">
+            <p class="text-sm text-muted-foreground">
+              Set up a passkey so you can sign back in with Face ID, Touch ID, or your device PIN —
+              no password required.
+            </p>
+            <button
+              type="button"
+              onClick={enrollPasskey}
+              disabled={busy()}
+              class="rounded-md bg-primary text-primary-foreground py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+            >
+              {busy() ? "Setting up…" : "Create passkey"}
+            </button>
+            <button
+              type="button"
+              onClick={skipPasskeyForNow}
+              disabled={busy()}
+              class="text-xs text-muted-foreground hover:text-foreground"
+            >
+              Skip for now (you can add one later)
+            </button>
+          </div>
+        </Show>
       </Show>
 
       <Show when={step() === "done"}>
