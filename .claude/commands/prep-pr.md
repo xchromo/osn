@@ -27,6 +27,7 @@ Run `git diff --name-only main...HEAD -- .changeset/` and filter out `config.jso
 
 **If changeset(s) exist:**
 - Read each new changeset file and extract the package names listed in its YAML frontmatter (between the `---` fences).
+- **Validate every package name** against the actual `name` field in its `package.json`. Run `jq -r .name <workspace>/package.json` for each. A mismatch (e.g. `osn` instead of `@osn/osn`) will cause `changeset version` to fail in CI with "package not in workspace". Fix any mismatches before continuing.
 - Compare against the affected workspace packages from step 1.
 - If any affected package is missing from all changesets, warn the user and offer to run `bun run changeset` to add coverage.
 
