@@ -2,13 +2,6 @@
 
 AI coding assistant reference. For full spec see README.md. For progress/decisions see TODO.md.
 
-## Communication Style
-
-- Short, 3–6 word sentences.
-- No filler, preamble, or pleasantries.
-- Run tools first, show result, then stop. Do not narrate.
-- Drop articles ("Fix bug" not "I will fix the bug").
-
 ## Quick Context
 
 OSN: Modular social platform. Users own identity + social graph. Apps opt-in/out independently.
