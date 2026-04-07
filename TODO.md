@@ -246,6 +246,7 @@ Address **High** items before any non-local deployment.
 | Max event duration | Prompt user when creating events without endTime | When Pulse event creation UI is built |
 | S2S scaling: HTTP graph API | Current: direct package import (`createGraphService()`). Migrate to HTTP `/graph/internal/*` + ARC tokens when scaling horizontally. | When multi-process or multi-machine deployment needed |
 | Per-app blocking | Blocks are global across all OSN apps. Per-app scope deferred. | When Messaging or a third-party app needs independent block lists |
+| Tauri passkey support on iOS | Tauri webview does not expose WebAuthn natively — `apps/pulse` registration flow feature-detects via `browserSupportsWebAuthn()` and auto-skips the passkey step on unsupported environments. Options when we ship mobile: (a) adopt [`tauri-plugin-webauthn`](https://github.com/Profiidev/tauri-plugin-webauthn) (third-party, audit first), (b) write our own thin Tauri plugin wrapping `ASAuthorizationPlatformPublicKeyCredentialProvider`, (c) wait for upstream — track [tauri#7926](https://github.com/tauri-apps/tauri/issues/7926). | When iOS build of Pulse is ready for sign-in |
 
 ---
 
