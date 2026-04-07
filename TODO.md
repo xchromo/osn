@@ -27,6 +27,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] Test coverage: utils, LocationInput, CreateEventForm end-time validation
 - [x] Test coverage: EventCard, CreateEventForm (full), EventList (auth/unauth)
 - [x] Toast notification system (solid-toast: event created, deleted, create/delete errors)
+- [x] Registration UI: multi-step flow (email + handle + display name → OTP → passkey enrolment), live handle availability check, auto-login on completion via `adoptSession`
 - [x] Coordinate storage (lat/lng from Photon autocomplete) + Maps button on EventCard
 - [ ] Map preview in expanded event view (Leaflet + OpenStreetMap, no API key)
 - [ ] "What's on today" default view

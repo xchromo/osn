@@ -66,6 +66,52 @@ export function createAuthRoutes(authConfig: AuthConfig, dbLayer: Layer.Layer<Db
         },
       )
       // -------------------------------------------------------------------------
+      // Email-verified registration: begin (sends OTP, does not create user)
+      // -------------------------------------------------------------------------
+      .post(
+        "/register/begin",
+        async ({ body, set }) => {
+          try {
+            const result = await run(
+              auth.beginRegistration(body.email, body.handle, body.displayName),
+            );
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          body: t.Object({
+            email: t.String(),
+            handle: t.String(),
+            displayName: t.Optional(t.String()),
+          }),
+        },
+      )
+      // -------------------------------------------------------------------------
+      // Email-verified registration: complete (verifies OTP, creates user)
+      // -------------------------------------------------------------------------
+      .post(
+        "/register/complete",
+        async ({ body, set }) => {
+          try {
+            const result = await run(auth.completeRegistration(body.email, body.code));
+            set.status = 201;
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          body: t.Object({
+            email: t.String(),
+            code: t.String(),
+          }),
+        },
+      )
+      // -------------------------------------------------------------------------
       // Authorization endpoint — renders the sign-in page
       // -------------------------------------------------------------------------
       .get(

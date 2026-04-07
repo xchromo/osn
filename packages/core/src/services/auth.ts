@@ -82,11 +82,21 @@ interface MagicEntry {
   expiresAt: number;
 }
 
+interface PendingRegistration {
+  email: string;
+  handle: string;
+  displayName: string | null;
+  code: string;
+  expiresAt: number;
+}
+
 // keyed by userId for registration, by email for login
 const registrationChallenges = new Map<string, ChallengeEntry>();
 const loginChallenges = new Map<string, ChallengeEntry>();
 const otpStore = new Map<string, OtpEntry>();
 const magicStore = new Map<string, MagicEntry>();
+// Pending email-verification registrations, keyed by lowercased email.
+const pendingRegistrations = new Map<string, PendingRegistration>();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -254,6 +264,128 @@ export function createAuthService(config: AuthConfig) {
       });
 
       return { id, handle, email, displayName: dn, avatarUrl: null, createdAt: ts, updatedAt: ts };
+    });
+
+  /**
+   * Step 1 of email-verified registration. Validates the inputs, ensures the
+   * email and handle are free, generates a 6-digit OTP, stores a pending
+   * registration entry, and emails the code. The user row is NOT created yet —
+   * it is only created in completeRegistration once the code is verified.
+   */
+  const beginRegistration = (
+    email: string,
+    handle: string,
+    displayName?: string,
+  ): Effect.Effect<{ sent: boolean }, AuthError | ValidationError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      yield* Schema.decodeUnknown(EmailSchema)(email).pipe(
+        Effect.mapError((cause) => new ValidationError({ cause })),
+      );
+      yield* Schema.decodeUnknown(HandleSchema)(handle).pipe(
+        Effect.mapError((cause) => new ValidationError({ cause })),
+      );
+
+      if (RESERVED_HANDLES.has(handle)) {
+        return yield* Effect.fail(new AuthError({ message: "Handle is reserved" }));
+      }
+
+      const [existingEmail, existingHandle] = yield* Effect.all(
+        [findUserByEmail(email), findUserByHandle(handle)],
+        { concurrency: "unbounded" },
+      );
+      if (existingEmail) {
+        return yield* Effect.fail(new AuthError({ message: "Email already registered" }));
+      }
+      if (existingHandle) {
+        return yield* Effect.fail(new AuthError({ message: "Handle already taken" }));
+      }
+
+      const buf = new Uint32Array(1);
+      crypto.getRandomValues(buf);
+      const code = (100_000 + (buf[0] % 900_000)).toString();
+
+      const key = email.toLowerCase();
+      pendingRegistrations.set(key, {
+        email,
+        handle,
+        displayName: displayName ?? null,
+        code,
+        expiresAt: Date.now() + otpTtl * 1000,
+      });
+
+      if (config.sendEmail) {
+        yield* Effect.tryPromise({
+          try: () =>
+            config.sendEmail!(
+              email,
+              "Verify your OSN email",
+              `Your OSN verification code is: ${code}\n\nThis code expires in ${otpTtl / 60} minutes.`,
+            ),
+          catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
+        });
+      } else {
+        console.log(`[OSN dev] Registration OTP for ${email}: ${code}`);
+      }
+
+      return { sent: true };
+    });
+
+  /**
+   * Step 2 of email-verified registration. Verifies the OTP against the
+   * pending registration and, if valid, creates the user row. Returns the new
+   * user plus a short-lived authorization code that the client can exchange
+   * for access/refresh tokens via /token.
+   */
+  const completeRegistration = (
+    email: string,
+    code: string,
+  ): Effect.Effect<
+    { userId: string; handle: string; email: string; code: string },
+    AuthError | DatabaseError,
+    Db
+  > =>
+    Effect.gen(function* () {
+      const key = email.toLowerCase();
+      const pending = pendingRegistrations.get(key);
+      if (!pending || Date.now() > pending.expiresAt) {
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+      if (pending.code !== code) {
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+      pendingRegistrations.delete(key);
+
+      // Re-check uniqueness in case someone raced us between begin and complete.
+      const [existingEmail, existingHandle] = yield* Effect.all(
+        [findUserByEmail(pending.email), findUserByHandle(pending.handle)],
+        { concurrency: "unbounded" },
+      );
+      if (existingEmail) {
+        return yield* Effect.fail(new AuthError({ message: "Email already registered" }));
+      }
+      if (existingHandle) {
+        return yield* Effect.fail(new AuthError({ message: "Handle already taken" }));
+      }
+
+      const { db } = yield* Db;
+      const id = genId("usr_");
+      const ts = now();
+
+      yield* Effect.tryPromise({
+        try: () =>
+          db.insert(users).values({
+            id,
+            handle: pending.handle,
+            email: pending.email,
+            displayName: pending.displayName,
+            createdAt: ts,
+            updatedAt: ts,
+          }),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      const authCode = yield* issueCode(id);
+      return { userId: id, handle: pending.handle, email: pending.email, code: authCode };
     });
 
   /**
@@ -790,6 +922,8 @@ export function createAuthService(config: AuthConfig) {
     findUserByHandle,
     resolveIdentifier,
     registerUser,
+    beginRegistration,
+    completeRegistration,
     checkHandle,
     issueTokens,
     exchangeCode,
