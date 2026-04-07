@@ -221,6 +221,67 @@ describe("auth routes", () => {
       );
       expect(res.status).toBe(400);
     });
+
+    it("rejects /register/complete with no preceding /register/begin", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/register/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "never-began@example.com", code: "123456" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects /register/complete on replay (single-use OTP)", async () => {
+      let captured: string | undefined;
+      const verifiedConfig = {
+        ...config,
+        sendEmail: async (_to: string, _subject: string, body: string) => {
+          const m = body.match(/code is: (\d{6})/);
+          if (m) captured = m[1];
+        },
+      };
+      const verifiedApp = createAuthRoutes(verifiedConfig, layer);
+
+      await verifiedApp.handle(
+        new Request("http://localhost/register/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "replay-route@example.com", handle: "replayroute" }),
+        }),
+      );
+
+      const first = await verifiedApp.handle(
+        new Request("http://localhost/register/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "replay-route@example.com", code: captured! }),
+        }),
+      );
+      expect(first.status).toBe(201);
+
+      const second = await verifiedApp.handle(
+        new Request("http://localhost/register/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "replay-route@example.com", code: captured! }),
+        }),
+      );
+      expect(second.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Reserved handles via /handle/:handle
+  // -------------------------------------------------------------------------
+  describe("GET /handle/:handle (reserved)", () => {
+    it("returns available:false for a reserved handle", async () => {
+      const res = await app.handle(new Request("http://localhost/handle/admin"));
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { available: boolean };
+      expect(json.available).toBe(false);
+    });
   });
 
   // -------------------------------------------------------------------------

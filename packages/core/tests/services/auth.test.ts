@@ -88,10 +88,152 @@ describe("checkHandle", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  it.effect("returns available:false for a reserved handle", () =>
+    Effect.gen(function* () {
+      const result = yield* auth.checkHandle("admin");
+      expect(result.available).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("fails with ValidationError for invalid format", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(auth.checkHandle("INVALID!"));
       expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Email-verified registration: beginRegistration + completeRegistration
+// ---------------------------------------------------------------------------
+
+describe("beginRegistration + completeRegistration", () => {
+  /**
+   * Each test gets its own auth service with a fresh in-memory `sendEmail`
+   * capture so the OTP sent in step 1 can be replayed in step 2.
+   */
+  function makeAuth() {
+    const captured: { code?: string } = {};
+    const svc = createAuthService({
+      ...config,
+      sendEmail: async (_to, _subject, body) => {
+        const m = body.match(/code is: (\d{6})/);
+        if (m) captured.code = m[1];
+      },
+    });
+    return { svc, captured };
+  }
+
+  it.effect("happy path: begin → complete creates the user and returns an auth code", () =>
+    Effect.gen(function* () {
+      const { svc, captured } = makeAuth();
+      yield* svc.beginRegistration("verify@example.com", "verifyme", "Verify Me");
+      expect(captured.code).toMatch(/^\d{6}$/);
+
+      const result = yield* svc.completeRegistration("verify@example.com", captured.code!);
+      expect(result.userId).toMatch(/^usr_/);
+      expect(result.handle).toBe("verifyme");
+      expect(result.email).toBe("verify@example.com");
+      expect(result.code.length).toBeGreaterThan(0);
+
+      // The user row must now exist.
+      const found = yield* svc.findUserByEmail("verify@example.com");
+      expect(found?.handle).toBe("verifyme");
+      expect(found?.displayName).toBe("Verify Me");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("does not create the user before the OTP is verified", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      yield* svc.beginRegistration("pending@example.com", "pendinguser");
+
+      // No DB row yet.
+      const found = yield* svc.findUserByEmail("pending@example.com");
+      expect(found).toBeNull();
+      // Handle still free.
+      const status = yield* svc.checkHandle("pendinguser");
+      expect(status.available).toBe(true);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects begin with ValidationError on bad email", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      const error = yield* Effect.flip(svc.beginRegistration("not-an-email", "okhandle"));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects begin with ValidationError on bad handle format", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      const error = yield* Effect.flip(svc.beginRegistration("ok@example.com", "Bad Handle!"));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects begin with AuthError on a reserved handle", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      const error = yield* Effect.flip(svc.beginRegistration("ok@example.com", "admin"));
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("reserved");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects begin when the email is already registered", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      yield* svc.registerUser("taken@example.com", "takenuser");
+      const error = yield* Effect.flip(svc.beginRegistration("taken@example.com", "newhandle"));
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Email already registered");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects begin when the handle is already taken", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      yield* svc.registerUser("first@example.com", "duphandle");
+      const error = yield* Effect.flip(svc.beginRegistration("second@example.com", "duphandle"));
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Handle already taken");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("complete fails with AuthError when the OTP is wrong", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      yield* svc.beginRegistration("wrong@example.com", "wronguser");
+      const error = yield* Effect.flip(svc.completeRegistration("wrong@example.com", "000000"));
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Invalid or expired code");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("complete fails with AuthError when there is no pending registration", () =>
+    Effect.gen(function* () {
+      const { svc } = makeAuth();
+      const error = yield* Effect.flip(
+        svc.completeRegistration("never-began@example.com", "123456"),
+      );
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Invalid or expired code");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("complete is single-use: a replayed code fails", () =>
+    Effect.gen(function* () {
+      const { svc, captured } = makeAuth();
+      yield* svc.beginRegistration("replay@example.com", "replayuser");
+      yield* svc.completeRegistration("replay@example.com", captured.code!);
+
+      // Second call with the same code must fail — pending entry was deleted.
+      const error = yield* Effect.flip(
+        svc.completeRegistration("replay@example.com", captured.code!),
+      );
+      expect(error._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
