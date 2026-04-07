@@ -1,14 +1,20 @@
-import { createSignal, createMemo, Show, onCleanup, createEffect } from "solid-js";
+import { createSignal, Show, onCleanup } from "solid-js";
 import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { useAuth } from "@osn/client/solid";
 import { createRegistrationClient, type RegistrationClient } from "@osn/client";
 import { toast } from "solid-toast";
-import { OSN_ISSUER_URL, OSN_CLIENT_ID } from "../lib/auth";
+import { OSN_ISSUER_URL } from "../lib/auth";
 
 type Step = "details" | "verify" | "passkey" | "done";
 
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Hoisted to module scope so we don't reallocate the client (and its closures)
+// every time the Register component mounts (P-W2).
+const registrationClient: RegistrationClient = createRegistrationClient({
+  issuerUrl: OSN_ISSUER_URL,
+});
 
 interface RegisterProps {
   onCancel: () => void;
@@ -16,10 +22,10 @@ interface RegisterProps {
 
 export function Register(props: RegisterProps) {
   const { adoptSession } = useAuth();
-  const client: RegistrationClient = createRegistrationClient({
-    issuerUrl: OSN_ISSUER_URL,
-    clientId: OSN_CLIENT_ID,
-  });
+  const client = registrationClient;
+  // Feature-detect on each mount so test code can toggle the underlying
+  // mock between renders. Calling once per mount is negligible cost.
+  const passkeySupported = browserSupportsWebAuthn();
 
   const [step, setStep] = createSignal<Step>("details");
   const [email, setEmail] = createSignal("");
@@ -28,13 +34,7 @@ export function Register(props: RegisterProps) {
   const [otp, setOtp] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [userId, setUserId] = createSignal<string | null>(null);
-  const [authCode, setAuthCode] = createSignal<string | null>(null);
-
-  // WebAuthn feature detection. On native Tauri the system webview may not
-  // expose a platform authenticator, in which case we skip step 3 entirely and
-  // finish sign-in with just the verified email. Users can add a passkey later
-  // from account settings once we ship that screen.
-  const passkeySupported = browserSupportsWebAuthn();
+  const [enrollmentToken, setEnrollmentToken] = createSignal<string | null>(null);
 
   // Live handle availability check (debounced).
   const [handleStatus, setHandleStatus] = createSignal<
@@ -71,7 +71,10 @@ export function Register(props: RegisterProps) {
     }, 300);
   }
 
-  const detailsValid = createMemo(() => EMAIL_RE.test(email()) && handleStatus() === "available");
+  // P-I2: inlined as a plain function. Solid's fine-grained reactivity
+  // re-evaluates this on every read; the computation is cheap enough that
+  // wrapping it in createMemo costs more than it saves.
+  const detailsValid = () => EMAIL_RE.test(email()) && handleStatus() === "available";
 
   async function submitDetails(e: Event) {
     e.preventDefault();
@@ -92,6 +95,17 @@ export function Register(props: RegisterProps) {
     }
   }
 
+  /**
+   * Verifies the OTP, persists the new Session immediately, then either
+   * advances the user to the passkey step (if WebAuthn is supported) or
+   * jumps straight to "done" (P-I1: no createEffect; the branch is
+   * imperative right after the state transition).
+   *
+   * Crucially, `adoptSession` happens BEFORE any passkey work — once the
+   * user has verified their email, they're signed in. A flaky WebAuthn
+   * ceremony or an unsupported environment can no longer leave them
+   * stranded between "verified" and "logged in".
+   */
   async function submitOtp(e: Event) {
     e.preventDefault();
     if (busy() || otp().length !== 6) return;
@@ -99,9 +113,16 @@ export function Register(props: RegisterProps) {
     try {
       const result = await client.completeRegistration({ email: email(), code: otp() });
       setUserId(result.userId);
-      setAuthCode(result.code);
+      setEnrollmentToken(result.enrollmentToken);
+      // Sign them in *now* — passkey enrolment is an upsell, not a gate.
+      await adoptSession(result.session);
       toast.success("Email verified");
-      setStep("passkey");
+      if (passkeySupported) {
+        setStep("passkey");
+      } else {
+        toast.success(`Welcome, @${handle()}`);
+        setStep("done");
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Invalid code");
     } finally {
@@ -109,27 +130,22 @@ export function Register(props: RegisterProps) {
     }
   }
 
-  // If the environment can't do WebAuthn, don't stall the user on a step they
-  // can't complete — finish sign-in as soon as we reach the passkey step.
-  createEffect(() => {
-    if (step() === "passkey" && !passkeySupported && !busy() && authCode()) {
-      void skipPasskeyForNow();
-    }
-  });
-
   async function enrollPasskey() {
     const id = userId();
-    const code = authCode();
-    if (!id || !code || busy()) return;
+    const token = enrollmentToken();
+    if (!id || !token || busy()) return;
     setBusy(true);
     try {
-      const options = (await client.passkeyRegisterBegin(id)) as Parameters<
-        typeof startRegistration
-      >[0]["optionsJSON"];
+      const options = (await client.passkeyRegisterBegin({
+        userId: id,
+        enrollmentToken: token,
+      })) as Parameters<typeof startRegistration>[0]["optionsJSON"];
       const attestation = await startRegistration({ optionsJSON: options });
-      await client.passkeyRegisterComplete({ userId: id, attestation });
-      const session = await client.exchangeAuthCode(code);
-      await adoptSession(session);
+      await client.passkeyRegisterComplete({
+        userId: id,
+        enrollmentToken: token,
+        attestation,
+      });
       toast.success(`Welcome, @${handle()}`);
       setStep("done");
     } catch (err) {
@@ -139,20 +155,11 @@ export function Register(props: RegisterProps) {
     }
   }
 
-  async function skipPasskeyForNow() {
-    const code = authCode();
-    if (!code || busy()) return;
-    setBusy(true);
-    try {
-      const session = await client.exchangeAuthCode(code);
-      await adoptSession(session);
-      toast.success(`Welcome, @${handle()}`);
-      setStep("done");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sign in failed");
-    } finally {
-      setBusy(false);
-    }
+  function skipPasskeyForNow() {
+    // The user is already signed in (we adopted the session at submitOtp
+    // time). Skipping is purely a UI advance.
+    toast.success(`Welcome, @${handle()}`);
+    setStep("done");
   }
 
   return (

@@ -127,7 +127,8 @@ describe("auth routes", () => {
       const checkRes = await verifiedApp.handle(new Request("http://localhost/handle/verifyme"));
       expect(((await checkRes.json()) as { available: boolean }).available).toBe(true);
 
-      // Complete: with the right code, user is created and an auth code returned.
+      // Complete: with the right code, user is created and a Session +
+      // enrollment_token are returned directly (no /token round-trip).
       const completeRes = await verifiedApp.handle(
         new Request("http://localhost/register/complete", {
           method: "POST",
@@ -140,12 +141,22 @@ describe("auth routes", () => {
         userId: string;
         handle: string;
         email: string;
-        code: string;
+        session: {
+          access_token: string;
+          refresh_token: string;
+          token_type: string;
+          expires_in: number;
+        };
+        enrollment_token: string;
       };
       expect(json.userId).toMatch(/^usr_/);
       expect(json.handle).toBe("verifyme");
       expect(json.email).toBe("verify-me@example.com");
-      expect(json.code.length).toBeGreaterThan(0);
+      expect(json.session.access_token.length).toBeGreaterThan(0);
+      expect(json.session.refresh_token.length).toBeGreaterThan(0);
+      expect(json.session.token_type).toBe("Bearer");
+      expect(json.session.expires_in).toBeGreaterThan(0);
+      expect(json.enrollment_token.length).toBeGreaterThan(0);
 
       // Handle now taken.
       const checkRes2 = await verifiedApp.handle(new Request("http://localhost/handle/verifyme"));
@@ -175,7 +186,10 @@ describe("auth routes", () => {
       expect(((await checkRes.json()) as { available: boolean }).available).toBe(true);
     });
 
-    it("rejects begin when the email is already registered", async () => {
+    it("S-M1: returns sent:true silently when the email is already registered", async () => {
+      // Enumeration-resistant: never differentiate between "free" and "taken"
+      // accounts on /register/begin. The handle availability check is the
+      // appropriate channel for that question.
       await app.handle(
         new Request("http://localhost/register", {
           method: "POST",
@@ -190,10 +204,11 @@ describe("auth routes", () => {
           body: JSON.stringify({ email: "taken@example.com", handle: "newhandle" }),
         }),
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { sent: boolean }).sent).toBe(true);
     });
 
-    it("rejects begin when the handle is already taken", async () => {
+    it("S-M1: returns sent:true silently when the handle is already taken", async () => {
       await app.handle(
         new Request("http://localhost/register", {
           method: "POST",
@@ -208,7 +223,8 @@ describe("auth routes", () => {
           body: JSON.stringify({ email: "second@example.com", handle: "duphandle" }),
         }),
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { sent: boolean }).sent).toBe(true);
     });
 
     it("rejects begin for an invalid handle format", async () => {
@@ -629,6 +645,149 @@ describe("auth routes", () => {
         }),
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Authorization gating on /passkey/register/*
+  // -------------------------------------------------------------------------
+  describe("POST /passkey/register/begin (Authorization gating)", () => {
+    /**
+     * Helper: register a user via the legacy path, then mint an enrollment
+     * token directly via the service. Mirrors what completeRegistration does
+     * in the new flow.
+     */
+    async function setupUserAndEnrollmentToken(): Promise<{
+      userId: string;
+      enrollmentToken: string;
+    }> {
+      const svc = createAuthService(config);
+      const user = await Effect.runPromise(
+        svc.registerUser("paul@example.com", "paul").pipe(Effect.provide(layer)),
+      );
+      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.id));
+      return { userId: user.id, enrollmentToken };
+    }
+
+    it("S-C1: rejects with 401 when Authorization header is present but invalid", async () => {
+      const { userId } = await setupUserAndEnrollmentToken();
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer not-a-real-token",
+          },
+          body: JSON.stringify({ userId }),
+        }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("S-C1: rejects with 401 when enrollment token's sub mismatches body.userId", async () => {
+      const { enrollmentToken } = await setupUserAndEnrollmentToken();
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${enrollmentToken}`,
+          },
+          body: JSON.stringify({ userId: "usr_someoneelse" }),
+        }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("accepts a valid enrollment token whose sub matches body.userId", async () => {
+      const { userId, enrollmentToken } = await setupUserAndEnrollmentToken();
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${enrollmentToken}`,
+          },
+          body: JSON.stringify({ userId }),
+        }),
+      );
+      // 200 OK (WebAuthn options blob) — not 401, not 400.
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { challenge?: string };
+      expect(json.challenge).toBeTruthy();
+    });
+
+    it("accepts a normal access token (existing user adding a passkey)", async () => {
+      const svc = createAuthService(config);
+      const user = await Effect.runPromise(
+        svc.registerUser("quinn@example.com", "quinn").pipe(Effect.provide(layer)),
+      );
+      const tokens = await Effect.runPromise(
+        svc.issueTokens(user.id, user.email, user.handle, user.displayName),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${tokens.accessToken}`,
+          },
+          body: JSON.stringify({ userId: user.id }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("legacy unauth'd path is still permitted (deprecated; tracked for removal)", async () => {
+      const svc = createAuthService(config);
+      const user = await Effect.runPromise(
+        svc.registerUser("rita@example.com", "rita").pipe(Effect.provide(layer)),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: user.id }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe("POST /passkey/register/complete (enrollment token consumption)", () => {
+    it("rejects when the enrollment token has already been consumed", async () => {
+      const svc = createAuthService(config);
+      const user = await Effect.runPromise(
+        svc.registerUser("sam@example.com", "samuser").pipe(Effect.provide(layer)),
+      );
+      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.id));
+
+      // First call: consumes the token. The attestation is bogus so the
+      // service will fail downstream — but the *consumption* happens in the
+      // route guard before that, so this still marks the token used.
+      await app.handle(
+        new Request("http://localhost/passkey/register/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${enrollmentToken}`,
+          },
+          body: JSON.stringify({ userId: user.id, attestation: { id: "x" } }),
+        }),
+      );
+
+      // Second call with the same token must be rejected at the auth layer.
+      const second = await app.handle(
+        new Request("http://localhost/passkey/register/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${enrollmentToken}`,
+          },
+          body: JSON.stringify({ userId: user.id, attestation: { id: "x" } }),
+        }),
+      );
+      expect(second.status).toBe(401);
     });
   });
 });

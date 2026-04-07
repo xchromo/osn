@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createRegistrationClient, RegistrationError } from "../src/register";
 
-const config = { issuerUrl: "https://osn.example.com", clientId: "test-client" };
+const config = { issuerUrl: "https://osn.example.com" };
 
 interface FetchCall {
   url: string;
@@ -92,14 +92,21 @@ describe("createRegistrationClient", () => {
   });
 
   describe("completeRegistration", () => {
-    it("POSTs JSON to /register/complete and returns the new user + auth code", async () => {
+    it("POSTs JSON to /register/complete and parses session + enrollment token", async () => {
       const { calls } = stubFetch(() =>
         jsonResponse(
           {
             userId: "usr_abc",
             handle: "alice",
             email: "alice@example.com",
-            code: "auth_code_xyz",
+            session: {
+              access_token: "acc_999",
+              refresh_token: "ref_999",
+              token_type: "Bearer",
+              expires_in: 3600,
+              scope: "openid profile",
+            },
+            enrollment_token: "enroll_xyz",
           },
           { status: 201 },
         ),
@@ -109,7 +116,17 @@ describe("createRegistrationClient", () => {
         code: "123456",
       });
       expect(result.userId).toBe("usr_abc");
-      expect(result.code).toBe("auth_code_xyz");
+      expect(result.handle).toBe("alice");
+      expect(result.email).toBe("alice@example.com");
+      expect(result.enrollmentToken).toBe("enroll_xyz");
+
+      // The session is parsed via the same parseTokenResponse used for the
+      // OAuth callback flow.
+      expect(result.session.accessToken).toBe("acc_999");
+      expect(result.session.refreshToken).toBe("ref_999");
+      expect(result.session.scopes).toEqual(["openid", "profile"]);
+      expect(result.session.expiresAt).toBeGreaterThan(Date.now());
+
       expect(calls[0].url).toBe("https://osn.example.com/register/complete");
       expect(JSON.parse(calls[0].init?.body as string)).toEqual({
         email: "alice@example.com",
@@ -118,94 +135,57 @@ describe("createRegistrationClient", () => {
     });
 
     it("throws RegistrationError on wrong OTP", async () => {
-      stubFetch(() => jsonResponse({ error: "Invalid or expired code" }, { status: 400 }));
+      stubFetch(() => jsonResponse({ error: "invalid_request" }, { status: 400 }));
       await expect(
         client.completeRegistration({ email: "alice@example.com", code: "000000" }),
-      ).rejects.toThrow("Invalid or expired code");
+      ).rejects.toThrow("invalid_request");
     });
   });
 
-  describe("passkeyRegisterBegin / passkeyRegisterComplete", () => {
-    it("passkeyRegisterBegin POSTs userId and returns the options blob verbatim", async () => {
+  describe("passkeyRegisterBegin / passkeyRegisterComplete (Authorization-gated)", () => {
+    it("passkeyRegisterBegin sends Authorization: Bearer <enrollmentToken>", async () => {
       const options = { challenge: "ch_123", rp: { name: "OSN" } };
       const { calls } = stubFetch(() => jsonResponse(options));
-      const result = await client.passkeyRegisterBegin("usr_abc");
+      const result = await client.passkeyRegisterBegin({
+        userId: "usr_abc",
+        enrollmentToken: "enroll_xyz",
+      });
       expect(result).toEqual(options);
       expect(calls[0].url).toBe("https://osn.example.com/passkey/register/begin");
+      const headers = new Headers(calls[0].init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer enroll_xyz");
       expect(JSON.parse(calls[0].init?.body as string)).toEqual({ userId: "usr_abc" });
     });
 
-    it("passkeyRegisterComplete POSTs userId + attestation and returns the passkey id", async () => {
+    it("passkeyRegisterComplete sends Authorization header and userId+attestation body", async () => {
       const { calls } = stubFetch(() => jsonResponse({ passkeyId: "pk_xyz" }));
       const attestation = { id: "cred_id", rawId: "raw" };
       const result = await client.passkeyRegisterComplete({
         userId: "usr_abc",
+        enrollmentToken: "enroll_xyz",
         attestation,
       });
       expect(result).toEqual({ passkeyId: "pk_xyz" });
       expect(calls[0].url).toBe("https://osn.example.com/passkey/register/complete");
+      const headers = new Headers(calls[0].init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer enroll_xyz");
       expect(JSON.parse(calls[0].init?.body as string)).toEqual({
         userId: "usr_abc",
         attestation,
       });
     });
-  });
 
-  describe("exchangeAuthCode", () => {
-    it("POSTs form-urlencoded to /token with the registration verifier", async () => {
-      const { calls } = stubFetch(() =>
-        jsonResponse({
-          access_token: "acc_999",
-          refresh_token: "ref_999",
-          token_type: "Bearer",
-          expires_in: 3600,
-          scope: "openid profile",
-        }),
-      );
-
-      const session = await client.exchangeAuthCode("auth_code_xyz");
-      expect(session.accessToken).toBe("acc_999");
-      expect(session.refreshToken).toBe("ref_999");
-      expect(session.scopes).toEqual(["openid", "profile"]);
-      expect(session.expiresAt).toBeGreaterThan(Date.now());
-
-      expect(calls[0].url).toBe("https://osn.example.com/token");
-      const headers = new Headers(calls[0].init?.headers);
-      expect(headers.get("Content-Type")).toBe("application/x-www-form-urlencoded");
-
-      const params = new URLSearchParams(calls[0].init?.body as string);
-      expect(params.get("grant_type")).toBe("authorization_code");
-      expect(params.get("code")).toBe("auth_code_xyz");
-      expect(params.get("client_id")).toBe("test-client");
-      expect(params.get("code_verifier")).toBe("registration");
-      expect(params.get("redirect_uri")).toBe("https://osn.example.com/callback");
-      // No state — registration flow bypasses PKCE on the server side.
-      expect(params.has("state")).toBe(false);
-    });
-
-    it("uses a custom redirect_uri when provided", async () => {
-      const { calls } = stubFetch(() =>
-        jsonResponse({
-          access_token: "acc_x",
-          token_type: "Bearer",
-          expires_in: 60,
-        }),
-      );
-      await client.exchangeAuthCode("code", "http://app.local/cb");
-      const params = new URLSearchParams(calls[0].init?.body as string);
-      expect(params.get("redirect_uri")).toBe("http://app.local/cb");
-    });
-
-    it("throws RegistrationError on token exchange failure", async () => {
-      stubFetch(() => jsonResponse({ error: "invalid_grant" }, { status: 400 }));
-      await expect(client.exchangeAuthCode("bad_code")).rejects.toThrow("invalid_grant");
+    it("propagates 401 from the server as a RegistrationError", async () => {
+      stubFetch(() => jsonResponse({ error: "unauthorized" }, { status: 401 }));
+      await expect(
+        client.passkeyRegisterBegin({ userId: "usr_abc", enrollmentToken: "bad" }),
+      ).rejects.toThrow("unauthorized");
     });
   });
 
   it("strips a trailing slash from issuerUrl", async () => {
     const c = createRegistrationClient({
       issuerUrl: "https://osn.example.com/",
-      clientId: "test-client",
     });
     const { calls } = stubFetch(() => jsonResponse({ available: true }));
     await c.checkHandle("alice");
