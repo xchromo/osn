@@ -91,10 +91,9 @@ Before pushing, update the relevant docs to reflect the changes made on this bra
 
 **Always check and update as needed:**
 
-- **`TODO.md` — Current Status**: rewrite the snapshot to reflect what this branch ships. One concise paragraph or table row per logical area changed. Keep it tight.
-- **`TODO.md` — Security/Performance backlogs**: add any new `S-*` / `P-*` findings from Step 6. Use the finding ID as the item label (e.g. `- [ ] S-M1 — No rate limit on /foo endpoint`). Mark any findings that were resolved on this branch with `[x]` + a short note.
-- **`TODO.md` — App/Platform sections**: check off any items completed by this branch.
-- **`TODO.md` — Up Next**: prune completed items; add new high-priority items if they surfaced.
+- **`TODO.md` — Security/Performance backlogs**: add any new `S-*` / `P-*` findings from Step 6. Use the finding ID as the item label (e.g. `- [ ] S-M1 — No rate limit on /foo endpoint`). Mark findings resolved on this branch with `[x]` + short note.
+- **`TODO.md` — App/Platform sections**: check off items completed by this branch.
+- **`TODO.md` — Up Next**: prune completed items. Review the full TODO and surface 2–3 suggested next priorities to the user — items that are now unblocked, newly urgent, or logically follow from this branch's work. Let the user decide whether to add them.
 - **`CLAUDE.md`**: update if this branch introduces a new pattern, package, convention, or architectural decision that future AI sessions need to know about. Do not add noise — only update if the change is genuinely reusable context.
 
 Commit any doc updates with the message: `docs: update TODO and CLAUDE for <branch-summary>`.

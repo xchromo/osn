@@ -2,21 +2,6 @@
 
 Progress tracking and deferred decisions. For full spec see README.md. For code patterns see CLAUDE.md.
 
-## Current Status
-
-| Area | What shipped |
-|------|-------------|
-| `@osn/crypto` | ARC S2S auth — ES256 key pairs, JWT create/verify, scope gates, 30s-before-expiry in-memory cache |
-| `@osn/db` | `service_accounts` table for ARC public key registration |
-| `@osn/core` | Full OIDC auth (passkey, OTP, magic-link, PKCE, JWT, discovery) + social graph (connections, close friends, blocks) — rate limiting, pagination, N+1-free queries, safe error responses |
-| `apps/osn` | Auth + graph server on port 4000 |
-| `apps/pulse` | Event CRUD UI + location autocomplete + Maps button + toast notifications + coordinate storage; 59 component tests |
-| `@pulse/db` | lat/lng columns + dynamic seed |
-| `@osn/api` | Events domain with coordinate range validation |
-| Tests | 143 passing across 13 files |
-
----
-
 ## Up Next
 
 Highest-priority items across all areas.
