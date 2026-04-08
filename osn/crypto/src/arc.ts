@@ -3,6 +3,15 @@ import { Effect, Data } from "effect";
 import { eq } from "drizzle-orm";
 import { Db } from "@osn/db/service";
 import { serviceAccounts } from "@osn/db";
+import {
+  classifyArcVerifyError,
+  metricArcPublicKeyCacheHit,
+  metricArcPublicKeyCacheMiss,
+  metricArcTokenCacheHit,
+  metricArcTokenCacheMiss,
+  metricArcTokenIssued,
+  metricArcTokenVerification,
+} from "./arc-metrics";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -142,13 +151,16 @@ export async function createArcToken(
   const scopes = normaliseScopes(claims.scope);
   validateScopeFormat(scopes);
 
-  return new SignJWT({ scope: scopes.join(",") })
+  const token = await new SignJWT({ scope: scopes.join(",") })
     .setProtectedHeader({ alg: ARC_ALG })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
     .setIssuedAt()
     .setExpirationTime(`${ttl}s`)
     .sign(privateKey);
+
+  metricArcTokenIssued(claims.iss, claims.aud);
+  return token;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,34 +181,47 @@ export async function verifyArcToken(
   expectedAudience: string,
   requiredScope?: string,
 ): Promise<ArcTokenPayload> {
-  const { payload } = await jwtVerify(token, publicKey, {
-    algorithms: [ARC_ALG],
-    audience: expectedAudience,
-  }).catch((cause) => {
-    throw new ArcTokenError({ message: "ARC token verification failed", cause });
-  });
+  // We don't know the issuer until we've parsed the token, so we record
+  // the metric once we have it. On early failure (bad signature, etc.)
+  // we label with "unknown" so the counter still increments.
+  let issForMetric = "unknown";
+  try {
+    const { payload } = await jwtVerify(token, publicKey, {
+      algorithms: [ARC_ALG],
+      audience: expectedAudience,
+    }).catch((cause) => {
+      throw new ArcTokenError({ message: "ARC token verification failed", cause });
+    });
 
-  const scope = payload.scope as string | undefined;
-  if (!scope) {
-    throw new ArcTokenError({ message: "ARC token missing scope claim" });
-  }
+    if (typeof payload.iss === "string") issForMetric = payload.iss;
 
-  if (requiredScope) {
-    const scopes = normaliseScopes(scope);
-    if (!scopes.includes(requiredScope.trim().toLowerCase())) {
-      throw new ArcTokenError({
-        message: `ARC token missing required scope: ${requiredScope}`,
-      });
+    const scope = payload.scope as string | undefined;
+    if (!scope) {
+      throw new ArcTokenError({ message: "ARC token missing scope claim" });
     }
-  }
 
-  return {
-    iss: payload.iss!,
-    aud: (Array.isArray(payload.aud) ? payload.aud[0] : payload.aud)!,
-    scope,
-    iat: payload.iat!,
-    exp: payload.exp!,
-  };
+    if (requiredScope) {
+      const scopes = normaliseScopes(scope);
+      if (!scopes.includes(requiredScope.trim().toLowerCase())) {
+        throw new ArcTokenError({
+          message: `ARC token missing required scope: ${requiredScope}`,
+        });
+      }
+    }
+
+    metricArcTokenVerification(issForMetric, "ok");
+
+    return {
+      iss: payload.iss!,
+      aud: (Array.isArray(payload.aud) ? payload.aud[0] : payload.aud)!,
+      scope,
+      iat: payload.iat!,
+      exp: payload.exp!,
+    };
+  } catch (err) {
+    metricArcTokenVerification(issForMetric, classifyArcVerifyError(err));
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -226,10 +251,12 @@ export const resolvePublicKey = (
       // Still need to validate scopes against DB if tokenScopes provided
       // but skip the DB query for key material — we fetch allowedScopes below
       if (!tokenScopes || tokenScopes.length === 0) {
+        metricArcPublicKeyCacheHit(issuer);
         return cached.key;
       }
     }
 
+    metricArcPublicKeyCacheMiss(issuer);
     const { db } = yield* Db;
 
     const rows = yield* Effect.tryPromise({
@@ -323,9 +350,11 @@ export async function getOrCreateArcToken(
 
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt - CACHE_REISSUE_BUFFER_SECONDS > now) {
+    metricArcTokenCacheHit(claims.iss);
     return cached.token;
   }
 
+  metricArcTokenCacheMiss(claims.iss);
   const token = await createArcToken(privateKey, claims, ttl);
 
   // Enforce max cache size — evict oldest entry if full
