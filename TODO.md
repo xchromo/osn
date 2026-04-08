@@ -4,9 +4,10 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 
 ## Up Next
 
+- [ ] Zap M0 scaffold — `@zap/app` (Tauri+Solid), `@zap/api` (Elysia), `@zap/db` (Drizzle)
+- [ ] Wire Pulse event chat to Zap once M2 lands (replace `EventChatPlaceholder`)
 - [ ] Pulse: "What's on today" default view
 - [ ] Landing page: design and content
-- [ ] Zap M0 scaffold — `@zap/app` (Tauri+Solid), `@zap/api` (Elysia), `@zap/db` (Drizzle)
 - [ ] S-H1 — Rate limit registration + login auth endpoints (per-IP / per-email throttle)
 - [ ] S-H3 — Open redirect in `/magic/verify` — fix before any deployment
 - [ ] S-H4 — Make PKCE mandatory at `/token` (drop the `if (state)` conditional; affects every code-issuing flow)
@@ -30,16 +31,30 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] Toast notification system (solid-toast: event created, deleted, create/delete errors)
 - [x] Registration UI: multi-step flow (email + handle + display name → OTP → passkey enrolment), live handle availability check, auto-login on completion via `adoptSession`
 - [x] Coordinate storage (lat/lng from Photon autocomplete) + Maps button on EventCard
-- [ ] Map preview in expanded event view (Leaflet + OpenStreetMap, no API key)
+- [x] Full event view at `/events/:id` with shareable URL (client routing via `@solidjs/router`)
+- [x] Map preview in expanded event view (Leaflet + OpenStreetMap, no API key)
+- [x] iCal export (ICS) — `GET /events/:id/ics` + Add-to-calendar button
+- [x] RSVP service: upsert/list/counts/invite, cross-DB join with `@osn/db` user displays
+- [x] RSVP visibility filtering — public / connections / private guest list, with per-attendee `attendanceVisibility` (`connections` / `close_friends` / `no_one`) honoured server-side
+- [x] Event public/private discovery flag — `listEvents` filters out private events from non-owners
+- [x] Join policy — `open` vs `guest_list` (invited users only)
+- [x] Allow-interested toggle for events that don't accept "Maybe" RSVPs
+- [x] Communications config (`commsChannels`) and stubbed blast log (`event_comms` table); organiser-only `POST /events/:id/comms/blasts`
+- [x] Per-step info popovers in `CreateEventForm`
+- [x] `pulse_users` table for Pulse-side user settings (separate from OSN identity)
+- [x] `PATCH /me/settings` route for attendance visibility
+- [x] Event chat placeholder (will be replaced with Zap M2)
 - [ ] "What's on today" default view
 - [ ] Prompt for max event duration when creating events without an endTime
 - [ ] Event discovery (location, category, datetime, friends, interests)
 - [ ] Recurring events (series + instances)
-- [ ] Event group chats (via messaging backend)
-- [ ] Calendar view + iCal export
-- [ ] Hidden attendance option
+- [ ] Event group chats (via Zap once M2 lands — placeholder shipped)
+- [ ] Hidden attendance option (delivered above as `attendanceVisibility = "no_one"`)
 - [ ] Organizer tools (moderation, blacklists)
 - [ ] Venue pages
+- [ ] Real SMS/email comms providers — `sendBlast` is stubbed (logs + writes to `event_comms`); plug in actual delivery
+- [ ] Tighten Tauri CSP to allowlist `*.tile.openstreetmap.org` for the new Leaflet tile loads (rolls into S-L3)
+- [ ] Drizzle: `@pulse/db` test helpers (`tests/schema.test.ts`, `tests/seed.test.ts`, `pulse/api/tests/helpers/db.ts`) hand-roll the SQL schema in three places — extract a shared `createSchemaSql()` helper so adding a column is a one-file change
 
 ---
 

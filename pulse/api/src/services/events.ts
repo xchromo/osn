@@ -21,6 +21,16 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
 }> {}
 
 const StatusEnum = Schema.Literal("upcoming", "ongoing", "finished", "cancelled");
+const VisibilityEnum = Schema.Literal("public", "private");
+const GuestListVisibilityEnum = Schema.Literal("public", "connections", "private");
+const JoinPolicyEnum = Schema.Literal("open", "guest_list");
+const CommsChannelSchema = Schema.Literal("sms", "email");
+const CommsChannelsSchema = Schema.Array(CommsChannelSchema).pipe(
+  Schema.minItems(1),
+  Schema.filter((channels) => new Set(channels).size === channels.length, {
+    message: () => "commsChannels must not contain duplicates",
+  }),
+);
 
 // Schema.DateFromString in this Effect version allows Invalid Date — use a validated transform
 const ValidDateString = Schema.String.pipe(Schema.filter((s) => !isNaN(new Date(s).getTime())));
@@ -56,6 +66,11 @@ const InsertEventSchema = Schema.Struct({
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
   imageUrl: Schema.optional(ValidUrl),
+  visibility: Schema.optional(VisibilityEnum),
+  guestListVisibility: Schema.optional(GuestListVisibilityEnum),
+  joinPolicy: Schema.optional(JoinPolicyEnum),
+  allowInterested: Schema.optional(Schema.Boolean),
+  commsChannels: Schema.optional(CommsChannelsSchema),
 });
 
 const UpdateEventSchema = Schema.Struct({
@@ -70,12 +85,23 @@ const UpdateEventSchema = Schema.Struct({
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
   imageUrl: Schema.optional(ValidUrl),
+  visibility: Schema.optional(VisibilityEnum),
+  guestListVisibility: Schema.optional(GuestListVisibilityEnum),
+  joinPolicy: Schema.optional(JoinPolicyEnum),
+  allowInterested: Schema.optional(Schema.Boolean),
+  commsChannels: Schema.optional(CommsChannelsSchema),
 });
 
 interface ListEventsParams {
   status?: "upcoming" | "ongoing" | "finished" | "cancelled";
   category?: string;
   limit?: string;
+  /**
+   * If provided, the viewer's own private events stay visible while other
+   * users' private events are filtered out. When omitted, ALL private
+   * events are filtered out (discovery behaviour).
+   */
+  viewerId?: string | null;
 }
 
 const deriveStatus = (event: Event, now: Date): Event["status"] => {
@@ -128,7 +154,16 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    return yield* Effect.forEach(results, applyTransition, { concurrency: "unbounded" });
+    // Discovery rule: private events are not surfaced in the generic feed.
+    // The viewer's own private events are still visible so they can manage
+    // them. A future enhancement will also include events the viewer has
+    // been invited to (requires joining event_rsvps).
+    const visible = results.filter((event) => {
+      if (event.visibility === "public") return true;
+      return params.viewerId != null && event.createdByUserId === params.viewerId;
+    });
+
+    return yield* Effect.forEach(visible, applyTransition, { concurrency: "unbounded" });
   });
 
 export const listTodayEvents: Effect.Effect<Event[], DatabaseError, Db> = Effect.gen(function* () {
@@ -191,9 +226,21 @@ export const createEvent = (
       return yield* Effect.fail(new ValidationError({ cause: "startTime must be in the future" }));
     }
 
+    // Serialise the commsChannels array to JSON text for the DB column.
+    // The schema default is `'["email"]'` so only overwrite when the
+    // caller explicitly provided a value.
+    const { commsChannels, ...rest } = validated;
+    const row = {
+      ...rest,
+      ...creator,
+      id,
+      createdAt: now,
+      updatedAt: now,
+      ...(commsChannels ? { commsChannels: JSON.stringify(commsChannels) } : {}),
+    };
+
     yield* Effect.tryPromise({
-      try: () =>
-        db.insert(events).values({ ...validated, ...creator, id, createdAt: now, updatedAt: now }),
+      try: () => db.insert(events).values(row),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
@@ -220,18 +267,20 @@ export const updateEvent = (
     );
 
     const now = new Date();
+    const { commsChannels, ...rest } = validated;
+    const update = {
+      ...rest,
+      updatedAt: now,
+      ...(commsChannels ? { commsChannels: JSON.stringify(commsChannels) } : {}),
+    };
     yield* Effect.tryPromise({
-      try: () =>
-        db
-          .update(events)
-          .set({ ...validated, updatedAt: now })
-          .where(eq(events.id, id)),
+      try: () => db.update(events).set(update).where(eq(events.id, id)),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
     // Build the updated event in-memory rather than re-fetching from DB.
     // applyTransition is still called in case startTime/endTime changed.
-    const updated = { ...existing, ...validated, updatedAt: now } as Event;
+    const updated = { ...existing, ...update } as Event;
     return yield* applyTransition(updated);
   });
 
