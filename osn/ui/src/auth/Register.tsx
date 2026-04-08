@@ -1,28 +1,28 @@
 import { createSignal, Show, onCleanup } from "solid-js";
 import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { useAuth } from "@osn/client/solid";
-import { createRegistrationClient, type RegistrationClient } from "@osn/client";
+import type { RegistrationClient } from "@osn/client";
 import { toast } from "solid-toast";
-import { OSN_ISSUER_URL } from "../lib/auth";
 
 type Step = "details" | "verify" | "passkey" | "done";
 
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Hoisted to module scope so we don't reallocate the client (and its closures)
-// every time the Register component mounts (P-W2).
-const registrationClient: RegistrationClient = createRegistrationClient({
-  issuerUrl: OSN_ISSUER_URL,
-});
-
 interface RegisterProps {
+  /**
+   * Registration client injected by the consuming app. Usually built once at
+   * app boot with `createRegistrationClient({ issuerUrl })` and passed in —
+   * keeping the construction caller-side means the shared component doesn't
+   * need to know about any app's env config.
+   */
+  client: RegistrationClient;
   onCancel: () => void;
 }
 
 export function Register(props: RegisterProps) {
   const { adoptSession } = useAuth();
-  const client = registrationClient;
+  const client = props.client;
   // Feature-detect on each mount so test code can toggle the underlying
   // mock between renders. Calling once per mount is negligible cost.
   const passkeySupported = browserSupportsWebAuthn();

@@ -97,10 +97,10 @@ describe("EventList — unauthenticated", () => {
     expect(await findByText("Second Event")).toBeTruthy();
   });
 
-  it("shows 'Sign in with OSN' button; no 'New Event' / 'Sign out' buttons", () => {
+  it("shows 'Sign in' button; no 'New Event' / 'Sign out' buttons", () => {
     mockGet.mockReturnValue(new Promise(() => {}));
     const { getByText, queryByText } = render(() => <EventList />);
-    expect(getByText("Sign in with OSN")).toBeTruthy();
+    expect(getByText("Sign in")).toBeTruthy();
     expect(queryByText("New Event")).toBeNull();
     expect(queryByText("Sign out")).toBeNull();
   });
@@ -131,7 +131,7 @@ describe("EventList — authenticated", () => {
     const { getByText, queryByText } = render(() => <EventList />);
     expect(getByText("New Event")).toBeTruthy();
     expect(getByText("Sign out")).toBeTruthy();
-    expect(queryByText("Sign in with OSN")).toBeNull();
+    expect(queryByText("Sign in")).toBeNull();
   });
 
   it("clicking 'New Event' shows the create form; clicking 'Cancel' hides it", () => {

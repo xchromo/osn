@@ -202,6 +202,40 @@ function looksLikeEmail(identifier: string): boolean {
   return identifier.includes("@");
 }
 
+/**
+ * A session token envelope — the shape returned by `issueTokens` and consumed
+ * by clients. Exposed as a named type so the first-party `/login/*` endpoints
+ * can type their return shapes precisely.
+ */
+export interface TokenSet {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+/**
+ * The publicly-safe subset of `User` returned alongside a fresh session on
+ * first-party login. Strips timestamps so clients don't accidentally depend
+ * on them for anything display-related.
+ */
+export interface PublicUser {
+  id: string;
+  handle: string;
+  email: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+function toPublicUser(u: User): PublicUser {
+  return {
+    id: u.id,
+    handle: u.handle,
+    email: u.email,
+    displayName: u.displayName,
+    avatarUrl: u.avatarUrl,
+  };
+}
+
 const RESERVED_HANDLES = new Set([
   "me",
   "admin",
@@ -907,13 +941,15 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // Passkey: complete login
+  // Passkey: verify assertion (extracted so both the code-issuing and
+  // direct-session completion paths can share the same WebAuthn verification
+  // logic without duplication).
   // -------------------------------------------------------------------------
 
-  const completePasskeyLogin = (
+  const verifyPasskeyAssertion = (
     identifier: string,
     assertion: AuthenticationResponseJSON,
-  ): Effect.Effect<{ code: string; userId: string }, AuthError | DatabaseError, Db> =>
+  ): Effect.Effect<User, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       // Check in-memory challenge guard before any DB lookup.
       const normalised = normaliseIdentifier(identifier);
@@ -971,8 +1007,37 @@ export function createAuthService(config: AuthConfig) {
         catch: (cause) => new DatabaseError({ cause }),
       });
 
+      return user;
+    });
+
+  // -------------------------------------------------------------------------
+  // Passkey: complete login (PKCE — returns an authorization code, exchanged
+  // at /token). Kept for the hosted HTML third-party flow.
+  // -------------------------------------------------------------------------
+
+  const completePasskeyLogin = (
+    identifier: string,
+    assertion: AuthenticationResponseJSON,
+  ): Effect.Effect<{ code: string; userId: string }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* verifyPasskeyAssertion(identifier, assertion);
       const code = yield* issueCode(user.id);
       return { code, userId: user.id };
+    });
+
+  // -------------------------------------------------------------------------
+  // Passkey: complete login — direct session (first-party path, bypasses
+  // PKCE and returns a Session + PublicUser directly).
+  // -------------------------------------------------------------------------
+
+  const completePasskeyLoginDirect = (
+    identifier: string,
+    assertion: AuthenticationResponseJSON,
+  ): Effect.Effect<{ session: TokenSet; user: PublicUser }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* verifyPasskeyAssertion(identifier, assertion);
+      const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
+      return { session, user: toPublicUser(user) };
     });
 
   // -------------------------------------------------------------------------
@@ -1028,13 +1093,15 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // OTP: complete
+  // OTP: verify code (extracted). Returns the full User row so both the
+  // code-issuing and direct-session completion paths can read email/handle/
+  // displayName off it.
   // -------------------------------------------------------------------------
 
-  const completeOtp = (
+  const verifyOtpCode = (
     identifier: string,
     code: string,
-  ): Effect.Effect<{ code: string; userId: string }, AuthError, Db> =>
+  ): Effect.Effect<User, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       // Check in-memory store first — no DB hit on expired/invalid attempts.
       const normalised = normaliseIdentifier(identifier);
@@ -1047,8 +1114,44 @@ export function createAuthService(config: AuthConfig) {
       }
       otpStore.delete(normalised);
 
-      const authCode = yield* issueCode(entry.userId);
-      return { code: authCode, userId: entry.userId };
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(eq(users.id, entry.userId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const user = result[0];
+      if (!user) {
+        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+      }
+      return user;
+    });
+
+  // -------------------------------------------------------------------------
+  // OTP: complete (PKCE — returns an authorization code)
+  // -------------------------------------------------------------------------
+
+  const completeOtp = (
+    identifier: string,
+    code: string,
+  ): Effect.Effect<{ code: string; userId: string }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* verifyOtpCode(identifier, code);
+      const authCode = yield* issueCode(user.id);
+      return { code: authCode, userId: user.id };
+    });
+
+  // -------------------------------------------------------------------------
+  // OTP: complete direct (first-party — returns a Session + PublicUser)
+  // -------------------------------------------------------------------------
+
+  const completeOtpDirect = (
+    identifier: string,
+    code: string,
+  ): Effect.Effect<{ session: TokenSet; user: PublicUser }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* verifyOtpCode(identifier, code);
+      const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
+      return { session, user: toPublicUser(user) };
     });
 
   // -------------------------------------------------------------------------
@@ -1103,14 +1206,12 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // Magic link: verify
+  // Magic link: consume token (extracted). Atomically removes the entry and
+  // returns the User. Shared by both the PKCE redirect path and the first-
+  // party direct-session path.
   // -------------------------------------------------------------------------
 
-  const verifyMagic = (
-    token: string,
-    redirectUri: string,
-    state: string,
-  ): Effect.Effect<{ redirectUrl: string }, AuthError, Db> =>
+  const consumeMagicToken = (token: string): Effect.Effect<User, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = magicStore.get(token);
       if (!entry || Date.now() > entry.expiresAt) {
@@ -1118,11 +1219,47 @@ export function createAuthService(config: AuthConfig) {
       }
       magicStore.delete(token);
 
-      const code = yield* issueCode(entry.userId);
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(eq(users.id, entry.userId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const user = result[0];
+      if (!user) {
+        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+      }
+      return user;
+    });
+
+  // -------------------------------------------------------------------------
+  // Magic link: verify (PKCE — returns a redirectUrl with an auth code)
+  // -------------------------------------------------------------------------
+
+  const verifyMagic = (
+    token: string,
+    redirectUri: string,
+    state: string,
+  ): Effect.Effect<{ redirectUrl: string }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* consumeMagicToken(token);
+      const code = yield* issueCode(user.id);
       const url = new URL(redirectUri);
       url.searchParams.set("code", code);
       url.searchParams.set("state", state);
       return { redirectUrl: url.toString() };
+    });
+
+  // -------------------------------------------------------------------------
+  // Magic link: verify direct (first-party — returns a Session + PublicUser)
+  // -------------------------------------------------------------------------
+
+  const verifyMagicDirect = (
+    token: string,
+  ): Effect.Effect<{ session: TokenSet; user: PublicUser }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const user = yield* consumeMagicToken(token);
+      const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
+      return { session, user: toPublicUser(user) };
     });
 
   return {
@@ -1143,10 +1280,13 @@ export function createAuthService(config: AuthConfig) {
     completePasskeyRegistration,
     beginPasskeyLogin,
     completePasskeyLogin,
+    completePasskeyLoginDirect,
     beginOtp,
     completeOtp,
+    completeOtpDirect,
     beginMagic,
     verifyMagic,
+    verifyMagicDirect,
   };
 }
 

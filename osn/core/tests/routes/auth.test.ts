@@ -581,6 +581,173 @@ describe("auth routes", () => {
   });
 
   // -------------------------------------------------------------------------
+  // First-party direct-session login (/login/*)
+  // -------------------------------------------------------------------------
+  describe("POST /login/otp/begin", () => {
+    it("returns sent:true for a known user", async () => {
+      await app.handle(
+        new Request("http://localhost/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "nia@example.com", handle: "nia" }),
+        }),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/login/otp/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "nia@example.com" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: true });
+    });
+
+    it("still returns sent:true for an unknown user (enumeration-safe)", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/otp/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "ghost@example.com" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: true });
+    });
+  });
+
+  describe("POST /login/otp/complete", () => {
+    it("returns a session + public user on a valid code", async () => {
+      let capturedCode: string | undefined;
+      const authHelper = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/\b(\d{6})\b/);
+          if (m) capturedCode = m[1];
+        },
+      });
+      await Effect.runPromise(
+        authHelper.registerUser("otp-direct@example.com", "otpdirect").pipe(Effect.provide(layer)),
+      );
+      await Effect.runPromise(
+        authHelper.beginOtp("otp-direct@example.com").pipe(Effect.provide(layer)),
+      );
+
+      const res = await app.handle(
+        new Request("http://localhost/login/otp/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "otp-direct@example.com", code: capturedCode }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        session: { accessToken: string; refreshToken: string; expiresIn: number };
+        user: { id: string; handle: string; email: string };
+      };
+      expect(json.session.accessToken).toBeTruthy();
+      expect(json.session.refreshToken).toBeTruthy();
+      expect(json.user.handle).toBe("otpdirect");
+      expect(json.user.email).toBe("otp-direct@example.com");
+    });
+
+    it("returns 400 for a wrong code", async () => {
+      await app.handle(
+        new Request("http://localhost/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "oscar@example.com", handle: "oscar" }),
+        }),
+      );
+      await app.handle(
+        new Request("http://localhost/login/otp/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "oscar@example.com" }),
+        }),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/login/otp/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "oscar@example.com", code: "000000" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /login/magic/begin", () => {
+    it("returns sent:true for a known user", async () => {
+      await app.handle(
+        new Request("http://localhost/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "pip@example.com", handle: "pip" }),
+        }),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/login/magic/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "pip@example.com" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: true });
+    });
+
+    it("still returns sent:true for an unknown user (enumeration-safe)", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/magic/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "ghost2@example.com" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ sent: true });
+    });
+  });
+
+  describe("GET /login/magic/verify", () => {
+    it("returns a session + public user for a valid magic token", async () => {
+      let capturedToken: string | undefined;
+      const authHelper = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/token=([^\s]+)/);
+          if (m) capturedToken = m[1];
+        },
+      });
+      await Effect.runPromise(
+        authHelper
+          .registerUser("magic-direct@example.com", "magicdirect")
+          .pipe(Effect.provide(layer)),
+      );
+      await Effect.runPromise(
+        authHelper.beginMagic("magic-direct@example.com").pipe(Effect.provide(layer)),
+      );
+
+      const res = await app.handle(
+        new Request(`http://localhost/login/magic/verify?token=${capturedToken}`),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        session: { accessToken: string };
+        user: { handle: string; email: string };
+      };
+      expect(json.session.accessToken).toBeTruthy();
+      expect(json.user.handle).toBe("magicdirect");
+    });
+
+    it("returns 400 for an unknown token", async () => {
+      const res = await app.handle(new Request("http://localhost/login/magic/verify?token=bogus"));
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // OIDC discovery
   // -------------------------------------------------------------------------
   describe("GET /.well-known/openid-configuration", () => {

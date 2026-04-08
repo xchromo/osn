@@ -3,11 +3,12 @@ import { useAuth } from "@osn/client/solid";
 import { toast } from "solid-toast";
 import { api } from "../lib/api";
 import type { EventItem } from "../lib/types";
-import { REDIRECT_URI } from "../lib/auth";
 import { getUserIdFromToken, getDisplayNameFromToken } from "../lib/utils";
 import { EventCard } from "./EventCard";
 import { CreateEventForm } from "./CreateEventForm";
-import { Register } from "./Register";
+import { Register } from "@osn/ui/auth/Register";
+import { SignIn } from "@osn/ui/auth/SignIn";
+import { registrationClient, loginClient } from "../lib/authClients";
 
 async function fetchEvents(accessToken: string | null): Promise<EventItem[]> {
   const headers: Record<string, string> = {};
@@ -18,7 +19,7 @@ async function fetchEvents(accessToken: string | null): Promise<EventItem[]> {
 }
 
 export function EventList() {
-  const { session, login, logout } = useAuth();
+  const { session, logout } = useAuth();
   const accessToken = () => session()?.accessToken ?? null;
   const authClaims = createMemo(() => {
     const token = accessToken();
@@ -29,6 +30,7 @@ export function EventList() {
   const [events, { refetch }] = createResource(tokenSource, ({ token }) => fetchEvents(token));
   const [showForm, setShowForm] = createSignal(false);
   const [showRegister, setShowRegister] = createSignal(false);
+  const [showSignIn, setShowSignIn] = createSignal(false);
   const [deletingIds, setDeletingIds] = createSignal(new Set<string>());
 
   function handleDelete(id: string) {
@@ -76,10 +78,10 @@ export function EventList() {
               Create account
             </button>
             <button
-              onClick={() => login(REDIRECT_URI())}
+              onClick={() => setShowSignIn(true)}
               class="rounded-md px-3 py-1.5 text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80"
             >
-              Sign in with OSN
+              Sign in
             </button>
           </Show>
           <Show when={session()}>
@@ -99,7 +101,14 @@ export function EventList() {
         </div>
       </div>
       <Show when={showRegister() && !session()}>
-        <Register onCancel={() => setShowRegister(false)} />
+        <Register client={registrationClient} onCancel={() => setShowRegister(false)} />
+      </Show>
+      <Show when={showSignIn() && !session()}>
+        <SignIn
+          client={loginClient}
+          onCancel={() => setShowSignIn(false)}
+          onSuccess={() => setShowSignIn(false)}
+        />
       </Show>
       <Show when={showForm()}>
         <CreateEventForm

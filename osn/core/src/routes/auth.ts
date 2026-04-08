@@ -560,6 +560,116 @@ export function createAuthRoutes(authConfig: AuthConfig, dbLayer: Layer.Layer<Db
           }),
         },
       )
+      // =========================================================================
+      // First-party direct-session login endpoints
+      //
+      // These mirror the /register/* flow: they return a Session + PublicUser
+      // directly, skipping the PKCE authorization-code round-trip. The hosted
+      // HTML flow at /authorize continues to use the code-returning variants
+      // above for third-party OAuth clients.
+      //
+      // Enumeration safety: /login/otp/begin and /login/magic/begin always
+      // return { sent: true } regardless of whether the identifier exists, so
+      // an attacker can't probe the handle/email namespace through them. The
+      // legitimate existence-check channel remains GET /handle/:handle.
+      // =========================================================================
+      .post(
+        "/login/passkey/begin",
+        async ({ body, set }) => {
+          try {
+            const result = await run(auth.beginPasskeyLogin(body.identifier));
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          body: t.Object({ identifier: t.String() }),
+        },
+      )
+      .post(
+        "/login/passkey/complete",
+        async ({ body, set }) => {
+          try {
+            const result = await run(
+              auth.completePasskeyLoginDirect(body.identifier, body.assertion),
+            );
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          body: t.Object({
+            identifier: t.String(),
+            assertion: t.Any(),
+          }),
+        },
+      )
+      .post(
+        "/login/otp/begin",
+        async ({ body }) => {
+          // Always opaque: on unknown identifier, the service throws, we
+          // swallow the error, and the client still gets { sent: true }. This
+          // prevents the endpoint from doubling as a user-existence oracle.
+          try {
+            await run(auth.beginOtp(body.identifier));
+          } catch {
+            /* swallowed on purpose */
+          }
+          return { sent: true as const };
+        },
+        {
+          body: t.Object({ identifier: t.String() }),
+        },
+      )
+      .post(
+        "/login/otp/complete",
+        async ({ body, set }) => {
+          try {
+            const result = await run(auth.completeOtpDirect(body.identifier, body.code));
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          body: t.Object({ identifier: t.String(), code: t.String() }),
+        },
+      )
+      .post(
+        "/login/magic/begin",
+        async ({ body }) => {
+          // Same enumeration-safety treatment as /login/otp/begin.
+          try {
+            await run(auth.beginMagic(body.identifier));
+          } catch {
+            /* swallowed on purpose */
+          }
+          return { sent: true as const };
+        },
+        {
+          body: t.Object({ identifier: t.String() }),
+        },
+      )
+      .get(
+        "/login/magic/verify",
+        async ({ query, set }) => {
+          try {
+            const result = await run(auth.verifyMagicDirect(query.token));
+            return result;
+          } catch (e) {
+            set.status = 400;
+            return { error: String(e) };
+          }
+        },
+        {
+          query: t.Object({ token: t.String() }),
+        },
+      )
       // -------------------------------------------------------------------------
       // OIDC discovery (minimal)
       // -------------------------------------------------------------------------

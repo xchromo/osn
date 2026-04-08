@@ -3,36 +3,25 @@ import { render, cleanup, screen, fireEvent, waitFor } from "@solidjs/testing-li
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 /**
- * T-R1: Register.tsx is the consumer of the entire registration flow. It
+ * Register.tsx is the consumer of the entire registration flow. It
  * orchestrates input sanitisation, debounced handle availability, the
  * details/verify/passkey/done step machine, the WebAuthn auto-skip branch,
  * and the adoptSession hand-off. None of those is covered anywhere else.
  *
- * Strategy: mock @osn/client (createRegistrationClient), @osn/client/solid
- * (useAuth → adoptSession spy), and @simplewebauthn/browser (toggleable
- * support flag). The mocks are hoisted via vi.hoisted() so we can flip
- * `webauthnSupported` between tests before importing the component.
+ * Strategy: inject a stub RegistrationClient directly via the `client` prop,
+ * mock @osn/client/solid (useAuth → adoptSession spy), and mock
+ * @simplewebauthn/browser (toggleable support flag). The WebAuthn mock is
+ * hoisted via vi.hoisted() so tests can flip `webauthnSupported` between
+ * renders before the component imports it.
  */
 
 const hoisted = vi.hoisted(() => {
   return {
     webauthnSupported: true,
-    stub: {
-      checkHandle: vi.fn(),
-      beginRegistration: vi.fn(),
-      completeRegistration: vi.fn(),
-      passkeyRegisterBegin: vi.fn(),
-      passkeyRegisterComplete: vi.fn(),
-    },
     adoptSession: vi.fn(),
     startRegistration: vi.fn(),
   };
 });
-
-vi.mock("@osn/client", () => ({
-  createRegistrationClient: () => hoisted.stub,
-  RegistrationError: class RegistrationError extends Error {},
-}));
 
 vi.mock("@osn/client/solid", () => ({
   useAuth: () => ({
@@ -49,13 +38,36 @@ vi.mock("solid-toast", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../../src/lib/auth", () => ({
-  OSN_ISSUER_URL: "https://osn.test",
-  REDIRECT_URI: () => "http://localhost/callback",
-}));
-
 // Import after mocks so the component picks them up.
-import { Register } from "../../src/components/Register";
+import { Register } from "../../src/auth/Register";
+import type { RegistrationClient } from "@osn/client";
+
+interface ClientStub {
+  checkHandle: ReturnType<typeof vi.fn>;
+  beginRegistration: ReturnType<typeof vi.fn>;
+  completeRegistration: ReturnType<typeof vi.fn>;
+  passkeyRegisterBegin: ReturnType<typeof vi.fn>;
+  passkeyRegisterComplete: ReturnType<typeof vi.fn>;
+}
+
+function makeClientStub(): ClientStub {
+  return {
+    checkHandle: vi.fn(),
+    beginRegistration: vi.fn(),
+    completeRegistration: vi.fn(),
+    passkeyRegisterBegin: vi.fn(),
+    passkeyRegisterComplete: vi.fn(),
+  };
+}
+
+// Cast site: the stub shape intentionally loosens RegistrationClient's
+// precise function signatures (each method is a plain vi.fn) so tests can
+// mock return values without dealing with mock-type gymnastics. The
+// component only ever reads from `props.client`, so the runtime shape is
+// all that matters.
+const asClient = (s: ClientStub): RegistrationClient => s as unknown as RegistrationClient;
+
+let stub: ClientStub;
 
 const sampleSession = {
   accessToken: "acc_x",
@@ -80,11 +92,7 @@ describe("Register component", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     hoisted.webauthnSupported = true;
-    hoisted.stub.checkHandle.mockReset();
-    hoisted.stub.beginRegistration.mockReset();
-    hoisted.stub.completeRegistration.mockReset();
-    hoisted.stub.passkeyRegisterBegin.mockReset();
-    hoisted.stub.passkeyRegisterComplete.mockReset();
+    stub = makeClientStub();
     hoisted.adoptSession.mockReset();
     hoisted.startRegistration.mockReset();
   });
@@ -96,41 +104,41 @@ describe("Register component", () => {
 
   describe("details step", () => {
     it("sanitises handle input: lowercases and strips invalid chars", () => {
-      render(() => <Register onCancel={() => {}} />);
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       const input = fillHandle("Alice WONDERLAND!");
       expect(input.value).toBe("alicewonderland");
     });
 
     it("flags handle as invalid format synchronously, no fetch", () => {
-      render(() => <Register onCancel={() => {}} />);
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       // Empty after sanitisation? No — we want a string that survives
       // sanitisation but fails HANDLE_RE. The sanitiser strips everything
       // except [a-z0-9_], so any input that survives is by construction valid.
       // Instead, drive the "invalid" branch via length: > 30 chars.
       fillHandle("a".repeat(31));
       expect(screen.getByText(/1.30 chars/)).toBeTruthy();
-      expect(hoisted.stub.checkHandle).not.toHaveBeenCalled();
+      expect(stub.checkHandle).not.toHaveBeenCalled();
     });
 
     it("debounces availability check and shows 'available'", async () => {
-      hoisted.stub.checkHandle.mockResolvedValue({ available: true });
-      render(() => <Register onCancel={() => {}} />);
+      stub.checkHandle.mockResolvedValue({ available: true });
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillHandle("alice");
       // Synchronously transitions to "checking".
       expect(screen.getByText(/Checking/)).toBeTruthy();
-      expect(hoisted.stub.checkHandle).not.toHaveBeenCalled();
+      expect(stub.checkHandle).not.toHaveBeenCalled();
 
       // Advance past the 300ms debounce.
       await vi.advanceTimersByTimeAsync(350);
       await waitFor(() => {
         expect(screen.getByText(/@alice is available/)).toBeTruthy();
       });
-      expect(hoisted.stub.checkHandle).toHaveBeenCalledWith("alice");
+      expect(stub.checkHandle).toHaveBeenCalledWith("alice");
     });
 
     it("shows 'taken' when the server reports unavailable", async () => {
-      hoisted.stub.checkHandle.mockResolvedValue({ available: false });
-      render(() => <Register onCancel={() => {}} />);
+      stub.checkHandle.mockResolvedValue({ available: false });
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillHandle("taken");
       await vi.advanceTimersByTimeAsync(350);
       await waitFor(() => {
@@ -143,8 +151,8 @@ describe("Register component", () => {
       // which rendered the "1–30 chars…" format error even though the user's
       // input was perfectly valid. Network/server failures must surface
       // separately so the user isn't told their handle is the wrong shape.
-      hoisted.stub.checkHandle.mockRejectedValue(new Error("network down"));
-      render(() => <Register onCancel={() => {}} />);
+      stub.checkHandle.mockRejectedValue(new Error("network down"));
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillHandle("alice");
       await vi.advanceTimersByTimeAsync(350);
       await waitFor(() => {
@@ -154,10 +162,10 @@ describe("Register component", () => {
     });
 
     it("submit is disabled while handle status is 'checking'", () => {
-      hoisted.stub.checkHandle.mockImplementation(
+      stub.checkHandle.mockImplementation(
         () => new Promise(() => {}), // never resolves
       );
-      render(() => <Register onCancel={() => {}} />);
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillEmail("alice@example.com");
       fillHandle("alice");
       // Still "checking" — debounce hasn't fired but the synchronous status
@@ -169,8 +177,8 @@ describe("Register component", () => {
     });
 
     it("submit becomes enabled once email + handle are both valid", async () => {
-      hoisted.stub.checkHandle.mockResolvedValue({ available: true });
-      render(() => <Register onCancel={() => {}} />);
+      stub.checkHandle.mockResolvedValue({ available: true });
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillEmail("alice@example.com");
       fillHandle("alice");
       await vi.advanceTimersByTimeAsync(350);
@@ -185,9 +193,9 @@ describe("Register component", () => {
 
   describe("verify step", () => {
     async function advanceToVerify() {
-      hoisted.stub.checkHandle.mockResolvedValue({ available: true });
-      hoisted.stub.beginRegistration.mockResolvedValue({ sent: true });
-      render(() => <Register onCancel={() => {}} />);
+      stub.checkHandle.mockResolvedValue({ available: true });
+      stub.beginRegistration.mockResolvedValue({ sent: true });
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillEmail("alice@example.com");
       fillHandle("alice");
       await vi.advanceTimersByTimeAsync(350);
@@ -206,7 +214,7 @@ describe("Register component", () => {
 
     it("calls beginRegistration with the form values and advances to verify", async () => {
       await advanceToVerify();
-      expect(hoisted.stub.beginRegistration).toHaveBeenCalledWith({
+      expect(stub.beginRegistration).toHaveBeenCalledWith({
         email: "alice@example.com",
         handle: "alice",
         displayName: undefined,
@@ -236,9 +244,9 @@ describe("Register component", () => {
 
   describe("passkey step (supported)", () => {
     async function reachPasskey() {
-      hoisted.stub.checkHandle.mockResolvedValue({ available: true });
-      hoisted.stub.beginRegistration.mockResolvedValue({ sent: true });
-      hoisted.stub.completeRegistration.mockResolvedValue({
+      stub.checkHandle.mockResolvedValue({ available: true });
+      stub.beginRegistration.mockResolvedValue({ sent: true });
+      stub.completeRegistration.mockResolvedValue({
         userId: "usr_abc",
         handle: "alice",
         email: "alice@example.com",
@@ -246,7 +254,7 @@ describe("Register component", () => {
         enrollmentToken: "enroll_xyz",
       });
       hoisted.adoptSession.mockResolvedValue(undefined);
-      render(() => <Register onCancel={() => {}} />);
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillEmail("alice@example.com");
       fillHandle("alice");
       await vi.advanceTimersByTimeAsync(350);
@@ -266,27 +274,27 @@ describe("Register component", () => {
       // that eliminates the "stranded between verified and logged in" UX
       // dead-end.
       expect(hoisted.adoptSession).toHaveBeenCalledWith(sampleSession);
-      expect(hoisted.stub.passkeyRegisterBegin).not.toHaveBeenCalled();
+      expect(stub.passkeyRegisterBegin).not.toHaveBeenCalled();
     });
 
     it("happy path: enrolls a passkey using the enrollment token", async () => {
       await reachPasskey();
-      hoisted.stub.passkeyRegisterBegin.mockResolvedValue({ challenge: "ch" });
+      stub.passkeyRegisterBegin.mockResolvedValue({ challenge: "ch" });
       hoisted.startRegistration.mockResolvedValue({ id: "cred", rawId: "raw" });
-      hoisted.stub.passkeyRegisterComplete.mockResolvedValue({ passkeyId: "pk_1" });
+      stub.passkeyRegisterComplete.mockResolvedValue({ passkeyId: "pk_1" });
 
       fireEvent.click(screen.getByRole("button", { name: /Create passkey/i }));
 
       await waitFor(() => {
-        expect(hoisted.stub.passkeyRegisterComplete).toHaveBeenCalled();
+        expect(stub.passkeyRegisterComplete).toHaveBeenCalled();
       });
       // Both passkey calls must carry the enrollment token.
-      expect(hoisted.stub.passkeyRegisterBegin).toHaveBeenCalledWith({
+      expect(stub.passkeyRegisterBegin).toHaveBeenCalledWith({
         userId: "usr_abc",
         enrollmentToken: "enroll_xyz",
       });
       expect(hoisted.startRegistration).toHaveBeenCalledWith({ optionsJSON: { challenge: "ch" } });
-      expect(hoisted.stub.passkeyRegisterComplete).toHaveBeenCalledWith({
+      expect(stub.passkeyRegisterComplete).toHaveBeenCalledWith({
         userId: "usr_abc",
         enrollmentToken: "enroll_xyz",
         attestation: { id: "cred", rawId: "raw" },
@@ -301,7 +309,7 @@ describe("Register component", () => {
       fireEvent.click(screen.getByRole("button", { name: /Skip for now/i }));
 
       // No passkey calls, no second adoptSession (already adopted at OTP step).
-      expect(hoisted.stub.passkeyRegisterBegin).not.toHaveBeenCalled();
+      expect(stub.passkeyRegisterBegin).not.toHaveBeenCalled();
       expect(hoisted.startRegistration).not.toHaveBeenCalled();
       expect(hoisted.adoptSession).not.toHaveBeenCalled();
     });
@@ -310,9 +318,9 @@ describe("Register component", () => {
   describe("passkey step (unsupported environment)", () => {
     it("submitOtp jumps straight to done; passkey APIs untouched", async () => {
       hoisted.webauthnSupported = false;
-      hoisted.stub.checkHandle.mockResolvedValue({ available: true });
-      hoisted.stub.beginRegistration.mockResolvedValue({ sent: true });
-      hoisted.stub.completeRegistration.mockResolvedValue({
+      stub.checkHandle.mockResolvedValue({ available: true });
+      stub.beginRegistration.mockResolvedValue({ sent: true });
+      stub.completeRegistration.mockResolvedValue({
         userId: "usr_abc",
         handle: "alice",
         email: "alice@example.com",
@@ -321,7 +329,7 @@ describe("Register component", () => {
       });
       hoisted.adoptSession.mockResolvedValue(undefined);
 
-      render(() => <Register onCancel={() => {}} />);
+      render(() => <Register client={asClient(stub)} onCancel={() => {}} />);
       fillEmail("alice@example.com");
       fillHandle("alice");
       await vi.advanceTimersByTimeAsync(350);
@@ -339,7 +347,7 @@ describe("Register component", () => {
 
       // Crucially, the passkey ceremony APIs were never touched and the
       // "Create passkey" button never appeared in the DOM.
-      expect(hoisted.stub.passkeyRegisterBegin).not.toHaveBeenCalled();
+      expect(stub.passkeyRegisterBegin).not.toHaveBeenCalled();
       expect(hoisted.startRegistration).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: /Create passkey/i })).toBeNull();
     });
@@ -347,7 +355,7 @@ describe("Register component", () => {
 
   it("Cancel button calls onCancel", () => {
     const onCancel = vi.fn();
-    render(() => <Register onCancel={onCancel} />);
+    render(() => <Register client={asClient(stub)} onCancel={onCancel} />);
     fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
     expect(onCancel).toHaveBeenCalled();
   });
