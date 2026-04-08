@@ -353,6 +353,224 @@ describe("Comms routes", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Visibility gate (S-H1/H2/H3/H5) — every direct-fetch route hides
+// private events from non-authorised callers. The discovery filter and
+// the direct-fetch filter must agree at all times.
+// ---------------------------------------------------------------------------
+
+describe("Private event visibility gate", () => {
+  let layer: ReturnType<typeof createTestLayer>;
+  let osn: ReturnType<typeof createOsnTestContext>;
+  let app: ReturnType<typeof createEventsRoutes>;
+  let aliceToken: string;
+  let bobToken: string;
+  let privateEventId: string;
+  let publicEventId: string;
+
+  beforeEach(async () => {
+    layer = createTestLayer();
+    osn = createOsnTestContext();
+    app = createEventsRoutes(layer, TEST_JWT_SECRET, osn.layer);
+    aliceToken = await makeToken("usr_alice");
+    bobToken = await makeToken("usr_bob");
+    await seedOsnUser(osn, { id: "usr_alice", handle: "alice", displayName: "Alice" });
+    await seedOsnUser(osn, { id: "usr_bob", handle: "bob", displayName: "Bob" });
+
+    const privateRes = await post(
+      app,
+      "/events",
+      { title: "Hidden", startTime: FUTURE, visibility: "private" },
+      aliceToken,
+    );
+    privateEventId = ((await privateRes.json()) as { event: { id: string } }).event.id;
+
+    const publicRes = await post(
+      app,
+      "/events",
+      { title: "Public", startTime: FUTURE, visibility: "public" },
+      aliceToken,
+    );
+    publicEventId = ((await publicRes.json()) as { event: { id: string } }).event.id;
+  });
+
+  // S-H1
+  it("GET /events/:id returns 404 for private events to non-organiser viewers", async () => {
+    const res = await get(app, `/events/${privateEventId}`, bobToken);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /events/:id returns 404 for private events when unauthenticated", async () => {
+    const res = await get(app, `/events/${privateEventId}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /events/:id returns 200 for private events to the organiser", async () => {
+    const res = await get(app, `/events/${privateEventId}`, aliceToken);
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /events/:id returns 200 for private events to viewers with an RSVP row", async () => {
+    // Alice invites Bob to the private event.
+    await post(app, `/events/${privateEventId}/invite`, { userIds: ["usr_bob"] }, aliceToken);
+    const res = await get(app, `/events/${privateEventId}`, bobToken);
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /events/:id returns 200 for public events to anyone", async () => {
+    const res = await get(app, `/events/${publicEventId}`);
+    expect(res.status).toBe(200);
+  });
+
+  // S-H2
+  it("GET /events/:id/ics returns 404 for private events to non-authorised callers", async () => {
+    const res = await get(app, `/events/${privateEventId}/ics`);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /events/:id/ics returns 200 for private events to the organiser", async () => {
+    const res = await get(app, `/events/${privateEventId}/ics`, aliceToken);
+    expect(res.status).toBe(200);
+  });
+
+  // S-H3
+  it("GET /events/:id/comms returns 404 for private events to non-authorised callers", async () => {
+    const res = await get(app, `/events/${privateEventId}/comms`);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /events/:id/comms returns 200 for private events to the organiser", async () => {
+    const res = await get(app, `/events/${privateEventId}/comms`, aliceToken);
+    expect(res.status).toBe(200);
+  });
+
+  // S-H5
+  it("GET /events/:id/rsvps/counts returns 404 for private events to non-authorised callers", async () => {
+    const res = await get(app, `/events/${privateEventId}/rsvps/counts`);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /events/:id/rsvps/counts returns 200 for private events to the organiser", async () => {
+    const res = await get(app, `/events/${privateEventId}/rsvps/counts`, aliceToken);
+    expect(res.status).toBe(200);
+  });
+
+  // RSVPs route gating
+  it("GET /events/:id/rsvps returns 404 for private events to non-authorised callers", async () => {
+    const res = await get(app, `/events/${privateEventId}/rsvps`);
+    expect(res.status).toBe(404);
+  });
+
+  // S-H4: invited list is organiser-only even on visible events
+  it("GET /events/:id/rsvps?status=invited returns empty for non-organisers", async () => {
+    await post(app, `/events/${publicEventId}/invite`, { userIds: ["usr_bob"] }, aliceToken);
+    const res = await get(app, `/events/${publicEventId}/rsvps?status=invited`, bobToken);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rsvps: unknown[] };
+    expect(body.rsvps).toEqual([]);
+  });
+
+  it("GET /events/:id/rsvps?status=invited returns the list for the organiser", async () => {
+    await post(app, `/events/${publicEventId}/invite`, { userIds: ["usr_bob"] }, aliceToken);
+    const res = await get(app, `/events/${publicEventId}/rsvps?status=invited`, aliceToken);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rsvps: { userId: string }[] };
+    expect(body.rsvps).toHaveLength(1);
+    expect(body.rsvps[0]!.userId).toBe("usr_bob");
+  });
+
+  // S-L3: invitedByUserId is gated to organiser viewers
+  it("GET /events/:id/rsvps hides invitedByUserId from non-organiser viewers", async () => {
+    await post(app, `/events/${publicEventId}/invite`, { userIds: ["usr_bob"] }, aliceToken);
+    // Bob accepts the invite — now appears as "going" for everyone.
+    const upsertRes = await post(
+      app,
+      `/events/${publicEventId}/rsvps`,
+      { status: "going" },
+      bobToken,
+    );
+    expect(upsertRes.status).toBe(200);
+    // Random viewer (no token) sees the row but invitedByUserId is null.
+    const res = await get(app, `/events/${publicEventId}/rsvps?status=going`);
+    const body = (await res.json()) as { rsvps: { invitedByUserId: string | null }[] };
+    expect(body.rsvps[0]!.invitedByUserId).toBeNull();
+  });
+
+  it("GET /events/:id/rsvps shows invitedByUserId to the organiser viewer", async () => {
+    await post(app, `/events/${publicEventId}/invite`, { userIds: ["usr_bob"] }, aliceToken);
+    await post(app, `/events/${publicEventId}/rsvps`, { status: "going" }, bobToken);
+    const res = await get(app, `/events/${publicEventId}/rsvps?status=going`, aliceToken);
+    const body = (await res.json()) as { rsvps: { invitedByUserId: string | null }[] };
+    expect(body.rsvps[0]!.invitedByUserId).toBe("usr_alice");
+  });
+
+  // isCloseFriend stamp
+  it("GET /events/:id/rsvps stamps isCloseFriend = false on rows by default", async () => {
+    await post(app, `/events/${publicEventId}/rsvps`, { status: "going" }, bobToken);
+    const res = await get(app, `/events/${publicEventId}/rsvps?status=going`, aliceToken);
+    const body = (await res.json()) as { rsvps: { isCloseFriend: boolean }[] };
+    expect(body.rsvps[0]!.isCloseFriend).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-M3 — text field length caps
+// ---------------------------------------------------------------------------
+
+describe("Event text field length caps (S-M3)", () => {
+  let layer: ReturnType<typeof createTestLayer>;
+  let osn: ReturnType<typeof createOsnTestContext>;
+  let app: ReturnType<typeof createEventsRoutes>;
+  let aliceToken: string;
+
+  beforeEach(async () => {
+    layer = createTestLayer();
+    osn = createOsnTestContext();
+    app = createEventsRoutes(layer, TEST_JWT_SECRET, osn.layer);
+    aliceToken = await makeToken("usr_alice");
+  });
+
+  it("POST /events rejects title longer than 200 chars", async () => {
+    const res = await post(
+      app,
+      "/events",
+      { title: "x".repeat(201), startTime: FUTURE },
+      aliceToken,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("POST /events rejects description longer than 5000 chars", async () => {
+    const res = await post(
+      app,
+      "/events",
+      { title: "Concert", startTime: FUTURE, description: "x".repeat(5001) },
+      aliceToken,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("POST /events accepts a 200-char title (boundary)", async () => {
+    const res = await post(
+      app,
+      "/events",
+      { title: "x".repeat(200), startTime: FUTURE },
+      aliceToken,
+    );
+    expect(res.status).toBe(201);
+  });
+
+  it("POST /events rejects venue longer than 500 chars", async () => {
+    const res = await post(
+      app,
+      "/events",
+      { title: "Concert", startTime: FUTURE, venue: "x".repeat(501) },
+      aliceToken,
+    );
+    expect(res.status).toBe(422);
+  });
+});
+
 describe("PATCH /me/settings", () => {
   let layer: ReturnType<typeof createTestLayer>;
   let settingsApp: ReturnType<typeof createSettingsRoutes>;

@@ -21,7 +21,14 @@ export interface Rsvp {
   eventId: string;
   userId: string;
   status: RsvpStatus;
+  /** Server returns null to non-organiser viewers; only the organiser sees who invited whom. */
   invitedByUserId: string | null;
+  /**
+   * True when this attendee has marked the current viewer as a close
+   * friend. Server-computed against the OSN graph; the client renders
+   * the close-friend affordance (green ring) when this is true.
+   */
+  isCloseFriend: boolean;
   createdAt: string;
   user: {
     id: string;

@@ -164,6 +164,20 @@ it.effect("inviteGuests rejects non-organiser caller", () =>
   }).pipe(Effect.provide(createTestLayer())),
 );
 
+it.effect("inviteGuests rejects batches over the platform MAX_EVENT_GUESTS cap", () =>
+  Effect.gen(function* () {
+    const event = yield* seedEvent({
+      title: "Festival",
+      startTime: "2030-06-01T10:00:00.000Z",
+      createdByUserId: "usr_alice",
+    });
+    // 1001 ids — one over the cap. ValidationError, not DatabaseError.
+    const userIds = Array.from({ length: 1001 }, (_, i) => `usr_${i}`);
+    const err = yield* Effect.flip(inviteGuests(event.id, "usr_alice", { userIds }));
+    expect(err._tag).toBe("ValidationError");
+  }).pipe(Effect.provide(createTestLayer())),
+);
+
 it.effect("invited user can then RSVP 'going' on guest_list event", () =>
   Effect.gen(function* () {
     const event = yield* seedEvent({
@@ -378,15 +392,17 @@ it.effect("viewer always sees their own RSVP", () =>
 );
 
 it.effect(
-  "close_friends visibility requires viewer to have reciprocated close-friend relation",
+  "close_friends visibility shows the row when the attendee marked the viewer as a close friend",
   () =>
     Effect.gen(function* () {
       const { pulse, osn, layer } = setup();
       yield* Effect.promise(() => seedBasicUsers(osn));
       yield* Effect.promise(() => seedConnection(osn, "usr_alice", "usr_dan"));
       yield* Effect.promise(() => seedConnection(osn, "usr_dan", "usr_bob"));
-      // Dan marks Bob as a close friend (viewer-side close friends list).
-      yield* Effect.promise(() => seedCloseFriend(osn, "usr_dan", "usr_bob"));
+      // Bob (the attendee) marks Dan (the viewer) as a close friend —
+      // the directionally-correct semantic. Bob's RSVP should appear
+      // for Dan because Bob owns the privacy decision.
+      yield* Effect.promise(() => seedCloseFriend(osn, "usr_bob", "usr_dan"));
       const event = yield* seedEvent({
         title: "Connections",
         startTime: "2030-06-01T10:00:00.000Z",
@@ -401,6 +417,36 @@ it.effect(
         Effect.provide(layer),
       );
       expect(rows.length).toBe(1);
+      expect(rows[0]!.isCloseFriend).toBe(true);
+    }),
+);
+
+it.effect(
+  "close_friends visibility hides the row when only the viewer marked the attendee (inverted)",
+  () =>
+    Effect.gen(function* () {
+      const { pulse, osn, layer } = setup();
+      yield* Effect.promise(() => seedBasicUsers(osn));
+      yield* Effect.promise(() => seedConnection(osn, "usr_alice", "usr_dan"));
+      yield* Effect.promise(() => seedConnection(osn, "usr_dan", "usr_bob"));
+      // Inverted: Dan (viewer) marks Bob (attendee). Bob did NOT mark
+      // Dan back. With the new directional check, Bob's gated RSVP
+      // must NOT leak to Dan — this is the S-M1 fix in action.
+      yield* Effect.promise(() => seedCloseFriend(osn, "usr_dan", "usr_bob"));
+      const event = yield* seedEvent({
+        title: "Connections",
+        startTime: "2030-06-01T10:00:00.000Z",
+        guestListVisibility: "connections",
+        createdByUserId: "usr_alice",
+      }).pipe(Effect.provide(pulse));
+      yield* upsertRsvp(event.id, "usr_bob", { status: "going" }).pipe(Effect.provide(pulse));
+      yield* updateSettings("usr_bob", { attendanceVisibility: "close_friends" }).pipe(
+        Effect.provide(pulse),
+      );
+      const rows = yield* listRsvps(event.id, "usr_dan", { status: "going" }).pipe(
+        Effect.provide(layer),
+      );
+      expect(rows.length).toBe(0);
     }),
 );
 

@@ -1,5 +1,6 @@
 import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { fetchRsvpsByStatus, type Rsvp, type RsvpStatus } from "../lib/rsvps";
+import { RsvpAvatar } from "./RsvpAvatar";
 
 interface Event {
   id: string;
@@ -10,15 +11,6 @@ interface Event {
 }
 
 type Tab = "going" | "interested" | "not_going" | "invited";
-
-function initials(name: string): string {
-  return name
-    .split(" ")
-    .map((w) => w[0] ?? "")
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-}
 
 /**
  * Full RSVP list with tabs for Going / Maybe / Not going / Invited.
@@ -114,22 +106,7 @@ export function RsvpModal(props: {
               <For each={rsvps() ?? []}>
                 {(rsvp: Rsvp) => (
                   <li class="flex items-center gap-3">
-                    <Show
-                      when={rsvp.user?.avatarUrl}
-                      fallback={
-                        <span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-muted text-muted-foreground text-[10px] font-semibold shrink-0">
-                          {initials(rsvp.user?.displayName ?? rsvp.user?.handle ?? "?")}
-                        </span>
-                      }
-                    >
-                      {(avatar) => (
-                        <img
-                          src={avatar()}
-                          alt={rsvp.user?.displayName ?? rsvp.user?.handle ?? ""}
-                          class="w-8 h-8 rounded-full object-cover shrink-0"
-                        />
-                      )}
-                    </Show>
+                    <RsvpAvatar rsvp={rsvp} />
                     <div class="flex-1 min-w-0">
                       <p class="text-sm font-medium text-foreground truncate">
                         {rsvp.user?.displayName ?? `@${rsvp.user?.handle ?? "unknown"}`}

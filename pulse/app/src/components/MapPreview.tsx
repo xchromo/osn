@@ -1,16 +1,17 @@
 import { onCleanup, onMount, Show } from "solid-js";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import L from "leaflet";
-// Leaflet CSS is required for the tile layer + control positioning to render
-// correctly. We import it directly into the component that uses it so it
-// only ships when the map is actually rendered.
-import "leaflet/dist/leaflet.css";
+import type * as Leaflet from "leaflet";
 
 /**
  * Read-only map preview for the event detail page. Uses Leaflet + OSM tiles
  * (no API key required, no third-party JS bundle requirements).
  *
  * Falls back to a text "location" card when coordinates are missing.
+ *
+ * P-W3: Leaflet (~150KB + CSS) is loaded via a dynamic `await import`
+ * inside `onMount` rather than a top-level import, so events without
+ * coordinates never pay for the chunk and the home feed never fetches
+ * it at all (route-level splitting in `App.tsx` handles the home case).
  */
 export function MapPreview(props: {
   latitude: number | null;
@@ -18,10 +19,17 @@ export function MapPreview(props: {
   label?: string | null;
 }) {
   let mapEl: HTMLDivElement | undefined;
-  let map: L.Map | undefined;
+  let map: Leaflet.Map | undefined;
 
-  onMount(() => {
+  onMount(async () => {
     if (!mapEl || props.latitude == null || props.longitude == null) return;
+    // Dynamic imports — Vite emits Leaflet + its CSS into their own
+    // chunk that's only fetched the first time this onMount runs.
+    const [{ default: L }] = await Promise.all([
+      import("leaflet"),
+      import("leaflet/dist/leaflet.css"),
+    ]);
+    if (!mapEl) return; // component unmounted while we awaited
     map = L.map(mapEl, {
       center: [props.latitude, props.longitude],
       zoom: 15,

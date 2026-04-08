@@ -1,3 +1,4 @@
+import { lazy } from "solid-js";
 import { Router, Route } from "@solidjs/router";
 import { AuthProvider } from "@osn/client/solid";
 import { Toaster } from "solid-toast";
@@ -6,9 +7,19 @@ import { OSN_ISSUER_URL, OSN_CLIENT_ID } from "./lib/auth";
 import { loginClient } from "./lib/authClients";
 import { CallbackHandler } from "./components/CallbackHandler";
 import { EventList } from "./components/EventList";
-import { EventDetailPage } from "./pages/EventDetailPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import "./App.css";
+
+// P-W3: route-level code-splitting. EventDetailPage pulls in
+// `MapPreview`, which transitively imports Leaflet (~150KB) + its CSS.
+// Lazy-loading the route boundary keeps Leaflet out of the initial
+// bundle so the home feed doesn't pay for a dependency it doesn't use.
+// Settings is split for the same reason — it's a low-traffic page.
+const EventDetailPage = lazy(() =>
+  import("./pages/EventDetailPage").then((m) => ({ default: m.EventDetailPage })),
+);
+const SettingsPage = lazy(() =>
+  import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 
 /**
  * Root layout. Wraps every route in the AuthProvider and deep-link

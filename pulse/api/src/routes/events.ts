@@ -5,7 +5,6 @@ import { DbLive, type Db } from "@pulse/db/service";
 import {
   createEvent,
   deleteEvent,
-  getEvent,
   listEvents,
   listTodayEvents,
   updateEvent,
@@ -22,6 +21,8 @@ import { listBlasts, parseCommsChannels, sendBlast } from "../services/comms";
 import { buildIcs } from "../services/calendar";
 import { updateSettings } from "../services/pulseUsers";
 import { OsnDb, OsnDbLayer } from "../services/graphBridge";
+import { loadVisibleEvent } from "../services/eventAccess";
+import { MAX_EVENT_GUESTS } from "../lib/limits";
 
 const visibilityEnum = t.Optional(t.Union([t.Literal("public"), t.Literal("private")]));
 const guestListVisibilityEnum = t.Optional(
@@ -44,17 +45,22 @@ const rsvpFilterStatusEnum = t.Union([
 ]);
 
 /**
- * Drops private user metadata (handle, avatar) from RSVP rows so we
- * return a stable wire format regardless of whether the viewer was
- * allowed to see the row — visibility is enforced upstream by
- * listRsvps. See rsvps.ts for the filtering logic.
+ * Serialises an RSVP row for the wire. Visibility is enforced upstream
+ * by `listRsvps` (per-row attendee privacy + coarse guest-list rules);
+ * this function only shapes the response.
+ *
+ * `invitedByUserId` is gated to the organiser viewer — non-organiser
+ * viewers don't need (or want) to know which co-host invited each
+ * attendee. The DB column stays populated; only the wire format hides
+ * it from non-organisers.
  */
-const serializeRsvp = (row: RsvpWithUser) => ({
+const serializeRsvp = (row: RsvpWithUser, isOrganiser: boolean) => ({
   id: row.id,
   eventId: row.eventId,
   userId: row.userId,
   status: row.status,
-  invitedByUserId: row.invitedByUserId,
+  invitedByUserId: isOrganiser ? row.invitedByUserId : null,
+  isCloseFriend: row.isCloseFriend,
   createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
   user: row.user
     ? {
@@ -137,12 +143,14 @@ export const createEventsRoutes = (
       })
       .get(
         "/:id",
-        async ({ params, set }) => {
+        async ({ params, headers, set }) => {
+          // S-H1: gate direct fetch by visibility. Private events are
+          // only returned to the organiser or to invited / RSVP'd users.
+          // 404 (not 403) for non-authorised viewers so we don't leak
+          // existence.
+          const claims = await extractClaims(headers["authorization"], secretBytes);
           const result = await Effect.runPromise(
-            getEvent(params.id).pipe(
-              Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
-              Effect.provide(dbLayer),
-            ),
+            loadVisibleEvent(params.id, claims?.userId ?? null).pipe(Effect.provide(dbLayer)),
           );
           if (result === null) {
             set.status = 404;
@@ -303,8 +311,18 @@ export const createEventsRoutes = (
         "/:id/rsvps",
         async ({ params, query, headers, set }) => {
           const claims = await extractClaims(headers["authorization"], secretBytes);
+          const viewerId = claims?.userId ?? null;
+          // Visibility gate first — private events are 404 to non-viewers.
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, viewerId).pipe(Effect.provide(dbLayer)),
+          );
+          if (event === null) {
+            set.status = 404;
+            return { message: "Event not found" } as const;
+          }
+          const isOrganiser = viewerId != null && viewerId === event.createdByUserId;
           const result = await Effect.runPromise(
-            listRsvps(params.id, claims?.userId ?? null, {
+            listRsvps(params.id, viewerId, {
               status: query.status,
               limit: query.limit ? Number(query.limit) : undefined,
             }).pipe(
@@ -330,7 +348,9 @@ export const createEventsRoutes = (
           ) {
             return result;
           }
-          return { rsvps: (result as RsvpWithUser[]).map(serializeRsvp) };
+          return {
+            rsvps: (result as RsvpWithUser[]).map((row) => serializeRsvp(row, isOrganiser)),
+          };
         },
         {
           params: t.Object({ id: t.String() }),
@@ -342,7 +362,17 @@ export const createEventsRoutes = (
       )
       .get(
         "/:id/rsvps/counts",
-        async ({ params, set }) => {
+        async ({ params, headers, set }) => {
+          const claims = await extractClaims(headers["authorization"], secretBytes);
+          // S-H5: gate counts by visibility — leaking the existence /
+          // activity of a private event is its own information disclosure.
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, claims?.userId ?? null).pipe(Effect.provide(dbLayer)),
+          );
+          if (event === null) {
+            set.status = 404;
+            return { message: "Event not found" } as const;
+          }
           const result = await Effect.runPromise(
             rsvpCounts(params.id).pipe(
               Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
@@ -361,9 +391,18 @@ export const createEventsRoutes = (
         "/:id/rsvps/latest",
         async ({ params, query, headers, set }) => {
           const claims = await extractClaims(headers["authorization"], secretBytes);
+          const viewerId = claims?.userId ?? null;
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, viewerId).pipe(Effect.provide(dbLayer)),
+          );
+          if (event === null) {
+            set.status = 404;
+            return { message: "Event not found" } as const;
+          }
+          const isOrganiser = viewerId != null && viewerId === event.createdByUserId;
           const limit = query.limit ? Math.min(Math.max(1, Number(query.limit)), 20) : 5;
           const result = await Effect.runPromise(
-            latestRsvps(params.id, claims?.userId ?? null, limit).pipe(
+            latestRsvps(params.id, viewerId, limit).pipe(
               Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
               Effect.catchAll(() =>
                 Effect.sync(() => {
@@ -386,7 +425,9 @@ export const createEventsRoutes = (
           ) {
             return result;
           }
-          return { rsvps: (result as RsvpWithUser[]).map(serializeRsvp) };
+          return {
+            rsvps: (result as RsvpWithUser[]).map((row) => serializeRsvp(row, isOrganiser)),
+          };
         },
         {
           params: t.Object({ id: t.String() }),
@@ -465,26 +506,29 @@ export const createEventsRoutes = (
         },
         {
           params: t.Object({ id: t.String() }),
-          body: t.Object({ userIds: t.Array(t.String(), { minItems: 1, maxItems: 100 }) }),
+          body: t.Object({
+            userIds: t.Array(t.String(), { minItems: 1, maxItems: MAX_EVENT_GUESTS }),
+          }),
         },
       )
       // ── Add to calendar ─────────────────────────────────────────────────
       .get(
         "/:id/ics",
-        async ({ params, set }) => {
-          const result = await Effect.runPromise(
-            getEvent(params.id).pipe(
-              Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
-              Effect.provide(dbLayer),
-            ),
+        async ({ params, headers, set }) => {
+          // S-H2: gate ICS export by visibility. Otherwise the file
+          // download leaks event metadata (incl. GEO coordinates) for
+          // private events to anyone with the URL.
+          const claims = await extractClaims(headers["authorization"], secretBytes);
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, claims?.userId ?? null).pipe(Effect.provide(dbLayer)),
           );
-          if (result === null) {
+          if (event === null) {
             set.status = 404;
             return { message: "Event not found" } as const;
           }
-          const ics = buildIcs(result);
+          const ics = buildIcs(event);
           set.headers["content-type"] = "text/calendar; charset=utf-8";
-          set.headers["content-disposition"] = `attachment; filename="${result.id}.ics"`;
+          set.headers["content-disposition"] = `attachment; filename="${event.id}.ics"`;
           return ics;
         },
         { params: t.Object({ id: t.String() }) },
@@ -492,24 +536,27 @@ export const createEventsRoutes = (
       // ── Comms (stubbed) ─────────────────────────────────────────────────
       .get(
         "/:id/comms",
-        async ({ params, set }) => {
-          const result = await Effect.runPromise(
-            Effect.gen(function* () {
-              const event = yield* getEvent(params.id);
-              const blasts = yield* listBlasts(params.id, 10);
-              return { event, blasts };
-            }).pipe(
-              Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
-              Effect.provide(dbLayer),
-            ),
+        async ({ params, headers, set }) => {
+          // S-H3: gate comms by visibility. Blast bodies often contain
+          // venue codes, addresses, dress codes — they should never be
+          // visible to viewers who can't see the event.
+          const claims = await extractClaims(headers["authorization"], secretBytes);
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, claims?.userId ?? null).pipe(Effect.provide(dbLayer)),
           );
-          if (result === null) {
+          if (event === null) {
             set.status = 404;
             return { message: "Event not found" } as const;
           }
+          const blasts = await Effect.runPromise(
+            listBlasts(params.id, 10).pipe(
+              Effect.catchTag("EventNotFound", () => Effect.succeed([])),
+              Effect.provide(dbLayer),
+            ),
+          );
           return {
-            channels: parseCommsChannels(result.event.commsChannels),
-            blasts: result.blasts.map((b) => ({
+            channels: parseCommsChannels(event.commsChannels),
+            blasts: blasts.map((b) => ({
               id: b.id,
               channel: b.channel,
               body: b.body,

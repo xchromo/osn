@@ -1,5 +1,5 @@
 import { Data, Effect, Schema } from "effect";
-import { and, eq, gte, lte, type SQL } from "drizzle-orm";
+import { and, eq, gte, lte, or, type SQL } from "drizzle-orm";
 import { events } from "@pulse/db/schema";
 import type { Event } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
@@ -54,14 +54,24 @@ const ValidUrl = Schema.String.pipe(
 const LatitudeSchema = Schema.Number.pipe(Schema.between(-90, 90));
 const LongitudeSchema = Schema.Number.pipe(Schema.between(-180, 180));
 
+// Length caps on user-provided text fields. Without these, an
+// authenticated user can POST an event with a 10MB description and bloat
+// every discovery response that returns it. The numbers are deliberately
+// generous — they cap abuse without constraining real events.
+const TitleString = Schema.NonEmptyString.pipe(Schema.maxLength(200));
+const DescriptionString = Schema.String.pipe(Schema.maxLength(5000));
+const LocationString = Schema.String.pipe(Schema.maxLength(500));
+const VenueString = Schema.String.pipe(Schema.maxLength(500));
+const CategoryString = Schema.String.pipe(Schema.maxLength(100));
+
 const InsertEventSchema = Schema.Struct({
-  title: Schema.NonEmptyString,
-  description: Schema.optional(Schema.String),
-  location: Schema.optional(Schema.String),
-  venue: Schema.optional(Schema.String),
+  title: TitleString,
+  description: Schema.optional(DescriptionString),
+  location: Schema.optional(LocationString),
+  venue: Schema.optional(VenueString),
   latitude: Schema.optional(LatitudeSchema),
   longitude: Schema.optional(LongitudeSchema),
-  category: Schema.optional(Schema.String),
+  category: Schema.optional(CategoryString),
   startTime: DateFromISOString,
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
@@ -74,13 +84,13 @@ const InsertEventSchema = Schema.Struct({
 });
 
 const UpdateEventSchema = Schema.Struct({
-  title: Schema.optional(Schema.NonEmptyString),
-  description: Schema.optional(Schema.String),
-  location: Schema.optional(Schema.String),
-  venue: Schema.optional(Schema.String),
+  title: Schema.optional(TitleString),
+  description: Schema.optional(DescriptionString),
+  location: Schema.optional(LocationString),
+  venue: Schema.optional(VenueString),
   latitude: Schema.optional(LatitudeSchema),
   longitude: Schema.optional(LongitudeSchema),
-  category: Schema.optional(Schema.String),
+  category: Schema.optional(CategoryString),
   startTime: Schema.optional(DateFromISOString),
   endTime: Schema.optional(DateFromISOString),
   status: Schema.optional(StatusEnum),
@@ -141,6 +151,19 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
       filters.push(eq(events.category, params.category));
     }
 
+    // Discovery rule: private events are filtered at the SQL layer so
+    // (a) the page size returned to the client is stable (post-filtering
+    // in JS would silently shrink the page), and (b) the
+    // `events_visibility_idx` index actually gets used.
+    //
+    // The viewer's own private events stay visible so they can manage
+    // them. A future enhancement will also include events the viewer
+    // has been invited to (requires a join with event_rsvps).
+    const visibilityFilter = params.viewerId
+      ? or(eq(events.visibility, "public"), eq(events.createdByUserId, params.viewerId))
+      : eq(events.visibility, "public");
+    if (visibilityFilter) filters.push(visibilityFilter);
+
     const results = yield* Effect.tryPromise({
       try: (): Promise<Event[]> =>
         db
@@ -154,16 +177,7 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Discovery rule: private events are not surfaced in the generic feed.
-    // The viewer's own private events are still visible so they can manage
-    // them. A future enhancement will also include events the viewer has
-    // been invited to (requires joining event_rsvps).
-    const visible = results.filter((event) => {
-      if (event.visibility === "public") return true;
-      return params.viewerId != null && event.createdByUserId === params.viewerId;
-    });
-
-    return yield* Effect.forEach(visible, applyTransition, { concurrency: "unbounded" });
+    return yield* Effect.forEach(results, applyTransition, { concurrency: "unbounded" });
   });
 
 export const listTodayEvents: Effect.Effect<Event[], DatabaseError, Db> = Effect.gen(function* () {

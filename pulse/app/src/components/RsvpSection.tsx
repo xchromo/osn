@@ -7,6 +7,7 @@ import {
   type Rsvp,
   type RsvpCounts,
 } from "../lib/rsvps";
+import { RsvpAvatar } from "./RsvpAvatar";
 import { RsvpModal } from "./RsvpModal";
 
 interface Event {
@@ -15,15 +16,6 @@ interface Event {
   allowInterested: boolean;
   joinPolicy: "open" | "guest_list";
   createdByUserId: string;
-}
-
-function initials(name: string): string {
-  return name
-    .split(" ")
-    .map((w) => w[0] ?? "")
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }
 
 export function RsvpSection(props: {
@@ -93,29 +85,7 @@ export function RsvpSection(props: {
           fallback={<p class="text-xs text-muted-foreground">No one's RSVPed yet.</p>}
         >
           <div class="flex -space-x-2 mb-3">
-            <For each={latest()!.slice(0, 5)}>
-              {(rsvp: Rsvp) => (
-                <Show
-                  when={rsvp.user?.avatarUrl}
-                  fallback={
-                    <span
-                      class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-muted text-muted-foreground text-[10px] font-semibold border-2 border-card"
-                      title={rsvp.user?.displayName ?? rsvp.user?.handle ?? ""}
-                    >
-                      {initials(rsvp.user?.displayName ?? rsvp.user?.handle ?? "?")}
-                    </span>
-                  }
-                >
-                  {(avatar) => (
-                    <img
-                      src={avatar()}
-                      alt={rsvp.user?.displayName ?? rsvp.user?.handle ?? ""}
-                      class="w-8 h-8 rounded-full object-cover border-2 border-card"
-                    />
-                  )}
-                </Show>
-              )}
-            </For>
+            <For each={latest()!.slice(0, 5)}>{(rsvp: Rsvp) => <RsvpAvatar rsvp={rsvp} />}</For>
           </div>
         </Show>
       </Show>

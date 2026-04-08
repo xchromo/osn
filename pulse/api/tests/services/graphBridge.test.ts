@@ -8,6 +8,7 @@ import {
 } from "../helpers/osnDb";
 import {
   getCloseFriendIds,
+  getCloseFriendsOf,
   getConnectionIds,
   getUserDisplays,
   type OsnDb,
@@ -140,6 +141,57 @@ it.effect("getUserDisplays omits ids that don't exist in the users table", () =>
       expect(map.size).toBe(1);
       expect(map.has("usr_alice")).toBe(true);
       expect(map.has("usr_ghost")).toBe(false);
+    }),
+  ),
+);
+
+// ── getCloseFriendsOf ────────────────────────────────────────────────────────
+//
+// This is the directionally-correct close-friend check used by the RSVP
+// visibility filter. The test pins the contract: the function returns the
+// subset of attendee IDs whose users have marked the viewer as a close
+// friend. NOT the viewer's own close-friends list.
+
+it.effect("getCloseFriendsOf returns empty Set on empty input (short-circuit)", () =>
+  withOsn((osn) =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_alice" }));
+      const result = yield* getCloseFriendsOf("usr_alice", []);
+      expect(result.size).toBe(0);
+    }),
+  ),
+);
+
+it.effect("getCloseFriendsOf returns the subset of attendees who marked the viewer", () =>
+  withOsn((osn) =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_alice" }));
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_bob" }));
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_carol" }));
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_dan" }));
+      // Bob and Carol both add Alice as a close friend.
+      yield* Effect.promise(() => seedCloseFriend(osn, "usr_bob", "usr_alice"));
+      yield* Effect.promise(() => seedCloseFriend(osn, "usr_carol", "usr_alice"));
+      // Dan does NOT.
+      const result = yield* getCloseFriendsOf("usr_alice", ["usr_bob", "usr_carol", "usr_dan"]);
+      expect(result.size).toBe(2);
+      expect(result.has("usr_bob")).toBe(true);
+      expect(result.has("usr_carol")).toBe(true);
+      expect(result.has("usr_dan")).toBe(false);
+    }),
+  ),
+);
+
+it.effect("getCloseFriendsOf is directional — viewer-side adds don't count", () =>
+  withOsn((osn) =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_alice" }));
+      yield* Effect.promise(() => seedOsnUser(osn, { id: "usr_bob" }));
+      // Alice adds Bob as her close friend, but Bob doesn't reciprocate.
+      // The function asks: "did Bob add Alice?" — the answer is no.
+      yield* Effect.promise(() => seedCloseFriend(osn, "usr_alice", "usr_bob"));
+      const result = yield* getCloseFriendsOf("usr_alice", ["usr_bob"]);
+      expect(result.has("usr_bob")).toBe(false);
     }),
   ),
 );

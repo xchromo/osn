@@ -125,13 +125,11 @@ export const sendBlast = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // STUB: when SMS/email providers land, dispatch here.
-    if (process.env.NODE_ENV !== "test") {
-      for (const row of rows) {
-        // eslint-disable-next-line no-console
-        console.log(`[comms-stub] ${row.channel} blast for ${eventId}: ${row.body.slice(0, 60)}`);
-      }
-    }
+    // STUB: when SMS/email providers land, dispatch here. Intentionally
+    // no logging — blast bodies frequently contain venue codes,
+    // addresses, or codes that should not land in stdout / log
+    // aggregation systems. Tests cover the contract directly via the
+    // returned `blasts` array.
 
     return { blasts: rows };
   });

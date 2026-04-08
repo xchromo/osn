@@ -2,10 +2,11 @@ import { Data, Effect, Schema } from "effect";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { events, eventRsvps, type Event, type EventRsvp } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
+import { MAX_EVENT_GUESTS } from "../lib/limits";
 import { EventNotFound, DatabaseError, ValidationError } from "./events";
-import { ensurePulseUser, getAttendanceVisibility, type AttendanceVisibility } from "./pulseUsers";
+import { ensurePulseUser, getAttendanceVisibilityBatch } from "./pulseUsers";
 import {
-  getCloseFriendIds,
+  getCloseFriendsOf,
   getConnectionIds,
   getUserDisplays,
   GraphBridgeError,
@@ -51,7 +52,13 @@ const UpsertRsvpSchema = Schema.Struct({
 });
 
 const InviteGuestsSchema = Schema.Struct({
-  userIds: Schema.Array(Schema.NonEmptyString).pipe(Schema.minItems(1), Schema.maxItems(100)),
+  // Bulk-invite batch is capped at the same MAX_EVENT_GUESTS platform
+  // limit — an organiser can't invite more people than the event itself
+  // can hold. See `lib/limits.ts` for the rationale.
+  userIds: Schema.Array(Schema.NonEmptyString).pipe(
+    Schema.minItems(1),
+    Schema.maxItems(MAX_EVENT_GUESTS),
+  ),
 });
 
 // ---------------------------------------------------------------------------
@@ -60,6 +67,15 @@ const InviteGuestsSchema = Schema.Struct({
 
 export interface RsvpWithUser extends EventRsvp {
   user: UserDisplay | null;
+  /**
+   * True when this attendee has marked the current viewer as a close
+   * friend. Computed server-side against the OSN graph so the client
+   * can't derive it by other means. Drives the green-outline avatar
+   * affordance on the event-detail page.
+   *
+   * Always false for unauthenticated viewers.
+   */
+  isCloseFriend: boolean;
 }
 
 export interface RsvpCounts {
@@ -112,71 +128,60 @@ const loadRsvp = (
 // ---------------------------------------------------------------------------
 
 /**
- * Decides whether `viewerId` is allowed to see the RSVP rows for `event`
- * *at all*, without drilling into per-row filters. Returns a discriminated
- * result describing the allowed scope.
+ * Decides whether `viewerId` is allowed to see ANY rows for `event` —
+ * the coarse access check that runs before per-row attendee-privacy
+ * filtering.
  *
  * - organiser          → sees everything
  * - public guest list  → everyone sees (even unauthenticated)
  * - connections        → only the organiser's connections see
- * - private guest list → only the organiser; others see counts only
+ * - private guest list → only the organiser
  *
- * This is the coarse filter. Per-row filtering (based on each attendee's
- * own attendanceVisibility setting) happens in `filterByAttendeePrivacy`.
+ * Per-row filtering (each attendee's own `attendanceVisibility`) is
+ * applied unconditionally afterwards in `filterByAttendeePrivacy`,
+ * which handles its own organiser bypass.
  */
-interface GuestListAccess {
-  canSeeAny: boolean;
-  requiresPerRowFilter: boolean;
-}
-
-const computeGuestListAccess = (
+const computeCanSeeAnyRsvps = (
   event: Event,
   viewerId: string | null,
-): Effect.Effect<GuestListAccess, DatabaseError | GraphBridgeError, Db | OsnDb> =>
+): Effect.Effect<boolean, DatabaseError | GraphBridgeError, Db | OsnDb> =>
   Effect.gen(function* () {
-    // Organiser always sees everything.
-    if (viewerId && viewerId === event.createdByUserId) {
-      return { canSeeAny: true, requiresPerRowFilter: false };
-    }
+    if (viewerId && viewerId === event.createdByUserId) return true;
     switch (event.guestListVisibility) {
       case "public":
-        // Public guest list: everyone sees, but per-row filter still applies
-        // so an individual user's "no_one" setting is respected — except the
-        // user is attending a public-guest-list event which implicitly opts
-        // them in. See filterByAttendeePrivacy.
-        return { canSeeAny: true, requiresPerRowFilter: true };
+        return true;
       case "connections": {
-        // Only the organiser's connections see the list at all.
-        if (!viewerId) return { canSeeAny: false, requiresPerRowFilter: false };
+        if (!viewerId) return false;
         const connectionSet = yield* getConnectionIds(event.createdByUserId);
-        const isConnected = connectionSet.has(viewerId);
-        return { canSeeAny: isConnected, requiresPerRowFilter: isConnected };
+        return connectionSet.has(viewerId);
       }
       case "private":
-        // Only organiser sees; handled at the top of this fn.
-        return { canSeeAny: false, requiresPerRowFilter: false };
+        return false;
     }
   });
 
 /**
  * Per-row privacy filter applied after the coarse guest-list check passes.
  *
- * Each attendee's own attendanceVisibility setting determines whether their
- * RSVP can be exposed to a specific viewer:
+ * Each attendee's own attendanceVisibility setting determines whether
+ * their RSVP can be exposed to a specific viewer:
  * - "connections"   → only attendees connected to the viewer see the row
- *                     (viewer-centric — NOT organiser-centric)
- * - "close_friends" → only the viewer if they are a close friend of the
- *                     attendee (very conservative; most filters collapse
- *                     to "only the attendee themselves")
+ * - "close_friends" → only attendees who have marked the viewer as a
+ *                     close friend (attendee-side directional check —
+ *                     the attendee owns the privacy decision)
  * - "no_one"        → hidden from everyone
  *
  * PUBLIC-GUEST-LIST OVERRIDE: if the event's guest list is public, the
  * attendee has implicitly opted in by RSVPing — their per-row setting is
- * ignored for that event. This matches the user's stated intent in the
- * feature spec.
+ * ignored for that event. This matches the feature spec.
  *
  * The viewer themselves always sees their own RSVP.
  * The organiser always sees all RSVPs (handled in computeGuestListAccess).
+ *
+ * This function ALSO stamps `isCloseFriend` on every returned row so the
+ * client can render a close-friend affordance (e.g. a coloured outline
+ * on the avatar). The flag is computed from the attendee's close-friends
+ * list relative to the viewer — same directional semantic as the filter.
  */
 const filterByAttendeePrivacy = (
   event: Event,
@@ -184,48 +189,60 @@ const filterByAttendeePrivacy = (
   viewerId: string | null,
 ): Effect.Effect<RsvpWithUser[], DatabaseError | GraphBridgeError, Db | OsnDb> =>
   Effect.gen(function* () {
-    // Public guest list bypasses per-row attendee privacy. Per spec: by
-    // attending a public-guest-list event, the attendee opts in.
-    if (event.guestListVisibility === "public") return rows;
-
-    // We need the attendance-visibility setting for every RSVP author.
-    // Batch-fetch them all at once to avoid N+1.
     const attendeeIds = Array.from(new Set(rows.map((r) => r.userId)));
-    const visibilityMap = new Map<string, AttendanceVisibility>();
-    for (const id of attendeeIds) {
-      const v = yield* getAttendanceVisibility(id);
-      visibilityMap.set(id, v);
-    }
 
-    // For "connections" setting we need the viewer's connection set
-    // (from the *viewer's* perspective, not the organiser's).
-    let viewerConnections: Set<string> = new Set();
-    let viewerCloseFriends: Set<string> = new Set();
-    if (viewerId) {
-      viewerConnections = yield* getConnectionIds(viewerId);
-      viewerCloseFriends = yield* getCloseFriendIds(viewerId);
-    }
+    // `closeFriendsOfViewer` is the set of attendee ids who have marked
+    // the viewer as a close friend. Used for the per-row filter AND for
+    // the `isCloseFriend` flag on returned rows.
+    const closeFriendsOfViewer = viewerId
+      ? yield* getCloseFriendsOf(viewerId, attendeeIds)
+      : new Set<string>();
 
-    return rows.filter((row) => {
-      // Always allow the viewer to see their own RSVP.
-      if (viewerId && row.userId === viewerId) return true;
-
-      const visibility = visibilityMap.get(row.userId) ?? "connections";
-      switch (visibility) {
-        case "no_one":
-          return false;
-        case "connections":
-          return viewerId != null && viewerConnections.has(row.userId);
-        case "close_friends":
-          // Attendee must have marked the viewer as a close friend; we
-          // approximate with the viewer's close-friends list since the
-          // relationship in pulse is symmetric-intent per event-list usage.
-          // TODO(osn): expose a graph.isCloseFriendOf(attendee, viewer)
-          // helper for the strict direction check. For now this is
-          // conservative — only shows if the viewer has reciprocated.
-          return viewerId != null && viewerCloseFriends.has(row.userId);
-      }
+    const stampCloseFriend = (row: RsvpWithUser): RsvpWithUser => ({
+      ...row,
+      isCloseFriend: closeFriendsOfViewer.has(row.userId),
     });
+
+    // Organiser bypass: the event organiser sees every row regardless
+    // of guest-list visibility or per-attendee privacy settings. We
+    // still stamp the close-friend flag so the organiser's UI can
+    // surface the same affordance.
+    if (viewerId && viewerId === event.createdByUserId) {
+      return rows.map(stampCloseFriend);
+    }
+
+    // Public guest list: by attending, attendees implicitly opted into
+    // being listed; per-row attendee-privacy is bypassed.
+    if (event.guestListVisibility === "public") {
+      return rows.map(stampCloseFriend);
+    }
+
+    // Batch-fetch attendance visibility for every attendee in one query.
+    const visibilityMap = yield* getAttendanceVisibilityBatch(attendeeIds);
+
+    // For "connections" we need the viewer's connection set.
+    const viewerConnections = viewerId ? yield* getConnectionIds(viewerId) : new Set<string>();
+
+    return rows
+      .filter((row) => {
+        // Always allow the viewer to see their own RSVP.
+        if (viewerId && row.userId === viewerId) return true;
+
+        const visibility = visibilityMap.get(row.userId) ?? "connections";
+        switch (visibility) {
+          case "no_one":
+            return false;
+          case "connections":
+            return viewerId != null && viewerConnections.has(row.userId);
+          case "close_friends":
+            // Attendee-side directional check: the attendee must have
+            // added the viewer to their close-friends list. A viewer
+            // who unilaterally marks someone as a close friend does
+            // NOT gain visibility into that person's gated RSVPs.
+            return closeFriendsOfViewer.has(row.userId);
+        }
+      })
+      .map(stampCloseFriend);
   });
 
 // ---------------------------------------------------------------------------
@@ -274,12 +291,13 @@ export const upsertRsvp = (
       // user is allowed to update their status.
     }
 
-    yield* ensurePulseUser(userId);
-
     const { db } = yield* Db;
     const now = new Date();
 
     if (existing === null) {
+      // Only lazy-create the pulse_users row on first RSVP insert. On
+      // update the row must already exist, so skip the extra round-trip.
+      yield* ensurePulseUser(userId);
       const id = genRsvpId();
       yield* Effect.tryPromise({
         try: () =>
@@ -378,8 +396,10 @@ export const inviteGuests = (
  * applying visibility filtering. Returns an empty array when the viewer
  * has no access (not an error — the caller decides how to present it).
  *
- * When `privacyOverride` is true, the per-row attendee-privacy filter is
- * skipped. Only used by the organiser's view.
+ * **Invited-status is organiser-only.** Queries with `status: "invited"`
+ * are rejected unless the viewer is the event organiser, because an
+ * invite list is the organiser's address book for the event and the
+ * invitees never opted to be shown (unlike attendees who chose "going").
  */
 export const listRsvps = (
   eventId: string,
@@ -392,8 +412,16 @@ export const listRsvps = (
   Effect.gen(function* () {
     const event = yield* loadEvent(eventId);
 
-    const access = yield* computeGuestListAccess(event, viewerId);
-    if (!access.canSeeAny) return [];
+    // S-H4: invite lists are organiser-only. Return empty rather than
+    // an error so the route can render the same 200-empty response as
+    // any other "no visible rows" state — the existence of the event
+    // is already gated upstream by the route's canViewEvent check.
+    if (options.status === "invited" && viewerId !== event.createdByUserId) {
+      return [];
+    }
+
+    const canSee = yield* computeCanSeeAnyRsvps(event, viewerId);
+    if (!canSee) return [];
 
     const { db } = yield* Db;
     const limit = Math.min(Math.max(1, options.limit ?? 50), 200);
@@ -412,15 +440,21 @@ export const listRsvps = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Join with user displays from osn/db.
+    // Join with user displays from osn/db. `isCloseFriend` is set to
+    // false here and then (potentially) overridden by the per-row
+    // filter below. This way rows always carry the flag, even when the
+    // per-row filter is skipped.
     const userIds = Array.from(new Set(rsvpRows.map((r) => r.userId)));
     const userMap = yield* getUserDisplays(userIds);
     const joined: RsvpWithUser[] = rsvpRows.map((row) => ({
       ...row,
       user: userMap.get(row.userId) ?? null,
+      isCloseFriend: false,
     }));
 
-    if (!access.requiresPerRowFilter) return joined;
+    // Even when per-row filtering isn't required (organiser view), we
+    // still want to stamp the close-friend flag — the organiser sees
+    // the list and benefits from the same affordance.
     return yield* filterByAttendeePrivacy(event, joined, viewerId);
   });
 

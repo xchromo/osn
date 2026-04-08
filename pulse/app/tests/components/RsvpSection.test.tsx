@@ -61,6 +61,7 @@ describe("RsvpSection", () => {
         eventId: "evt_1",
         status: "going",
         invitedByUserId: null,
+        isCloseFriend: false,
         createdAt: "2030-01-01T00:00:00Z",
         user: { id: "usr_bob", handle: "bob", displayName: "Bob Smith", avatarUrl: null },
       },
@@ -71,6 +72,29 @@ describe("RsvpSection", () => {
     await waitFor(() => {
       const initials = container.querySelector("span.inline-flex");
       expect(initials?.textContent).toBe("BS");
+    });
+  });
+
+  it("applies the close-friend ring on rows where isCloseFriend is true", async () => {
+    mockFetchLatest.mockResolvedValueOnce([
+      {
+        id: "rsvp_1",
+        userId: "usr_bob",
+        eventId: "evt_1",
+        status: "going",
+        invitedByUserId: null,
+        isCloseFriend: true,
+        createdAt: "2030-01-01T00:00:00Z",
+        user: { id: "usr_bob", handle: "bob", displayName: "Bob Smith", avatarUrl: null },
+      },
+    ]);
+    const { container } = render(() => (
+      <RsvpSection event={baseEvent} accessToken="tok" currentUserId="usr_dan" />
+    ));
+    await waitFor(() => {
+      const avatar = container.querySelector("span.inline-flex") as HTMLElement;
+      // ring-green-500 is the centralised marker — see lib/ui.ts.
+      expect(avatar?.classList.contains("ring-green-500")).toBe(true);
     });
   });
 

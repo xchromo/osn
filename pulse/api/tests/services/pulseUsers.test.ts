@@ -5,6 +5,7 @@ import {
   DEFAULT_ATTENDANCE_VISIBILITY,
   ensurePulseUser,
   getAttendanceVisibility,
+  getAttendanceVisibilityBatch,
   getPulseUser,
   updateSettings,
 } from "../../src/services/pulseUsers";
@@ -66,4 +67,32 @@ it.effect("getAttendanceVisibility reads the stored value after update", () =>
     const v = yield* getAttendanceVisibility("usr_alice");
     expect(v).toBe("no_one");
   }).pipe(Effect.provide(createTestLayer())),
+);
+
+// ── getAttendanceVisibilityBatch ─────────────────────────────────────────────
+//
+// Pinning the batched lookup contract: missing rows fall back to the
+// default; one query handles many ids; result Map contains an entry for
+// every requested id.
+
+it.effect("getAttendanceVisibilityBatch returns empty Map on empty input", () =>
+  Effect.gen(function* () {
+    const map = yield* getAttendanceVisibilityBatch([]);
+    expect(map.size).toBe(0);
+  }).pipe(Effect.provide(createTestLayer())),
+);
+
+it.effect(
+  "getAttendanceVisibilityBatch returns one entry per requested id, defaulting missing ones",
+  () =>
+    Effect.gen(function* () {
+      yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
+      yield* updateSettings("usr_bob", { attendanceVisibility: "close_friends" });
+      // usr_carol has no row at all → should default to "connections".
+      const map = yield* getAttendanceVisibilityBatch(["usr_alice", "usr_bob", "usr_carol"]);
+      expect(map.size).toBe(3);
+      expect(map.get("usr_alice")).toBe("no_one");
+      expect(map.get("usr_bob")).toBe("close_friends");
+      expect(map.get("usr_carol")).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
+    }).pipe(Effect.provide(createTestLayer())),
 );
