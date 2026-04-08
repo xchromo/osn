@@ -16,6 +16,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
       - name: Check for changeset
         run: |
           files=$(git diff --name-only origin/main...HEAD | grep '^\.changeset/.*\.md$' | grep -v README.md || true)
@@ -25,3 +29,20 @@ jobs:
           fi
           echo "✅ Changeset found:"
           echo "$files"
+
+      - name: Install dependencies
+        run: bun install
+
+      # Validate every changeset on the branch references a real workspace.
+      # Without this, a changeset that names a non-existent package (e.g.
+      # "pulse" instead of "@pulse/app") passes PR review and then explodes
+      # the Release workflow on main, blocking all subsequent versioning.
+      - name: Validate changeset package names
+        run: |
+          if ! bunx changeset status; then
+            echo "❌ A changeset references a package that is not in the workspace."
+            echo "   Open the offending .changeset/*.md file and use the exact"
+            echo "   workspace 'name' from its package.json (e.g. '@osn/ui',"
+            echo "   '@pulse/app'). Then re-run 'bunx changeset status' locally."
+            exit 1
+          fi
