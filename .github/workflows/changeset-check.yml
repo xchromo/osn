@@ -37,12 +37,20 @@ jobs:
       # Without this, a changeset that names a non-existent package (e.g.
       # "pulse" instead of "@pulse/app") passes PR review and then explodes
       # the Release workflow on main, blocking all subsequent versioning.
+      #
+      # Use `bun run changeset` rather than `bunx changeset`: bunx can
+      # resolve to an unrelated npm package called `changeset` (different
+      # from `@changesets/cli`) when its global cache is cold, which is
+      # always the case in CI. `bun run changeset` invokes the
+      # `"changeset": "changeset"` script from package.json, which adds
+      # node_modules/.bin to PATH so the local @changesets/cli binary is
+      # the only thing that can be resolved.
       - name: Validate changeset package names
         run: |
-          if ! bunx changeset status; then
+          if ! bun run changeset status; then
             echo "❌ A changeset references a package that is not in the workspace."
             echo "   Open the offending .changeset/*.md file and use the exact"
             echo "   workspace 'name' from its package.json (e.g. '@osn/ui',"
-            echo "   '@pulse/app'). Then re-run 'bunx changeset status' locally."
+            echo "   '@pulse/app'). Then re-run 'bun run changeset status' locally."
             exit 1
           fi
