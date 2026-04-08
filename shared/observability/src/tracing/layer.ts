@@ -1,4 +1,8 @@
-import { NodeSdk } from "@effect/opentelemetry";
+// Subpath import (NOT the top-level `@effect/opentelemetry` barrel) — the
+// root barrel eagerly re-exports `WebSdk`, which pulls in the optional
+// `@opentelemetry/sdk-trace-web` peer dep we don't install. Importing the
+// `NodeSdk` subpath directly avoids resolving the web modules.
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import {
