@@ -223,6 +223,8 @@ shared/observability/
 - **Span names are hierarchical and snake_case.** Dots separate layers; underscores separate words. Match the metric naming convention so dashboards can correlate on shared prefixes.
 - **Do not create spans at route level** — the Elysia plugin already creates a span per request with `http.*` attributes. Creating a second span inside the handler is redundant; add service spans inside the Effect pipeline instead.
 - **Propagate trace context across services via the shared `fetch` wrapper.** Any outbound HTTP from our code goes through `instrumentedFetch` from `@shared/observability/fetch` — it injects `traceparent` + (if configured) the ARC token header. Never raw `fetch()` for service-to-service calls.
+- **Inbound `traceparent` is only trusted from ARC-authenticated callers.** The Elysia plugin extracts upstream trace context when — and only when — the request presents `Authorization: ARC ...`. Anonymous/public requests start fresh root spans to prevent external attackers from forcing sampling decisions or injecting chosen trace IDs into our internal traces (S-H13).
+- **Elysia hook limitation (known).** Elysia's `onRequest → handler → onAfterResponse` hooks run as separate invocations, not inside a single enclosing callback. OTel's `context.with(ctx, fn)` scope only lives for the duration of `fn`, so there is no way to make a single OTel `Context` active across the hook → handler boundary via hooks alone. Consequences: `trace.getActiveSpan()` inside a synchronous handler does NOT see the server span, and Effect service spans created via `Effect.withSpan` become root spans rather than children of the HTTP request. Distributed tracing across services still works (inbound/outbound `traceparent` propagation is unaffected). For handlers that explicitly want child spans, use `getRequestContext(request)` + `context.with(...)` as an escape hatch.
 - **WebSocket spans are out of scope for the initial rollout** — flagged to add per-message spans when `@zap/api` lands.
 
 ### Metrics rules
@@ -264,6 +266,8 @@ Each file exports:
 - **Must be documented at the declaration site** via the TypeScript type. The type *is* the contract.
 - **Never include user-identifying, request-identifying, or session-identifying values** — even via `as`. Reviewers reject the diff; logs and traces are the correct home for those.
 - **Max ~5 attributes per metric.** More than that and you're probably modelling what should be two metrics.
+- **Free-text → bounded bucket.** When an attribute value comes from user input or a runtime registry whose set can't be known at compile time (e.g. event category, ARC service ID), do NOT type it as `string`. Define a closed allow-list and a `bucketX()` / `safeX()` helper that collapses unknown values to `"other"` or `"unknown"` before emission. See `bucketCategory()` in `pulse/api/src/metrics.ts` and `safeIssuer()` in `osn/crypto/src/arc-metrics.ts` for the canonical pattern. This is the runtime analogue of the compile-time string-literal-union rule.
+- **Route attributes default to a fixed sentinel.** HTTP-style route labels must never be set from a raw URL path. The shared Elysia plugin defaults `http.route` to `"unmatched"` and only overwrites it with Elysia's matched route template in `onAfterHandle`. Any request that short-circuits before then (404, body validation failure) records as `unmatched`, not as a raw attacker-controlled path (S-C1).
 
 ### Canonical code example
 
