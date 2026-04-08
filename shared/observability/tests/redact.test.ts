@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, REDACTION_PLACEHOLDER } from "../src/logger/redact";
+import { REDACT_KEYS, redact, REDACTION_PLACEHOLDER } from "../src/logger/redact";
 
 describe("redact", () => {
   it("passes primitives through unchanged", () => {
@@ -151,5 +151,58 @@ describe("redact", () => {
     const snapshot = { ...input };
     redact(input);
     expect(input).toEqual(snapshot);
+  });
+
+  /**
+   * Walks every entry in the deny-list and confirms it redacts.
+   * Self-maintaining: any key added to (or removed from) REDACT_KEYS
+   * automatically gets coverage. Guards against a future refactor
+   * accidentally dropping a "non-negotiable" entry (per CLAUDE.md).
+   */
+  it("every entry in REDACT_KEYS is actually redacted", () => {
+    expect(REDACT_KEYS.size).toBeGreaterThan(20);
+    for (const key of REDACT_KEYS) {
+      const input = { [key]: "sensitive-value" };
+      const out = redact(input) as Record<string, unknown>;
+      expect(out[key], `key "${key}" was not redacted`).toBe(REDACTION_PLACEHOLDER);
+    }
+  });
+
+  it("explicitly asserts headers + crypto + signal keys stay on the list", () => {
+    // These are the "non-negotiable" keys called out in CLAUDE.md.
+    // Locking them with an explicit assertion here means a PR that
+    // accidentally deletes any one of them will fail this test by name,
+    // not just the generic loop above.
+    const mustBeRedacted = [
+      "cookie",
+      "set-cookie",
+      "setCookie",
+      "authorization",
+      "apiKey",
+      "api_key",
+      "privateKey",
+      "private_key",
+      "secretKey",
+      "secret_key",
+      "password_hash",
+      "sessionToken",
+      "session_token",
+      "signalEnvelope",
+      "signal_envelope",
+      "prekey",
+      "preKey",
+      "senderKey",
+      "sender_key",
+      "identityKey",
+      "identity_key",
+      "ratchetKey",
+      "ratchet_key",
+    ];
+    for (const key of mustBeRedacted) {
+      expect(
+        REDACT_KEYS.has(key.toLowerCase()),
+        `deny-list is missing "${key}" — this is a non-negotiable key per CLAUDE.md`,
+      ).toBe(true);
+    }
   });
 });

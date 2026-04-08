@@ -109,9 +109,12 @@ export const classifyArcVerifyError = (err: unknown): ArcVerifyResult => {
     const m = err.message.toLowerCase();
     if (m.includes("expired")) return "expired";
     if (m.includes("audience")) return "audience_mismatch";
+    // NOTE: the more-specific "missing scope claim" branch MUST come
+    // before the generic "scope" branch — the generic one would
+    // otherwise swallow it and mis-classify as scope_denied.
+    if (m.includes("missing scope claim")) return "malformed";
     if (m.includes("scope")) return "scope_denied";
     if (m.includes("unknown service")) return "unknown_issuer";
-    if (m.includes("missing scope claim")) return "malformed";
     if (m.includes("invalid public key")) return "unknown_issuer";
   }
   return "bad_signature";
