@@ -8,7 +8,13 @@ import {
   seedOsnUser,
   type OsnTestContext,
 } from "../helpers/osnDb";
-import { inviteGuests, listRsvps, rsvpCounts, upsertRsvp } from "../../src/services/rsvps";
+import {
+  inviteGuests,
+  latestRsvps,
+  listRsvps,
+  rsvpCounts,
+  upsertRsvp,
+} from "../../src/services/rsvps";
 import { updateSettings } from "../../src/services/pulseUsers";
 
 function setup() {
@@ -419,6 +425,56 @@ it.effect("listRsvps joins user display metadata onto rows", () =>
     );
     expect(rows[0]!.user?.displayName).toBe("Bob Smith");
     expect(rows[0]!.user?.handle).toBe("bob");
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// latestRsvps — default + clamping
+// ---------------------------------------------------------------------------
+
+it.effect("latestRsvps defaults to 5 results when more exist", () =>
+  Effect.gen(function* () {
+    const { pulse, osn, layer } = setup();
+    yield* Effect.promise(() =>
+      seedOsnUser(osn, { id: "usr_alice", handle: "alice", displayName: "Alice" }),
+    );
+    for (const id of ["usr_b1", "usr_b2", "usr_b3", "usr_b4", "usr_b5", "usr_b6", "usr_b7"]) {
+      yield* Effect.promise(() => seedOsnUser(osn, { id, handle: id, displayName: id }));
+    }
+    const event = yield* seedEvent({
+      title: "Popular",
+      startTime: "2030-06-01T10:00:00.000Z",
+      guestListVisibility: "public",
+      createdByUserId: "usr_alice",
+    }).pipe(Effect.provide(pulse));
+    for (const id of ["usr_b1", "usr_b2", "usr_b3", "usr_b4", "usr_b5", "usr_b6", "usr_b7"]) {
+      yield* upsertRsvp(event.id, id, { status: "going" }).pipe(Effect.provide(pulse));
+    }
+    const rows = yield* latestRsvps(event.id, "usr_alice").pipe(Effect.provide(layer));
+    expect(rows.length).toBe(5);
+  }),
+);
+
+it.effect("latestRsvps respects an explicit limit", () =>
+  Effect.gen(function* () {
+    const { pulse, osn, layer } = setup();
+    yield* Effect.promise(() =>
+      seedOsnUser(osn, { id: "usr_alice", handle: "alice", displayName: "Alice" }),
+    );
+    for (const id of ["usr_b1", "usr_b2", "usr_b3"]) {
+      yield* Effect.promise(() => seedOsnUser(osn, { id, handle: id, displayName: id }));
+    }
+    const event = yield* seedEvent({
+      title: "Small",
+      startTime: "2030-06-01T10:00:00.000Z",
+      guestListVisibility: "public",
+      createdByUserId: "usr_alice",
+    }).pipe(Effect.provide(pulse));
+    for (const id of ["usr_b1", "usr_b2", "usr_b3"]) {
+      yield* upsertRsvp(event.id, id, { status: "going" }).pipe(Effect.provide(pulse));
+    }
+    const rows = yield* latestRsvps(event.id, "usr_alice", 1).pipe(Effect.provide(layer));
+    expect(rows.length).toBe(1);
   }),
 );
 
