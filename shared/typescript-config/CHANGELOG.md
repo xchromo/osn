@@ -1,6 +1,6 @@
-# @utils/db
+# @shared/typescript-config
 
-## 0.2.1
+## 0.0.2
 
 ### Patch Changes
 
@@ -13,9 +13,3 @@
   - `@osn/typescript-config` → `@shared/typescript-config`
 
   `@osn/core` remains unchanged as the OSN identity library consumed by `@osn/app`. The prefix rule going forward: `@osn/*` = identity stack, `@pulse/*` = events stack, `@shared/*` = cross-cutting utilities.
-
-## 0.2.0
-
-### Minor Changes
-
-- 880e762: Add `@utils/db` package (`packages/utils-db`) with shared database utilities — `createDrizzleClient` and `makeDbLive` — eliminating boilerplate duplication between `@osn/db` and `@pulse/db`. Both db packages now delegate client creation and Layer setup to `@utils/db`. Also removes the unused singleton `client.ts` export from both db packages.
