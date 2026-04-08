@@ -142,8 +142,11 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
       catch: (cause) => new DatabaseError({ cause }),
     });
 
+    // Bounded concurrency: 5 is enough parallelism to hide DB round-trip
+    // latency but avoids unleashing a burst of N in-flight UPDATEs (and
+    // N child spans) against SQLite for a page-size of 100 results.
     const transitioned = yield* Effect.forEach(results, applyTransition, {
-      concurrency: "unbounded",
+      concurrency: 5,
     });
     metricEventsListed("all", transitioned.length);
     return transitioned;
@@ -165,8 +168,9 @@ export const listTodayEvents: Effect.Effect<Event[], DatabaseError, Db> = Effect
     catch: (cause) => new DatabaseError({ cause }),
   });
 
+  // Bounded concurrency (see listEvents for the rationale).
   const transitioned = yield* Effect.forEach(results, applyTransition, {
-    concurrency: "unbounded",
+    concurrency: 5,
   });
   metricEventsListed("today", transitioned.length);
   return transitioned;

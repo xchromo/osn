@@ -23,9 +23,12 @@ export const ARC_METRICS = {
  * Attribute shapes. All values are bounded string-literal unions — high
  * cardinality values (user IDs, request IDs) are forbidden.
  *
- * `iss` and `aud` are technically strings but we only ever have a small,
- * known set of service IDs (see `service_accounts` table), so they're
- * safe to include.
+ * `iss` and `aud` are typed as `string` because the set is determined
+ * at runtime by the `service_accounts` table, not at compile time.
+ * Cardinality is enforced by `safeIssuer()` below: any value that
+ * doesn't match a strict service-ID regex is bucketed into `"unknown"`.
+ * Callers must never pass unverified external input directly — see
+ * S-C2 + the docstring on each recording helper.
  */
 type ArcIssuedAttrs = {
   iss: string;
@@ -40,6 +43,20 @@ type ArcVerificationAttrs = {
 type ArcCacheAttrs = {
   iss: string;
 };
+
+/**
+ * Runtime cardinality guard.
+ *
+ * Valid OSN service IDs are short lowercase identifiers matching
+ * /^[a-z][a-z0-9-]{1,30}$/ (e.g. `pulse-api`, `osn-core`, `zap-api`).
+ * Any value outside that shape — including CRLF, unicode, excessive
+ * length, or attacker-crafted randomness — collapses to `"unknown"`
+ * so cardinality stays bounded even if a caller accidentally forwards
+ * unverified input. This is defence-in-depth on top of the call-site
+ * check in arc.ts (S-C2).
+ */
+const SERVICE_ID_RE = /^[a-z][a-z0-9-]{1,30}$/;
+const safeIssuer = (iss: string): string => (SERVICE_ID_RE.test(iss) ? iss : "unknown");
 
 /** Total ARC tokens minted by this service. Increment on successful sign. */
 const tokenIssuedCounter = createCounter<ArcIssuedAttrs>({
@@ -84,20 +101,22 @@ const publicKeyCacheMissesCounter = createCounter<ArcCacheAttrs>({
 // ---------------------------------------------------------------------------
 
 export const metricArcTokenIssued = (iss: string, aud: string): void =>
-  tokenIssuedCounter.inc({ iss, aud });
+  tokenIssuedCounter.inc({ iss: safeIssuer(iss), aud: safeIssuer(aud) });
 
 export const metricArcTokenVerification = (iss: string, result: ArcVerifyResult): void =>
-  tokenVerificationCounter.inc({ iss, result });
+  tokenVerificationCounter.inc({ iss: safeIssuer(iss), result });
 
-export const metricArcTokenCacheHit = (iss: string): void => tokenCacheHitsCounter.inc({ iss });
+export const metricArcTokenCacheHit = (iss: string): void =>
+  tokenCacheHitsCounter.inc({ iss: safeIssuer(iss) });
 
-export const metricArcTokenCacheMiss = (iss: string): void => tokenCacheMissesCounter.inc({ iss });
+export const metricArcTokenCacheMiss = (iss: string): void =>
+  tokenCacheMissesCounter.inc({ iss: safeIssuer(iss) });
 
 export const metricArcPublicKeyCacheHit = (iss: string): void =>
-  publicKeyCacheHitsCounter.inc({ iss });
+  publicKeyCacheHitsCounter.inc({ iss: safeIssuer(iss) });
 
 export const metricArcPublicKeyCacheMiss = (iss: string): void =>
-  publicKeyCacheMissesCounter.inc({ iss });
+  publicKeyCacheMissesCounter.inc({ iss: safeIssuer(iss) });
 
 /**
  * Classify an `ArcTokenError` (or any caught exception) into a bounded

@@ -59,6 +59,29 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     "phoneNumber",
     "phone_number",
     "handle", // borderline but safer to redact in logs; use userId instead
+    // User-chosen free-text name fields (S-M2) — often contain the
+    // user's real name, which is PII.
+    "displayName",
+    "display_name",
+    "firstName",
+    "first_name",
+    "lastName",
+    "last_name",
+    "fullName",
+    "full_name",
+    "legalName",
+    "legal_name",
+    "dob",
+    "dateOfBirth",
+    "date_of_birth",
+    "address",
+    "streetAddress",
+    "street_address",
+    "postalCode",
+    "postal_code",
+    "ssn",
+    "taxId",
+    "tax_id",
 
     // --- E2E encryption (Zap / Signal) ---
     "ciphertext",
@@ -85,8 +108,17 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
  *
  * Intentionally does not follow cycles — throws on cyclic input. Log
  * entries should never contain cycles; if one shows up, that's a bug.
+ *
+ * Fast path (P-I1): primitives return immediately without allocating
+ * a new WeakSet or walking anything. Hot log paths (per-request,
+ * per-metric) stay allocation-free for the common case of scalar
+ * messages and annotations.
  */
 export const redact = (value: unknown): unknown => {
+  // Primitive fast path — no allocation, no walk.
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+  if (value instanceof Date) return value;
   return redactInner(value, new WeakSet());
 };
 

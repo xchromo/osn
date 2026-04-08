@@ -98,4 +98,28 @@ describe("instrumentedFetch", () => {
     const hdrs = getStubHeaders(0);
     expect(hdrs).toBeInstanceOf(Headers);
   });
+
+  // S-H4: query strings must not land in span attributes, since they
+  // frequently carry OAuth codes, magic-link tokens, presigned
+  // signatures, etc. We can't directly inspect the span's attributes
+  // without hooking a recording processor, but we CAN verify that the
+  // wrapper still forwards the full URL to the underlying fetch (so
+  // requests work) AND doesn't throw on URLs with queries.
+  it("forwards URLs with query strings to fetch without crashing", async () => {
+    const url = "http://example.com/oauth/callback?code=secret123&state=xyz";
+    const res = await instrumentedFetch(url);
+    expect(stub).toHaveBeenCalledTimes(1);
+    expect(stub.mock.calls[0]?.[0]).toBe(url);
+    expect(res.status).toBe(200);
+  });
+
+  it("reuses caller's Headers instance instead of allocating a new one (P-I3)", async () => {
+    const callerHeaders = new Headers({ authorization: "ARC tok", "x-a": "b" });
+    await instrumentedFetch("http://example.com/", { headers: callerHeaders });
+    // Assertion: the exact same Headers reference was passed through
+    // to globalThis.fetch. `init` in the stub call should reference
+    // callerHeaders directly.
+    const init = getStubInit(0);
+    expect(init?.headers).toBe(callerHeaders);
+  });
 });

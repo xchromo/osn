@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { Elysia } from "elysia";
 
 /**
@@ -14,6 +15,12 @@ import { Elysia } from "elysia";
  *
  * Convention borrowed from Kubernetes; works on Fly.io / Render / Railway
  * / bare Docker without modification.
+ *
+ * IMPORTANT (S-H1): these routes are **unauthenticated** and publicly
+ * reachable. Response bodies are deliberately opaque — never include
+ * driver text, file paths, connection strings, or any other internal
+ * detail. Probe failures are logged via `Effect.logError` for
+ * operators; callers see a fixed `{ status: "not_ready" }` shape.
  */
 export interface HealthRoutesOptions {
   /** Service name, returned in the body so operators can sanity-check. */
@@ -39,15 +46,29 @@ export const healthRoutes = (options: HealthRoutesOptions) =>
         const ok = await options.probe();
         if (!ok) {
           set.status = 503;
+          // Operator-side log so we know WHY ready returned false.
+          void Effect.runPromise(
+            Effect.logWarning("readiness probe returned false").pipe(
+              Effect.annotateLogs({ service: options.serviceName }),
+            ),
+          );
           return { status: "not_ready", service: options.serviceName };
         }
         return { status: "ready", service: options.serviceName };
       } catch (err) {
         set.status = 503;
-        return {
-          status: "not_ready",
-          service: options.serviceName,
-          reason: err instanceof Error ? err.message : "probe_failed",
-        };
+        // S-H1: log the underlying error for operators but do NOT
+        // return it to the caller. The body shape is identical to
+        // the `ok === false` branch so external callers cannot
+        // distinguish "probe threw" from "probe returned false".
+        void Effect.runPromise(
+          Effect.logError("readiness probe threw").pipe(
+            Effect.annotateLogs({
+              service: options.serviceName,
+              cause: err instanceof Error ? err.message : String(err),
+            }),
+          ),
+        );
+        return { status: "not_ready", service: options.serviceName };
       }
     });

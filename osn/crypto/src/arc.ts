@@ -245,7 +245,9 @@ export const resolvePublicKey = (
   Effect.gen(function* () {
     const now = Math.floor(Date.now() / 1000);
 
-    // Check CryptoKey cache first
+    // Check CryptoKey cache first. Cache entries only exist for
+    // issuers we've already verified against the DB, so recording the
+    // hit metric with `issuer` here is safe (S-C2).
     const cached = publicKeyCache.get(issuer);
     if (cached && cached.expiresAt > now) {
       // Still need to validate scopes against DB if tokenScopes provided
@@ -256,7 +258,11 @@ export const resolvePublicKey = (
       }
     }
 
-    metricArcPublicKeyCacheMiss(issuer);
+    // S-C2: do NOT record the miss metric yet. At this point `issuer`
+    // is attacker-controlled (it's the `iss` claim of an unverified
+    // token). Recording it as a metric label would let anyone explode
+    // cardinality. Defer until the DB lookup confirms the issuer
+    // exists in `service_accounts`.
     const { db } = yield* Db;
 
     const rows = yield* Effect.tryPromise({
@@ -273,8 +279,14 @@ export const resolvePublicKey = (
     });
 
     if (rows.length === 0) {
+      // Unknown issuer — record the miss against the "unknown" bucket
+      // so we still observe the probe volume.
+      metricArcPublicKeyCacheMiss("unknown");
       return yield* Effect.fail(new ArcTokenError({ message: `Unknown service: ${issuer}` }));
     }
+
+    // Issuer verified — safe to record against the real service ID.
+    metricArcPublicKeyCacheMiss(issuer);
 
     const { publicKeyJwk, allowedScopes } = rows[0];
 

@@ -28,21 +28,28 @@ describe("redact", () => {
     expect(out.jwt).toBe(REDACTION_PLACEHOLDER);
   });
 
-  it("redacts PII (email, phone, handle)", () => {
+  it("redacts PII (email, phone, handle, displayName)", () => {
     const input = {
       userId: "u_123",
       email: "alice@example.com",
       phone: "+15551234567",
       handle: "alice",
-      displayName: "Alice",
+      displayName: "Alice Smith",
+      firstName: "Alice",
+      lastName: "Smith",
+      createdAtTs: 1234567890,
     };
     const out = redact(input) as Record<string, unknown>;
     expect(out.userId).toBe("u_123");
     expect(out.email).toBe(REDACTION_PLACEHOLDER);
     expect(out.phone).toBe(REDACTION_PLACEHOLDER);
     expect(out.handle).toBe(REDACTION_PLACEHOLDER);
-    // displayName is NOT in the deny-list
-    expect(out.displayName).toBe("Alice");
+    // S-M2: user-chosen name fields are redacted
+    expect(out.displayName).toBe(REDACTION_PLACEHOLDER);
+    expect(out.firstName).toBe(REDACTION_PLACEHOLDER);
+    expect(out.lastName).toBe(REDACTION_PLACEHOLDER);
+    // Non-sensitive fields pass through unchanged
+    expect(out.createdAtTs).toBe(1234567890);
   });
 
   it("redacts nested object fields", () => {

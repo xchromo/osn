@@ -59,6 +59,21 @@ const parseLogLevel = (value: string | undefined): LogLevel => {
   }
 };
 
+/**
+ * S-M1: strict OTLP header parser.
+ *
+ * These headers are passed straight to the OTLP HTTP exporter and
+ * typically include the Grafana Cloud / Axiom / etc. Authorization
+ * token. Malformed values (CRLF, control chars, spaces) must NOT reach
+ * the HTTP layer — they enable header smuggling attacks against the
+ * collector. We throw on malformed input rather than silently dropping
+ * so misconfiguration crashes loudly at boot.
+ */
+const HEADER_KEY_RE = /^[A-Za-z0-9-]+$/;
+// Values: any printable ASCII except CR/LF. OTLP uses tokens, base64,
+// and JWT-like strings as auth headers; this range covers all of them.
+const HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
+
 const parseHeaders = (value: string | undefined): Record<string, string> => {
   if (!value) return {};
   const out: Record<string, string> = {};
@@ -67,7 +82,18 @@ const parseHeaders = (value: string | undefined): Record<string, string> => {
     if (idx < 0) continue;
     const key = pair.slice(0, idx).trim();
     const val = pair.slice(idx + 1).trim();
-    if (key) out[key] = val;
+    if (!key) continue;
+    if (!HEADER_KEY_RE.test(key)) {
+      throw new Error(
+        `OTEL_EXPORTER_OTLP_HEADERS: invalid header name "${key}" (expected [A-Za-z0-9-]+)`,
+      );
+    }
+    if (!HEADER_VALUE_RE.test(val)) {
+      throw new Error(
+        `OTEL_EXPORTER_OTLP_HEADERS: invalid value for "${key}" (control characters or CRLF not allowed)`,
+      );
+    }
+    out[key] = val;
   }
   return out;
 };
@@ -93,6 +119,20 @@ export interface ConfigOverrides {
 
 export const loadConfig = (overrides: ConfigOverrides = {}): ObservabilityConfig => {
   const env = overrides.env ?? parseEnv(process.env.OSN_ENV ?? process.env.NODE_ENV ?? undefined);
+
+  // S-L3: if anything claims we're in production, require an explicit
+  // `OSN_ENV=production` — `NODE_ENV` alone is not sufficient because
+  // Bun leaves it empty by default and a missing env would silently
+  // classify as `dev` (pretty logs + 100% trace sampling + any future
+  // dev-only code paths). Conversely, if the operator DID set
+  // `OSN_ENV=production` but an override tries to force it elsewhere,
+  // that's a bug we want to hear about.
+  if (process.env.OSN_ENV === "production" && env !== "production") {
+    throw new Error(
+      `loadConfig: OSN_ENV=production in the environment but resolved env is "${env}". Refusing to boot with a mismatched environment.`,
+    );
+  }
+
   const serviceName = overrides.serviceName ?? process.env.OSN_SERVICE_NAME ?? "osn-service";
   const serviceVersion = overrides.serviceVersion ?? process.env.OSN_SERVICE_VERSION ?? "0.0.0";
 

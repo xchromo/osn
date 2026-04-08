@@ -31,9 +31,48 @@ export const PULSE_METRICS = {
 // TypeScript rejects unknown keys, so cardinality is enforced at compile time.
 // ---------------------------------------------------------------------------
 
+/**
+ * Closed set of event categories allowed as a metric attribute value.
+ * Free-text categories supplied by users (see `InsertEventSchema`) are
+ * bucketed into `"other"` by `bucketCategory()` below so metric
+ * cardinality cannot be inflated by crafted `category` strings
+ * (S-C3). Extend this list as new first-class categories are added.
+ */
+const ALLOWED_CATEGORIES = [
+  "none",
+  "music",
+  "food",
+  "sports",
+  "arts",
+  "tech",
+  "community",
+  "education",
+  "social",
+  "nightlife",
+  "outdoor",
+  "family",
+  "other",
+] as const;
+
+type AllowedCategory = (typeof ALLOWED_CATEGORIES)[number];
+
+const CATEGORY_SET: ReadonlySet<string> = new Set(ALLOWED_CATEGORIES);
+
+/**
+ * Map a raw user-supplied category string to the closed `AllowedCategory`
+ * union. Values outside the allow-list collapse to `"other"`; `null`
+ * collapses to `"none"`. This is the ONLY way to record a Pulse metric
+ * that includes a category attribute.
+ */
+const bucketCategory = (raw: string | null): AllowedCategory => {
+  if (raw === null) return "none";
+  const normalised = raw.toLowerCase();
+  return (CATEGORY_SET.has(normalised) ? normalised : "other") as AllowedCategory;
+};
+
 type EventsCreatedAttrs = {
-  /** Event category if set, else "uncategorized". Bounded in practice (~20 categories). */
-  category: string;
+  /** Bounded category bucket — see `bucketCategory`. */
+  category: AllowedCategory;
   /** Whether the event had an explicit end time. */
   has_end_time: "true" | "false";
 };
@@ -110,7 +149,7 @@ const eventValidationFailures = createCounter<EventsValidationFailureAttrs>({
 
 export const metricEventCreated = (category: string | null, hasEndTime: boolean): void =>
   eventsCreated.inc({
-    category: category ?? "uncategorized",
+    category: bucketCategory(category),
     has_end_time: hasEndTime ? "true" : "false",
   });
 

@@ -68,6 +68,32 @@ describe("loadConfig", () => {
     });
   });
 
+  // S-M1: strict header parser
+  it("rejects OTEL_EXPORTER_OTLP_HEADERS with CRLF in values", () => {
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = "authorization=Bearer\r\nX-Evil: injected";
+    expect(() => loadConfig()).toThrow(/invalid value/);
+  });
+
+  it("rejects OTEL_EXPORTER_OTLP_HEADERS with control chars in key", () => {
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = "x-bad header=ok";
+    expect(() => loadConfig()).toThrow(/invalid header name/);
+  });
+
+  it("rejects OTEL_EXPORTER_OTLP_HEADERS with a colon in the key", () => {
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = "x-bad:key=ok";
+    expect(() => loadConfig()).toThrow(/invalid header name/);
+  });
+
+  // S-L3: production env mismatch guard
+  it("throws when OSN_ENV=production but the override disagrees", () => {
+    process.env.OSN_ENV = "production";
+    expect(() => loadConfig({ env: "dev" })).toThrow(/production/);
+  });
+
+  it("does not throw when OSN_ENV is unset and override is dev", () => {
+    expect(() => loadConfig({ env: "dev" })).not.toThrow();
+  });
+
   it("uses overrides over env", () => {
     process.env.OSN_SERVICE_NAME = "env-name";
     const cfg = loadConfig({ serviceName: "override-name", serviceVersion: "9.9.9" });

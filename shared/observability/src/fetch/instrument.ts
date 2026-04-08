@@ -38,11 +38,18 @@ export const instrumentedFetch: FetchFn = async (input, init) => {
     parsed = undefined;
   }
 
+  // S-H4: never record the query string on a span. URLs routinely
+  // carry secrets in the query component (OAuth `code`, magic-link
+  // `token`, presigned S3 signatures, OTP callbacks). Record only
+  // `<scheme>://<host><port?><path>`. If parsing failed we have no
+  // choice but to emit no `url.full` at all.
+  const safeUrl = parsed ? `${parsed.protocol}//${parsed.host}${parsed.pathname}` : undefined;
+
   const span = tracer.startSpan(`HTTP ${method}`, {
     kind: SpanKind.CLIENT,
     attributes: {
       "http.request.method": method,
-      "url.full": urlString,
+      ...(safeUrl && { "url.full": safeUrl }),
       ...(parsed && {
         "server.address": parsed.hostname,
         "server.port": parsed.port ? Number(parsed.port) : undefined,
@@ -52,14 +59,21 @@ export const instrumentedFetch: FetchFn = async (input, init) => {
     },
   });
 
-  // Build the headers object so we can inject traceparent even if the
-  // caller passed a plain record or nothing at all.
-  const headers = new Headers(init?.headers);
+  // Reuse the caller's Headers instance when possible — avoids an
+  // extra allocation per outbound call (P-I3). Only fall back to
+  // constructing a new Headers when the caller passed a plain
+  // record/array or nothing at all.
+  const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
 
   return context.with(trace.setSpan(context.active(), span), async () => {
     try {
       injectTraceContext(headers);
-      const response = await globalThis.fetch(input, { ...init, headers });
+      // Only spread when we had to allocate a new Headers — if we're
+      // reusing the caller's instance, `init` already points at it.
+      const response =
+        init?.headers instanceof Headers
+          ? await globalThis.fetch(input, init)
+          : await globalThis.fetch(input, { ...init, headers });
       span.setAttribute("http.response.status_code", response.status);
       if (response.status >= 400) {
         span.setStatus({
