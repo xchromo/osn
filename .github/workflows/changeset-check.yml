@@ -30,24 +30,49 @@ jobs:
           echo "✅ Changeset found:"
           echo "$files"
 
+      - name: Debug environment
+        run: |
+          echo "=== bun version ==="
+          bun --version || echo "bun not found"
+          echo "=== .bun-version file ==="
+          cat .bun-version || echo "no .bun-version"
+          echo "=== pwd ==="
+          pwd
+          echo "=== ls ==="
+          ls -la
+          echo "=== cat package.json ==="
+          cat package.json
+          echo "=== ls .changeset ==="
+          ls -la .changeset/
+
       - name: Install dependencies
         run: bun install
+
+      - name: Debug after install
+        run: |
+          echo "=== ls node_modules/.bin/changeset ==="
+          ls -la node_modules/.bin/changeset || echo "missing"
+          echo "=== changeset binary content ==="
+          readlink node_modules/.bin/changeset || true
+          echo "=== @changesets/cli installed ==="
+          ls node_modules/@changesets/ || echo "no @changesets dir"
+          echo "=== bunx changeset --version ==="
+          bunx changeset --version 2>&1 || true
+          echo "=== bun run changeset --version ==="
+          bun run changeset --version 2>&1 || true
 
       # Validate every changeset on the branch references a real workspace.
       # Without this, a changeset that names a non-existent package (e.g.
       # "pulse" instead of "@pulse/app") passes PR review and then explodes
       # the Release workflow on main, blocking all subsequent versioning.
-      #
-      # Use `bun run changeset` rather than `bunx changeset`: bunx can
-      # resolve to an unrelated npm package called `changeset` (different
-      # from `@changesets/cli`) when its global cache is cold, which is
-      # always the case in CI. `bun run changeset` invokes the
-      # `"changeset": "changeset"` script from package.json, which adds
-      # node_modules/.bin to PATH so the local @changesets/cli binary is
-      # the only thing that can be resolved.
       - name: Validate changeset package names
         run: |
-          if ! bun run changeset status; then
+          set +e
+          bun run changeset status
+          rc=$?
+          set -e
+          echo "----- changeset status exit code: $rc -----"
+          if [ $rc -ne 0 ]; then
             echo "❌ A changeset references a package that is not in the workspace."
             echo "   Open the offending .changeset/*.md file and use the exact"
             echo "   workspace 'name' from its package.json (e.g. '@osn/ui',"
