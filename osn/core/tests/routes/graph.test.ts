@@ -457,6 +457,21 @@ describe("graph routes", () => {
     expect(json.isCloseFriend).toBe(false);
   });
 
+  it("GET /graph/close-friends/:handle → 404 for unknown handle", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/nobody", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /graph/close-friends/:handle → 401 without auth", async () => {
+    const res = await graphApp.handle(new Request("http://localhost/graph/close-friends/bob"));
+    expect(res.status).toBe(401);
+  });
+
   it("DELETE /graph/close-friends/:handle → 400 if not in list", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     await registerAndGetToken("bob@example.com", "bob");
