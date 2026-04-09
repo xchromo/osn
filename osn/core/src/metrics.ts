@@ -125,8 +125,24 @@ const graphCloseFriendOps = createCounter<GraphCloseFriendAttrs>({
 });
 
 // ---------------------------------------------------------------------------
-// Error classification
+// Error classification + sanitisation
 // ---------------------------------------------------------------------------
+
+/**
+ * Extract a log-safe summary from an error. Avoids serialising raw `cause`
+ * payloads (which may contain internal schema details) into structured log
+ * annotations. Only `_tag` and `message` are kept — both are hardcoded
+ * strings in the codebase, never user input.
+ */
+const safeErrorSummary = (err: unknown): Record<string, unknown> => {
+  if (!err || typeof err !== "object") return { error: String(err) };
+  const tag = (err as { _tag?: unknown })._tag;
+  const msg = (err as { message?: unknown }).message;
+  return {
+    ...(typeof tag === "string" ? { _tag: tag } : {}),
+    ...(typeof msg === "string" ? { message: msg } : {}),
+  };
+};
 
 /**
  * Map any caught error (usually an Effect tagged error) into a bounded
@@ -239,7 +255,7 @@ export const withGraphConnectionOp =
       Effect.tapError((e) =>
         Effect.all([
           Effect.sync(() => graphConnectionOps.inc({ action, result: classifyError(e) })),
-          Effect.logError("graph.connection operation failed", { action, error: e }),
+          Effect.logError("graph.connection operation failed", { action, ...safeErrorSummary(e) }),
         ]),
       ),
     );
@@ -253,7 +269,7 @@ export const withGraphBlockOp =
       Effect.tapError((e) =>
         Effect.all([
           Effect.sync(() => graphBlockOps.inc({ action, result: classifyError(e) })),
-          Effect.logError("graph.block operation failed", { action, error: e }),
+          Effect.logError("graph.block operation failed", { action, ...safeErrorSummary(e) }),
         ]),
       ),
     );
@@ -267,7 +283,10 @@ export const withGraphCloseFriendOp =
       Effect.tapError((e) =>
         Effect.all([
           Effect.sync(() => graphCloseFriendOps.inc({ action, result: classifyError(e) })),
-          Effect.logError("graph.close_friend operation failed", { action, error: e }),
+          Effect.logError("graph.close_friend operation failed", {
+            action,
+            ...safeErrorSummary(e),
+          }),
         ]),
       ),
     );

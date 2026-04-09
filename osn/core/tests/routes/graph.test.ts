@@ -227,6 +227,54 @@ describe("graph routes", () => {
     expect(json.status).toBe("none");
   });
 
+  it("DELETE /graph/connections/:handle also cleans up close friends", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    // Connect
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/alice", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bob.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "accept" }),
+      }),
+    );
+
+    // Add close friend
+    await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    // Remove connection
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    // Close friend should be gone
+    const listRes = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const json = (await listRes.json()) as { closeFriends: unknown[] };
+    expect(json.closeFriends).toHaveLength(0);
+  });
+
   it("POST /graph/connections/:handle → 404 for unknown handle", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     const res = await graphApp.handle(

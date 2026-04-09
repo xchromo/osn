@@ -47,6 +47,9 @@ function clampLimit(limit: number | undefined): number {
   return Math.min(Math.max(limit ?? 50, 1), 100);
 }
 
+/** Max items for batched `IN (...)` queries to stay within SQLite variable limits. */
+const MAX_BATCH_SIZE = 1000;
+
 // ---------------------------------------------------------------------------
 // Graph service factory
 // ---------------------------------------------------------------------------
@@ -273,22 +276,21 @@ export function createGraphService() {
         return yield* Effect.fail(new NotFoundError({ message: "Connection not found" }));
       }
 
-      // Clean up close-friend entries in both directions
+      // Atomic: clean up close-friend entries + delete the connection
+      const connId = rows[0].id;
       yield* Effect.tryPromise({
         try: () =>
-          db
-            .delete(closeFriends)
-            .where(
-              or(
-                and(eq(closeFriends.userId, userId), eq(closeFriends.friendId, otherId)),
-                and(eq(closeFriends.userId, otherId), eq(closeFriends.friendId, userId)),
-              ),
-            ),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      yield* Effect.tryPromise({
-        try: () => db.delete(connections).where(eq(connections.id, rows[0].id)),
+          db.transaction(async (tx) => {
+            await tx
+              .delete(closeFriends)
+              .where(
+                or(
+                  and(eq(closeFriends.userId, userId), eq(closeFriends.friendId, otherId)),
+                  and(eq(closeFriends.userId, otherId), eq(closeFriends.friendId, userId)),
+                ),
+              );
+            await tx.delete(connections).where(eq(connections.id, connId));
+          }),
         catch: (cause) => new DatabaseError({ cause }),
       });
     }).pipe(withGraphConnectionOp("remove"));
@@ -472,7 +474,7 @@ export function createGraphService() {
       const result = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({ _: closeFriends.id })
             .from(closeFriends)
             .where(and(eq(closeFriends.userId, userId), eq(closeFriends.friendId, friendId)))
             .limit(1),
@@ -491,13 +493,14 @@ export function createGraphService() {
   ): Effect.Effect<Set<string>, DatabaseError, Db> =>
     Effect.gen(function* () {
       if (userIds.length === 0) return new Set<string>();
+      const clamped = userIds.length > MAX_BATCH_SIZE ? userIds.slice(0, MAX_BATCH_SIZE) : userIds;
       const { db } = yield* Db;
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
             .select({ userId: closeFriends.userId })
             .from(closeFriends)
-            .where(and(eq(closeFriends.friendId, viewerId), inArray(closeFriends.userId, userIds))),
+            .where(and(eq(closeFriends.friendId, viewerId), inArray(closeFriends.userId, clamped))),
         catch: (cause) => new DatabaseError({ cause }),
       });
       return new Set(rows.map((r) => r.userId));
@@ -518,40 +521,37 @@ export function createGraphService() {
 
       const { db } = yield* Db;
 
-      // Remove any existing connection directly — no SELECT needed
+      // Atomic: remove connection + close-friends + insert block
       yield* Effect.tryPromise({
         try: () =>
-          db
-            .delete(connections)
-            .where(
-              or(
-                and(eq(connections.requesterId, blockerId), eq(connections.addresseeId, blockedId)),
-                and(eq(connections.requesterId, blockedId), eq(connections.addresseeId, blockerId)),
-              ),
-            ),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      // Remove close-friend entries in both directions
-      yield* Effect.tryPromise({
-        try: () =>
-          db
-            .delete(closeFriends)
-            .where(
-              or(
-                and(eq(closeFriends.userId, blockerId), eq(closeFriends.friendId, blockedId)),
-                and(eq(closeFriends.userId, blockedId), eq(closeFriends.friendId, blockerId)),
-              ),
-            ),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      yield* Effect.tryPromise({
-        try: () =>
-          db
-            .insert(blocks)
-            .values({ id: genId("blk_"), blockerId, blockedId, createdAt: now() })
-            .onConflictDoNothing(),
+          db.transaction(async (tx) => {
+            await tx
+              .delete(connections)
+              .where(
+                or(
+                  and(
+                    eq(connections.requesterId, blockerId),
+                    eq(connections.addresseeId, blockedId),
+                  ),
+                  and(
+                    eq(connections.requesterId, blockedId),
+                    eq(connections.addresseeId, blockerId),
+                  ),
+                ),
+              );
+            await tx
+              .delete(closeFriends)
+              .where(
+                or(
+                  and(eq(closeFriends.userId, blockerId), eq(closeFriends.friendId, blockedId)),
+                  and(eq(closeFriends.userId, blockedId), eq(closeFriends.friendId, blockerId)),
+                ),
+              );
+            await tx
+              .insert(blocks)
+              .values({ id: genId("blk_"), blockerId, blockedId, createdAt: now() })
+              .onConflictDoNothing();
+          }),
         catch: (cause) => new DatabaseError({ cause }),
       });
     }).pipe(withGraphBlockOp("add"));

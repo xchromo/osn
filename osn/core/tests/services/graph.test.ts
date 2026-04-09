@@ -322,6 +322,24 @@ describe("getCloseFriendsOfBatch", () => {
       expect(result.size).toBe(0);
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("returns multiple matches when several users marked viewer", () =>
+    Effect.gen(function* () {
+      const { alice, bob } = yield* setupConnected;
+      const carol = yield* auth.registerUser("carol@example.com", "carol");
+      yield* graph.sendConnectionRequest(alice.id, carol.id);
+      yield* graph.acceptConnection(carol.id, alice.id);
+
+      // Both Bob and Carol mark Alice as close friend
+      yield* graph.addCloseFriend(bob.id, alice.id);
+      yield* graph.addCloseFriend(carol.id, alice.id);
+
+      const result = yield* graph.getCloseFriendsOfBatch(alice.id, [bob.id, carol.id]);
+      expect(result.size).toBe(2);
+      expect(result.has(bob.id)).toBe(true);
+      expect(result.has(carol.id)).toBe(true);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("removeConnection cleans up close friends", () => {
