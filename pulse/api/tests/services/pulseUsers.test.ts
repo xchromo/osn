@@ -1,5 +1,7 @@
 import { it, expect } from "@effect/vitest";
 import { Effect } from "effect";
+import { pulseUsers } from "@pulse/db/schema";
+import { Db } from "@pulse/db/service";
 import { createTestLayer } from "../helpers/db";
 import {
   DEFAULT_ATTENDANCE_VISIBILITY,
@@ -39,16 +41,16 @@ it.effect("ensurePulseUser is idempotent", () =>
 
 it.effect("updateSettings creates a row on first update", () =>
   Effect.gen(function* () {
-    const row = yield* updateSettings("usr_alice", { attendanceVisibility: "close_friends" });
-    expect(row.attendanceVisibility).toBe("close_friends");
+    const row = yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
+    expect(row.attendanceVisibility).toBe("no_one");
   }).pipe(Effect.provide(createTestLayer())),
 );
 
 it.effect("updateSettings changes an existing row", () =>
   Effect.gen(function* () {
-    yield* updateSettings("usr_alice", { attendanceVisibility: "close_friends" });
-    const updated = yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
-    expect(updated.attendanceVisibility).toBe("no_one");
+    yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
+    const updated = yield* updateSettings("usr_alice", { attendanceVisibility: "connections" });
+    expect(updated.attendanceVisibility).toBe("connections");
   }).pipe(Effect.provide(createTestLayer())),
 );
 
@@ -56,6 +58,16 @@ it.effect("updateSettings rejects invalid enum values", () =>
   Effect.gen(function* () {
     const err = yield* Effect.flip(
       updateSettings("usr_alice", { attendanceVisibility: "everyone" }),
+    );
+    expect(err._tag).toBe("ValidationError");
+  }).pipe(Effect.provide(createTestLayer())),
+);
+
+it.effect("updateSettings rejects the legacy 'close_friends' value", () =>
+  Effect.gen(function* () {
+    // The option was removed — new writes must not be able to set it.
+    const err = yield* Effect.flip(
+      updateSettings("usr_alice", { attendanceVisibility: "close_friends" }),
     );
     expect(err._tag).toBe("ValidationError");
   }).pipe(Effect.provide(createTestLayer())),
@@ -87,12 +99,37 @@ it.effect(
   () =>
     Effect.gen(function* () {
       yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
-      yield* updateSettings("usr_bob", { attendanceVisibility: "close_friends" });
+      yield* updateSettings("usr_bob", { attendanceVisibility: "connections" });
       // usr_carol has no row at all → should default to "connections".
       const map = yield* getAttendanceVisibilityBatch(["usr_alice", "usr_bob", "usr_carol"]);
       expect(map.size).toBe(3);
       expect(map.get("usr_alice")).toBe("no_one");
-      expect(map.get("usr_bob")).toBe("close_friends");
+      expect(map.get("usr_bob")).toBe("connections");
       expect(map.get("usr_carol")).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
     }).pipe(Effect.provide(createTestLayer())),
+);
+
+// Legacy `"close_friends"` rows can exist on disk from the pre-
+// simplification schema. Readers must coerce them back to the default
+// so the dropped visibility bucket is treated as "connections" rather
+// than an unknown value that falls through the filter switch.
+it.effect("getAttendanceVisibility coerces a legacy 'close_friends' DB value to default", () =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const now = new Date();
+    // Insert a legacy value directly, bypassing the type-narrowed
+    // insert schema that no longer accepts "close_friends".
+    yield* Effect.promise(() =>
+      db.insert(pulseUsers).values({
+        userId: "usr_legacy",
+        attendanceVisibility: "close_friends" as unknown as "connections",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    const v = yield* getAttendanceVisibility("usr_legacy");
+    expect(v).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
+    const batch = yield* getAttendanceVisibilityBatch(["usr_legacy"]);
+    expect(batch.get("usr_legacy")).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
+  }).pipe(Effect.provide(createTestLayer())),
 );

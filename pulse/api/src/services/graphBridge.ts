@@ -64,14 +64,15 @@ export const getCloseFriendIds = (
 /**
  * Returns the subset of `attendeeIds` that have marked `viewerId` as a
  * close friend — i.e. attendees who explicitly opted to let this viewer
- * into their close-friends-only circle.
+ * into their close-friends circle.
  *
- * This is the directionally-correct check for the RSVP visibility
- * filter: when an attendee sets `attendanceVisibility: "close_friends"`,
- * the intent is "only people I consider close friends should see me".
- * The filter must key on the **attendee's** close-friends list, not the
- * viewer's — otherwise a stalker who unilaterally adds a target as a
- * close friend can see the target's gated RSVPs.
+ * Used by `listRsvps` to stamp an `isCloseFriend` display flag on each
+ * returned row and to promote friendly attendees to the top of the
+ * list. This is a display affordance only: attendance visibility is
+ * `"connections" | "no_one"` and close-friendship no longer gates it
+ * (it previously did, but that leaked attendance one-directionally).
+ * The query is still keyed on the **attendee's** close-friends list so
+ * the flag can't be unilaterally conjured by the viewer.
  *
  * Implementation: single batched SQL query against `close_friends` with
  * `WHERE friend_id = viewerId AND user_id IN (attendeeIds)`. Avoids N+1
