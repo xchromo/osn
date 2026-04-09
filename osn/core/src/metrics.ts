@@ -237,7 +237,10 @@ export const withGraphConnectionOp =
       Effect.withSpan(`graph.connection.${action}`),
       Effect.tap(() => Effect.sync(() => graphConnectionOps.inc({ action, result: "ok" }))),
       Effect.tapError((e) =>
-        Effect.sync(() => graphConnectionOps.inc({ action, result: classifyError(e) })),
+        Effect.all([
+          Effect.sync(() => graphConnectionOps.inc({ action, result: classifyError(e) })),
+          Effect.logError("graph.connection operation failed", { action, error: e }),
+        ]),
       ),
     );
 
@@ -248,7 +251,10 @@ export const withGraphBlockOp =
       Effect.withSpan(`graph.block.${action}`),
       Effect.tap(() => Effect.sync(() => graphBlockOps.inc({ action, result: "ok" }))),
       Effect.tapError((e) =>
-        Effect.sync(() => graphBlockOps.inc({ action, result: classifyError(e) })),
+        Effect.all([
+          Effect.sync(() => graphBlockOps.inc({ action, result: classifyError(e) })),
+          Effect.logError("graph.block operation failed", { action, error: e }),
+        ]),
       ),
     );
 
@@ -259,7 +265,10 @@ export const withGraphCloseFriendOp =
       Effect.withSpan(`graph.close_friend.${action}`),
       Effect.tap(() => Effect.sync(() => graphCloseFriendOps.inc({ action, result: "ok" }))),
       Effect.tapError((e) =>
-        Effect.sync(() => graphCloseFriendOps.inc({ action, result: classifyError(e) })),
+        Effect.all([
+          Effect.sync(() => graphCloseFriendOps.inc({ action, result: classifyError(e) })),
+          Effect.logError("graph.close_friend operation failed", { action, error: e }),
+        ]),
       ),
     );
 

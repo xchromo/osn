@@ -554,6 +554,56 @@ describe("graph routes", () => {
     expect(json.pending[0].handle).toBe("alice");
   });
 
+  it("GET /graph/close-friends returns list, not status check for handle", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    // Connect and add as close friend
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/alice", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bob.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "accept" }),
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    // GET /graph/close-friends should return the list format
+    const listRes = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(listRes.status).toBe(200);
+    const listJson = (await listRes.json()) as { closeFriends: { handle: string }[] };
+    expect(Array.isArray(listJson.closeFriends)).toBe(true);
+    expect(listJson.closeFriends[0].handle).toBe("bob");
+
+    // GET /graph/close-friends/bob should return the status check format
+    const statusRes = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(statusRes.status).toBe(200);
+    const statusJson = (await statusRes.json()) as { isCloseFriend: boolean };
+    expect(statusJson.isCloseFriend).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // isBlocked
   // -------------------------------------------------------------------------
