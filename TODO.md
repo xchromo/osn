@@ -341,8 +341,8 @@ Address **High** items before any non-local deployment.
 ### Warning
 
 - [ ] P-W1 — `rateLimitStore` in graph routes grows without bound — expired entries never evicted; add `setInterval` sweep
-- [ ] P-W16 — Auth rate limiter Maps (11 instances) only sweep when `maxEntries` exceeded — expired entries accumulate in long-running processes. Add proactive sweep (setInterval or sweep-on-check).
-- [ ] P-W17 — `isAllowedRedirectUri` and `validateRedirectUri` re-parse the allowlist via `URL.parse()` on every call. Pre-compute allowed origins once at boot.
+- [x] P-W16 — Auth rate limiter Maps swept proactively: sweep now runs on every `check()` when at least one window has elapsed since the last sweep, not just when `maxEntries` is exceeded. Deterministic memory profile in long-running processes.
+- [x] P-W17 — Redirect URI allowlist pre-computed: `allowedOrigins` Set built once at boot in both `createAuthRoutes` and `createAuthService`. Per-request check is a single `Set.has()` call.
 - [ ] P-W2 — `resolvePublicKey` hits DB on every scoped call despite warm cache — cache `CryptoKey` + `allowedScopes` together
 - [ ] P-W3 — `sendConnectionRequest` makes two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — add periodic sweep. The new `pendingRegistrations` map already uses `sweepExpired()` on insert; lift the helper into the other stores.

@@ -117,16 +117,20 @@ export function createAuthRoutes(
 
   // ---------------------------------------------------------------------------
   // Redirect URI validation (S-H3) — route-level helper for /authorize + /token
+  // Pre-computed origin set avoids re-parsing the static allowlist per request (P-W17).
   // ---------------------------------------------------------------------------
 
+  const allowedOrigins = new Set(
+    (authConfig.allowedRedirectUris ?? [])
+      .map((u) => URL.parse(u)?.origin)
+      .filter((o): o is string => o != null),
+  );
+
   function isAllowedRedirectUri(uri: string): boolean {
-    if (!authConfig.allowedRedirectUris || authConfig.allowedRedirectUris.length === 0) return true;
+    if (allowedOrigins.size === 0) return true;
     const parsed = URL.parse(uri);
     if (!parsed) return false;
-    return authConfig.allowedRedirectUris.some((a) => {
-      const p = URL.parse(a);
-      return p !== null && p.origin === parsed.origin;
-    });
+    return allowedOrigins.has(parsed.origin);
   }
 
   /**

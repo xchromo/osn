@@ -287,10 +287,17 @@ export function createAuthService(config: AuthConfig) {
 
   // -------------------------------------------------------------------------
   // Redirect URI validation (S-H3)
+  // Pre-computed origin set avoids re-parsing the static allowlist per request (P-W17).
   // -------------------------------------------------------------------------
 
+  const allowedOrigins = new Set(
+    (config.allowedRedirectUris ?? [])
+      .map((u) => URL.parse(u)?.origin)
+      .filter((o): o is string => o != null),
+  );
+
   const validateRedirectUri = (uri: string): Effect.Effect<void, AuthError> => {
-    if (!config.allowedRedirectUris || config.allowedRedirectUris.length === 0) {
+    if (allowedOrigins.size === 0) {
       // No allowlist configured — allow all (development mode).
       return Effect.void;
     }
@@ -298,11 +305,7 @@ export function createAuthService(config: AuthConfig) {
     if (!parsed) {
       return Effect.fail(new AuthError({ message: "Invalid redirect_uri" }));
     }
-    const allowed = config.allowedRedirectUris.some((a) => {
-      const p = URL.parse(a);
-      return p !== null && p.origin === parsed.origin;
-    });
-    if (!allowed) {
+    if (!allowedOrigins.has(parsed.origin)) {
       return Effect.fail(new AuthError({ message: "redirect_uri not allowed" }));
     }
     return Effect.void;

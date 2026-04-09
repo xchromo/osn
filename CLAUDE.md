@@ -508,6 +508,7 @@ interface RateLimiterConfig {
 - **In-memory only** — resets on restart; not safe for multi-process. S-M2 tracks migration to a shared counter (Redis / Cloudflare Durable Objects) for horizontal scaling.
 - **Trusts `X-Forwarded-For`** — clients can spoof the header without a trusted reverse proxy. S-M34 tracks adding a `trustProxy` config flag.
 - **Fixed window** — a burst at the window boundary can allow 2x the limit. Acceptable for auth endpoints; sliding window is overkill for current traffic.
+- **Proactive sweep** — expired entries are evicted on every `check()` call when at least one window has elapsed since the last sweep. The `maxEntries` cap is a hard backstop; periodic sweeping keeps memory deterministic under normal load.
 
 ## Testing Patterns
 

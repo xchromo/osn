@@ -30,10 +30,17 @@ export interface RateLimiter {
 export function createRateLimiter(config: RateLimiterConfig): RateLimiter {
   const store = new Map<string, Entry>();
   const maxEntries = config.maxEntries ?? 10_000;
+  let lastSweep = Date.now();
 
+  /**
+   * Evict expired entries. Runs on every check() call but short-circuits
+   * if less than one window has elapsed since the last sweep (P-W16).
+   * Also runs unconditionally when store exceeds maxEntries as a hard cap.
+   */
   function sweep() {
-    if (store.size <= maxEntries) return;
     const now = Date.now();
+    if (store.size <= maxEntries && now - lastSweep < config.windowMs) return;
+    lastSweep = now;
     for (const [key, entry] of store) {
       if (now - entry.windowStart > config.windowMs) store.delete(key);
     }
