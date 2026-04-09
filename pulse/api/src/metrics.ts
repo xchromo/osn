@@ -9,6 +9,7 @@
  */
 
 import {
+  BYTE_BUCKETS,
   createCounter,
   createHistogram,
   LATENCY_BUCKETS_SECONDS,
@@ -24,6 +25,20 @@ export const PULSE_METRICS = {
   eventsCreateDuration: "pulse.events.create.duration",
   eventStatusTransitions: "pulse.events.status_transitions",
   eventValidationFailures: "pulse.events.validation.failures",
+  // RSVP surface (added with the full-event-view feature)
+  rsvpUpserted: "pulse.rsvps.upserted",
+  rsvpInvitesBatch: "pulse.rsvps.invites.batch",
+  rsvpInvitesPerBatch: "pulse.rsvps.invites.per_batch",
+  rsvpListed: "pulse.rsvps.listed",
+  // Comms blast surface (SMS/email broadcast from organiser)
+  commsBlastSent: "pulse.comms.blast.sent",
+  commsBlastBodySize: "pulse.comms.blast.body.size",
+  // Calendar / ICS
+  calendarIcsGenerated: "pulse.calendar.ics.generated",
+  // Visibility + access
+  eventAccessDenied: "pulse.events.access.denied",
+  // Pulse user settings
+  settingsUpdated: "pulse.settings.updated",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -96,6 +111,75 @@ type EventsValidationFailureAttrs = {
   reason: "schema" | "past_start_time";
 };
 
+// --- RSVP ---
+
+/** Bounded RSVP status union — matches `UserRsvpStatus` + the organiser-side `"invited"` row. */
+type RsvpStatus = "going" | "interested" | "not_going" | "invited";
+
+type RsvpUpsertedAttrs = {
+  /** Terminal status after the upsert. */
+  status: RsvpStatus;
+  /** `true` for the first-ever RSVP on this (event,user) pair; `false` for updates. */
+  is_first_rsvp: "true" | "false";
+  /** Result class — covers gating errors like NotInvited, validation, etc. */
+  result: Result;
+};
+
+type RsvpInviteBatchAttrs = {
+  result: Result;
+};
+
+type RsvpListedAttrs = {
+  /**
+   * Which status bucket was queried. `"invited"` is the organiser-only
+   * lookup; all others are public-ish (subject to the attendance-visibility
+   * filter).
+   */
+  status_filter: RsvpStatus | "all";
+  result_empty: "true" | "false";
+};
+
+// --- Comms (organiser blast) ---
+
+type CommsChannel = "sms" | "email";
+
+type CommsBlastSentAttrs = {
+  channel: CommsChannel;
+  result: Result;
+};
+
+type CommsBlastBodySizeAttrs = {
+  channel: CommsChannel;
+};
+
+// --- Calendar / ICS ---
+
+type CalendarIcsAttrs = {
+  result: Result;
+};
+
+// --- Access gate (visibility enforcement) ---
+
+/**
+ * Bucketed reason an event access was denied. Low-cardinality by design —
+ * all unknown reasons collapse to `"other"`. Driven by the `canViewEvent`
+ * / `loadVisibleEvent` gate in `services/eventAccess.ts`.
+ */
+type EventAccessDeniedReason = "not_found" | "private_anonymous" | "private_no_rsvp" | "other";
+
+type EventAccessDeniedAttrs = {
+  /** Which direct-fetch surface the denial happened on. */
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts";
+  reason: EventAccessDeniedReason;
+};
+
+// --- Pulse user settings ---
+
+type SettingsUpdatedAttrs = {
+  field: "attendance_visibility";
+  result: Result;
+};
+
 // ---------------------------------------------------------------------------
 // Counters / histograms
 // ---------------------------------------------------------------------------
@@ -143,6 +227,75 @@ const eventValidationFailures = createCounter<EventsValidationFailureAttrs>({
   unit: "{failure}",
 });
 
+// --- RSVP instruments ---
+
+const rsvpUpserted = createCounter<RsvpUpsertedAttrs>({
+  name: PULSE_METRICS.rsvpUpserted,
+  description: "RSVP upserts (first-create or status-change) by terminal status",
+  unit: "{rsvp}",
+});
+
+const rsvpInvitesBatch = createCounter<RsvpInviteBatchAttrs>({
+  name: PULSE_METRICS.rsvpInvitesBatch,
+  description: "Organiser invite batches sent, by outcome",
+  unit: "{batch}",
+});
+
+const rsvpInvitesPerBatch = createHistogram<RsvpInviteBatchAttrs>({
+  name: PULSE_METRICS.rsvpInvitesPerBatch,
+  description: "Distribution of invite batch sizes (users invited per call)",
+  unit: "{invite}",
+  // Tuned for invite batches: 1…MAX_EVENT_GUESTS (=1000). Buckets
+  // emphasise the small-batch end because most invite flows are per-
+  // group-chat (~5-50) rather than mass mail-merge.
+  boundaries: [1, 5, 10, 25, 50, 100, 250, 500, 1000],
+});
+
+const rsvpListed = createCounter<RsvpListedAttrs>({
+  name: PULSE_METRICS.rsvpListed,
+  description: "RSVP list queries, by status filter and whether any rows were returned",
+  unit: "{query}",
+});
+
+// --- Comms blast instruments ---
+
+const commsBlastSent = createCounter<CommsBlastSentAttrs>({
+  name: PULSE_METRICS.commsBlastSent,
+  description: "Organiser comms blasts recorded, one counter inc per channel per blast",
+  unit: "{blast}",
+});
+
+const commsBlastBodySize = createHistogram<CommsBlastBodySizeAttrs>({
+  name: PULSE_METRICS.commsBlastBodySize,
+  description: "Blast body length in bytes (capped at 1600 by the schema)",
+  unit: "By",
+  boundaries: BYTE_BUCKETS,
+});
+
+// --- Calendar / ICS ---
+
+const calendarIcsGenerated = createCounter<CalendarIcsAttrs>({
+  name: PULSE_METRICS.calendarIcsGenerated,
+  description: "ICS calendar files generated via `buildIcs`",
+  unit: "{file}",
+});
+
+// --- Access gate ---
+
+const eventAccessDenied = createCounter<EventAccessDeniedAttrs>({
+  name: PULSE_METRICS.eventAccessDenied,
+  description: "Direct-fetch event access denials (visibility gate) — a spike is a probing signal",
+  unit: "{denial}",
+});
+
+// --- Pulse user settings ---
+
+const settingsUpdated = createCounter<SettingsUpdatedAttrs>({
+  name: PULSE_METRICS.settingsUpdated,
+  description: "Pulse user settings updates by field and outcome",
+  unit: "{update}",
+});
+
 // ---------------------------------------------------------------------------
 // Public recording helpers — the ONLY way Pulse code should emit metrics.
 // ---------------------------------------------------------------------------
@@ -170,3 +323,59 @@ export const metricEventValidationFailure = (
   operation: "create" | "update",
   reason: "schema" | "past_start_time",
 ): void => eventValidationFailures.inc({ operation, reason });
+
+// --- RSVP recording helpers ---
+
+export const metricRsvpUpserted = (
+  status: RsvpStatus,
+  isFirstRsvp: boolean,
+  result: Result,
+): void =>
+  rsvpUpserted.inc({
+    status,
+    is_first_rsvp: isFirstRsvp ? "true" : "false",
+    result,
+  });
+
+export const metricRsvpInviteBatch = (batchSize: number, result: Result): void => {
+  rsvpInvitesBatch.inc({ result });
+  // Only record the histogram on success — failed batches are not
+  // meaningful for the size distribution.
+  if (result === "ok") rsvpInvitesPerBatch.record(batchSize, { result });
+};
+
+export const metricRsvpListed = (statusFilter: RsvpStatus | "all", resultCount: number): void =>
+  rsvpListed.inc({
+    status_filter: statusFilter,
+    result_empty: resultCount === 0 ? "true" : "false",
+  });
+
+// --- Comms blast recording helpers ---
+
+export const metricCommsBlastSent = (
+  channel: CommsChannel,
+  bodyBytes: number,
+  result: Result,
+): void => {
+  commsBlastSent.inc({ channel, result });
+  // Only record size for successful blasts to keep the histogram
+  // meaningful — error-path payloads can be malformed.
+  if (result === "ok") commsBlastBodySize.record(bodyBytes, { channel });
+};
+
+// --- Calendar recording helper ---
+
+export const metricCalendarIcsGenerated = (result: Result): void =>
+  calendarIcsGenerated.inc({ result });
+
+// --- Access gate recording helper ---
+
+export const metricEventAccessDenied = (
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts",
+  reason: EventAccessDeniedReason,
+): void => eventAccessDenied.inc({ surface, reason });
+
+// --- Settings recording helper ---
+
+export const metricSettingsUpdated = (field: "attendance_visibility", result: Result): void =>
+  settingsUpdated.inc({ field, result });

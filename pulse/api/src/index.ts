@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { healthRoutes, initObservability, observabilityPlugin } from "@shared/observability";
 import { Effect, Logger } from "effect";
-import { eventsRoutes } from "./routes/events";
+import { eventsRoutes, settingsRoutes } from "./routes/events";
 
 // Initialise observability (logger, tracing, metrics) before building the app.
 // No-op in test runs — tests never call listen() so the layer is never provided.
@@ -14,7 +14,8 @@ const app = new Elysia()
   .use(observabilityPlugin({ serviceName: SERVICE_NAME }))
   .use(healthRoutes({ serviceName: SERVICE_NAME }))
   .get("/", () => ({ status: "ok", service: "osn-api" }))
-  .use(eventsRoutes);
+  .use(eventsRoutes)
+  .use(settingsRoutes);
 
 const port = process.env.PORT || 3001;
 
