@@ -59,7 +59,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [ ] Tighten Tauri CSP to allowlist `*.tile.openstreetmap.org` for the new Leaflet tile loads (rolls into S-L3)
 - [ ] Drizzle: `@pulse/db` test helpers (`tests/schema.test.ts`, `tests/seed.test.ts`, `pulse/api/tests/helpers/db.ts`) hand-roll the SQL schema in three places — extract a shared `createSchemaSql()` helper so adding a column is a one-file change
 - [ ] Verified-organisation tier (Pulse phase 2): organisation accounts can run events over `MAX_EVENT_GUESTS` (1000) via a per-event support flow that bumps the cap. Required for conferences / festivals / large weddings. Blocks: org claim on JWT, support request flow, billing, dashboards.
-- [ ] Once `@osn/core` exposes a directional `isCloseFriendOf(attendee, viewer)` graph helper, drop the `getCloseFriendsOf` SQL query from `pulse/api/src/services/graphBridge.ts` and call the service helper instead. The bridge query is correct but a service-level helper is cleaner and easier to migrate to ARC-token HTTP later.
+- [x] Once `@osn/core` exposes a directional `isCloseFriendOf(attendee, viewer)` graph helper, drop the `getCloseFriendsOf` SQL query from `pulse/api/src/services/graphBridge.ts` and call the service helper instead. Done: `isCloseFriendOf`, `getCloseFriendsOfBatch` added to graph service; bridge migrated to use service helper.
 
 ---
 

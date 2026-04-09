@@ -2,7 +2,7 @@ import { Data, Effect } from "effect";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { users, connections, closeFriends, blocks } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { withGraphBlockOp, withGraphConnectionOp } from "../metrics";
+import { withGraphBlockOp, withGraphCloseFriendOp, withGraphConnectionOp } from "../metrics";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -273,6 +273,20 @@ export function createGraphService() {
         return yield* Effect.fail(new NotFoundError({ message: "Connection not found" }));
       }
 
+      // Clean up close-friend entries in both directions
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .delete(closeFriends)
+            .where(
+              or(
+                and(eq(closeFriends.userId, userId), eq(closeFriends.friendId, otherId)),
+                and(eq(closeFriends.userId, otherId), eq(closeFriends.friendId, userId)),
+              ),
+            ),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
       yield* Effect.tryPromise({
         try: () => db.delete(connections).where(eq(connections.id, rows[0].id)),
         catch: (cause) => new DatabaseError({ cause }),
@@ -386,7 +400,7 @@ export function createGraphService() {
             .onConflictDoNothing(),
         catch: (cause) => new DatabaseError({ cause }),
       });
-    });
+    }).pipe(withGraphCloseFriendOp("add"));
 
   const removeCloseFriend = (
     userId: string,
@@ -412,7 +426,7 @@ export function createGraphService() {
         try: () => db.delete(closeFriends).where(eq(closeFriends.id, rows[0].id)),
         catch: (cause) => new DatabaseError({ cause }),
       });
-    });
+    }).pipe(withGraphCloseFriendOp("remove"));
 
   const listCloseFriends = (
     userId: string,
@@ -445,6 +459,49 @@ export function createGraphService() {
 
       return friends;
     });
+
+  /**
+   * Directional check: has `userId` marked `friendId` as a close friend?
+   */
+  const isCloseFriendOf = (
+    userId: string,
+    friendId: string,
+  ): Effect.Effect<boolean, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select()
+            .from(closeFriends)
+            .where(and(eq(closeFriends.userId, userId), eq(closeFriends.friendId, friendId)))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return result.length > 0;
+    }).pipe(Effect.withSpan("graph.close_friend.check"));
+
+  /**
+   * Batched reverse lookup: which of `userIds` have marked `viewerId` as a
+   * close friend? Returns the subset of `userIds` that have done so.
+   */
+  const getCloseFriendsOfBatch = (
+    viewerId: string,
+    userIds: string[],
+  ): Effect.Effect<Set<string>, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      if (userIds.length === 0) return new Set<string>();
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ userId: closeFriends.userId })
+            .from(closeFriends)
+            .where(and(eq(closeFriends.friendId, viewerId), inArray(closeFriends.userId, userIds))),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return new Set(rows.map((r) => r.userId));
+    }).pipe(Effect.withSpan("graph.close_friend.batch_lookup"));
 
   // -------------------------------------------------------------------------
   // Blocks
@@ -565,6 +622,8 @@ export function createGraphService() {
     addCloseFriend,
     removeCloseFriend,
     listCloseFriends,
+    isCloseFriendOf,
+    getCloseFriendsOfBatch,
     blockUser,
     unblockUser,
     listBlocks,

@@ -17,6 +17,7 @@ import {
 import type {
   AuthMethod,
   GraphBlockAction,
+  GraphCloseFriendAction,
   GraphConnectionAction,
   RegisterStep,
   Result,
@@ -34,6 +35,7 @@ export const OSN_METRICS = {
   authMagicLinkSent: "osn.auth.magic_link.sent",
   graphConnectionOps: "osn.graph.connection.operations",
   graphBlockOps: "osn.graph.block.operations",
+  graphCloseFriendOps: "osn.graph.close_friend.operations",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +50,7 @@ type OtpSentAttrs = { purpose: "registration" | "login" };
 type MagicLinkSentAttrs = { result: Result };
 type GraphConnectionAttrs = { action: GraphConnectionAction; result: Result };
 type GraphBlockAttrs = { action: GraphBlockAction; result: Result };
+type GraphCloseFriendAttrs = { action: GraphCloseFriendAction; result: Result };
 
 // ---------------------------------------------------------------------------
 // Counters / histograms
@@ -112,6 +115,12 @@ const graphConnectionOps = createCounter<GraphConnectionAttrs>({
 const graphBlockOps = createCounter<GraphBlockAttrs>({
   name: OSN_METRICS.graphBlockOps,
   description: "Social graph block/unblock operations",
+  unit: "{operation}",
+});
+
+const graphCloseFriendOps = createCounter<GraphCloseFriendAttrs>({
+  name: OSN_METRICS.graphCloseFriendOps,
+  description: "Social graph close-friend add/remove operations",
   unit: "{operation}",
 });
 
@@ -240,6 +249,17 @@ export const withGraphBlockOp =
       Effect.tap(() => Effect.sync(() => graphBlockOps.inc({ action, result: "ok" }))),
       Effect.tapError((e) =>
         Effect.sync(() => graphBlockOps.inc({ action, result: classifyError(e) })),
+      ),
+    );
+
+export const withGraphCloseFriendOp =
+  (action: GraphCloseFriendAction) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      Effect.withSpan(`graph.close_friend.${action}`),
+      Effect.tap(() => Effect.sync(() => graphCloseFriendOps.inc({ action, result: "ok" }))),
+      Effect.tapError((e) =>
+        Effect.sync(() => graphCloseFriendOps.inc({ action, result: classifyError(e) })),
       ),
     );
 

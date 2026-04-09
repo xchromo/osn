@@ -405,6 +405,58 @@ describe("graph routes", () => {
     expect(json.closeFriends).toHaveLength(0);
   });
 
+  it("GET /graph/close-friends/:handle returns true when marked", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    // Connect and add as close friend
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/connections/alice", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bob.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "accept" }),
+      }),
+    );
+    await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { isCloseFriend: boolean };
+    expect(json.isCloseFriend).toBe(true);
+  });
+
+  it("GET /graph/close-friends/:handle returns false when not marked", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    await registerAndGetToken("bob@example.com", "bob");
+
+    const res = await graphApp.handle(
+      new Request("http://localhost/graph/close-friends/bob", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { isCloseFriend: boolean };
+    expect(json.isCloseFriend).toBe(false);
+  });
+
   it("DELETE /graph/close-friends/:handle → 400 if not in list", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     await registerAndGetToken("bob@example.com", "bob");
