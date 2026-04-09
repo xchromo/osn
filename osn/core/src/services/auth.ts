@@ -68,6 +68,13 @@ export interface AuthConfig {
   magicTtl?: number;
   /** Callback to send email (OTP code or magic link) */
   sendEmail?: (to: string, subject: string, body: string) => Promise<void>;
+  /**
+   * Allowed redirect URI origins for OAuth flows (validated at /authorize,
+   * /magic/verify, and /token). When set, the origin of any caller-supplied
+   * redirect_uri must match one of these entries exactly. When omitted or
+   * empty, all redirect URIs are accepted (development mode only).
+   */
+  allowedRedirectUris?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +89,7 @@ interface ChallengeEntry {
 interface OtpEntry {
   code: string;
   userId: string;
+  attempts: number;
   expiresAt: number;
 }
 
@@ -276,6 +284,29 @@ export function createAuthService(config: AuthConfig) {
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
   const otpTtl = config.otpTtl ?? 600;
   const magicTtl = config.magicTtl ?? 600;
+
+  // -------------------------------------------------------------------------
+  // Redirect URI validation (S-H3)
+  // -------------------------------------------------------------------------
+
+  const validateRedirectUri = (uri: string): Effect.Effect<void, AuthError> => {
+    if (!config.allowedRedirectUris || config.allowedRedirectUris.length === 0) {
+      // No allowlist configured — allow all (development mode).
+      return Effect.void;
+    }
+    const parsed = URL.parse(uri);
+    if (!parsed) {
+      return Effect.fail(new AuthError({ message: "Invalid redirect_uri" }));
+    }
+    const allowed = config.allowedRedirectUris.some((a) => {
+      const p = URL.parse(a);
+      return p !== null && p.origin === parsed.origin;
+    });
+    if (!allowed) {
+      return Effect.fail(new AuthError({ message: "redirect_uri not allowed" }));
+    }
+    return Effect.void;
+  };
 
   // -------------------------------------------------------------------------
   // User helpers
@@ -1081,14 +1112,13 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
       }
 
-      const buf = new Uint32Array(1);
-      crypto.getRandomValues(buf);
-      const code = (100_000 + (buf[0] % 900_000)).toString();
+      const code = genOtpCode();
 
       // Key by normalised identifier so completeOtp can check in-memory first.
       otpStore.set(normalised, {
         code,
         userId: user.id,
+        attempts: 0,
         expiresAt: Date.now() + otpTtl * 1000,
       });
 
@@ -1102,7 +1132,7 @@ export function createAuthService(config: AuthConfig) {
             ),
           catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
         });
-      } else {
+      } else if (process.env["NODE_ENV"] !== "production") {
         // Dev-only fallback when no email sender is configured. See the
         // matching block in beginRegistration for why values are interpolated
         // into the message string instead of using log annotations.
@@ -1130,7 +1160,11 @@ export function createAuthService(config: AuthConfig) {
       if (!entry || Date.now() > entry.expiresAt) {
         return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
       }
-      if (entry.code !== code) {
+      if (!timingSafeEqualString(entry.code, code)) {
+        entry.attempts++;
+        if (entry.attempts >= MAX_OTP_ATTEMPTS) {
+          otpStore.delete(normalised);
+        }
         return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
       }
       otpStore.delete(normalised);
@@ -1219,7 +1253,7 @@ export function createAuthService(config: AuthConfig) {
             ),
           catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
         });
-      } else {
+      } else if (process.env["NODE_ENV"] !== "production") {
         // Dev-only fallback when no email sender is configured. See the
         // matching block in beginRegistration for why values are interpolated
         // into the message string instead of using log annotations.
@@ -1266,6 +1300,7 @@ export function createAuthService(config: AuthConfig) {
     state: string,
   ): Effect.Effect<{ redirectUrl: string }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
+      yield* validateRedirectUri(redirectUri);
       const user = yield* consumeMagicToken(token);
       const code = yield* issueCode(user.id);
       const url = new URL(redirectUri);
@@ -1312,6 +1347,7 @@ export function createAuthService(config: AuthConfig) {
     beginMagic,
     verifyMagic,
     verifyMagicDirect,
+    validateRedirectUri,
   };
 }
 

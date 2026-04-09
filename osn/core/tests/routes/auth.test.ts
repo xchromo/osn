@@ -391,6 +391,22 @@ describe("auth routes", () => {
         authHelper.completeOtp("judy@example.com", capturedOtp!).pipe(Effect.provide(layer)),
       );
 
+      // S-H4: PKCE is now mandatory — set up a PKCE entry via /authorize first
+      const verifier = "test-verifier-that-is-long-enough";
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+      const challenge = Buffer.from(digest)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=/g, "");
+      const testState = "test-state-" + Date.now();
+
+      await app.handle(
+        new Request(
+          `http://localhost/authorize?response_type=code&client_id=pulse&redirect_uri=${encodeURIComponent("http://localhost:5173/callback")}&state=${testState}&code_challenge=${challenge}&code_challenge_method=S256`,
+        ),
+      );
+
       const res = await app.handle(
         new Request("http://localhost/token", {
           method: "POST",
@@ -400,7 +416,8 @@ describe("auth routes", () => {
             code,
             redirect_uri: "http://localhost:5173/callback",
             client_id: "pulse",
-            code_verifier: "test-verifier",
+            code_verifier: verifier,
+            state: testState,
           }),
         }),
       );
@@ -905,7 +922,7 @@ describe("auth routes", () => {
       expect(res.status).toBe(200);
     });
 
-    it("legacy unauth'd path is still permitted (deprecated; tracked for removal)", async () => {
+    it("rejects requests without Authorization header (S-H5: legacy path removed)", async () => {
       const svc = createAuthService(config);
       const user = await Effect.runPromise(
         svc.registerUser("rita@example.com", "rita").pipe(Effect.provide(layer)),
@@ -917,7 +934,7 @@ describe("auth routes", () => {
           body: JSON.stringify({ userId: user.id }),
         }),
       );
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(401);
     });
   });
 
