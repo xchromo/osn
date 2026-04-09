@@ -222,6 +222,7 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
   <!-- Post-auth passkey prompt removed (S-H5) -->
 </div>
 
+<script src="https://unpkg.com/@simplewebauthn/browser@13/dist/bundle/index.es5.umd.min.js"></script>
 <script>
 (function () {
   var P = ${escaped};
@@ -534,7 +535,7 @@ export function buildAuthorizeHtml(params: AuthorizeHtmlParams): string {
         body: JSON.stringify({ identifier: _regEmail, code: code })
       }).then(function(r) { return r.json(); });
       if (res.error) { showErr('reg-otp-err', res.error); return; }
-      showPasskeyPrompt(_regUserId, function() { completeAuth(res.code); });
+      completeAuth(res.code);
     } catch(e) {
       showErr('reg-otp-err', e.message || 'Verification failed.');
     }

@@ -747,9 +747,12 @@ export function createAuthRoutes(
       )
       .post(
         "/login/otp/begin",
-        async ({ body, headers }) => {
+        async ({ body, set, headers }) => {
           const rlErr = rateLimit(headers, "otp_begin", rl.otpBegin);
-          if (rlErr) return rlErr;
+          if (rlErr) {
+            set.status = 429;
+            return rlErr;
+          }
           // Always opaque: on unknown identifier, the service throws, we
           // swallow the error, and the client still gets { sent: true }. This
           // prevents the endpoint from doubling as a user-existence oracle.
@@ -786,9 +789,12 @@ export function createAuthRoutes(
       )
       .post(
         "/login/magic/begin",
-        async ({ body, headers }) => {
+        async ({ body, set, headers }) => {
           const rlErr = rateLimit(headers, "magic_begin", rl.magicBegin);
-          if (rlErr) return rlErr;
+          if (rlErr) {
+            set.status = 429;
+            return rlErr;
+          }
           // Same enumeration-safety treatment as /login/otp/begin.
           try {
             await run(auth.beginMagic(body.identifier));
