@@ -299,6 +299,8 @@ Address **High** items before any non-local deployment.
 - [x] S-M31 — Redaction deny-list was missing user-chosen name fields — `displayName` (the only such field that exists in the schema today) was added so it gets scrubbed alongside `email` / `handle`. Originally also added speculative entries for `firstName`, `lastName`, `fullName`, `legalName`, `dob`, `address`, `streetAddress`, `postalCode`, `ssn`, `taxId`; these were removed in the S-H21 follow-up because none of them exist as real object keys in the codebase. The deny-list is now grown only when a sensitive field actually lands in the schema/types — see the file header in `shared/observability/src/logger/redact.ts` for the criteria and the lock-step assertion in `redact.test.ts` that pins the exact set.
 - [x] S-M32 — `span.recordException(error)` in the Elysia plugin wrote the error's enumerable own properties as span event attributes outside the log redactor's reach. Effect tagged errors embedding `email`, `handle`, `cause` etc. would leak to trace storage. Fixed: plugin wraps `recordException` to first scrub the error via `redact()` and only passes `name` + redacted `message` to OTel; `span.setStatus.message` is also routed through `redact()`.
 - [x] S-M33 — `enrollmentToken` (and snake-case `enrollment_token`) was missing from the trimmed redaction deny-list. It is a real single-use bearer credential returned by `/register/complete` (`osn/core/src/routes/auth.ts:225`) and sent back as `Authorization: Bearer <token>` for passkey enrollment (`osn/client/src/register.ts:131,142`) — same secrecy profile as `accessToken`. Defence-in-depth (no current log path emits the completeRegistration result), but the file header criterion in `redact.ts` explicitly requires real-bearer-credential fields to be on the list. Fixed by adding both spellings to `REDACT_KEYS` under the OAuth token block, updating the lock-step assertion + positive test, and pointing at the two call sites in the comment.
+- [ ] S-M34 — Rate limiter trusts `X-Forwarded-For` without reverse-proxy guarantee — any client can spoof the header to bypass IP-based rate limits. Add `trustProxy` config flag or fall back to socket IP when no proxy is configured.
+- [ ] S-M35 — Redirect URI allowlist matches origin only, not exact URI per OAuth 2.0 Security BCP (RFC 9700 §4.1.3). Upgrade to exact string comparison for stricter validation.
 
 ### Low
 
@@ -323,6 +325,8 @@ Address **High** items before any non-local deployment.
 - [x] S-L16 — `EventList` `console.error` logs raw server error objects — guarded with `import.meta.env.DEV`
 - [x] S-L17 — `displayName` returned as `undefined` in graph list responses — normalised to `null` via `userProjection()`
 - [ ] S-L18 — Graph rate-limit store (`rateLimitStore`) never evicts expired windows — add periodic sweep
+- [ ] S-L23 — `pkceStore` has no size bound or eviction sweep — unauthenticated `/authorize` can fill memory. Add maxEntries cap + sweepExpired.
+- [ ] S-L24 — `/token` and legacy `POST /register` have no rate limiting — add per-IP limiters for consistency
 - [ ] S-L19 — `jwtSecret` falls back to `"dev-secret"` in graph auth — already tracked as S-L7
 - [x] S-L20 — `loadConfig` silently classified production deploys as `dev` if operators forgot to set `OSN_ENV=production` (Bun leaves `NODE_ENV` empty by default), enabling pretty-printing, 100% trace sampling, and any future dev-only code paths in prod. Fixed: `loadConfig` now throws when `OSN_ENV=production` in the environment but the resolved env differs, refusing to boot with a mismatched environment. Operators must be explicit about production classification.
 
@@ -337,6 +341,8 @@ Address **High** items before any non-local deployment.
 ### Warning
 
 - [ ] P-W1 — `rateLimitStore` in graph routes grows without bound — expired entries never evicted; add `setInterval` sweep
+- [ ] P-W16 — Auth rate limiter Maps (11 instances) only sweep when `maxEntries` exceeded — expired entries accumulate in long-running processes. Add proactive sweep (setInterval or sweep-on-check).
+- [ ] P-W17 — `isAllowedRedirectUri` and `validateRedirectUri` re-parse the allowlist via `URL.parse()` on every call. Pre-compute allowed origins once at boot.
 - [ ] P-W2 — `resolvePublicKey` hits DB on every scoped call despite warm cache — cache `CryptoKey` + `allowedScopes` together
 - [ ] P-W3 — `sendConnectionRequest` makes two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — add periodic sweep. The new `pendingRegistrations` map already uses `sweepExpired()` on insert; lift the helper into the other stores.
