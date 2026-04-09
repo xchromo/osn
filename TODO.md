@@ -69,7 +69,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] User registration/login flows
 - [x] `osn/app` auth server entry point (port 4000)
 - [x] 50 tests: services, routes, lib/crypto, lib/html
-- [x] Social graph data model (connections, close friends, blocks) — 124 tests
+- [x] Social graph data model (connections, close friends, blocks) — 209 tests
 - [x] Handle system — registration, real-time availability check, email/handle sign-in toggle
 - [ ] ARC token verification middleware on internal graph routes (`/graph/internal/*`)
 - [ ] Per-app vs global blocking logic (deferred — global blocking across all OSN apps for now)
@@ -309,6 +309,8 @@ Address **High** items before any non-local deployment.
 - [x] S-L5 — `getSession()` returned expired tokens — fixed
 - [x] S-L6 — OTP used `Math.random()` — replaced with `crypto.getRandomValues`
 - [ ] S-L7 — `jwtSecret` falls back to `"dev-secret"` — throw at startup in production
+- [x] S-L8 — `getCloseFriendsOfBatch` accepted unbounded `userIds` array — fixed: clamped to `MAX_BATCH_SIZE` (1000)
+- [x] S-L9 — Error objects passed to `Effect.logError` in graph wrappers could serialise verbose DB internals — fixed: `safeErrorSummary()` extracts only `_tag` + `message`
 - [ ] S-L8 — OTP codes and magic link URLs logged to stdout — guard with `NODE_ENV` check
 - [ ] S-L9 — `imageUrl` allows `data:` URIs — add CSP `img-src` header
 - [ ] S-L10 — Sign-in page loads `@simplewebauthn/browser` from unpkg CDN without SRI hash
@@ -342,6 +344,8 @@ Address **High** items before any non-local deployment.
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — add periodic sweep. The new `pendingRegistrations` map already uses `sweepExpired()` on insert; lift the helper into the other stores.
 - [ ] P-W10 — `RegistrationClient.checkHandle` has no `AbortController` — debounced bursts of typing can leave multiple in-flight `GET /handle/:handle` requests racing each other; results are guarded against display races but the network requests still hit the DB. Plumb an `AbortSignal` through and abort the previous request when a new one is scheduled.
 - [ ] P-W11 — `beginRegistration` and the legacy `registerUser` issue two parallel `findUserByEmail` + `findUserByHandle` queries instead of a single `WHERE email = ? OR handle = ?` — doubles the DB latency component on a hot signup path. Add a `findUserByEmailOrHandle` helper.
+- [x] P-W16 — Missing index on `close_friends.friend_id` caused table scan in `getCloseFriendsOfBatch` and `removeConnection` cleanup — fixed: added `close_friends_friend_idx`
+- [x] P-W17 — `removeConnection` and `blockUser` multi-step mutations not wrapped in a transaction — fixed: both now use `db.transaction()`
 - [ ] P-W5 — Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (N individual writes today)
 - [x] P-W6 — N+1 queries in graph list functions — replaced with `inArray` batch fetches
 - [x] P-W7 — `eitherBlocked` made two sequential `isBlocked` calls — collapsed to single OR query
@@ -356,6 +360,8 @@ Address **High** items before any non-local deployment.
 
 - [ ] P-I1 — `evictExpiredTokens` in `arc.ts` iterates full cache on every `getOrCreateArcToken` call — throttle or remove; `MAX_CACHE_SIZE` is sufficient
 - [ ] P-I2 — `new TextEncoder()` allocated per JWT sign/verify call — cache encoded secret or import `CryptoKey` once
+- [x] P-I3 — `isCloseFriendOf` used `SELECT *` with `.limit(1)` for existence check — fixed: projects only PK
+- [x] P-I4 — `getCloseFriendsOfBatch` had no upper bound on `userIds` array size — fixed: clamped to `MAX_BATCH_SIZE` (1000)
 - [ ] P-I3 — `new TextEncoder()` allocated per `verifyPkceChallenge` call — move to module scope
 - [ ] P-I4 — `AuthProvider` reconstructs Effect `Layer` on every render — wrap with `createMemo`
 - [ ] P-I5 — `completePasskeyLogin` calls `findUserByEmail` redundantly — `pk.userId` already on passkey row
