@@ -1,7 +1,5 @@
 import { it, expect } from "@effect/vitest";
 import { Effect } from "effect";
-import { pulseUsers } from "@pulse/db/schema";
-import { Db } from "@pulse/db/service";
 import { createTestLayer } from "../helpers/db";
 import {
   DEFAULT_ATTENDANCE_VISIBILITY,
@@ -63,16 +61,6 @@ it.effect("updateSettings rejects invalid enum values", () =>
   }).pipe(Effect.provide(createTestLayer())),
 );
 
-it.effect("updateSettings rejects the legacy 'close_friends' value", () =>
-  Effect.gen(function* () {
-    // The option was removed — new writes must not be able to set it.
-    const err = yield* Effect.flip(
-      updateSettings("usr_alice", { attendanceVisibility: "close_friends" }),
-    );
-    expect(err._tag).toBe("ValidationError");
-  }).pipe(Effect.provide(createTestLayer())),
-);
-
 it.effect("getAttendanceVisibility reads the stored value after update", () =>
   Effect.gen(function* () {
     yield* updateSettings("usr_alice", { attendanceVisibility: "no_one" });
@@ -107,29 +95,4 @@ it.effect(
       expect(map.get("usr_bob")).toBe("connections");
       expect(map.get("usr_carol")).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
     }).pipe(Effect.provide(createTestLayer())),
-);
-
-// Legacy `"close_friends"` rows can exist on disk from the pre-
-// simplification schema. Readers must coerce them back to the default
-// so the dropped visibility bucket is treated as "connections" rather
-// than an unknown value that falls through the filter switch.
-it.effect("getAttendanceVisibility coerces a legacy 'close_friends' DB value to default", () =>
-  Effect.gen(function* () {
-    const { db } = yield* Db;
-    const now = new Date();
-    // Insert a legacy value directly, bypassing the type-narrowed
-    // insert schema that no longer accepts "close_friends".
-    yield* Effect.promise(() =>
-      db.insert(pulseUsers).values({
-        userId: "usr_legacy",
-        attendanceVisibility: "close_friends" as unknown as "connections",
-        createdAt: now,
-        updatedAt: now,
-      }),
-    );
-    const v = yield* getAttendanceVisibility("usr_legacy");
-    expect(v).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
-    const batch = yield* getAttendanceVisibilityBatch(["usr_legacy"]);
-    expect(batch.get("usr_legacy")).toBe(DEFAULT_ATTENDANCE_VISIBILITY);
-  }).pipe(Effect.provide(createTestLayer())),
 );

@@ -68,11 +68,10 @@ export const getCloseFriendIds = (
  *
  * Used by `listRsvps` to stamp an `isCloseFriend` display flag on each
  * returned row and to promote friendly attendees to the top of the
- * list. This is a display affordance only: attendance visibility is
- * `"connections" | "no_one"` and close-friendship no longer gates it
- * (it previously did, but that leaked attendance one-directionally).
- * The query is still keyed on the **attendee's** close-friends list so
- * the flag can't be unilaterally conjured by the viewer.
+ * list. Display affordance only — attendance visibility is
+ * `"connections" | "no_one"` and close-friendship never gates access.
+ * The query is keyed on the **attendee's** close-friends list so the
+ * flag can't be unilaterally conjured by the viewer.
  *
  * Implementation: single batched SQL query against `close_friends` with
  * `WHERE friend_id = viewerId AND user_id IN (attendeeIds)`. Avoids N+1

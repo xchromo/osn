@@ -416,33 +416,31 @@ it.effect("isCloseFriend flag is stamped when the attendee has marked the viewer
   }),
 );
 
-it.effect(
-  "isCloseFriend flag is NOT stamped when only the viewer marked the attendee (inverted)",
-  () =>
-    Effect.gen(function* () {
-      const { pulse, osn, layer } = setup();
-      yield* Effect.promise(() => seedBasicUsers(osn));
-      yield* Effect.promise(() => seedConnection(osn, "usr_alice", "usr_dan"));
-      yield* Effect.promise(() => seedConnection(osn, "usr_dan", "usr_bob"));
-      // Inverted: Dan (viewer) marks Bob (attendee). Bob did NOT mark
-      // Dan. The flag keys on the attendee's CF list — so Dan doesn't
-      // get the ring affordance. The row is still visible because
-      // Bob's attendance visibility defaults to "connections" and
-      // Dan is connected to Bob.
-      yield* Effect.promise(() => seedCloseFriend(osn, "usr_dan", "usr_bob"));
-      const event = yield* seedEvent({
-        title: "Connections",
-        startTime: "2030-06-01T10:00:00.000Z",
-        guestListVisibility: "connections",
-        createdByUserId: "usr_alice",
-      }).pipe(Effect.provide(pulse));
-      yield* upsertRsvp(event.id, "usr_bob", { status: "going" }).pipe(Effect.provide(pulse));
-      const rows = yield* listRsvps(event.id, "usr_dan", { status: "going" }).pipe(
-        Effect.provide(layer),
-      );
-      expect(rows.length).toBe(1);
-      expect(rows[0]!.isCloseFriend).toBe(false);
-    }),
+it.effect("isCloseFriend flag is NOT stamped when only the viewer marked the attendee", () =>
+  Effect.gen(function* () {
+    const { pulse, osn, layer } = setup();
+    yield* Effect.promise(() => seedBasicUsers(osn));
+    yield* Effect.promise(() => seedConnection(osn, "usr_alice", "usr_dan"));
+    yield* Effect.promise(() => seedConnection(osn, "usr_dan", "usr_bob"));
+    // Dan (viewer) marks Bob (attendee). Bob did NOT mark Dan. The
+    // flag keys on the attendee's CF list — so Dan doesn't get the
+    // ring affordance. The row is still visible because Bob's
+    // attendance visibility defaults to "connections" and Dan is
+    // connected to Bob.
+    yield* Effect.promise(() => seedCloseFriend(osn, "usr_dan", "usr_bob"));
+    const event = yield* seedEvent({
+      title: "Connections",
+      startTime: "2030-06-01T10:00:00.000Z",
+      guestListVisibility: "connections",
+      createdByUserId: "usr_alice",
+    }).pipe(Effect.provide(pulse));
+    yield* upsertRsvp(event.id, "usr_bob", { status: "going" }).pipe(Effect.provide(pulse));
+    const rows = yield* listRsvps(event.id, "usr_dan", { status: "going" }).pipe(
+      Effect.provide(layer),
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.isCloseFriend).toBe(false);
+  }),
 );
 
 it.effect("listRsvps surfaces close-friend rows first, newest-within-bucket after", () =>

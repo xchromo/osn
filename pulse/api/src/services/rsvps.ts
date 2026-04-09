@@ -77,10 +77,8 @@ export interface RsvpWithUser extends EventRsvp {
    *   2. Drives the green-outline avatar affordance on the
    *      event-detail page.
    *
-   * This is NOT a visibility gate — attendance visibility is
-   * `"connections" | "no_one"` only. The previous `"close_friends"`
-   * option was removed because it was one-directional and leaked
-   * attendance to anyone the attendee had marked as a close friend.
+   * This is a display signal only — it is NEVER used as a visibility
+   * gate. Attendance visibility is `"connections" | "no_one"`.
    *
    * Always false for unauthenticated viewers.
    */
@@ -177,13 +175,6 @@ const computeCanSeeAnyRsvps = (
  * - "connections" → only attendees connected to the viewer see the row
  * - "no_one"      → hidden from everyone
  *
- * Close-friends is intentionally NOT a visibility bucket. A previous
- * iteration exposed a `"close_friends"` option, but close-friendship
- * is a one-way graph edge — so marking someone as a close friend would
- * leak your attendance to them whether or not they reciprocated. The
- * close-friends list is now used only to surface friendly attendees
- * first in the returned list (see `listRsvps`), never as a gate.
- *
  * PUBLIC-GUEST-LIST OVERRIDE: if the event's guest list is public, the
  * attendee has implicitly opted in by RSVPing — their per-row setting is
  * ignored for that event. This matches the feature spec.
@@ -191,12 +182,11 @@ const computeCanSeeAnyRsvps = (
  * The viewer themselves always sees their own RSVP.
  * The organiser always sees all RSVPs (handled in computeGuestListAccess).
  *
- * This function ALSO stamps `isCloseFriend` on every returned row so the
- * client can render a close-friend affordance (e.g. a coloured outline
- * on the avatar) AND so `listRsvps` can sort close-friend rows to the
- * top. The flag is computed from the attendee's close-friends list
- * relative to the viewer — same directional semantic the old filter
- * used, now purely for display.
+ * This function ALSO stamps `isCloseFriend` on every returned row so
+ * `listRsvps` can sort close-friend rows to the top and the client can
+ * render the green avatar outline. The flag is keyed on the attendee's
+ * close-friends list (the viewer must be in there) so it can't be
+ * conjured unilaterally — it's a display signal, never a gate.
  */
 const filterByAttendeePrivacy = (
   event: Event,
@@ -206,9 +196,8 @@ const filterByAttendeePrivacy = (
   Effect.gen(function* () {
     const attendeeIds = Array.from(new Set(rows.map((r) => r.userId)));
 
-    // `closeFriendsOfViewer` is the set of attendee ids who have marked
-    // the viewer as a close friend. Used only for the `isCloseFriend`
-    // display flag (and the downstream sort); never for access control.
+    // Set of attendee ids who have marked the viewer as a close friend,
+    // used to stamp the display flag and drive the sort.
     const closeFriendsOfViewer = viewerId
       ? yield* getCloseFriendsOf(viewerId, attendeeIds)
       : new Set<string>();

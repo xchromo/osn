@@ -53,15 +53,6 @@ describe("SettingsPage", () => {
     expect(queryByText("Everyone")).toBeNull();
   });
 
-  it("does NOT include a 'close friends' option — that bucket was removed", () => {
-    const { container, queryByText } = render(() => <SettingsPage />);
-    expect(queryByText("Close friends only")).toBeNull();
-    const closeFriends = container.querySelector(
-      'input[name="attendanceVisibility"][value="close_friends"]',
-    );
-    expect(closeFriends).toBeNull();
-  });
-
   it("connections is selected by default", () => {
     const { container } = render(() => <SettingsPage />);
     const connections = container.querySelector(

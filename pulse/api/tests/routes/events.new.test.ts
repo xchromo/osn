@@ -613,14 +613,4 @@ describe("PATCH /me/settings", () => {
     );
     expect(res.status).toBe(422);
   });
-
-  it("rejects the legacy 'close_friends' value", async () => {
-    const res = await patch(
-      settingsApp,
-      "/me/settings",
-      { attendanceVisibility: "close_friends" },
-      aliceToken,
-    );
-    expect(res.status).toBe(422);
-  });
 });

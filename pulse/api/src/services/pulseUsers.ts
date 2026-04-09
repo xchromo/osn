@@ -22,17 +22,6 @@ export type AttendanceVisibility = PulseUser["attendanceVisibility"];
 
 const AttendanceVisibilitySchema = Schema.Literal("connections", "no_one");
 
-/**
- * Coerce any legacy `"close_friends"` values still on disk back to the
- * default. The enum option was removed because close-friend visibility
- * was one-directional and leaked attendance. Any legacy row is treated
- * as `"connections"` so the user's intent ("narrow my audience to my
- * social graph") is preserved as closely as possible without the
- * broken asymmetric behaviour.
- */
-const coerceLegacyVisibility = (value: string): AttendanceVisibility =>
-  value === "connections" || value === "no_one" ? value : DEFAULT_ATTENDANCE_VISIBILITY;
-
 const UpdateSettingsSchema = Schema.Struct({
   attendanceVisibility: Schema.optional(AttendanceVisibilitySchema),
 });
@@ -67,7 +56,7 @@ export const getAttendanceVisibility = (
 ): Effect.Effect<AttendanceVisibility, DatabaseError, Db> =>
   Effect.gen(function* () {
     const row = yield* getPulseUser(userId);
-    return row ? coerceLegacyVisibility(row.attendanceVisibility) : DEFAULT_ATTENDANCE_VISIBILITY;
+    return row?.attendanceVisibility ?? DEFAULT_ATTENDANCE_VISIBILITY;
   });
 
 /**
@@ -104,11 +93,9 @@ export const getAttendanceVisibilityBatch = (
 
     // Seed defaults for every requested id so callers never need to
     // check for missing entries — ids without a row fall back to the
-    // default visibility. Legacy `"close_friends"` values are coerced
-    // back to the default on read (see `coerceLegacyVisibility`).
+    // default visibility.
     for (const id of userIds) result.set(id, DEFAULT_ATTENDANCE_VISIBILITY);
-    for (const row of rows)
-      result.set(row.userId, coerceLegacyVisibility(row.attendanceVisibility));
+    for (const row of rows) result.set(row.userId, row.attendanceVisibility);
     return result;
   });
 
