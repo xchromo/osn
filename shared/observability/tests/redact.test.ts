@@ -16,18 +16,22 @@ describe("redact", () => {
       accessToken: "eyJ...",
       refreshToken: "eyJ...",
       idToken: "eyJ...",
+      enrollmentToken: "enroll_xyz",
       access_token: "eyJ...",
       refresh_token: "eyJ...",
       id_token: "eyJ...",
+      enrollment_token: "enroll_xyz",
     };
     const out = redact(input) as Record<string, unknown>;
     expect(out.userId).toBe("u_123");
     expect(out.accessToken).toBe(REDACTION_PLACEHOLDER);
     expect(out.refreshToken).toBe(REDACTION_PLACEHOLDER);
     expect(out.idToken).toBe(REDACTION_PLACEHOLDER);
+    expect(out.enrollmentToken).toBe(REDACTION_PLACEHOLDER);
     expect(out.access_token).toBe(REDACTION_PLACEHOLDER);
     expect(out.refresh_token).toBe(REDACTION_PLACEHOLDER);
     expect(out.id_token).toBe(REDACTION_PLACEHOLDER);
+    expect(out.enrollment_token).toBe(REDACTION_PLACEHOLDER);
   });
 
   it("redacts the Authorization header", () => {
@@ -186,6 +190,51 @@ describe("redact", () => {
   });
 
   /**
+   * Deliberately-removed keys pass through unchanged. This is a behavioural
+   * regression anchor: the file header in `src/logger/redact.ts` documents
+   * the "real fields only" rule, and this test makes that intent executable
+   * so a well-meaning "let's add password back for safety" PR has to
+   * acknowledge it. Mirrors the historical S-M31 / S-H21 trim decision.
+   */
+  it("no longer scrubs keys that do not correspond to real fields", () => {
+    const input = {
+      // Auth / credentials that don't exist as field names:
+      password: "hunter2",
+      passwordHash: "hash",
+      otp: "000000",
+      otpCode: "000000",
+      jwt: "eyJ...",
+      sessionToken: "tok",
+      cookie: "sid=abc",
+      apiKey: "sk_live_",
+      secretKey: "sk",
+      // E2E / Signal — no messaging impl yet:
+      ciphertext: "aGVsbG8=",
+      plaintext: "hello",
+      ratchetKey: "k",
+      senderKey: "k",
+      identityKey: "k",
+      messageBody: "hi",
+      signalEnvelope: "env",
+      prekey: "pk",
+      // PII fields that don't exist in the schema:
+      firstName: "Alice",
+      lastName: "Smith",
+      fullName: "Alice Smith",
+      legalName: "Alice Smith",
+      dob: "1990-01-01",
+      address: "1 Test St",
+      phone: "+15551234567",
+      ssn: "000-00-0000",
+      taxId: "TAX",
+    };
+    const out = redact(input) as Record<string, string>;
+    for (const [k, v] of Object.entries(input)) {
+      expect(out[k], `${k} should pass through unchanged`).toBe(v);
+    }
+  });
+
+  /**
    * Locks the exact deny-list so a PR that adds or removes a key has to
    * touch this assertion as well — forcing the author to acknowledge the
    * change. The deny-list is small on purpose; see the file header in
@@ -200,6 +249,8 @@ describe("redact", () => {
       "refresh_token",
       "idtoken",
       "id_token",
+      "enrollmenttoken",
+      "enrollment_token",
       "assertion",
       "privatekey",
       "private_key",

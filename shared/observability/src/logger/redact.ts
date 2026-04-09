@@ -91,6 +91,13 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     "refresh_token",
     "idToken",
     "id_token",
+    // Enrollment token — single-use bearer returned by /register/complete
+    // (osn/core/src/routes/auth.ts:225 wire; osn/core/src/services/auth.ts:498
+    // service return) and sent back as `Authorization: Bearer <token>` for
+    // passkey enrollment (osn/client/src/register.ts:131,142). Same secrecy
+    // profile as accessToken.
+    "enrollmentToken",
+    "enrollment_token",
 
     // --- WebAuthn ---
     // `assertion` is the AuthenticationResponseJSON body posted to
