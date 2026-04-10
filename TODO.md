@@ -16,6 +16,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] S-H4 — PKCE now mandatory at `/token`: `state` and `code_verifier` required for `authorization_code` grants; unknown/expired state returns 400; redirect_uri must match the value stored at `/authorize` (S-M9 RFC 6749 §4.1.3)
 - [x] S-H5 — Legacy unauth'd passkey path removed: `resolvePasskeyEnrollPrincipal` now returns 401 when `Authorization` header is absent. Hosted `/authorize` HTML passkey-enrollment prompt removed (passkey enrollment requires auth; users enrol through first-party apps). `console.warn` deprecation log removed. `SimpleWebAuthn` script tag removed from hosted HTML.
 - [ ] ARC token verification middleware on internal graph routes (`/graph/internal/*`)
+- [ ] Redis migration — `@shared/redis` package + migrate rate limiters to shared counter (S-M2, S-M8, P-W1, P-W4, S-L18, S-L23)
 
 ---
 
@@ -228,6 +229,43 @@ Signal Protocol lives in `@osn/crypto`, not `zap/`.
 - [x] UserPromptSubmit hook for tone enforcement
 - [x] Changeset Check workflow runs `bunx changeset status` so a `.changeset/*.md` referencing a non-existent workspace name fails the PR — previously such typos blew up the Release workflow on main and blocked all subsequent versioning (e.g. `"pulse"` instead of `"@pulse/app"` in `fix-handle-regex-error-message.md`).
 
+### Redis Migration (S-M2 umbrella)
+
+Migrate in-memory rate limiters and auth state stores to Redis for horizontal scaling.
+Subsumes: S-M2, S-M8, P-W1, P-W4, S-L18, S-L23.
+
+**Phase 1 — Abstraction layer (no Redis dependency)**
+- [ ] Extract `RateLimiterBackend` interface from `osn/core/src/lib/rate-limit.ts` — backend-agnostic `check(key): boolean | Promise<boolean>`
+- [ ] Refactor graph route inline `rateLimitStore` + `checkRateLimit` (`osn/core/src/routes/graph.ts:10-30`) to use shared `createRateLimiter` from `rate-limit.ts` (fixes P-W1, S-L18)
+- [ ] Update `createAuthRoutes` and graph route factories to accept injected rate limiter instances (DI for testability)
+
+**Phase 2 — `@shared/redis` package**
+- [ ] Create `shared/redis` workspace (`@shared/redis`) — mirrors `@shared/db-utils` pattern
+- [ ] Effect-based `Redis` service tag (`Context.Tag`) + `RedisLive` layer (connection from `REDIS_URL` env); `Layer.scoped` finalizer calls `redis.quit()`
+- [ ] `RedisError` tagged error (`Data.TaggedError`, `_tag: "RedisError"`)
+- [ ] `createRedisRateLimiter(config)` — Lua script for atomic INCR + PEXPIRE (single round-trip fixed-window); key format `rl:{namespace}:{key}`
+- [ ] Redis health probe for `/ready` endpoint (simple `PING` with timeout)
+- [ ] Dev-mode: in-memory fallback when `REDIS_URL` is unset (local dev without Redis)
+- [ ] Tests: Lua script atomicity, window expiry, key independence, connection failure fallback
+
+**Phase 3 — Wire up**
+- [ ] Add `@shared/redis` dependency to `osn/core/package.json`
+- [ ] Construct `RedisLive` layer in `osn/app/src/index.ts`; env-driven backend selection (Redis when `REDIS_URL` set, in-memory otherwise)
+- [ ] Migrate all 11 auth rate limiter instances (`osn/core/src/routes/auth.ts`) to Redis backend
+- [ ] Migrate graph rate limiter (`osn/core/src/routes/graph.ts`) to Redis backend
+- [ ] Update CLAUDE.md Rate Limiting section to document the two-backend model
+
+**Phase 4 — Auth state migration (S-M8, follow-up)**
+- [ ] `otpStore` → Redis with TTL (resolves S-M8 partial, P-W4 partial)
+- [ ] `magicStore` → Redis with TTL (resolves S-M8 partial, P-W4 partial)
+- [ ] `pkceStore` → Redis with TTL + size bound (resolves S-M8 partial, S-L23)
+- [ ] `pendingRegistrations` → Redis with TTL
+
+**Observability (applied across all phases)**
+- [ ] Logs: `Effect.logError` on Redis connection failures + command errors; `Effect.logWarning` on fallback-to-in-memory transitions; add `redisPassword` / `redis_password` to redaction deny-list in `shared/observability/src/logger/redact.ts`
+- [ ] Traces: `Effect.withSpan("redis.rate_limit.check")`, `Effect.withSpan("redis.connection.health")`, `Effect.withSpan("redis.auth_state.get|set")` (Phase 4)
+- [ ] Metrics in `shared/redis/src/metrics.ts`: `redis.command.duration` histogram (`{ command: RedisCommand, result: RedisResult }`), `redis.command.errors` counter (`{ command: RedisCommand, error_type: RedisErrorType }`), `redis.connection.state` up/down gauge; bounded attrs: `RedisCommand = "evalsha" | "ping" | "get" | "set" | "del" | "incr" | "other"`, `RedisResult = "ok" | "error" | "timeout"`
+
 ---
 
 ## Security Backlog
@@ -267,13 +305,13 @@ Address **High** items before any non-local deployment.
 ### Medium
 
 - [ ] S-M1 — `verifyAccessToken` rejects tokens missing `handle` claim — old tokens 401 silently; treat missing `handle` as `null` during transition period
-- [ ] S-M2 — In-memory rate limiter resets on restart/deploy — document as known; migrate to shared counter when scaling horizontally
+- [ ] S-M2 — In-memory rate limiter resets on restart/deploy — migrate to Redis shared counter. See **Platform > Infrastructure > Redis Migration** for the full plan (phases 1–3). Cross-refs: S-M8, P-W1, P-W4, S-L18, S-L23
 - [ ] S-M3 — No "resend code" button after registration OTP; if SMTP fails, handle/email are claimed with no recovery path. Partly mitigated by the new flow's "refuse to overwrite a non-expired pending entry" policy (the user retries via the existing pending entry, no new email is sent), but a true resend button is still needed.
 - [ ] S-M4 — Legacy `POST /register` (unverified email) returns raw `String(catch)` error — can expose Drizzle constraint internals. The new `/register/{begin,complete}` routes already use the `publicError()` mapper from `routes/auth.ts`; extend the same mapper to the legacy endpoint and to all other routes that still use `String(e)`.
 - [ ] S-M5 — `displayName` embedded in JWT (1h TTL) — stale after profile update; `createdByName` on events reflects old value until token expires
 - [ ] S-M6 — Wildcard CORS on auth server — restrict to known client origins before deployment
 - [x] S-M7 — Login OTP attempt limit added: `verifyOtpCode` now increments `entry.attempts` on wrong-code and wipes the entry after `MAX_OTP_ATTEMPTS` (5) wrong guesses, mirroring the registration flow.
-- [ ] S-M8 — All auth state in process memory (`otpStore`, `magicStore`, `pkceStore`) — lost on restart, unsafe for multi-process
+- [ ] S-M8 — All auth state in process memory (`otpStore`, `magicStore`, `pkceStore`) — lost on restart, unsafe for multi-process. Resolved by Redis Migration Phase 4
 - [x] S-M9 — `redirect_uri` at `/token` now matched against value stored in `pkceStore` (RFC 6749 §4.1.3); fixed as part of S-H4.
 - [x] S-M10 — `/passkey/register/begin` arbitrary `userId` fixed: Authorization header now required (fixed as part of S-H5).
 - [ ] S-M11 — Magic-link tokens use `crypto.randomUUID` without additional entropy hardening
@@ -396,6 +434,7 @@ Address **High** items before any non-local deployment.
 | Two-way calendar sync | Currently one-way (Pulse → external) | Phase 2 |
 | Community event-ended reporting | 15–20 attendees auto-finish; host notified | When attendee/messaging features land |
 | Max event duration | Prompt user when creating events without endTime | When Pulse event creation UI is built |
+| Redis provider (self-hosted vs managed) | Upstash (serverless, free tier) vs Redis Cloud vs self-hosted. Upstash aligns with serverless deploy model; Cloudflare Durable Objects reconsidered if deploying to Workers. | When deploying beyond localhost |
 | S2S scaling: HTTP graph API | Current: direct package import (`createGraphService()`). Migrate to HTTP `/graph/internal/*` + ARC tokens when scaling horizontally. | When multi-process or multi-machine deployment needed |
 | Per-app blocking | Blocks are global across all OSN apps. Per-app scope deferred. | When Messaging or a third-party app needs independent block lists |
 | Tauri passkey support on iOS | Tauri webview does not expose WebAuthn natively — `pulse/app` registration flow (rendered by `@osn/ui/auth/Register`) feature-detects via `browserSupportsWebAuthn()` and auto-skips the passkey step on unsupported environments. Options when we ship mobile: (a) adopt [`tauri-plugin-webauthn`](https://github.com/Profiidev/tauri-plugin-webauthn) (third-party, audit first), (b) write our own thin Tauri plugin wrapping `ASAuthorizationPlatformPublicKeyCredentialProvider`, (c) wait for upstream — track [tauri#7926](https://github.com/tauri-apps/tauri/issues/7926). | When iOS build of Pulse is ready for sign-in |
