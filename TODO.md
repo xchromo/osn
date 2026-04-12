@@ -235,9 +235,9 @@ Migrate in-memory rate limiters and auth state stores to Redis for horizontal sc
 Subsumes: S-M2, S-M8, P-W1, P-W4, S-L18, S-L23.
 
 **Phase 1 — Abstraction layer (no Redis dependency)**
-- [ ] Extract `RateLimiterBackend` interface from `osn/core/src/lib/rate-limit.ts` — backend-agnostic `check(key): boolean | Promise<boolean>`
-- [ ] Refactor graph route inline `rateLimitStore` + `checkRateLimit` (`osn/core/src/routes/graph.ts:10-30`) to use shared `createRateLimiter` from `rate-limit.ts` (fixes P-W1, S-L18)
-- [ ] Update `createAuthRoutes` and graph route factories to accept injected rate limiter instances (DI for testability)
+- [x] Extract `RateLimiterBackend` interface from `osn/core/src/lib/rate-limit.ts` — backend-agnostic `check(key): boolean | Promise<boolean>`
+- [x] Refactor graph route inline `rateLimitStore` + `checkRateLimit` (`osn/core/src/routes/graph.ts:10-30`) to use shared `createRateLimiter` from `rate-limit.ts` (fixes P-W1, S-L18)
+- [x] Update `createAuthRoutes` and graph route factories to accept injected rate limiter instances (DI for testability)
 
 **Phase 2 — `@shared/redis` package**
 - [ ] Create `shared/redis` workspace (`@shared/redis`) — mirrors `@shared/db-utils` pattern
@@ -362,7 +362,7 @@ Address **High** items before any non-local deployment.
 - [ ] S-L15 — No reserved-handle blocklist in DB — enforced in app layer only; consider DB-level check constraint
 - [x] S-L16 — `EventList` `console.error` logs raw server error objects — guarded with `import.meta.env.DEV`
 - [x] S-L17 — `displayName` returned as `undefined` in graph list responses — normalised to `null` via `userProjection()`
-- [ ] S-L18 — Graph rate-limit store (`rateLimitStore`) never evicts expired windows — add periodic sweep
+- [x] S-L18 — Graph rate-limit store (`rateLimitStore`) never evicts expired windows — fixed: graph route now uses shared `createRateLimiter` with proactive sweep (Redis migration Phase 1)
 - [ ] S-L23 — `pkceStore` has no size bound or eviction sweep — unauthenticated `/authorize` can fill memory. Add maxEntries cap + sweepExpired.
 - [ ] S-L24 — `/token` and legacy `POST /register` have no rate limiting — add per-IP limiters for consistency
 - [ ] S-L19 — `jwtSecret` falls back to `"dev-secret"` in graph auth — already tracked as S-L7
@@ -378,7 +378,7 @@ Address **High** items before any non-local deployment.
 
 ### Warning
 
-- [ ] P-W1 — `rateLimitStore` in graph routes grows without bound — expired entries never evicted; add `setInterval` sweep
+- [x] P-W1 — `rateLimitStore` in graph routes grows without bound — fixed: graph route refactored to use shared `createRateLimiter` from `osn/core/src/lib/rate-limit.ts` which handles proactive sweeping + maxEntries cap
 - [x] P-W16 — Auth rate limiter Maps swept proactively: sweep now runs on every `check()` when at least one window has elapsed since the last sweep, not just when `maxEntries` is exceeded. Deterministic memory profile in long-running processes.
 - [x] P-W17 — Redirect URI allowlist pre-computed: `allowedOrigins` Set built once at boot in both `createAuthRoutes` and `createAuthService`. Per-request check is a single `Set.has()` call.
 - [ ] P-W2 — `resolvePublicKey` hits DB on every scoped call despite warm cache — cache `CryptoKey` + `allowedScopes` together

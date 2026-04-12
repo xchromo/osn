@@ -4,30 +4,27 @@ import { DbLive, type Db } from "@osn/db/service";
 import type { User } from "@osn/db/schema";
 import { createAuthService, type AuthConfig } from "../services/auth";
 import { createGraphService } from "../services/graph";
+import { createRateLimiter, type RateLimiterBackend } from "../lib/rate-limit";
 
 // ---------------------------------------------------------------------------
 // Rate limiter — per-user fixed window (write operations only)
+//
+// Uses the shared `createRateLimiter` from lib/rate-limit so Phase 2 of the
+// Redis migration (TODO.md) swaps graph and auth rate limiters via the same
+// backend abstraction. Previous inline `rateLimitStore` + `checkRateLimit`
+// duplicated the logic AND never evicted expired entries (P-W1 / S-L18);
+// the shared limiter handles sweeping + maxEntries for us.
 // ---------------------------------------------------------------------------
 
-interface RateLimitEntry {
-  count: number;
-  windowStart: number;
-}
+const GRAPH_RATE_LIMIT_MAX = 60; // requests per window
+const GRAPH_RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 
-const rateLimitStore = new Map<string, RateLimitEntry>();
-const RATE_LIMIT_MAX = 60; // requests per window
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-
-function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitStore.get(userId);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitStore.set(userId, { count: 1, windowStart: now });
-    return true;
-  }
-  if (entry.count >= RATE_LIMIT_MAX) return false;
-  entry.count++;
-  return true;
+/** Default in-memory graph rate limiter. Override via `createGraphRoutes` for Redis. */
+export function createDefaultGraphRateLimiter(): RateLimiterBackend {
+  return createRateLimiter({
+    maxRequests: GRAPH_RATE_LIMIT_MAX,
+    windowMs: GRAPH_RATE_LIMIT_WINDOW_MS,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +82,13 @@ export function createGraphRoutes(
   dbLayer: Layer.Layer<Db> = DbLive,
   /** See `createAuthRoutes` — same semantics. */
   loggerLayer: Layer.Layer<never> = Layer.empty,
+  /**
+   * Rate limiter backend for graph write operations (connections / close-friends /
+   * blocks mutations, keyed by user ID). Default is a fresh in-memory limiter;
+   * supply a Redis-backed `RateLimiterBackend` here to share state across
+   * processes (Phase 2 of the Redis migration plan).
+   */
+  rateLimiter: RateLimiterBackend = createDefaultGraphRateLimiter(),
 ) {
   const auth = createAuthService(authConfig);
   const graph = createGraphService();
@@ -116,9 +120,13 @@ export function createGraphRoutes(
     }
   }
 
-  // Enforce rate limit; set 429 on breach
-  function requireRateLimit(userId: string, set: { status?: number | string }): boolean {
-    if (!checkRateLimit(userId)) {
+  // Enforce rate limit; set 429 on breach. Async to accommodate future
+  // Redis backend where `check()` returns a Promise.
+  async function requireRateLimit(
+    userId: string,
+    set: { status?: number | string },
+  ): Promise<boolean> {
+    if (!(await rateLimiter.check(userId))) {
       set.status = 429;
       return false;
     }
@@ -153,7 +161,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const target = await resolveHandle(params.handle, set);
           if (!target) return { error: "User not found" };
@@ -174,7 +182,7 @@ export function createGraphRoutes(
         async ({ params, body, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const requester = await resolveHandle(params.handle, set);
           if (!requester) return { error: "User not found" };
@@ -201,7 +209,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const other = await resolveHandle(params.handle, set);
           if (!other) return { error: "User not found" };
@@ -283,7 +291,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const friend = await resolveHandle(params.handle, set);
           if (!friend) return { error: "User not found" };
@@ -304,7 +312,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const friend = await resolveHandle(params.handle, set);
           if (!friend) return { error: "User not found" };
@@ -342,7 +350,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const blocked = await resolveHandle(params.handle, set);
           if (!blocked) return { error: "User not found" };
@@ -363,7 +371,7 @@ export function createGraphRoutes(
         async ({ params, headers, set }) => {
           const caller = await requireAuth(headers.authorization, set);
           if (!caller) return { error: "Unauthorized" };
-          if (!requireRateLimit(caller.userId, set)) return { error: "Too many requests" };
+          if (!(await requireRateLimit(caller.userId, set))) return { error: "Too many requests" };
 
           const blocked = await resolveHandle(params.handle, set);
           if (!blocked) return { error: "User not found" };

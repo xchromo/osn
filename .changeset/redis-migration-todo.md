@@ -1,5 +1,11 @@
 ---
-"@osn/core": patch
+"@osn/core": minor
 ---
 
-Add Redis migration plan to TODO.md for shared rate limiting across multiple processes (S-M2). Documents phased approach: abstraction layer, @shared/redis package, wire-up, and auth state migration. Cross-references S-M8, P-W1, P-W4, S-L18, S-L23.
+Add RateLimiterBackend abstraction and dependency injection for rate limiters (Redis migration Phase 1).
+
+- Extract backend-agnostic `RateLimiterBackend` interface (`check(key): boolean | Promise<boolean>`) so routes can be wired to a future Redis backend without call-site changes
+- Refactor graph route inline rate limiter to use shared `createRateLimiter` (fixes P-W1, S-L18: unbounded in-memory store with no eviction)
+- Add `rateLimiters` parameter to `createAuthRoutes` and `rateLimiter` parameter to `createGraphRoutes` for DI
+- Export `AuthRateLimiters`, `createDefaultAuthRateLimiters`, `createDefaultGraphRateLimiter`, `RateLimiterBackend` from `@osn/core`
+- Add TODO.md Redis migration plan (S-M2 umbrella) with phased approach across 4 phases
