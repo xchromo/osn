@@ -9,6 +9,12 @@ export interface RedisRateLimiterConfig {
   readonly windowMs: number;
 }
 
+/** Maximum length for a rate limiter key (S-M2). */
+const MAX_KEY_LENGTH = 256;
+
+/** Allowed characters in namespace — validated at construction time (S-M2). */
+const NAMESPACE_RE = /^[a-zA-Z0-9_:.-]+$/;
+
 /**
  * Fixed-window rate limiter Lua script — atomic INCR + PEXPIRE in a single
  * round-trip.
@@ -37,6 +43,9 @@ return 0
  * structurally compatible with `RateLimiterBackend` from
  * `osn/core/src/lib/rate-limit.ts`. Fail-closed: if the Redis command
  * rejects, the request is denied (returns `false`) per S-M36 posture.
+ *
+ * Throws at construction time if `namespace` contains invalid characters
+ * (S-M2). At check time, keys exceeding 256 bytes are denied.
  */
 export function createRedisRateLimiter(
   client: RedisClient,
@@ -44,9 +53,14 @@ export function createRedisRateLimiter(
 ): { check(key: string): Promise<boolean> } {
   const { namespace, maxRequests, windowMs } = config;
 
+  if (!NAMESPACE_RE.test(namespace)) {
+    throw new Error(`Invalid rate limiter namespace: "${namespace}" — must match ${NAMESPACE_RE}`);
+  }
+
   return {
     async check(key: string): Promise<boolean> {
       try {
+        if (key.length > MAX_KEY_LENGTH) return false;
         const redisKey = `rl:${namespace}:${key}`;
         const result = await client.eval(RATE_LIMIT_SCRIPT, [redisKey], [maxRequests, windowMs]);
         return result === 1;

@@ -17,6 +17,17 @@ export interface RedisService {
 
 export class Redis extends Context.Tag("@shared/redis/Redis")<Redis, RedisService>() {}
 
+const STARTUP_PING_TIMEOUT_MS = 5_000;
+
+/** Redact credentials from Redis URLs in error messages (S-M3). */
+function sanitizeCause(cause: unknown): string {
+  const msg = cause instanceof Error ? cause.message : String(cause);
+  return msg.replace(/rediss?:\/\/[^@\s]*@/g, (match) => {
+    const scheme = match.startsWith("rediss") ? "rediss://" : "redis://";
+    return `${scheme}[REDACTED]@`;
+  });
+}
+
 /**
  * Live layer — connects to `REDIS_URL`. `Layer.scoped` ensures `quit()` on
  * shutdown. Fails with `RedisError` if `REDIS_URL` is unset or the connection
@@ -28,19 +39,35 @@ export const RedisLive: Layer.Layer<Redis, RedisError> = Layer.scoped(
     const url = process.env.REDIS_URL;
     if (!url) {
       return yield* Effect.fail(
-        new RedisError({
-          cause: "REDIS_URL environment variable is not set",
-        }),
+        new RedisError({ cause: "REDIS_URL environment variable is not set" }),
+      );
+    }
+
+    // S-M1: warn when production connection is unencrypted
+    if (!url.startsWith("rediss://") && process.env.NODE_ENV === "production") {
+      yield* Effect.logWarning(
+        "REDIS_URL does not use TLS (rediss://) — connection is unencrypted",
       );
     }
 
     const raw = new IORedis(url);
     const client = wrapIoRedis(raw);
 
+    // P-I2: startup ping with timeout to prevent indefinite hangs
+    let timer: ReturnType<typeof setTimeout>;
     yield* Effect.tryPromise({
-      try: () => client.ping(),
-      catch: (cause) => new RedisError({ cause }),
-    }).pipe(Effect.tapError((e) => Effect.logError("Redis connection failed", { cause: e.cause })));
+      try: () =>
+        Promise.race([
+          client.ping().finally(() => clearTimeout(timer)),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Redis startup ping timed out")),
+              STARTUP_PING_TIMEOUT_MS,
+            );
+          }),
+        ]),
+      catch: (cause) => new RedisError({ cause: sanitizeCause(cause) }),
+    }).pipe(Effect.tapError(() => Effect.logError("Redis connection failed")));
 
     yield* Effect.addFinalizer(() => Effect.promise(() => client.quit().catch(() => {})));
 
@@ -62,3 +89,5 @@ export const RedisMemoryLive: Layer.Layer<Redis> = Layer.scoped(
     return { client };
   }),
 );
+
+export { sanitizeCause as _sanitizeCause };

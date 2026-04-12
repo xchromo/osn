@@ -1,6 +1,7 @@
 import { describe, it, expect } from "@effect/vitest";
+import { it as vitestIt } from "vitest";
 import { Effect } from "effect";
-import { Redis, RedisMemoryLive } from "../src/service";
+import { Redis, RedisMemoryLive, _sanitizeCause } from "../src/service";
 
 describe("RedisMemoryLive", () => {
   it.effect("provides the Redis service with a working client", () =>
@@ -42,4 +43,26 @@ describe("RedisMemoryLive", () => {
       expect(after).toBeNull();
     }).pipe(Effect.provide(RedisMemoryLive)),
   );
+});
+
+describe("sanitizeCause (S-M3)", () => {
+  vitestIt("redacts credentials from redis:// URLs", () => {
+    const err = new Error("connect ECONNREFUSED redis://admin:s3cret@redis.example.com:6379");
+    expect(_sanitizeCause(err)).toBe(
+      "connect ECONNREFUSED redis://[REDACTED]@redis.example.com:6379",
+    );
+  });
+
+  vitestIt("redacts credentials from rediss:// URLs", () => {
+    const err = new Error("failed: rediss://user:pass@host:6380/0");
+    expect(_sanitizeCause(err)).toBe("failed: rediss://[REDACTED]@host:6380/0");
+  });
+
+  vitestIt("passes through messages without URLs", () => {
+    expect(_sanitizeCause(new Error("timeout"))).toBe("timeout");
+  });
+
+  vitestIt("handles non-Error causes", () => {
+    expect(_sanitizeCause("raw string error")).toBe("raw string error");
+  });
 });

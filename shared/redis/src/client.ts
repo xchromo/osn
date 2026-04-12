@@ -6,6 +6,7 @@
  * - `createMemoryClient()` provides an in-memory fallback for dev/test
  */
 
+import { createHash } from "node:crypto";
 import type IORedis from "ioredis";
 
 /**
@@ -31,11 +32,39 @@ export interface RedisClient {
   quit(): Promise<void>;
 }
 
-/** Wrap an ioredis instance as a `RedisClient`. */
+/**
+ * Wrap an ioredis instance as a `RedisClient`.
+ *
+ * Transparently caches Lua script SHAs and uses EVALSHA on subsequent calls
+ * to avoid re-transmitting the full script body on every request (P-W1).
+ * Falls back to EVAL on NOSCRIPT errors (e.g. after a Redis restart).
+ */
 export function wrapIoRedis(client: IORedis): RedisClient {
+  const scriptShas = new Map<string, string>();
+
   return {
     async eval(script, keys, args) {
-      return client.eval(script, keys.length, ...keys, ...args);
+      const allArgs: (string | number)[] = [...keys, ...args];
+      const cachedSha = scriptShas.get(script);
+
+      if (cachedSha) {
+        try {
+          return await client.evalsha(cachedSha, keys.length, ...allArgs);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "";
+          if (msg.includes("NOSCRIPT")) {
+            scriptShas.delete(script);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      // Full EVAL — cache SHA after success for next call
+      const sha = createHash("sha1").update(script).digest("hex");
+      const result = await client.eval(script, keys.length, ...allArgs);
+      scriptShas.set(script, sha);
+      return result;
     },
     async ping() {
       return client.ping();
@@ -60,6 +89,12 @@ export function wrapIoRedis(client: IORedis): RedisClient {
   };
 }
 
+const DEFAULT_MAX_ENTRIES = 10_000;
+
+function isExpired(entry: { expiresAt?: number }): boolean {
+  return entry.expiresAt !== undefined && Date.now() > entry.expiresAt;
+}
+
 /**
  * In-memory RedisClient for dev/test — no external Redis server needed.
  *
@@ -67,13 +102,23 @@ export function wrapIoRedis(client: IORedis): RedisClient {
  * method implements the fixed-window rate limit Lua script semantics
  * (INCR + PEXPIRE) so `createRedisRateLimiter` works identically against
  * both the real and in-memory backends.
+ *
+ * Includes a proactive sweep (P-W2) that evicts expired entries when the
+ * store exceeds `maxEntries`, mirroring the pattern in
+ * `osn/core/src/lib/rate-limit.ts`.
  */
-function isExpired(entry: { expiresAt?: number }): boolean {
-  return entry.expiresAt !== undefined && Date.now() > entry.expiresAt;
-}
-
-export function createMemoryClient(): RedisClient {
+export function createMemoryClient(maxEntries = DEFAULT_MAX_ENTRIES): RedisClient {
   const store = new Map<string, { value: string; expiresAt?: number }>();
+  let lastSweep = Date.now();
+
+  function sweep(windowMs: number) {
+    const now = Date.now();
+    if (store.size <= maxEntries && now - lastSweep < windowMs) return;
+    lastSweep = now;
+    for (const [key, entry] of store) {
+      if (isExpired(entry)) store.delete(key);
+    }
+  }
 
   return {
     async eval(_script, keys, args) {
@@ -82,6 +127,8 @@ export function createMemoryClient(): RedisClient {
       const maxRequests = Number(args[0]);
       const windowMs = Number(args[1]);
       const now = Date.now();
+
+      sweep(windowMs);
 
       const entry = store.get(key);
       if (!entry || isExpired(entry)) {

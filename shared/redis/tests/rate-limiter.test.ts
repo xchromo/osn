@@ -107,4 +107,35 @@ describe("createRedisRateLimiter", () => {
     expect(await rl.check("192.168.1.1")).toBe(false);
     expect(await rl.check("10.0.0.1")).toBe(true);
   });
+
+  it("denies keys exceeding MAX_KEY_LENGTH (S-M2)", async () => {
+    const rl = createRedisRateLimiter(client, {
+      namespace: "test",
+      maxRequests: 10,
+      windowMs: 60_000,
+    });
+
+    const longKey = "x".repeat(257);
+    expect(await rl.check(longKey)).toBe(false);
+  });
+
+  it("throws on invalid namespace characters (S-M2)", () => {
+    expect(() =>
+      createRedisRateLimiter(client, {
+        namespace: "bad namespace!",
+        maxRequests: 10,
+        windowMs: 60_000,
+      }),
+    ).toThrow("Invalid rate limiter namespace");
+  });
+
+  it("accepts valid namespace characters including dots and hyphens", () => {
+    expect(() =>
+      createRedisRateLimiter(client, {
+        namespace: "auth:register_begin.v2-test",
+        maxRequests: 10,
+        windowMs: 60_000,
+      }),
+    ).not.toThrow();
+  });
 });
