@@ -265,6 +265,7 @@ Subsumes: S-M2, S-M8, P-W1, P-W4, S-L18, S-L23.
 - [ ] Logs: `Effect.logError` on Redis connection failures + command errors; `Effect.logWarning` on fallback-to-in-memory transitions; add `redisPassword` / `redis_password` to redaction deny-list in `shared/observability/src/logger/redact.ts`
 - [ ] Traces: `Effect.withSpan("redis.rate_limit.check")`, `Effect.withSpan("redis.connection.health")`, `Effect.withSpan("redis.auth_state.get|set")` (Phase 4)
 - [ ] Metrics in `shared/redis/src/metrics.ts`: `redis.command.duration` histogram (`{ command: RedisCommand, result: RedisResult }`), `redis.command.errors` counter (`{ command: RedisCommand, error_type: RedisErrorType }`), `redis.connection.state` up/down gauge; bounded attrs: `RedisCommand = "evalsha" | "ping" | "get" | "set" | "del" | "incr" | "other"`, `RedisResult = "ok" | "error" | "timeout"`
+- [ ] Capacity metrics: `redis.memory.bytes` gauge (from periodic `INFO memory` → `used_memory`; alert at 80% of `maxmemory`), `redis.store.keys` gauge per namespace (`{ namespace: RedisNamespace }` where `RedisNamespace = "rate_limit" | "otp" | "magic" | "pkce" | "pending_registration"`; sampled via `SCAN` count or key-prefix `DBSIZE` equivalent). These are the at-a-glance indicators for whether we're approaching Redis capacity limits.
 
 ---
 
