@@ -1,6 +1,6 @@
 {
-  "name": "@pulse/api",
-  "version": "0.7.6",
+  "name": "@zap/api",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -19,8 +19,6 @@
     "@elysiajs/cors": "^1.4.0",
     "@elysiajs/eden": "^1.2.0",
     "@osn/core": "workspace:*",
-    "@osn/db": "workspace:*",
-    "@pulse/db": "workspace:*",
     "@shared/observability": "workspace:*",
     "@zap/db": "workspace:*",
     "drizzle-orm": "^0.38.0",
