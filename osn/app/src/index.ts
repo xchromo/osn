@@ -8,13 +8,8 @@ import {
 } from "@osn/core";
 import { DbLive } from "@osn/db/service";
 import { healthRoutes, initObservability, observabilityPlugin } from "@shared/observability";
-import {
-  createMemoryClient,
-  createClientFromUrl,
-  checkRedisHealth,
-  type RedisClient,
-} from "@shared/redis";
 import { Effect, Logger } from "effect";
+import { initRedisClient } from "./redis";
 
 const SERVICE_NAME = "osn-app";
 const port = Number(process.env.PORT) || 4000;
@@ -35,57 +30,16 @@ const authConfig = {
 // ---------------------------------------------------------------------------
 // Redis client — env-driven backend selection (S-M2)
 //
-// When REDIS_URL is set, connect to Redis for cross-process rate limiting.
-// When unset (local dev), use an in-memory client with identical semantics.
-// If Redis is configured but unreachable at startup, fall back to in-memory
-// with a warning — fail-open on infrastructure, fail-closed on individual
-// rate limit checks (the rate limiter itself denies on backend errors per
-// S-M36).
+// See `./redis.ts` for the full initialisation logic (TLS warning, credential
+// redaction, REDIS_REQUIRED fail-closed mode, lazyConnect lifecycle).
 // ---------------------------------------------------------------------------
 
-async function initRedisClient(): Promise<RedisClient> {
-  const url = process.env.REDIS_URL;
-
-  if (!url) {
-    void Effect.runPromise(
-      Effect.logInfo("REDIS_URL not set — using in-memory rate limiters").pipe(
-        Effect.provide(observabilityLayer),
-      ),
-    );
-    return createMemoryClient();
-  }
-
-  try {
-    const client = createClientFromUrl(url);
-    const healthy = await checkRedisHealth(client);
-
-    if (!healthy) {
-      await client.quit().catch(() => {});
-      throw new Error("Redis startup health check failed");
-    }
-
-    void Effect.runPromise(
-      Effect.logInfo("Redis connected — using Redis-backed rate limiters").pipe(
-        Effect.provide(observabilityLayer),
-      ),
-    );
-    return client;
-  } catch (cause) {
-    void Effect.runPromise(
-      Effect.logWarning(
-        "Redis connection failed at startup — falling back to in-memory rate limiters",
-      ).pipe(
-        Effect.annotateLogs({
-          error: cause instanceof Error ? cause.message : String(cause),
-        }),
-        Effect.provide(observabilityLayer),
-      ),
-    );
-    return createMemoryClient();
-  }
-}
-
-const redisClient = await initRedisClient();
+const redisClient = await initRedisClient({
+  redisUrl: process.env.REDIS_URL,
+  redisRequired: process.env.REDIS_REQUIRED === "true",
+  nodeEnv: process.env.NODE_ENV,
+  loggerLayer: observabilityLayer,
+});
 
 const authRateLimiters = createRedisAuthRateLimiters(redisClient);
 const graphRateLimiter = createRedisGraphRateLimiter(redisClient);

@@ -8,14 +8,17 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { Effect } from "effect";
 import { createTestLayer } from "../helpers/db";
 import { createAuthRoutes } from "../../src/routes/auth";
 import { createGraphRoutes } from "../../src/routes/graph";
+import { createAuthService } from "../../src/services/auth";
+import { type Db } from "@osn/db/service";
 import {
   createRedisAuthRateLimiters,
   createRedisGraphRateLimiter,
 } from "../../src/lib/redis-rate-limiters";
-import { createMemoryClient } from "@shared/redis";
+import { createMemoryClient, createRedisRateLimiter } from "@shared/redis";
 
 const config = {
   rpId: "localhost",
@@ -134,5 +137,48 @@ describe("graph routes with Redis-backed rate limiter", () => {
     const limiter = createRedisGraphRateLimiter(client);
     const layer = createTestLayer();
     expect(() => createGraphRoutes(config, layer, undefined, limiter)).not.toThrow();
+  });
+
+  it("rate limits graph write at 3 req/user via Redis backend", async () => {
+    const client = createMemoryClient();
+    // Use a very low limit (3) so the test is fast
+    const limiter = createRedisRateLimiter(client, {
+      namespace: "graph:write",
+      maxRequests: 3,
+      windowMs: 60_000,
+    });
+
+    const layer = createTestLayer();
+    const graphApp = createGraphRoutes(config, layer, undefined, limiter);
+
+    // Register two users so we can attempt a connection
+    const auth = createAuthService(config);
+    const run = <A, E>(eff: Effect.Effect<A, E, Db>) =>
+      Effect.runPromise(eff.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
+
+    const alice = await run(auth.registerUser("alice@test.com", "alice"));
+    await run(auth.registerUser("bob@test.com", "bob"));
+    const tokens = await run(
+      auth.issueTokens(alice.id, alice.email, alice.handle, alice.displayName),
+    );
+
+    const makeRequest = () =>
+      graphApp.handle(
+        new Request("http://localhost/graph/connections/bob", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        }),
+      );
+
+    // First 3 requests should not be rate-limited (may be 201 or 400 for
+    // duplicate connection, but never 429)
+    for (let i = 0; i < 3; i++) {
+      const res = await makeRequest();
+      expect(res.status).not.toBe(429);
+    }
+
+    // 4th request should be rate-limited
+    const blocked = await makeRequest();
+    expect(blocked.status).toBe(429);
   });
 });

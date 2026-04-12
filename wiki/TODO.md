@@ -347,6 +347,8 @@ Address **High** items before any non-local deployment.
 - [x] S-M38 — `@shared/redis` `RedisLive` logs raw connection error cause which may contain credentials from `REDIS_URL`. Fixed: `sanitizeCause()` redacts `redis://user:pass@` patterns before logging. — see [[redis]]
 - [x] S-M39 — `@shared/redis` rate limiter key built from unsanitised input — namespace validated at construction (`/^[a-zA-Z0-9_:.-]+$/`), keys >256 bytes denied. — see [[redis]]
 - [x] S-M40 — `@shared/redis` `RedisLive` does not enforce TLS. Fixed: logs warning when `REDIS_URL` lacks `rediss://` and `NODE_ENV=production`. — see [[redis]]
+- [x] S-M41 — `createClientFromUrl()` bypassed the TLS warning established in `RedisLive` (S-M40). Fixed: `initRedisClient()` in `osn/app/src/redis.ts` checks `NODE_ENV=production` + `rediss://` and logs a warning, matching the `RedisLive` posture. — see [[redis]], [[rate-limiting]]
+- [x] S-M42 — `initRedisClient()` logged raw `cause.message` on Redis connection failure, potentially leaking `REDIS_URL` credentials. Fixed: error messages are passed through `sanitizeCause()` before logging, matching the redaction in `RedisLive`. — see [[redis]]
 
 ### Low
 
@@ -379,6 +381,8 @@ Address **High** items before any non-local deployment.
 - [x] S-L20 — `loadConfig` silently classified production deploys as `dev` if operators forgot to set `OSN_ENV=production` (Bun leaves `NODE_ENV` empty by default), enabling pretty-printing, 100% trace sampling, and any future dev-only code paths in prod. Fixed: `loadConfig` now throws when `OSN_ENV=production` in the environment but the resolved env differs, refusing to boot with a mismatched environment. Operators must be explicit about production classification.
 - [x] S-L25 — `createRateLimiter` was exported from the `@osn/core` barrel, letting downstream consumers construct limiters with arbitrary config (e.g. `maxRequests: Infinity`) and inject them to disable rate limiting. Fixed: removed from barrel; only `RateLimiterBackend` type + default factories are public.
 - [x] S-L26 — No runtime validation on injected `RateLimiterBackend` shape — a misconfigured DI object would cause `TypeError: check is not a function` at request time. Fixed: `createAuthRoutes` and `createGraphRoutes` validate every limiter slot at construction time, failing fast at boot.
+- [x] S-L27 — `initRedisClient()` fail-open startup fallback weakens rate limiting in multi-replica production (each process gets independent in-memory counters). Fixed: `REDIS_REQUIRED=true` env var added — when set, process exits on Redis failure instead of falling back. Operators can choose availability vs rate-limit integrity. — see [[redis]]
+- [x] S-L28 — `createClientFromUrl()` used eager ioredis connection, allowing zombie connections on health-check failure. Fixed: `lazyConnect: true` + explicit `connect()` / `disconnect()` lifecycle via `ConnectableRedisClient` interface. — see [[redis]]
 
 ---
 
@@ -400,7 +404,7 @@ Address **High** items before any non-local deployment.
 - [ ] P-W11 — `beginRegistration` and the legacy `registerUser` issue two parallel `findUserByEmail` + `findUserByHandle` queries instead of a single `WHERE email = ? OR handle = ?` — doubles the DB latency component on a hot signup path. Add a `findUserByEmailOrHandle` helper.
 - [x] P-W16 — Missing index on `close_friends.friend_id` caused table scan in `getCloseFriendsOfBatch` and `removeConnection` cleanup — fixed: added `close_friends_friend_idx`
 - [x] P-W17 — `removeConnection` and `blockUser` multi-step mutations not wrapped in a transaction — fixed: both now use `db.transaction()`
-- [x] P-W18 — `@shared/redis` `wrapIoRedis` sent full Lua script body on every EVAL call. Fixed: transparent EVALSHA caching with NOSCRIPT fallback — see [[redis]]
+- [x] P-W18 — `@shared/redis` `wrapIoRedis` sent full Lua script body on every EVAL call. Fixed: transparent EVALSHA caching with NOSCRIPT fallback — see [[redis]]. Further improved: SHA now computed eagerly on first sight of each script (P-W2 follow-up) and EVALSHA tried first on every call.
 - [x] P-W19 — `@shared/redis` `createMemoryClient` had no expiry sweep (unbounded Map growth). Fixed: proactive sweep when store exceeds `maxEntries` cap, mirroring `osn/core` rate limiter pattern — see [[redis]]
 - [ ] P-W5 — Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (N individual writes today)
 - [x] P-W6 — N+1 queries in graph list functions — replaced with `inArray` batch fetches
@@ -420,6 +424,7 @@ Address **High** items before any non-local deployment.
 - [x] P-I4 — `getCloseFriendsOfBatch` had no upper bound on `userIds` array size — fixed: clamped to `MAX_BATCH_SIZE` (1000)
 - [x] P-I14 — `@shared/redis` `checkRedisHealth` timeout timer leaked on success path. Fixed: `clearTimeout` in `.finally()` — see [[redis]]
 - [x] P-I15 — `@shared/redis` `RedisLive` startup ping had no timeout (indefinite hang on unresponsive Redis). Fixed: 5s timeout with `Promise.race` — see [[redis]]
+- [x] P-I16 — `void Effect.runPromise(...)` fire-and-forget log statements in `initRedisClient()` could swallow observability bootstrap errors. Fixed: warning-level logs are now `await`-ed; info-level remain fire-and-forget. — see [[redis]]
 - [ ] P-I3 — `new TextEncoder()` allocated per `verifyPkceChallenge` call — move to module scope
 - [ ] P-I4 — `AuthProvider` reconstructs Effect `Layer` on every render — wrap with `createMemo`
 - [ ] P-I5 — `completePasskeyLogin` calls `findUserByEmail` redundantly — `pk.userId` already on passkey row
