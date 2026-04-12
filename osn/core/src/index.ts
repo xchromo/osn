@@ -6,5 +6,4 @@ export type { AuthConfig, AuthService } from "./services/auth";
 export { createGraphRoutes, createDefaultGraphRateLimiter } from "./routes/graph";
 export { createGraphService } from "./services/graph";
 export type { GraphService } from "./services/graph";
-export { createRateLimiter } from "./lib/rate-limit";
-export type { RateLimiterBackend, RateLimiterConfig, RateLimiter } from "./lib/rate-limit";
+export type { RateLimiterBackend } from "./lib/rate-limit";

@@ -641,6 +641,24 @@ describe("graph routes", () => {
       expect(res.status).toBe(429);
     });
 
+    it("fails closed when the backend rejects (S-M1)", async () => {
+      const failing: RateLimiterBackend = {
+        check: () => Promise.reject(new Error("Redis connection refused")),
+      };
+      const freshGraph = createGraphRoutes(config, layer, Layer.empty, failing);
+      const alice = await registerAndGetToken("alice@example.com", "alice");
+      await registerAndGetToken("bob@example.com", "bob");
+
+      const res = await freshGraph.handle(
+        new Request("http://localhost/graph/connections/bob", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${alice.token}` },
+        }),
+      );
+      // Must return 429 (fail-closed), not 500 (unhandled rejection).
+      expect(res.status).toBe(429);
+    });
+
     it("does not rate-limit read operations", async () => {
       const rejectAll: RateLimiterBackend = { check: () => false };
       const freshGraph = createGraphRoutes(config, layer, Layer.empty, rejectAll);

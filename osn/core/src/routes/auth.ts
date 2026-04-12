@@ -25,7 +25,7 @@ const pkceStore = new Map<string, PkceEntry>();
  * Redis-backed and in-memory backends per endpoint without touching
  * `createAuthRoutes` call sites.
  */
-export type AuthRateLimiters = {
+export type AuthRateLimiters = Readonly<{
   registerBegin: RateLimiterBackend;
   registerComplete: RateLimiterBackend;
   handleCheck: RateLimiterBackend;
@@ -37,7 +37,7 @@ export type AuthRateLimiters = {
   passkeyLoginComplete: RateLimiterBackend;
   passkeyRegisterBegin: RateLimiterBackend;
   passkeyRegisterComplete: RateLimiterBackend;
-};
+}>;
 
 /**
  * Default in-memory rate limiter bundle used when callers don't pass an
@@ -82,6 +82,15 @@ export function createAuthRoutes(
    */
   rateLimiters: AuthRateLimiters = createDefaultAuthRateLimiters(),
 ) {
+  // Fail-fast: validate every limiter slot at construction time (S-L2) so a
+  // partially-valid object surfaces immediately instead of on the first
+  // request to a rarely-hit endpoint.
+  for (const [key, backend] of Object.entries(rateLimiters)) {
+    if (typeof (backend as RateLimiterBackend)?.check !== "function") {
+      throw new Error(`AuthRateLimiters.${key} must have a check() method`);
+    }
+  }
+
   const auth = createAuthService(authConfig);
 
   const run = <A, E>(eff: Effect.Effect<A, E, Db>): Promise<A> =>
@@ -142,13 +151,21 @@ export function createAuthRoutes(
 
   // Async to accommodate future Redis backends where `check()` returns a Promise.
   // In-memory backends resolve immediately; `await` on a non-Promise is a no-op.
+  // Fail-closed (S-M1): if the backend rejects, treat it as rate-limited so a
+  // Redis outage blocks rather than bypasses the limiter.
   async function rateLimit(
     headers: Record<string, string | undefined>,
     endpoint: AuthRateLimitedEndpoint,
     limiter: RateLimiterBackend,
   ): Promise<{ error: string } | null> {
     const ip = getClientIp(headers);
-    if (!(await limiter.check(ip))) {
+    let allowed: boolean;
+    try {
+      allowed = await limiter.check(ip);
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) {
       metricAuthRateLimited(endpoint);
       return { error: "rate_limited" };
     }

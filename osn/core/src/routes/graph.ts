@@ -90,6 +90,11 @@ export function createGraphRoutes(
    */
   rateLimiter: RateLimiterBackend = createDefaultGraphRateLimiter(),
 ) {
+  // Fail-fast: validate the injected rate limiter at construction time (S-L2).
+  if (typeof rateLimiter?.check !== "function") {
+    throw new Error("Graph rateLimiter must have a check() method");
+  }
+
   const auth = createAuthService(authConfig);
   const graph = createGraphService();
 
@@ -122,11 +127,18 @@ export function createGraphRoutes(
 
   // Enforce rate limit; set 429 on breach. Async to accommodate future
   // Redis backend where `check()` returns a Promise.
+  // Fail-closed (S-M1): if the backend rejects, treat as rate-limited.
   async function requireRateLimit(
     userId: string,
     set: { status?: number | string },
   ): Promise<boolean> {
-    if (!(await rateLimiter.check(userId))) {
+    let allowed: boolean;
+    try {
+      allowed = await rateLimiter.check(userId);
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) {
       set.status = 429;
       return false;
     }

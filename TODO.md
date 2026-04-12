@@ -339,6 +339,8 @@ Address **High** items before any non-local deployment.
 - [x] S-M33 — `enrollmentToken` (and snake-case `enrollment_token`) was missing from the trimmed redaction deny-list. It is a real single-use bearer credential returned by `/register/complete` (`osn/core/src/routes/auth.ts:225`) and sent back as `Authorization: Bearer <token>` for passkey enrollment (`osn/client/src/register.ts:131,142`) — same secrecy profile as `accessToken`. Defence-in-depth (no current log path emits the completeRegistration result), but the file header criterion in `redact.ts` explicitly requires real-bearer-credential fields to be on the list. Fixed by adding both spellings to `REDACT_KEYS` under the OAuth token block, updating the lock-step assertion + positive test, and pointing at the two call sites in the comment.
 - [ ] S-M34 — Rate limiter trusts `X-Forwarded-For` without reverse-proxy guarantee — any client can spoof the header to bypass IP-based rate limits. Add `trustProxy` config flag or fall back to socket IP when no proxy is configured.
 - [ ] S-M35 — Redirect URI allowlist matches origin only, not exact URI per OAuth 2.0 Security BCP (RFC 9700 §4.1.3). Upgrade to exact string comparison for stricter validation.
+- [x] S-M36 — Async `RateLimiterBackend.check()` rejection was fail-open: unhandled rejection propagated as 500 instead of 429, bypassing rate limit counter. Fixed: `rateLimit()` and `requireRateLimit()` wrap `await check()` in try/catch, defaulting to `false` (deny) on backend errors. Fail-closed posture established before Redis backend lands.
+- [x] S-M37 — `AuthRateLimiters` type was mutable, allowing post-construction limiter replacement via held reference. Fixed: type declared as `Readonly<{...}>`. Tests construct override objects via spread instead of mutation.
 
 ### Low
 
@@ -367,6 +369,8 @@ Address **High** items before any non-local deployment.
 - [ ] S-L24 — `/token` and legacy `POST /register` have no rate limiting — add per-IP limiters for consistency
 - [ ] S-L19 — `jwtSecret` falls back to `"dev-secret"` in graph auth — already tracked as S-L7
 - [x] S-L20 — `loadConfig` silently classified production deploys as `dev` if operators forgot to set `OSN_ENV=production` (Bun leaves `NODE_ENV` empty by default), enabling pretty-printing, 100% trace sampling, and any future dev-only code paths in prod. Fixed: `loadConfig` now throws when `OSN_ENV=production` in the environment but the resolved env differs, refusing to boot with a mismatched environment. Operators must be explicit about production classification.
+- [x] S-L25 — `createRateLimiter` was exported from the `@osn/core` barrel, letting downstream consumers construct limiters with arbitrary config (e.g. `maxRequests: Infinity`) and inject them to disable rate limiting. Fixed: removed from barrel; only `RateLimiterBackend` type + default factories are public.
+- [x] S-L26 — No runtime validation on injected `RateLimiterBackend` shape — a misconfigured DI object would cause `TypeError: check is not a function` at request time. Fixed: `createAuthRoutes` and `createGraphRoutes` validate every limiter slot at construction time, failing fast at boot.
 
 ---
 

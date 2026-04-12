@@ -1298,8 +1298,7 @@ describe("auth routes", () => {
     it("uses the injected rate limiter bundle instead of the default", async () => {
       // An "always reject" limiter — every check returns false.
       const rejectAll: RateLimiterBackend = { check: () => false };
-      const limiters = createDefaultAuthRateLimiters();
-      limiters.handleCheck = rejectAll;
+      const limiters = { ...createDefaultAuthRateLimiters(), handleCheck: rejectAll };
 
       const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
       const res = await freshApp.handle(
@@ -1317,8 +1316,7 @@ describe("auth routes", () => {
       const asyncBackend: RateLimiterBackend = {
         check: () => Promise.resolve(false),
       };
-      const limiters = createDefaultAuthRateLimiters();
-      limiters.registerBegin = asyncBackend;
+      const limiters = { ...createDefaultAuthRateLimiters(), registerBegin: asyncBackend };
 
       const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
       const res = await freshApp.handle(
@@ -1331,10 +1329,26 @@ describe("auth routes", () => {
       expect(res.status).toBe(429);
     });
 
+    it("fails closed when the backend rejects (S-M1)", async () => {
+      // Simulates a Redis outage where check() throws.
+      const failing: RateLimiterBackend = {
+        check: () => Promise.reject(new Error("Redis connection refused")),
+      };
+      const limiters = { ...createDefaultAuthRateLimiters(), handleCheck: failing };
+
+      const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
+      const res = await freshApp.handle(
+        new Request("http://localhost/handle/alice", {
+          headers: { "x-forwarded-for": "4.4.4.4" },
+        }),
+      );
+      // Must return 429 (fail-closed), not 500 (unhandled rejection).
+      expect(res.status).toBe(429);
+    });
+
     it("passes when the injected limiter returns true", async () => {
       const allowAll: RateLimiterBackend = { check: () => true };
-      const limiters = createDefaultAuthRateLimiters();
-      limiters.handleCheck = allowAll;
+      const limiters = { ...createDefaultAuthRateLimiters(), handleCheck: allowAll };
 
       const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
       // Fire a burst that would exceed the default 10/min cap; everything
