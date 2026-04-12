@@ -985,17 +985,14 @@ describe("auth routes", () => {
       // The handle check limiter allows 10 req/min. Create a fresh app
       // so the limiter is clean.
       const freshApp = createAuthRoutes(config, layer);
-      const responses = await Promise.all(
-        Array.from({ length: 10 }, (_, i) =>
-          freshApp.handle(
-            new Request(`http://localhost/handle/test${i}`, {
-              headers: { "x-forwarded-for": "1.2.3.4" },
-            }),
-          ),
-        ),
-      );
-      // May be 200 or 400 depending on user existence — doesn't matter
-      for (const res of responses) {
+      for (let i = 0; i < 10; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        const res = await freshApp.handle(
+          new Request(`http://localhost/handle/test${i}`, {
+            headers: { "x-forwarded-for": "1.2.3.4" },
+          }),
+        );
+        // May be 200 or 400 depending on user existence — doesn't matter
         expect(res.status).not.toBe(429);
       }
       // 11th request should be rate-limited
@@ -1012,15 +1009,14 @@ describe("auth routes", () => {
     it("rate limits are per-IP — different IPs are independent", async () => {
       const freshApp = createAuthRoutes(config, layer);
       // Exhaust the limit for IP A
-      await Promise.all(
-        Array.from({ length: 10 }, (_, i) =>
-          freshApp.handle(
-            new Request(`http://localhost/handle/x${i}`, {
-              headers: { "x-forwarded-for": "10.0.0.1" },
-            }),
-          ),
-        ),
-      );
+      for (let i = 0; i < 10; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request(`http://localhost/handle/x${i}`, {
+            headers: { "x-forwarded-for": "10.0.0.1" },
+          }),
+        );
+      }
       // IP A is blocked
       const blockedA = await freshApp.handle(
         new Request("http://localhost/handle/y", {
@@ -1041,17 +1037,16 @@ describe("auth routes", () => {
     it("returns 429 on /register/begin when rate-limited", async () => {
       const freshApp = createAuthRoutes(config, layer);
       // register/begin allows 5 req/min
-      await Promise.all(
-        Array.from({ length: 5 }, (_, i) =>
-          freshApp.handle(
-            new Request("http://localhost/register/begin", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-forwarded-for": "5.5.5.5" },
-              body: JSON.stringify({ email: `u${i}@example.com`, handle: `u${i}` }),
-            }),
-          ),
-        ),
-      );
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/register/begin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "5.5.5.5" },
+            body: JSON.stringify({ email: `u${i}@example.com`, handle: `u${i}` }),
+          }),
+        );
+      }
       const blocked = await freshApp.handle(
         new Request("http://localhost/register/begin", {
           method: "POST",
@@ -1065,17 +1060,16 @@ describe("auth routes", () => {
     it("returns 429 on /login/otp/begin when rate-limited", async () => {
       const freshApp = createAuthRoutes(config, layer);
       // otp/begin allows 5 req/min — shared with /login/otp/begin
-      await Promise.all(
-        Array.from({ length: 5 }, (_, i) =>
-          freshApp.handle(
-            new Request("http://localhost/login/otp/begin", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-forwarded-for": "6.6.6.6" },
-              body: JSON.stringify({ identifier: `u${i}@example.com` }),
-            }),
-          ),
-        ),
-      );
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/login/otp/begin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "6.6.6.6" },
+            body: JSON.stringify({ identifier: `u${i}@example.com` }),
+          }),
+        );
+      }
       const blocked = await freshApp.handle(
         new Request("http://localhost/login/otp/begin", {
           method: "POST",
@@ -1090,17 +1084,16 @@ describe("auth routes", () => {
 
     it("returns 429 on /login/magic/begin when rate-limited", async () => {
       const freshApp = createAuthRoutes(config, layer);
-      await Promise.all(
-        Array.from({ length: 5 }, (_, i) =>
-          freshApp.handle(
-            new Request("http://localhost/login/magic/begin", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-forwarded-for": "7.7.7.7" },
-              body: JSON.stringify({ identifier: `u${i}@example.com` }),
-            }),
-          ),
-        ),
-      );
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/login/magic/begin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "7.7.7.7" },
+            body: JSON.stringify({ identifier: `u${i}@example.com` }),
+          }),
+        );
+      }
       const blocked = await freshApp.handle(
         new Request("http://localhost/login/magic/begin", {
           method: "POST",
@@ -1366,16 +1359,13 @@ describe("auth routes", () => {
       const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
       // Fire a burst that would exceed the default 10/min cap; everything
       // should pass because the injected limiter always says yes.
-      const responses = await Promise.all(
-        Array.from({ length: 20 }, (_, i) =>
-          freshApp.handle(
-            new Request(`http://localhost/handle/user${i}`, {
-              headers: { "x-forwarded-for": "7.7.7.7" },
-            }),
-          ),
-        ),
-      );
-      for (const res of responses) {
+      for (let i = 0; i < 20; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        const res = await freshApp.handle(
+          new Request(`http://localhost/handle/user${i}`, {
+            headers: { "x-forwarded-for": "7.7.7.7" },
+          }),
+        );
         expect(res.status).not.toBe(429);
       }
     });
