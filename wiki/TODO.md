@@ -240,13 +240,13 @@ Subsumes: S-M2, S-M8, P-W1, P-W4, S-L18, S-L23. See [[rate-limiting]] for curren
 - [x] Update `createAuthRoutes` and graph route factories to accept injected rate limiter instances (DI for testability)
 
 **Phase 2 — `@shared/redis` package**
-- [ ] Create `shared/redis` workspace (`@shared/redis`) — mirrors `@shared/db-utils` pattern
-- [ ] Effect-based `Redis` service tag (`Context.Tag`) + `RedisLive` layer (connection from `REDIS_URL` env); `Layer.scoped` finalizer calls `redis.quit()`
-- [ ] `RedisError` tagged error (`Data.TaggedError`, `_tag: "RedisError"`)
-- [ ] `createRedisRateLimiter(config)` — Lua script for atomic INCR + PEXPIRE (single round-trip fixed-window); key format `rl:{namespace}:{key}`
-- [ ] Redis health probe for `/ready` endpoint (simple `PING` with timeout)
-- [ ] Dev-mode: in-memory fallback when `REDIS_URL` is unset (local dev without Redis)
-- [ ] Tests: Lua script atomicity, window expiry, key independence, connection failure fallback
+- [x] Create `shared/redis` workspace (`@shared/redis`) — mirrors `@shared/db-utils` pattern
+- [x] Effect-based `Redis` service tag (`Context.Tag`) + `RedisLive` layer (connection from `REDIS_URL` env); `Layer.scoped` finalizer calls `redis.quit()`
+- [x] `RedisError` tagged error (`Data.TaggedError`, `_tag: "RedisError"`)
+- [x] `createRedisRateLimiter(config)` — Lua script for atomic INCR + PEXPIRE (single round-trip fixed-window); key format `rl:{namespace}:{key}`
+- [x] Redis health probe for `/ready` endpoint (simple `PING` with timeout)
+- [x] Dev-mode: in-memory fallback when `REDIS_URL` is unset (local dev without Redis) — `createMemoryClient()` + `RedisMemoryLive` layer
+- [x] Tests: Lua script atomicity, window expiry, key independence, connection failure fallback — 13 tests across 3 files
 
 **Phase 3 — Wire up**
 - [ ] Add `@shared/redis` dependency to `osn/core/package.json`
