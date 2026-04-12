@@ -185,4 +185,73 @@ describe("chats service", () => {
       }
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // ── Validation error paths (T-E1) ────────────────────────────────────
+
+  it.effect("createChat fails with ValidationError for oversized title", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.either(
+        createChat({ type: "group", title: "X".repeat(201) }, "usr_alice"),
+      );
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ValidationError");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // ── Authorization edge cases (T-S2) ─────────────────────────────────
+
+  it.effect("removeMember fails with NotChatAdmin when non-admin removes another member", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      yield* seedMember(chat.id, "usr_bob");
+      yield* seedMember(chat.id, "usr_charlie");
+      // Bob (non-admin) tries to remove Charlie.
+      const result = yield* Effect.either(removeMember(chat.id, "usr_charlie", "usr_bob"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("NotChatAdmin");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // ── Membership filtering (T-S3) ─────────────────────────────────────
+
+  it.effect("listChats returns empty when chats exist but user is not a member", () =>
+    Effect.gen(function* () {
+      // Seed chats with other users as members.
+      const chat1 = yield* seedChat({ type: "group", title: "Not Mine" });
+      const chat2 = yield* seedChat({ type: "dm" });
+      yield* seedMember(chat1.id, "usr_bob", "admin");
+      yield* seedMember(chat2.id, "usr_charlie", "admin");
+
+      const result = yield* listChats("usr_nobody");
+      expect(result).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // ── getChatMembers standalone (T-U2) ────────────────────────────────
+
+  it.effect("getChatMembers returns all members", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      yield* seedMember(chat.id, "usr_bob");
+      yield* seedMember(chat.id, "usr_charlie");
+      const members = yield* getChatMembers(chat.id);
+      expect(members).toHaveLength(3);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("getChatMembers fails with ChatNotFound for missing chat", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.either(getChatMembers("chat_nonexistent"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ChatNotFound");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });

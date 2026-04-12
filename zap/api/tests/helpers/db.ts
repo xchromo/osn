@@ -2,7 +2,14 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Effect, Layer } from "effect";
 import * as schema from "@zap/db/schema";
-import { chats, chatMembers, type Chat, type ChatMember } from "@zap/db/schema";
+import {
+  chats,
+  chatMembers,
+  messages,
+  type Chat,
+  type ChatMember,
+  type Message,
+} from "@zap/db/schema";
 import { Db } from "@zap/db/service";
 
 export function createTestLayer() {
@@ -93,5 +100,30 @@ export const seedMember = (
     const now = new Date();
     const row: ChatMember = { id, chatId, userId, role, joinedAt: now };
     yield* Effect.promise(() => db.insert(chatMembers).values(row));
+    return row;
+  });
+
+/**
+ * Seed a message directly into the DB with a controllable timestamp.
+ */
+export const seedMessage = (
+  chatId: string,
+  senderUserId: string,
+  ciphertext: string,
+  createdAt: Date,
+): Effect.Effect<Message, never, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const row: Message = {
+      id,
+      chatId,
+      senderUserId,
+      ciphertext,
+      nonce: "test_nonce",
+      createdAt,
+      expiresAt: null,
+    };
+    yield* Effect.promise(() => db.insert(messages).values(row));
     return row;
   });

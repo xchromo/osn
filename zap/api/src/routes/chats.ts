@@ -15,6 +15,7 @@ import {
 import { sendMessage, listMessages } from "../services/messages";
 import { metricAccessDenied } from "../metrics";
 import { MAX_CHAT_MEMBERS, MAX_CIPHERTEXT_LENGTH, MAX_NONCE_LENGTH } from "../lib/limits";
+import { createRateLimiter, getClientIp, type RateLimiterBackend } from "@osn/core";
 
 const chatTypeEnum = t.Union([t.Literal("dm"), t.Literal("group"), t.Literal("event")]);
 
@@ -36,9 +37,28 @@ async function extractClaims(
 
 const DEFAULT_JWT_SECRET = process.env.OSN_JWT_SECRET ?? "dev-secret-change-in-prod";
 
+/** Rate limiter configuration for Zap write endpoints. */
+export interface ZapRateLimiters {
+  /** POST /chats — 20 req/IP/min */
+  readonly createChat: RateLimiterBackend;
+  /** POST /chats/:id/messages — 60 req/IP/min */
+  readonly sendMessage: RateLimiterBackend;
+  /** POST /chats/:id/members — 30 req/IP/min */
+  readonly addMember: RateLimiterBackend;
+}
+
+export function createDefaultZapRateLimiters(): ZapRateLimiters {
+  return {
+    createChat: createRateLimiter({ maxRequests: 20, windowMs: 60_000 }),
+    sendMessage: createRateLimiter({ maxRequests: 60, windowMs: 60_000 }),
+    addMember: createRateLimiter({ maxRequests: 30, windowMs: 60_000 }),
+  };
+}
+
 export const createChatsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
   jwtSecret: string = DEFAULT_JWT_SECRET,
+  rateLimiters: ZapRateLimiters = createDefaultZapRateLimiters(),
 ) => {
   const secretBytes = new TextEncoder().encode(jwtSecret);
 
@@ -89,6 +109,11 @@ export const createChatsRoutes = (
       .post(
         "/",
         async ({ body, headers, set }) => {
+          const ip = getClientIp(headers);
+          if (!(await rateLimiters.createChat.check(ip))) {
+            set.status = 429;
+            return { message: "Too many requests" } as const;
+          }
           const claims = await extractClaims(headers["authorization"], secretBytes);
           if (!claims) {
             set.status = 401;
@@ -192,6 +217,11 @@ export const createChatsRoutes = (
       .post(
         "/:id/members",
         async ({ params, body, headers, set }) => {
+          const ip = getClientIp(headers);
+          if (!(await rateLimiters.addMember.check(ip))) {
+            set.status = 429;
+            return { message: "Too many requests" } as const;
+          }
           const claims = await extractClaims(headers["authorization"], secretBytes);
           if (!claims) {
             set.status = 401;
@@ -276,6 +306,11 @@ export const createChatsRoutes = (
       .post(
         "/:id/messages",
         async ({ params, body, headers, set }) => {
+          const ip = getClientIp(headers);
+          if (!(await rateLimiters.sendMessage.check(ip))) {
+            set.status = 429;
+            return { message: "Too many requests" } as const;
+          }
           const claims = await extractClaims(headers["authorization"], secretBytes);
           if (!claims) {
             set.status = 401;
