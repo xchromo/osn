@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type IORedis from "ioredis";
+import IORedis from "ioredis";
 
 /**
  * Backend-agnostic Redis client contract. Production uses ioredis via
@@ -87,6 +87,19 @@ export function wrapIoRedis(client: IORedis): RedisClient {
       await client.quit();
     },
   };
+}
+
+/**
+ * Create a `RedisClient` connected to the given URL.
+ *
+ * Encapsulates the ioredis constructor so consumers (e.g. `osn/app`) don't
+ * need ioredis as a direct dependency — they go through this factory instead.
+ * Does NOT perform a health check; callers should use `checkRedisHealth()`
+ * from `./health.ts` after creation if startup verification is desired.
+ */
+export function createClientFromUrl(url: string): RedisClient {
+  const raw = new IORedis(url);
+  return wrapIoRedis(raw);
 }
 
 const DEFAULT_MAX_ENTRIES = 10_000;

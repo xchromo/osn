@@ -16,7 +16,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] S-H4 — PKCE now mandatory at `/token`: `state` and `code_verifier` required for `authorization_code` grants; unknown/expired state returns 400; redirect_uri must match the value stored at `/authorize` (S-M9 RFC 6749 §4.1.3)
 - [x] S-H5 — Legacy unauth'd passkey path removed: `resolvePasskeyEnrollPrincipal` now returns 401 when `Authorization` header is absent. Hosted `/authorize` HTML passkey-enrollment prompt removed (passkey enrollment requires auth; users enrol through first-party apps). `console.warn` deprecation log removed. `SimpleWebAuthn` script tag removed from hosted HTML.
 - [ ] ARC token verification middleware on internal graph routes (`/graph/internal/*`) — see [[arc-tokens]], [[arc-token-debugging]]
-- [ ] Redis migration — Phase 2 (`@shared/redis` package) done; Phase 3 (wire up rate limiters) is next — see [[redis]]
+- [x] Redis migration — Phase 3 (wire up rate limiters) done: `createRedisAuthRateLimiters()` + `createRedisGraphRateLimiter()` factories in `osn/core`, env-driven backend selection in `osn/app` (`REDIS_URL` → Redis, unset → in-memory), 10 integration tests. Resolves S-M2 for production. Phase 4 (auth state migration) is next — see [[redis]]
 
 ---
 
@@ -249,11 +249,13 @@ Subsumes: S-M2, S-M8, P-W1, P-W4, S-L18, S-L23. See [[rate-limiting]] for curren
 - [x] Tests: Lua script atomicity, window expiry, key independence, connection failure fallback — 13 tests across 3 files
 
 **Phase 3 — Wire up**
-- [ ] Add `@shared/redis` dependency to `osn/core/package.json`
-- [ ] Construct `RedisLive` layer in `osn/app/src/index.ts`; env-driven backend selection (Redis when `REDIS_URL` set, in-memory otherwise)
-- [ ] Migrate all 11 auth rate limiter instances (`osn/core/src/routes/auth.ts`) to Redis backend
-- [ ] Migrate graph rate limiter (`osn/core/src/routes/graph.ts`) to Redis backend
-- [ ] Update CLAUDE.md Rate Limiting section to document the two-backend model
+- [x] Add `@shared/redis` dependency to `osn/core/package.json` and `osn/app/package.json`
+- [x] `createClientFromUrl()` factory in `@shared/redis/client` — encapsulates ioredis constructor
+- [x] `createRedisAuthRateLimiters(client)` + `createRedisGraphRateLimiter(client)` factories in `osn/core/src/lib/redis-rate-limiters.ts`
+- [x] Env-driven backend selection in `osn/app/src/index.ts`: `REDIS_URL` → Redis with startup health check; unset → in-memory fallback; graceful fallback on connection failure
+- [x] All 12 rate limiters (11 auth + 1 graph) now use Redis backends when available
+- [x] 10 new integration tests verifying Redis-backed limiters integrate with route factories
+- [x] Updated CLAUDE.md Rate Limiting section + [[rate-limiting]] wiki page to document the two-backend model
 
 **Phase 4 — Auth state migration (S-M8, follow-up)**
 - [ ] `otpStore` → Redis with TTL (resolves S-M8 partial, P-W4 partial)
@@ -306,7 +308,7 @@ Address **High** items before any non-local deployment.
 ### Medium
 
 - [ ] S-M1 — `verifyAccessToken` rejects tokens missing `handle` claim — old tokens 401 silently; treat missing `handle` as `null` during transition period
-- [ ] S-M2 — In-memory rate limiter resets on restart/deploy — migrate to Redis shared counter. See **Platform > Infrastructure > Redis Migration** for the full plan (phases 1–3). Cross-refs: S-M8, P-W1, P-W4, S-L18, S-L23 — see [[rate-limiting]], [[redis]]
+- [x] S-M2 — In-memory rate limiter resets on restart/deploy — migrated to Redis shared counter (Phase 3). All 12 rate limiters now use Redis when `REDIS_URL` is set, with in-memory fallback. Cross-refs: S-M8 (Phase 4), P-W1 (Phase 1), P-W4 (Phase 4), S-L18 (Phase 1), S-L23 (Phase 4) — see [[rate-limiting]], [[redis]]
 - [ ] S-M3 — No "resend code" button after registration OTP; if SMTP fails, handle/email are claimed with no recovery path. Partly mitigated by the new flow's "refuse to overwrite a non-expired pending entry" policy (the user retries via the existing pending entry, no new email is sent), but a true resend button is still needed.
 - [ ] S-M4 — Legacy `POST /register` (unverified email) returns raw `String(catch)` error — can expose Drizzle constraint internals. The new `/register/{begin,complete}` routes already use the `publicError()` mapper from `routes/auth.ts`; extend the same mapper to the legacy endpoint and to all other routes that still use `String(e)`.
 - [ ] S-M5 — `displayName` embedded in JWT (1h TTL) — stale after profile update; `createdByName` on events reflects old value until token expires
