@@ -477,7 +477,7 @@ export const listRsvps = (
     // Close friends first, createdAt DESC within each bucket (stable
     // sort preserves the DB ordering). This is how we "surface close
     // friends" without using them as an access gate.
-    const sorted = filtered.toSorted((a, b) => {
+    const sorted = filtered.toSorted((a: RsvpWithUser, b: RsvpWithUser) => {
       if (a.isCloseFriend === b.isCloseFriend) return 0;
       return a.isCloseFriend ? -1 : 1;
     });
