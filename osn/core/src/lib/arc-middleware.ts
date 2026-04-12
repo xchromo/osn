@@ -25,37 +25,26 @@ function extractArcToken(authorization: string | undefined): string | null {
 }
 
 /**
- * Decodes the JWT payload without verification to read the `iss` claim.
+ * Decodes the JWT payload once without verification to read `iss` and `scope`.
  * Needed to look up the issuer's public key before we can verify the
  * signature. Returns null if the token is malformed.
  */
-function peekIssuer(token: string): string | null {
+function peekClaims(token: string): { iss: string; scopes: string[] } | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1])) as { iss?: string };
-    return typeof payload.iss === "string" ? payload.iss : null;
+    const payload = JSON.parse(atob(parts[1])) as { iss?: string; scope?: string };
+    if (typeof payload.iss !== "string") return null;
+    const scopes =
+      typeof payload.scope === "string"
+        ? payload.scope
+            .split(",")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+    return { iss: payload.iss, scopes };
   } catch {
     return null;
-  }
-}
-
-/**
- * Decodes the JWT payload without verification to read the `scope` claim.
- * Returns the normalised scopes array, or empty array if missing/malformed.
- */
-function peekScopes(token: string): string[] {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return [];
-    const payload = JSON.parse(atob(parts[1])) as { scope?: string };
-    if (typeof payload.scope !== "string") return [];
-    return payload.scope
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-  } catch {
-    return [];
   }
 }
 
@@ -90,20 +79,18 @@ export async function requireArc(
     return null;
   }
 
-  const issuer = peekIssuer(raw);
-  if (!issuer) {
+  const peeked = peekClaims(raw);
+  if (!peeked) {
     set.status = 401;
     return null;
   }
-
-  const scopes = peekScopes(raw);
 
   try {
     // Resolve the public key from the service_accounts table. Also
     // validates that the issuer exists and is authorised for the
     // claimed scopes.
     const publicKey = await Effect.runPromise(
-      resolvePublicKey(issuer, scopes).pipe(Effect.provide(dbLayer)),
+      resolvePublicKey(peeked.iss, peeked.scopes).pipe(Effect.provide(dbLayer)),
     );
 
     // Verify signature, audience, expiry, and required scope.

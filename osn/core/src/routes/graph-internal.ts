@@ -12,6 +12,8 @@ import { requireArc } from "../lib/arc-middleware";
 
 const AUDIENCE = "osn-core";
 const SCOPE_GRAPH_READ = "graph:read";
+/** Max user IDs per batch request — stays well under SQLite's variable limit (999). */
+const MAX_BATCH_USER_IDS = 200;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,7 +289,7 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
         },
         {
           body: t.Object({
-            userIds: t.Array(t.String({ minLength: 1 })),
+            userIds: t.Array(t.String({ minLength: 1 }), { maxItems: MAX_BATCH_USER_IDS }),
           }),
         },
       )
