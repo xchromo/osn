@@ -71,6 +71,7 @@ export function CreateEventForm(props: {
         { headers },
       );
       if (error) {
+        // eslint-disable-next-line no-console -- DEV-only client-side debug logging
         if (import.meta.env.DEV) console.error("Failed to create event:", error);
         toast.error("Failed to create event");
         return;

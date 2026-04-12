@@ -408,7 +408,9 @@ const seed = Effect.gen(function* () {
     catch: (cause) => new SeedError({ cause }),
   });
 
+  // eslint-disable-next-line no-console -- CLI seed script output
   console.log("Seed complete — 15 events + 73 RSVPs inserted (existing rows skipped).");
 }).pipe(Effect.provide(DbLive));
 
+// eslint-disable-next-line no-console -- CLI seed script error handler
 Effect.runPromise(seed).catch(console.error);

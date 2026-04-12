@@ -330,9 +330,11 @@ const seed = Effect.gen(function* () {
     catch: (cause) => new SeedError({ cause }),
   });
 
+  // eslint-disable-next-line no-console -- CLI seed script output
   console.log(
     "Seed complete — 20 users, 25 connections, 3 close friends inserted (existing rows skipped).",
   );
 }).pipe(Effect.provide(DbLive));
 
+// eslint-disable-next-line no-console -- CLI seed script error handler
 Effect.runPromise(seed).catch(console.error);

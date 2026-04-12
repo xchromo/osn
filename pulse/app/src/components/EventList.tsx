@@ -50,6 +50,7 @@ export function EventList() {
         return undefined;
       })
       .catch((err) => {
+        // eslint-disable-next-line no-console -- DEV-only client-side debug logging
         if (import.meta.env.DEV) console.error("Failed to delete event:", err);
         toast.error("Failed to delete event");
       })
