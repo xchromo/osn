@@ -86,14 +86,17 @@ export async function requireArc(
   }
 
   try {
-    // Resolve the public key from the service_accounts table. Also
-    // validates that the issuer exists and is authorised for the
-    // claimed scopes.
+    // S-M3: The peeked claims are unverified at this point. We pass them
+    // to resolvePublicKey to (a) look up the issuer's key and (b) check
+    // scope authorization against the DB. If an attacker tampers with the
+    // base64 payload, verifyArcToken below will reject the signature —
+    // so the DB scope check here is a fail-fast optimisation, not the
+    // sole gate. The cryptographic verification below is authoritative.
     const publicKey = await Effect.runPromise(
       resolvePublicKey(peeked.iss, peeked.scopes).pipe(Effect.provide(dbLayer)),
     );
 
-    // Verify signature, audience, expiry, and required scope.
+    // Verify signature, audience, expiry, and required scope (authoritative).
     const payload: ArcTokenPayload = await verifyArcToken(
       raw,
       publicKey,

@@ -240,7 +240,7 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
         {
           body: t.Object({
             viewerId: t.String({ minLength: 1 }),
-            userIds: t.Array(t.String({ minLength: 1 })),
+            userIds: t.Array(t.String({ minLength: 1 }), { maxItems: MAX_BATCH_USER_IDS }),
           }),
         },
       )
