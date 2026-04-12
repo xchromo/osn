@@ -15,7 +15,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] S-H3 — Open redirect in `/magic/verify` fixed: `allowedRedirectUris` field on `AuthConfig`; validated at `/authorize`, `/magic/verify` (service-level), and `/token` (route-level origin match + S-M9 exact redirect_uri match against pkceStore)
 - [x] S-H4 — PKCE now mandatory at `/token`: `state` and `code_verifier` required for `authorization_code` grants; unknown/expired state returns 400; redirect_uri must match the value stored at `/authorize` (S-M9 RFC 6749 §4.1.3)
 - [x] S-H5 — Legacy unauth'd passkey path removed: `resolvePasskeyEnrollPrincipal` now returns 401 when `Authorization` header is absent. Hosted `/authorize` HTML passkey-enrollment prompt removed (passkey enrollment requires auth; users enrol through first-party apps). `console.warn` deprecation log removed. `SimpleWebAuthn` script tag removed from hosted HTML.
-- [ ] ARC token verification middleware on internal graph routes (`/graph/internal/*`) — see [[arc-tokens]], [[arc-token-debugging]]
+- [x] ARC token verification middleware on internal graph routes (`/graph/internal/*`) — see [[arc-tokens]], [[arc-token-debugging]]. Implemented `requireArc` middleware in `osn/core/src/lib/arc-middleware.ts` and seven `/graph/internal/*` read-only endpoints (either-blocked, connection-status, connections, close-friends, is-close-friend, close-friends-of, user-displays) in `osn/core/src/routes/graph-internal.ts`. 21 new tests.
 - [x] Redis migration — Phase 3 (wire up rate limiters) done: `createRedisAuthRateLimiters()` + `createRedisGraphRateLimiter()` factories in `osn/core`, env-driven backend selection in `osn/app` (`REDIS_URL` → Redis, unset → in-memory), 10 integration tests. Resolves S-M2 for production. Phase 4 (auth state migration) is next — see [[redis]]
 
 ---
@@ -72,7 +72,7 @@ Progress tracking and deferred decisions. For full spec see README.md. For code 
 - [x] 50 tests: services, routes, lib/crypto, lib/html
 - [x] Social graph data model (connections, close friends, blocks) — 209 tests
 - [x] Handle system — registration, real-time availability check, email/handle sign-in toggle
-- [ ] ARC token verification middleware on internal graph routes (`/graph/internal/*`)
+- [x] ARC token verification middleware on internal graph routes (`/graph/internal/*`)
 - [ ] Per-app vs global blocking logic (deferred — global blocking across all OSN apps for now)
 - [ ] Interest profile selection (onboarding)
 - [ ] Third-party app authorization flow
