@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { REDACT_KEYS, redact, REDACTION_PLACEHOLDER } from "../src/logger/redact";
 
 describe("redact", () => {

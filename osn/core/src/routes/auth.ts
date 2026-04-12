@@ -1,12 +1,13 @@
-import { Elysia, t } from "elysia";
-import { Effect, Layer } from "effect";
 import { DbLive, type Db } from "@osn/db/service";
-import { createAuthService, type AuthConfig } from "../services/auth";
-import { buildAuthorizeHtml } from "../lib/html";
+import type { AuthRateLimitedEndpoint } from "@shared/observability/metrics";
+import { Effect, Layer } from "effect";
+import { Elysia, t } from "elysia";
+
 import { verifyPkceChallenge } from "../lib/crypto";
+import { buildAuthorizeHtml } from "../lib/html";
 import { createRateLimiter, getClientIp, type RateLimiterBackend } from "../lib/rate-limit";
 import { metricAuthRateLimited } from "../metrics";
-import type { AuthRateLimitedEndpoint } from "@shared/observability/metrics";
+import { createAuthService, type AuthConfig } from "../services/auth";
 
 // In-memory PKCE challenge store (keyed by state)
 interface PkceEntry {

@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { describe, expect, it } from "vitest";
+
 import { observabilityPlugin } from "../src/elysia/plugin";
 
 /**

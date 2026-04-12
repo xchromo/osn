@@ -1,6 +1,6 @@
-import { onMount } from "solid-js";
-import { useAuth } from "@osn/client/solid";
 import type { LoginClient } from "@osn/client";
+import { useAuth } from "@osn/client/solid";
+import { onMount } from "solid-js";
 
 /**
  * Invisible helper component: on mount, checks the current URL for a

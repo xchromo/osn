@@ -1,9 +1,10 @@
+import { Effect, Layer } from "effect";
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestLayer } from "../helpers/db";
+
+import type { RateLimiterBackend } from "../../src/lib/rate-limit";
 import { createAuthRoutes, createDefaultAuthRateLimiters } from "../../src/routes/auth";
 import { createAuthService } from "../../src/services/auth";
-import type { RateLimiterBackend } from "../../src/lib/rate-limit";
-import { Effect, Layer } from "effect";
+import { createTestLayer } from "../helpers/db";
 
 const config = {
   rpId: "localhost",

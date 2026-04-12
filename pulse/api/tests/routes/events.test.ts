@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
 import { Effect } from "effect";
 import { SignJWT } from "jose";
+import { describe, it, expect, beforeEach } from "vitest";
+
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
 

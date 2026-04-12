@@ -1,7 +1,8 @@
 import { Effect, Data } from "effect";
-import { DbLive, Db } from "./service";
+
 import { users, connections, closeFriends } from "./schema";
 import type { NewUser, NewConnection, NewCloseFriend } from "./schema";
+import { DbLive, Db } from "./service";
 
 class SeedError extends Data.TaggedError("SeedError")<{ cause: unknown }> {}
 

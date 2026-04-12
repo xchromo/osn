@@ -1,7 +1,8 @@
 import { Effect, Data } from "effect";
-import { DbLive, Db } from "./service";
+
 import { events, eventRsvps } from "./schema";
 import type { NewEvent, NewEventRsvp } from "./schema";
+import { DbLive, Db } from "./service";
 
 /**
  * Seed user references matching osn-db seed.

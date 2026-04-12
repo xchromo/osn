@@ -1,8 +1,9 @@
 import { it, expect, describe } from "@effect/vitest";
 import { Effect } from "effect";
-import { createTestLayer } from "../helpers/db";
+
 import { createAuthService } from "../../src/services/auth";
 import { createGraphService } from "../../src/services/graph";
+import { createTestLayer } from "../helpers/db";
 
 const config = {
   rpId: "localhost",

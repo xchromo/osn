@@ -1,5 +1,6 @@
-import { onMount } from "solid-js";
 import { useAuth } from "@osn/client/solid";
+import { onMount } from "solid-js";
+
 import { REDIRECT_URI } from "../lib/auth";
 
 export function CallbackHandler() {

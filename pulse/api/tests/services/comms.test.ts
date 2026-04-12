@@ -1,8 +1,9 @@
-import { describe, it as vitestIt } from "vitest";
 import { it, expect } from "@effect/vitest";
 import { Effect } from "effect";
-import { createTestLayer, seedEvent } from "../helpers/db";
+import { describe, it as vitestIt } from "vitest";
+
 import { listBlasts, parseCommsChannels, sendBlast } from "../../src/services/comms";
+import { createTestLayer, seedEvent } from "../helpers/db";
 
 it.effect("sendBlast writes one row per channel", () =>
   Effect.gen(function* () {

@@ -1,11 +1,11 @@
-import { Data, Effect, Schema } from "effect";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { events, eventRsvps, type Event, type EventRsvp } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { Data, Effect, Schema } from "effect";
+
 import { MAX_EVENT_GUESTS } from "../lib/limits";
 import { metricRsvpInviteBatch, metricRsvpListed, metricRsvpUpserted } from "../metrics";
 import { EventNotFound, DatabaseError, ValidationError } from "./events";
-import { ensurePulseUser, getAttendanceVisibilityBatch } from "./pulseUsers";
 import {
   getCloseFriendsOf,
   getConnectionIds,
@@ -14,6 +14,7 @@ import {
   OsnDb,
   type UserDisplay,
 } from "./graphBridge";
+import { ensurePulseUser, getAttendanceVisibilityBatch } from "./pulseUsers";
 
 // ---------------------------------------------------------------------------
 // Errors
