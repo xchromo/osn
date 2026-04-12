@@ -33,6 +33,7 @@ Set the following environment variables in each service deployment:
 
 ```bash
 # OTLP exporter configuration
+# WARNING: Never commit real tokens here — use env vars, 1Password, or a secrets manager.
 OTEL_EXPORTER_OTLP_ENDPOINT="https://otlp-gateway-<region>.grafana.net/otlp"
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64-encoded-instance:token>"
 
