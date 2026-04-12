@@ -30,8 +30,8 @@
     "@changesets/cli": "^2.29.8",
     "bun-types": "latest",
     "lefthook": "^2.0.12",
-    "oxfmt": "^0.20.0",
-    "oxlint": "^0.16.0",
+    "oxfmt": "^0.44.0",
+    "oxlint": "^1.59.0",
     "turbo": "^2.7.1",
     "typescript": "^5.7.0"
   }
