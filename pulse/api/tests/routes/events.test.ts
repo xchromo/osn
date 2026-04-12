@@ -288,13 +288,13 @@ describe("events routes", () => {
   });
 
   it("DELETE /events/:id returns 403 when requester does not own the event", async () => {
-    const aliceToken = await makeToken("usr_alice");
+    const localAliceToken = await makeToken("usr_alice");
     const bobToken = await makeToken("usr_bob");
     const createRes = await post(
       app,
       "/events",
       { title: "Alice's Event", startTime: FUTURE },
-      aliceToken,
+      localAliceToken,
     );
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await del(app, `/events/${event.id}`, bobToken);
@@ -310,13 +310,13 @@ describe("events routes", () => {
   });
 
   it("PATCH /events/:id returns 403 when requester does not own the event", async () => {
-    const aliceToken = await makeToken("usr_alice");
+    const localAliceToken = await makeToken("usr_alice");
     const bobToken = await makeToken("usr_bob");
     const createRes = await post(
       app,
       "/events",
       { title: "Alice's Event", startTime: FUTURE },
-      aliceToken,
+      localAliceToken,
     );
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await patch(app, `/events/${event.id}`, { title: "Hijacked" }, bobToken);

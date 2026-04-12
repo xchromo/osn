@@ -170,7 +170,7 @@ export function CreateEventForm(props: {
       {/* Event visibility */}
       <div class="flex flex-col gap-1">
         <div class="flex items-center">
-          <label class="text-foreground text-sm font-medium">Event visibility</label>
+          <span class="text-foreground text-sm font-medium">Event visibility</span>
           <InfoPopover
             label="About event visibility"
             body="Public events can appear in Discover and the Pulse feed. Private events are only reachable by direct link or invite — they won't show up in anyone else's feed."
@@ -201,7 +201,7 @@ export function CreateEventForm(props: {
       {/* Guest list visibility */}
       <div class="flex flex-col gap-1">
         <div class="flex items-center">
-          <label class="text-foreground text-sm font-medium">Guest list visibility</label>
+          <span class="text-foreground text-sm font-medium">Guest list visibility</span>
           <InfoPopover
             label="About guest list visibility"
             body="Public = anyone who can see the event sees who's going. Connections = only your connections can see the list. Private = only you can see — others see counts only."
@@ -241,7 +241,7 @@ export function CreateEventForm(props: {
       {/* Join policy */}
       <div class="flex flex-col gap-1">
         <div class="flex items-center">
-          <label class="text-foreground text-sm font-medium">Who can RSVP?</label>
+          <span class="text-foreground text-sm font-medium">Who can RSVP?</span>
           <InfoPopover
             label="About join policy"
             body="Open = anyone with the link can RSVP going or maybe. Guest list = you invite specific people first, and only invited users can RSVP going."
@@ -272,7 +272,7 @@ export function CreateEventForm(props: {
       {/* Allow interested */}
       <div class="flex flex-col gap-1">
         <div class="flex items-center">
-          <label class="text-foreground text-sm font-medium">Allow "Maybe" replies?</label>
+          <span class="text-foreground text-sm font-medium">Allow "Maybe" replies?</span>
           <InfoPopover
             label="About Maybe replies"
             body="When enabled, guests can RSVP Maybe in addition to Going / Can't make it. Turn off for strict Yes/No events."
@@ -303,7 +303,7 @@ export function CreateEventForm(props: {
       {/* Comms channels */}
       <div class="flex flex-col gap-1">
         <div class="flex items-center">
-          <label class="text-foreground text-sm font-medium">How to reach guests</label>
+          <span class="text-foreground text-sm font-medium">How to reach guests</span>
           <InfoPopover
             label="About announcement channels"
             body="The channels you'll use to send reminders and announcements (blasts) to guests. Pick one or both — actual sending lands later; for now you can preview how blasts will appear on the event page."

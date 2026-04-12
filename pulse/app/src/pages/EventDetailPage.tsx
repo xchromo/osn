@@ -32,6 +32,8 @@ interface EventDetail {
   createdByName: string | null;
 }
 
+const locationLabel = (e: EventDetail) => [e.venue, e.location].filter(Boolean).join(", ") || null;
+
 async function fetchEvent(id: string, token: string | null): Promise<EventDetail | null> {
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -48,9 +50,6 @@ export function EventDetailPage() {
 
   const source = () => ({ id: params.id, token: accessToken() });
   const [event] = createResource(source, ({ id, token }) => fetchEvent(id, token));
-
-  const locationLabel = (e: EventDetail) =>
-    [e.venue, e.location].filter(Boolean).join(", ") || null;
 
   return (
     <main class="mx-auto max-w-xl px-4 py-6">

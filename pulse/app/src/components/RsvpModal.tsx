@@ -33,8 +33,8 @@ export function RsvpModal(props: {
     token: props.accessToken,
     tab: tab(),
   }));
-  const [rsvps] = createResource(source, ({ eventId, token, tab }) =>
-    fetchRsvpsByStatus(eventId, tab as RsvpStatus, token),
+  const [rsvps] = createResource(source, ({ eventId, token, tab: selectedTab }) =>
+    fetchRsvpsByStatus(eventId, selectedTab as RsvpStatus, token),
   );
 
   const isOrganiser = () => props.currentUserId === props.event.createdByUserId;
@@ -49,9 +49,13 @@ export function RsvpModal(props: {
 
   return (
     <div
+      role="none"
       class="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center"
       onClick={(e) => {
         if (e.target === e.currentTarget) props.onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") props.onClose();
       }}
     >
       <div class="bg-card border-border flex max-h-[85vh] w-full flex-col rounded-t-xl border shadow-xl sm:max-w-lg sm:rounded-xl">

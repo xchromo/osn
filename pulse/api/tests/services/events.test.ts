@@ -476,7 +476,7 @@ it.effect("listEvents shows private events to their own creator", () =>
       );
       const events = yield* listEvents({ viewerId: "usr_alice" });
       expect(events.length).toBe(2);
-      expect(events.map((e) => e.title).sort()).toEqual(["Alice's private", "Public"]);
+      expect(events.map((e) => e.title).toSorted()).toEqual(["Alice's private", "Public"]);
     }),
   ),
 );

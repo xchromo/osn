@@ -245,10 +245,11 @@ export function createGraphRoutes(
           try {
             const list = await run(graph.listConnections(caller.userId, parsePagination(query)));
             return {
-              connections: list.map((c) => ({
-                ...userProjection(c.user),
-                connectedAt: c.connectedAt.toISOString(),
-              })),
+              connections: list.map((c) =>
+                Object.assign({}, userProjection(c.user), {
+                  connectedAt: c.connectedAt.toISOString(),
+                }),
+              ),
             };
           } catch (e) {
             set.status = 500;
@@ -267,10 +268,11 @@ export function createGraphRoutes(
               graph.listPendingRequests(caller.userId, parsePagination(query)),
             );
             return {
-              pending: list.map((r) => ({
-                ...userProjection(r.user),
-                requestedAt: r.requestedAt.toISOString(),
-              })),
+              pending: list.map((r) =>
+                Object.assign({}, userProjection(r.user), {
+                  requestedAt: r.requestedAt.toISOString(),
+                }),
+              ),
             };
           } catch (e) {
             set.status = 500;

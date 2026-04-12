@@ -73,7 +73,7 @@ export function SettingsPage() {
           </p>
           <div class="mt-2 flex flex-col gap-2">
             {OPTIONS.map((opt) => (
-              <label class="flex cursor-pointer items-start gap-2">
+              <label class="flex cursor-pointer items-start gap-2" aria-label={opt.label}>
                 <input
                   type="radio"
                   name="attendanceVisibility"

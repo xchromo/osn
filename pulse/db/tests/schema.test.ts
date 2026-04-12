@@ -366,7 +366,7 @@ describe("pulse_users schema", () => {
       { userId: "usr_none", attendanceVisibility: "no_one", createdAt: now, updatedAt: now },
     ]);
     const rows = await db.select().from(schema.pulseUsers);
-    expect(rows.map((r) => r.attendanceVisibility).sort()).toEqual(["connections", "no_one"]);
+    expect(rows.map((r) => r.attendanceVisibility).toSorted()).toEqual(["connections", "no_one"]);
   });
 });
 

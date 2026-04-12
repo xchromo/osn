@@ -14,6 +14,7 @@ export function CallbackHandler() {
     if (code && state) {
       handleCallback({ code, state, redirectUri: REDIRECT_URI() }).then(() => {
         window.history.replaceState({}, "", window.location.pathname);
+        return undefined;
       });
     }
   });

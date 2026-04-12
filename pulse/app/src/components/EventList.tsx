@@ -47,6 +47,7 @@ export function EventList() {
       .then(() => {
         toast.success("Event deleted");
         refetch();
+        return undefined;
       })
       .catch((err) => {
         if (import.meta.env.DEV) console.error("Failed to delete event:", err);

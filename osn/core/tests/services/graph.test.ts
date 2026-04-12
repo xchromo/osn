@@ -170,7 +170,7 @@ describe("listConnections", () => {
       yield* graph.acceptConnection(carol.id, alice.id);
 
       const list = yield* graph.listConnections(alice.id);
-      const handles = list.map((c) => c.user.handle).sort();
+      const handles = list.map((c) => c.user.handle).toSorted();
       expect(handles).toEqual(["bob", "carol"]);
       void bob;
     }).pipe(Effect.provide(createTestLayer())),
