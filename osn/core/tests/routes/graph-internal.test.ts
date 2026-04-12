@@ -161,6 +161,56 @@ describe("internal graph routes (ARC-protected)", () => {
       expect(res.status).toBe(401);
     });
 
+    it("returns 401 with expired ARC token", async () => {
+      const { keyPair: kp } = await setupArcService("pulse-api", "graph:read", "osn-core");
+      // Create token with minimum TTL (1 second)
+      const expiredToken = await createArcToken(
+        kp.privateKey,
+        { iss: "pulse-api", aud: "osn-core", scope: "graph:read" },
+        1,
+      );
+
+      // Wait for expiry
+      await new Promise((r) => setTimeout(r, 1100));
+
+      const res = await app.handle(
+        new Request("http://localhost/graph/internal/either-blocked?userA=a&userB=b", {
+          headers: { Authorization: `ARC ${expiredToken}` },
+        }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects missing ARC token on all endpoints", async () => {
+      const endpoints = [
+        { url: "/graph/internal/either-blocked?userA=a&userB=b", method: "GET" },
+        { url: "/graph/internal/connection-status?viewerId=a&targetId=b", method: "GET" },
+        { url: "/graph/internal/connections?userId=a", method: "GET" },
+        { url: "/graph/internal/close-friends?userId=a", method: "GET" },
+        { url: "/graph/internal/is-close-friend?userId=a&friendId=b", method: "GET" },
+        {
+          url: "/graph/internal/close-friends-of",
+          method: "POST",
+          body: JSON.stringify({ viewerId: "a", userIds: ["b"] }),
+        },
+        {
+          url: "/graph/internal/user-displays",
+          method: "POST",
+          body: JSON.stringify({ userIds: ["a"] }),
+        },
+      ];
+
+      for (const ep of endpoints) {
+        const init: RequestInit = { method: ep.method };
+        if (ep.body) {
+          init.headers = { "Content-Type": "application/json" };
+          init.body = ep.body;
+        }
+        const res = await app.handle(new Request(`http://localhost${ep.url}`, init));
+        expect(res.status, `expected 401 on ${ep.method} ${ep.url}`).toBe(401);
+      }
+    });
+
     it("succeeds with valid ARC token", async () => {
       const { token } = await setupArcService();
 
