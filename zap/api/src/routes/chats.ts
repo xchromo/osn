@@ -10,6 +10,7 @@ import {
   addMember,
   removeMember,
   getChatMembers,
+  assertMember,
 } from "../services/chats";
 import { sendMessage, listMessages } from "../services/messages";
 import { metricAccessDenied } from "../metrics";
@@ -65,8 +66,13 @@ export const createChatsRoutes = (
             return { message: "Unauthorized" } as const;
           }
           const result = await Effect.runPromise(
-            getChat(params.id).pipe(
+            Effect.gen(function* () {
+              const chat = yield* getChat(params.id);
+              yield* assertMember(params.id, claims.userId);
+              return chat;
+            }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
               Effect.provide(dbLayer),
             ),
           );
@@ -122,8 +128,12 @@ export const createChatsRoutes = (
             return { message: "Unauthorized" } as const;
           }
           const result = await Effect.runPromise(
-            updateChat(params.id, body, claims.userId).pipe(
+            Effect.gen(function* () {
+              yield* assertMember(params.id, claims.userId);
+              return yield* updateChat(params.id, body, claims.userId);
+            }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -161,8 +171,12 @@ export const createChatsRoutes = (
             return { message: "Unauthorized" } as const;
           }
           const result = await Effect.runPromise(
-            getChatMembers(params.id).pipe(
+            Effect.gen(function* () {
+              yield* assertMember(params.id, claims.userId);
+              return yield* getChatMembers(params.id);
+            }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
               Effect.provide(dbLayer),
             ),
           );

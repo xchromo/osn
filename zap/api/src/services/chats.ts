@@ -1,5 +1,5 @@
 import { Data, Effect, Schema } from "effect";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { chats, chatMembers } from "@zap/db/schema";
 import type { Chat, ChatMember } from "@zap/db/schema";
 import { Db } from "@zap/db/service";
@@ -89,16 +89,8 @@ export const listChats = (userId: string): Effect.Effect<Chat[], DatabaseError, 
     if (memberRows.length === 0) return [];
     const chatIds = memberRows.map((m) => m.chatId);
     const results = yield* Effect.tryPromise({
-      try: async (): Promise<Chat[]> => {
-        // SQLite doesn't have an IN operator in drizzle-orm's builder that
-        // takes an array directly, so we use a loop with bounded concurrency.
-        const rows: Chat[] = [];
-        for (const cid of chatIds) {
-          const r = (await db.select().from(chats).where(eq(chats.id, cid))) as Chat[];
-          rows.push(...r);
-        }
-        return rows;
-      },
+      try: (): Promise<Chat[]> =>
+        db.select().from(chats).where(inArray(chats.id, chatIds)) as Promise<Chat[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
     return results;
@@ -146,20 +138,20 @@ export const createChat = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Add initial members if provided.
+    // Batch-insert initial members if provided.
     if (validated.memberUserIds && validated.memberUserIds.length > 0) {
-      for (const userId of validated.memberUserIds) {
-        if (userId === creatorUserId) continue; // already added as admin
-        const mid = "cmem_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+      const memberRows = validated.memberUserIds
+        .filter((uid) => uid !== creatorUserId) // already added as admin
+        .map((uid) => ({
+          id: "cmem_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+          chatId: id,
+          userId: uid,
+          role: "member" as const,
+          joinedAt: now,
+        }));
+      if (memberRows.length > 0) {
         yield* Effect.tryPromise({
-          try: () =>
-            db.insert(chatMembers).values({
-              id: mid,
-              chatId: id,
-              userId,
-              role: "member",
-              joinedAt: now,
-            }),
+          try: () => db.insert(chatMembers).values(memberRows),
           catch: (cause) => new DatabaseError({ cause }),
         });
       }
@@ -306,6 +298,30 @@ export const getChatMembers = (
     });
     return members;
   }).pipe(Effect.withSpan("zap.chats.get_members"));
+
+// ---------------------------------------------------------------------------
+// Helpers (public — used by routes for membership gating)
+// ---------------------------------------------------------------------------
+
+export const assertMember = (
+  chatId: string,
+  userId: string,
+): Effect.Effect<void, NotChatMember | DatabaseError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<ChatMember[]> =>
+        db
+          .select()
+          .from(chatMembers)
+          .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)))
+          .limit(1) as Promise<ChatMember[]>,
+      catch: (cause) => new DatabaseError({ cause }),
+    });
+    if (rows.length === 0) {
+      return yield* Effect.fail(new NotChatMember({ chatId }));
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // Internal helpers
