@@ -358,6 +358,13 @@ Address **High** items before any non-local deployment.
 - [x] S-H2 (zap) — Missing membership check on `GET /chats/:id` allowed any authenticated user to read chat metadata. Fixed: `assertMember` gate added.
 - [x] S-H3 (zap) — Missing membership check on `GET /chats/:id/members` leaked member rosters. Fixed: `assertMember` gate added.
 - [x] S-H4 (zap) — `PATCH /chats/:id` differentiated 403/404 for non-members, leaking chat existence. Fixed: 404 for non-members.
+- [x] S-H1 (multi) — Client/server field mismatch on passkey enrollment. Client sent `profileId`, server expected `accountId`. Fixed: route accepts `profileId` and resolves `accountId` internally via `findProfileById`. Enrollment token `sub` now carries real `accountId`.
+- [x] S-H2 (multi) — Profile ID stored in `passkeys.accountId` column. `completeRegistration` passed profile ID to `issueEnrollmentToken`. Fixed: now passes `accountId`. `beginPasskeyLogin` queries `passkeys.accountId = user.accountId`.
+- [x] S-H3 (multi) — Non-atomic account + profile creation. Two separate INSERTs without transaction. Fixed: both `registerUser` and `completeRegistration` wrap account+profile inserts in `db.transaction()`.
+- [x] S-M1 (multi) — Missing email index after UNIQUE removal from `users.email`. `findUserByEmail` hot path became full table scan. Fixed: re-added `users_email_idx`.
+- [x] S-M2 (multi) — `accountId` exposed in org `listMembers` service return type. Fixed: stripped `accountId` and `isDefault` from select projection and return type.
+- [ ] S-L1 (multi) — `maxProfiles` column set to 5 but never enforced. Deferred to multi-account P3 (profile CRUD).
+- [ ] S-L2 (multi) — Email duplication between `accounts.email` and `users.email`. Transitional for PR1 backward compat. Deferred to multi-account P2 (auth refactor).
 - [ ] S-M1 (zap) — No rate limiting on any Zap API endpoint. Add per-IP rate limiting on write endpoints (POST `/chats`, POST `/:id/messages`, POST `/:id/members`). — see [[rate-limiting]]
 - [ ] S-M2 (zap) — CORS wildcard (`cors()` with no config) on `@zap/api` allows any origin. Restrict to known client origins. — see S-M6 (same pattern on Pulse)
 - [ ] S-M3 (zap) — `zapBridge.provisionEventChat` does not verify caller owns the event. Add ownership check.
@@ -432,6 +439,8 @@ Address **High** items before any non-local deployment.
 - [x] P-C1 — `filterByAttendeePrivacy` in `pulse/api/src/services/rsvps.ts` had an N+1 lookup against `pulse_users` (the comment claimed "batch-fetch" but the implementation did `for (id of attendeeIds) yield* getAttendanceVisibility(id)`), firing up to 200 extra queries per `listRsvps` call on busy events. Fixed in the full-event-view PR by adding `getAttendanceVisibilityBatch(userIds[])` to `pulseUsers.ts` (single `WHERE userId IN (...)` query, defaults missing keys to `connections`) and replacing the for-loop with a single call.
 - [x] P-C1 (zap) — N+1 query in `listChats` fetched each chat individually in a loop. Fixed: replaced with `inArray` single query.
 - [x] P-C2 (zap) — `createChat` inserted initial members one-by-one. Fixed: batch `db.insert(chatMembers).values(memberRows)`.
+- [x] P-C1 (multi) — Passkey login query used profile ID against account-scoped `passkeys.accountId` column. `beginPasskeyLogin` queried `eq(passkeys.accountId, user.id)` instead of `eq(passkeys.accountId, user.accountId)`. Fixed.
+- [x] P-C2 (multi) — `users.email` index dropped during schema rewrite. Login hot path became full table scan. Fixed: re-added `users_email_idx`.
 
 ### Warning
 

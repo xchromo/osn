@@ -36,7 +36,7 @@ export const users = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("users_account_idx").on(t.accountId)],
+  (t) => [index("users_account_idx").on(t.accountId), index("users_email_idx").on(t.email)],
 );
 
 export const passkeys = sqliteTable(

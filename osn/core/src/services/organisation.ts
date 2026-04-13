@@ -497,7 +497,19 @@ export function createOrganisationService() {
     orgId: string,
     options: ListOptions = {},
   ): Effect.Effect<
-    { user: typeof users.$inferSelect; role: string; joinedAt: Date }[],
+    {
+      user: {
+        id: string;
+        handle: string;
+        email: string;
+        displayName: string | null;
+        avatarUrl: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+      };
+      role: string;
+      joinedAt: Date;
+    }[],
     NotFoundError | DatabaseError,
     Db
   > =>
@@ -527,12 +539,10 @@ export function createOrganisationService() {
           db
             .select({
               id: users.id,
-              accountId: users.accountId,
               handle: users.handle,
               email: users.email,
               displayName: users.displayName,
               avatarUrl: users.avatarUrl,
-              isDefault: users.isDefault,
               createdAt: users.createdAt,
               updatedAt: users.updatedAt,
               role: organisationMembers.role,
@@ -549,12 +559,10 @@ export function createOrganisationService() {
       return rows.map((r) => ({
         user: {
           id: r.id,
-          accountId: r.accountId,
           handle: r.handle,
           email: r.email,
           displayName: r.displayName,
           avatarUrl: r.avatarUrl,
-          isDefault: r.isDefault,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         },

@@ -518,7 +518,7 @@ describe("passkey registration", () => {
   it.effect("beginPasskeyRegistration returns options with @handle as userName", () =>
     Effect.gen(function* () {
       const user = yield* auth.registerUser("passkey@example.com", "passkeyuser");
-      const result = yield* auth.beginPasskeyRegistration(user.id);
+      const result = yield* auth.beginPasskeyRegistration(user.accountId);
       expect(result.options).toBeTruthy();
       expect(result.options.challenge).toBeTruthy();
       expect(result.options.user.name).toBe("@passkeyuser");

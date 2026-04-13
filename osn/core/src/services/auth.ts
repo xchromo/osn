@@ -337,6 +337,16 @@ export function createAuthService(config: AuthConfig) {
       return result[0] ?? null;
     });
 
+  const findProfileById = (profileId: string): Effect.Effect<User | null, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(eq(users.id, profileId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return result[0] ?? null;
+    });
+
   /**
    * Resolves a (normalised) identifier to a user.
    * Identifiers containing "@" are treated as email addresses; all others as handles.
@@ -384,23 +394,20 @@ export function createAuthService(config: AuthConfig) {
 
       yield* Effect.tryPromise({
         try: () =>
-          db
-            .insert(accounts)
-            .values({ id: accountId, email, maxProfiles: 5, createdAt: ts, updatedAt: ts }),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      yield* Effect.tryPromise({
-        try: () =>
-          db.insert(users).values({
-            id,
-            accountId,
-            handle,
-            email,
-            displayName: dn,
-            isDefault: true,
-            createdAt: ts,
-            updatedAt: ts,
+          db.transaction(async (tx) => {
+            await tx
+              .insert(accounts)
+              .values({ id: accountId, email, maxProfiles: 5, createdAt: ts, updatedAt: ts });
+            await tx.insert(users).values({
+              id,
+              accountId,
+              handle,
+              email,
+              displayName: dn,
+              isDefault: true,
+              createdAt: ts,
+              updatedAt: ts,
+            });
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -591,22 +598,24 @@ export function createAuthService(config: AuthConfig) {
       const inserted = yield* Effect.tryPromise({
         try: async () => {
           try {
-            await db.insert(accounts).values({
-              id: accountId,
-              email: pending.email,
-              maxProfiles: 5,
-              createdAt: ts,
-              updatedAt: ts,
-            });
-            await db.insert(users).values({
-              id,
-              accountId,
-              handle: pending.handle,
-              email: pending.email,
-              displayName: pending.displayName,
-              isDefault: true,
-              createdAt: ts,
-              updatedAt: ts,
+            await db.transaction(async (tx) => {
+              await tx.insert(accounts).values({
+                id: accountId,
+                email: pending.email,
+                maxProfiles: 5,
+                createdAt: ts,
+                updatedAt: ts,
+              });
+              await tx.insert(users).values({
+                id,
+                accountId,
+                handle: pending.handle,
+                email: pending.email,
+                displayName: pending.displayName,
+                isDefault: true,
+                createdAt: ts,
+                updatedAt: ts,
+              });
             });
             return { ok: true as const };
           } catch (e) {
@@ -631,7 +640,7 @@ export function createAuthService(config: AuthConfig) {
       pendingRegistrations.delete(key);
 
       const tokens = yield* issueTokens(id, pending.email, pending.handle, pending.displayName);
-      const enrollmentToken = yield* issueEnrollmentToken(id);
+      const enrollmentToken = yield* issueEnrollmentToken(accountId);
 
       return {
         profileId: id,
@@ -880,13 +889,14 @@ export function createAuthService(config: AuthConfig) {
   > =>
     Effect.gen(function* () {
       const { db } = yield* Db;
-      const userResult = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, accountId)).limit(1),
+      // Look up the default profile for this account (for display name in WebAuthn)
+      const profileResult = yield* Effect.tryPromise({
+        try: () => db.select().from(users).where(eq(users.accountId, accountId)).limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      const user = userResult[0];
-      if (!user) {
-        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+      const profile = profileResult[0];
+      if (!profile) {
+        return yield* Effect.fail(new AuthError({ message: "Account not found" }));
       }
 
       const existingPasskeys = yield* Effect.tryPromise({
@@ -900,8 +910,8 @@ export function createAuthService(config: AuthConfig) {
             rpName: config.rpName,
             rpID: config.rpId,
             userID: new TextEncoder().encode(accountId),
-            userName: `@${user.handle}`,
-            userDisplayName: user.displayName ?? `@${user.handle}`,
+            userName: `@${profile.handle}`,
+            userDisplayName: profile.displayName ?? `@${profile.handle}`,
             attestationType: "none",
             excludeCredentials: existingPasskeys.map((pk) => ({
               id: pk.credentialId,
@@ -999,7 +1009,7 @@ export function createAuthService(config: AuthConfig) {
 
       const { db } = yield* Db;
       const userPasskeys = yield* Effect.tryPromise({
-        try: () => db.select().from(passkeys).where(eq(passkeys.accountId, user.id)),
+        try: () => db.select().from(passkeys).where(eq(passkeys.accountId, user.accountId)),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -1371,6 +1381,7 @@ export function createAuthService(config: AuthConfig) {
   return {
     findUserByEmail,
     findUserByHandle,
+    findProfileById,
     resolveIdentifier,
     registerUser,
     beginRegistration,
