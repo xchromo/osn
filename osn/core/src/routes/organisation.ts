@@ -55,7 +55,7 @@ const PaginationQuery = t.Object({
   offset: t.Optional(t.String()),
 });
 
-function userProjection(u: User) {
+function userProjection(u: { handle: string; displayName: string | null }) {
   return {
     handle: u.handle,
     displayName: u.displayName ?? null,
