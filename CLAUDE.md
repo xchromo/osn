@@ -51,6 +51,7 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 | Instrument logging, tracing, or metrics | `[[wiki/observability/overview]]`, then the specific page |
 | Write or review tests | `[[wiki/conventions/testing-patterns]]` |
 | Understand event visibility rules | `[[wiki/systems/event-access]]` |
+| Add or use a UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
 | Work on the social graph or close friends | `[[wiki/systems/social-graph]]`, `[[wiki/systems/close-friends]]` |
 | Understand cross-service calls | `[[wiki/architecture/s2s-patterns]]` |
 | Debug a production issue | Browse `wiki/runbooks/` |
