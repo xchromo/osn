@@ -57,7 +57,7 @@ export function buildSeedEvents(now: Date): NewEvent[] {
     user: (typeof U)[keyof typeof U],
     overrides: Omit<
       NewEvent,
-      "id" | "createdByUserId" | "createdByName" | "createdByAvatar" | "createdAt" | "updatedAt"
+      "id" | "createdByProfileId" | "createdByName" | "createdByAvatar" | "createdAt" | "updatedAt"
     >,
   ): NewEvent => ({
     id,
