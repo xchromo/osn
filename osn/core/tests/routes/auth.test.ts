@@ -386,7 +386,7 @@ describe("auth routes", () => {
         },
       });
       await Effect.runPromise(
-        authHelper.registerUser("judy@example.com", "judy").pipe(Effect.provide(layer)),
+        authHelper.registerProfile("judy@example.com", "judy").pipe(Effect.provide(layer)),
       );
       await Effect.runPromise(authHelper.beginOtp("judy@example.com").pipe(Effect.provide(layer)));
       const { code } = await Effect.runPromise(
@@ -568,7 +568,7 @@ describe("auth routes", () => {
       });
       await Effect.runPromise(
         authHelper
-          .registerUser("magic-route@example.com", "magicroute")
+          .registerProfile("magic-route@example.com", "magicroute")
           .pipe(Effect.provide(layer)),
       );
       await Effect.runPromise(
@@ -646,7 +646,9 @@ describe("auth routes", () => {
         },
       });
       await Effect.runPromise(
-        authHelper.registerUser("otp-direct@example.com", "otpdirect").pipe(Effect.provide(layer)),
+        authHelper
+          .registerProfile("otp-direct@example.com", "otpdirect")
+          .pipe(Effect.provide(layer)),
       );
       await Effect.runPromise(
         authHelper.beginOtp("otp-direct@example.com").pipe(Effect.provide(layer)),
@@ -741,7 +743,7 @@ describe("auth routes", () => {
       });
       await Effect.runPromise(
         authHelper
-          .registerUser("magic-direct@example.com", "magicdirect")
+          .registerProfile("magic-direct@example.com", "magicdirect")
           .pipe(Effect.provide(layer)),
       );
       await Effect.runPromise(
@@ -793,7 +795,7 @@ describe("auth routes", () => {
     it("returns 400 when user has no passkeys (by email)", async () => {
       const auth = createAuthService(config);
       await Effect.runPromise(
-        auth.registerUser("noah@example.com", "noah").pipe(Effect.provide(layer)),
+        auth.registerProfile("noah@example.com", "noah").pipe(Effect.provide(layer)),
       );
 
       const res = await app.handle(
@@ -809,7 +811,7 @@ describe("auth routes", () => {
     it("returns 400 when user has no passkeys (by handle)", async () => {
       const auth = createAuthService(config);
       await Effect.runPromise(
-        auth.registerUser("olivia@example.com", "olivia").pipe(Effect.provide(layer)),
+        auth.registerProfile("olivia@example.com", "olivia").pipe(Effect.provide(layer)),
       );
 
       const res = await app.handle(
@@ -850,7 +852,7 @@ describe("auth routes", () => {
     }> {
       const svc = createAuthService(config);
       const user = await Effect.runPromise(
-        svc.registerUser("paul@example.com", "paul").pipe(Effect.provide(layer)),
+        svc.registerProfile("paul@example.com", "paul").pipe(Effect.provide(layer)),
       );
       // Enrollment token sub = accountId (passkeys belong to accounts)
       const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.accountId));
@@ -908,7 +910,7 @@ describe("auth routes", () => {
     it("accepts a normal access token (existing user adding a passkey)", async () => {
       const svc = createAuthService(config);
       const user = await Effect.runPromise(
-        svc.registerUser("quinn@example.com", "quinn").pipe(Effect.provide(layer)),
+        svc.registerProfile("quinn@example.com", "quinn").pipe(Effect.provide(layer)),
       );
       const tokens = await Effect.runPromise(
         svc.issueTokens(user.id, user.email, user.handle, user.displayName),
@@ -929,7 +931,7 @@ describe("auth routes", () => {
     it("rejects requests without Authorization header (S-H5: legacy path removed)", async () => {
       const svc = createAuthService(config);
       const user = await Effect.runPromise(
-        svc.registerUser("rita@example.com", "rita").pipe(Effect.provide(layer)),
+        svc.registerProfile("rita@example.com", "rita").pipe(Effect.provide(layer)),
       );
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
@@ -946,7 +948,7 @@ describe("auth routes", () => {
     it("rejects when the enrollment token has already been consumed", async () => {
       const svc = createAuthService(config);
       const user = await Effect.runPromise(
-        svc.registerUser("sam@example.com", "samuser").pipe(Effect.provide(layer)),
+        svc.registerProfile("sam@example.com", "samuser").pipe(Effect.provide(layer)),
       );
       const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.id));
 

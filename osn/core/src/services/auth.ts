@@ -323,7 +323,9 @@ export function createAuthService(config: AuthConfig) {
   // User helpers
   // -------------------------------------------------------------------------
 
-  const findUserByEmail = (email: string): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
+  const findProfileByEmail = (
+    email: string,
+  ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const result = yield* Effect.tryPromise({
@@ -341,7 +343,7 @@ export function createAuthService(config: AuthConfig) {
       return { ...row.user, email: row.account.email };
     });
 
-  const findUserByHandle = (
+  const findProfileByHandle = (
     handle: string,
   ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
@@ -382,19 +384,19 @@ export function createAuthService(config: AuthConfig) {
     });
 
   /**
-   * Resolves a (normalised) identifier to a user.
+   * Resolves a (normalised) identifier to a profile.
    * Identifiers containing "@" are treated as email addresses; all others as handles.
    */
   const resolveIdentifier = (
     identifier: string,
   ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
-    looksLikeEmail(identifier) ? findUserByEmail(identifier) : findUserByHandle(identifier);
+    looksLikeEmail(identifier) ? findProfileByEmail(identifier) : findProfileByHandle(identifier);
 
   /**
-   * Registers a new user. Fails if the email or handle is already taken.
-   * This is the only way to create a user — OTP/magic/passkey flows are login-only.
+   * Registers a new profile (and its owning account). Fails if the email or handle is already taken.
+   * This is the only way to create a profile — OTP/magic/passkey flows are login-only.
    */
-  const registerUser = (
+  const registerProfile = (
     email: string,
     handle: string,
     displayName?: string,
@@ -412,7 +414,7 @@ export function createAuthService(config: AuthConfig) {
       }
 
       const [existingEmail, existingHandle] = yield* Effect.all(
-        [findUserByEmail(email), findUserByHandle(handle)],
+        [findProfileByEmail(email), findProfileByHandle(handle)],
         { concurrency: "unbounded" },
       );
       if (existingEmail) {
@@ -515,7 +517,7 @@ export function createAuthService(config: AuthConfig) {
       }
 
       const [existingEmail, existingHandle] = yield* Effect.all(
-        [findUserByEmail(normalisedEmail), findUserByHandle(handle)],
+        [findProfileByEmail(normalisedEmail), findProfileByHandle(handle)],
         { concurrency: "unbounded" },
       );
 
@@ -567,7 +569,7 @@ export function createAuthService(config: AuthConfig) {
 
   /**
    * Step 2 of email-verified registration. Verifies the OTP against the
-   * pending registration and, if valid, creates the user row, then returns a
+   * pending registration and, if valid, creates the account + profile rows, then returns a
    * full Session (access + refresh tokens) AND a short-lived single-use
    * enrollment token the client can use to add a passkey via the
    * Authorization-gated `/passkey/register/*` routes.
@@ -703,7 +705,7 @@ export function createAuthService(config: AuthConfig) {
         metricAuthHandleCheck("taken");
         return { available: false };
       }
-      const existing = yield* findUserByHandle(handle);
+      const existing = yield* findProfileByHandle(handle);
       metricAuthHandleCheck(existing === null ? "available" : "taken");
       return { available: existing === null };
     }).pipe(Effect.withSpan("auth.handle.check"));
@@ -838,7 +840,7 @@ export function createAuthService(config: AuthConfig) {
       const profileId = payload["sub"];
       const user = yield* findProfileById(profileId);
       if (!user) {
-        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
       }
       return yield* issueTokens(profileId, user.email, user.handle, user.displayName);
     });
@@ -865,7 +867,7 @@ export function createAuthService(config: AuthConfig) {
       const profileId = payload["sub"];
       const user = yield* findProfileById(profileId);
       if (!user) {
-        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
       }
       return yield* issueTokens(profileId, user.email, user.handle, user.displayName);
     }).pipe(withAuthTokenRefresh);
@@ -1251,7 +1253,7 @@ export function createAuthService(config: AuthConfig) {
 
       const user = yield* findProfileById(entry.profileId);
       if (!user) {
-        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
       }
       return user;
     });
@@ -1357,7 +1359,7 @@ export function createAuthService(config: AuthConfig) {
 
       const user = yield* findProfileById(entry.profileId);
       if (!user) {
-        return yield* Effect.fail(new AuthError({ message: "User not found" }));
+        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
       }
       return user;
     });
@@ -1395,11 +1397,11 @@ export function createAuthService(config: AuthConfig) {
     }).pipe(withAuthLogin("magic_link"));
 
   return {
-    findUserByEmail,
-    findUserByHandle,
+    findProfileByEmail,
+    findProfileByHandle,
     findProfileById,
     resolveIdentifier,
-    registerUser,
+    registerProfile,
     beginRegistration,
     completeRegistration,
     issueEnrollmentToken,
