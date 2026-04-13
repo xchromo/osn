@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { accounts, users, passkeys } from "@osn/db/schema";
-import type { Account, User } from "@osn/db/schema";
+import type { User } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import {
   generateRegistrationOptions,
