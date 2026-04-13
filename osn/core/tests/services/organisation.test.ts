@@ -65,7 +65,7 @@ describe("createOrganisation", () => {
       const alice = yield* registerUser("alice@example.com", "alice");
       const error = yield* Effect.flip(org.createOrganisation(alice.id, "alice", "Alice Org"));
       expect(error._tag).toBe("OrgError");
-      expect(error.message).toContain("Handle already taken");
+      expect(error.message).toContain("Handle unavailable");
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -75,7 +75,7 @@ describe("createOrganisation", () => {
       yield* org.createOrganisation(alice.id, "acme", "Acme Corp");
       const error = yield* Effect.flip(org.createOrganisation(alice.id, "acme", "Another Acme"));
       expect(error._tag).toBe("OrgError");
-      expect(error.message).toContain("Handle already taken");
+      expect(error.message).toContain("Handle unavailable");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

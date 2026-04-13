@@ -1,6 +1,6 @@
 import { organisations, organisationMembers, users } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { withOrgMemberOp, withOrgOp } from "../metrics";
@@ -64,8 +64,8 @@ export function createOrganisationService() {
     Effect.gen(function* () {
       const { db } = yield* Db;
 
-      // Check handle uniqueness across users and organisations
-      const [existingUser, existingOrg] = yield* Effect.tryPromise({
+      // P-W1: parallelise all pre-insert checks (handle user, handle org, owner exists)
+      const [existingUser, existingOrg, ownerRows] = yield* Effect.tryPromise({
         try: () =>
           Promise.all([
             db.select({ id: users.id }).from(users).where(eq(users.handle, handle)).limit(1),
@@ -74,19 +74,15 @@ export function createOrganisationService() {
               .from(organisations)
               .where(eq(organisations.handle, handle))
               .limit(1),
+            db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1),
           ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
+      // S-H2: use generic message to avoid confirming handle existence
       if (existingUser.length > 0 || existingOrg.length > 0) {
-        return yield* Effect.fail(new OrgError({ message: "Handle already taken" }));
+        return yield* Effect.fail(new OrgError({ message: "Handle unavailable" }));
       }
-
-      // Verify owner exists
-      const ownerRows = yield* Effect.tryPromise({
-        try: () => db.select({ id: users.id }).from(users).where(eq(users.id, ownerId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
 
       if (ownerRows.length === 0) {
         return yield* Effect.fail(new OrgError({ message: "Owner not found" }));
@@ -94,6 +90,7 @@ export function createOrganisationService() {
 
       const ts = now();
       const orgId = genId("org_");
+      const desc = description ?? null;
 
       // Insert org + owner as admin in a single transaction
       yield* Effect.tryPromise({
@@ -103,7 +100,7 @@ export function createOrganisationService() {
               id: orgId,
               handle,
               name,
-              description: description ?? null,
+              description: desc,
               avatarUrl: null,
               ownerId,
               createdAt: ts,
@@ -120,12 +117,17 @@ export function createOrganisationService() {
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      const rows = yield* Effect.tryPromise({
-        try: () => db.select().from(organisations).where(eq(organisations.id, orgId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      return rows[0];
+      // P-I1: construct return value from known inputs instead of re-fetching
+      return {
+        id: orgId,
+        handle,
+        name,
+        description: desc,
+        avatarUrl: null,
+        ownerId,
+        createdAt: ts,
+        updatedAt: ts,
+      };
     }).pipe(withOrgOp("create"));
 
   const getOrganisation = (
@@ -203,7 +205,8 @@ export function createOrganisationService() {
         );
       }
 
-      const setClause: Record<string, unknown> = { updatedAt: now() };
+      const ts = now();
+      const setClause: Record<string, unknown> = { updatedAt: ts };
       if (updates.name !== undefined) setClause.name = updates.name;
       if (updates.description !== undefined) setClause.description = updates.description;
 
@@ -212,12 +215,14 @@ export function createOrganisationService() {
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      const updated = yield* Effect.tryPromise({
-        try: () => db.select().from(organisations).where(eq(organisations.id, orgId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      return updated[0];
+      // P-W6: construct return from known state instead of re-fetching
+      const org = orgRows[0];
+      return {
+        ...org,
+        name: updates.name ?? org.name,
+        description: updates.description ?? org.description,
+        updatedAt: ts,
+      };
     }).pipe(withOrgOp("update"));
 
   const deleteOrganisation = (
@@ -263,27 +268,29 @@ export function createOrganisationService() {
       const limit = clampLimit(options.limit);
       const offset = options.offset ?? 0;
 
-      const memberRows = yield* Effect.tryPromise({
+      // P-W4: single JOIN query instead of two-step lookup
+      const rows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select({ organisationId: organisationMembers.organisationId })
+            .select({
+              id: organisations.id,
+              handle: organisations.handle,
+              name: organisations.name,
+              description: organisations.description,
+              avatarUrl: organisations.avatarUrl,
+              ownerId: organisations.ownerId,
+              createdAt: organisations.createdAt,
+              updatedAt: organisations.updatedAt,
+            })
             .from(organisationMembers)
+            .innerJoin(organisations, eq(organisationMembers.organisationId, organisations.id))
             .where(eq(organisationMembers.userId, userId))
             .limit(limit)
             .offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      if (memberRows.length === 0) return [];
-
-      const orgIds = memberRows.map((r) => r.organisationId);
-
-      const orgs = yield* Effect.tryPromise({
-        try: () => db.select().from(organisations).where(inArray(organisations.id, orgIds)),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      return orgs;
+      return rows;
     }).pipe(Effect.withSpan("org.list_by_user"));
 
   // -------------------------------------------------------------------------
@@ -299,64 +306,46 @@ export function createOrganisationService() {
     Effect.gen(function* () {
       const { db } = yield* Db;
 
-      // Check org exists
-      const orgRows = yield* Effect.tryPromise({
-        try: () => db.select().from(organisations).where(eq(organisations.id, orgId)).limit(1),
+      // P-W2: parallelise all pre-insert checks
+      const [orgRows, callerMember, targetRows, existing] = yield* Effect.tryPromise({
+        try: () =>
+          Promise.all([
+            db.select().from(organisations).where(eq(organisations.id, orgId)).limit(1),
+            db
+              .select()
+              .from(organisationMembers)
+              .where(
+                and(
+                  eq(organisationMembers.organisationId, orgId),
+                  eq(organisationMembers.userId, callerId),
+                  eq(organisationMembers.role, "admin"),
+                ),
+              )
+              .limit(1),
+            db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)).limit(1),
+            db
+              .select()
+              .from(organisationMembers)
+              .where(
+                and(
+                  eq(organisationMembers.organisationId, orgId),
+                  eq(organisationMembers.userId, targetUserId),
+                ),
+              )
+              .limit(1),
+          ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       if (orgRows.length === 0) {
         return yield* Effect.fail(new NotFoundError({ message: "Organisation not found" }));
       }
-
-      // Check caller is admin
-      const callerMember = yield* Effect.tryPromise({
-        try: () =>
-          db
-            .select()
-            .from(organisationMembers)
-            .where(
-              and(
-                eq(organisationMembers.organisationId, orgId),
-                eq(organisationMembers.userId, callerId),
-                eq(organisationMembers.role, "admin"),
-              ),
-            )
-            .limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
       if (callerMember.length === 0) {
         return yield* Effect.fail(new OrgError({ message: "Only admins can add members" }));
       }
-
-      // Check target user exists
-      const targetRows = yield* Effect.tryPromise({
-        try: () =>
-          db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
       if (targetRows.length === 0) {
         return yield* Effect.fail(new OrgError({ message: "Target user not found" }));
       }
-
-      // Check not already a member
-      const existing = yield* Effect.tryPromise({
-        try: () =>
-          db
-            .select()
-            .from(organisationMembers)
-            .where(
-              and(
-                eq(organisationMembers.organisationId, orgId),
-                eq(organisationMembers.userId, targetUserId),
-              ),
-            )
-            .limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
       if (existing.length > 0) {
         return yield* Effect.fail(new OrgError({ message: "User is already a member" }));
       }
@@ -532,32 +521,41 @@ export function createOrganisationService() {
         return yield* Effect.fail(new NotFoundError({ message: "Organisation not found" }));
       }
 
-      const memberRows = yield* Effect.tryPromise({
+      // P-W5: single JOIN query instead of two-step lookup
+      const rows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              id: users.id,
+              handle: users.handle,
+              email: users.email,
+              displayName: users.displayName,
+              avatarUrl: users.avatarUrl,
+              createdAt: users.createdAt,
+              updatedAt: users.updatedAt,
+              role: organisationMembers.role,
+              joinedAt: organisationMembers.createdAt,
+            })
             .from(organisationMembers)
+            .innerJoin(users, eq(organisationMembers.userId, users.id))
             .where(eq(organisationMembers.organisationId, orgId))
             .limit(limit)
             .offset(offset),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      if (memberRows.length === 0) return [];
-
-      const userIds = memberRows.map((m) => m.userId);
-      const roleMap = new Map(memberRows.map((m) => [m.userId, m.role]));
-      const joinedMap = new Map(memberRows.map((m) => [m.userId, m.createdAt]));
-
-      const memberUsers = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(inArray(users.id, userIds)),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-
-      return memberUsers.map((u) => ({
-        user: u,
-        role: roleMap.get(u.id) ?? "member",
-        joinedAt: joinedMap.get(u.id) ?? new Date(),
+      return rows.map((r) => ({
+        user: {
+          id: r.id,
+          handle: r.handle,
+          email: r.email,
+          displayName: r.displayName,
+          avatarUrl: r.avatarUrl,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        },
+        role: r.role,
+        joinedAt: r.joinedAt,
       }));
     }).pipe(Effect.withSpan("org.member.list"));
 

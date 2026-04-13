@@ -11,6 +11,9 @@ import { createOrganisationService } from "../services/organisation";
 
 const AUDIENCE = "osn-core";
 const SCOPE_ORG_READ = "org:read";
+/** S-M2: defined now so future mutation endpoints use the write scope, not read. */
+const _SCOPE_ORG_WRITE = "org:write";
+void _SCOPE_ORG_WRITE;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,7 +61,7 @@ export function createInternalOrganisationRoutes(dbLayer: Layer.Layer<Db> = DbLi
       },
       {
         query: t.Object({
-          userId: t.String({ minLength: 1 }),
+          userId: t.String({ minLength: 1, maxLength: 50 }),
         }),
       },
     )
@@ -84,8 +87,8 @@ export function createInternalOrganisationRoutes(dbLayer: Layer.Layer<Db> = DbLi
       },
       {
         query: t.Object({
-          orgId: t.String({ minLength: 1 }),
-          userId: t.String({ minLength: 1 }),
+          orgId: t.String({ minLength: 1, maxLength: 50 }),
+          userId: t.String({ minLength: 1, maxLength: 50 }),
         }),
       },
     );
