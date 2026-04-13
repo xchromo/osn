@@ -40,10 +40,10 @@ describe("auth routes", () => {
         }),
       );
       expect(res.status).toBe(201);
-      const json = (await res.json()) as { userId: string; handle: string; email: string };
+      const json = (await res.json()) as { profileId: string; handle: string; email: string };
       expect(json.handle).toBe("alice");
       expect(json.email).toBe("alice@example.com");
-      expect(json.userId).toMatch(/^usr_/);
+      expect(json.profileId).toMatch(/^usr_/);
     });
 
     it("returns 400 for duplicate email", async () => {
@@ -140,7 +140,7 @@ describe("auth routes", () => {
       );
       expect(completeRes.status).toBe(201);
       const json = (await completeRes.json()) as {
-        userId: string;
+        profileId: string;
         handle: string;
         email: string;
         session: {
@@ -151,7 +151,7 @@ describe("auth routes", () => {
         };
         enrollment_token: string;
       };
-      expect(json.userId).toMatch(/^usr_/);
+      expect(json.profileId).toMatch(/^usr_/);
       expect(json.handle).toBe("verifyme");
       expect(json.email).toBe("verify-me@example.com");
       expect(json.session.access_token.length).toBeGreaterThan(0);
@@ -844,7 +844,7 @@ describe("auth routes", () => {
      * in the new flow.
      */
     async function setupUserAndEnrollmentToken(): Promise<{
-      userId: string;
+      accountId: string;
       enrollmentToken: string;
     }> {
       const svc = createAuthService(config);
@@ -852,11 +852,11 @@ describe("auth routes", () => {
         svc.registerUser("paul@example.com", "paul").pipe(Effect.provide(layer)),
       );
       const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.id));
-      return { userId: user.id, enrollmentToken };
+      return { accountId: user.id, enrollmentToken };
     }
 
     it("S-C1: rejects with 401 when Authorization header is present but invalid", async () => {
-      const { userId } = await setupUserAndEnrollmentToken();
+      const { accountId } = await setupUserAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
@@ -864,13 +864,13 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: "Bearer not-a-real-token",
           },
-          body: JSON.stringify({ userId }),
+          body: JSON.stringify({ accountId }),
         }),
       );
       expect(res.status).toBe(401);
     });
 
-    it("S-C1: rejects with 401 when enrollment token's sub mismatches body.userId", async () => {
+    it("S-C1: rejects with 401 when enrollment token's sub mismatches body.accountId", async () => {
       const { enrollmentToken } = await setupUserAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
@@ -879,14 +879,14 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ userId: "usr_someoneelse" }),
+          body: JSON.stringify({ accountId: "acc_someoneelse" }),
         }),
       );
       expect(res.status).toBe(401);
     });
 
-    it("accepts a valid enrollment token whose sub matches body.userId", async () => {
-      const { userId, enrollmentToken } = await setupUserAndEnrollmentToken();
+    it("accepts a valid enrollment token whose sub matches body.accountId", async () => {
+      const { accountId, enrollmentToken } = await setupUserAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
@@ -894,7 +894,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ userId }),
+          body: JSON.stringify({ accountId }),
         }),
       );
       // 200 OK (WebAuthn options blob) — not 401, not 400.
@@ -918,7 +918,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${tokens.accessToken}`,
           },
-          body: JSON.stringify({ userId: user.id }),
+          body: JSON.stringify({ accountId: user.id }),
         }),
       );
       expect(res.status).toBe(200);
@@ -933,7 +933,7 @@ describe("auth routes", () => {
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: user.id }),
+          body: JSON.stringify({ accountId: user.id }),
         }),
       );
       expect(res.status).toBe(401);
@@ -958,7 +958,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ userId: user.id, attestation: { id: "x" } }),
+          body: JSON.stringify({ accountId: user.id, attestation: { id: "x" } }),
         }),
       );
 
@@ -970,7 +970,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ userId: user.id, attestation: { id: "x" } }),
+          body: JSON.stringify({ accountId: user.id, attestation: { id: "x" } }),
         }),
       );
       expect(second.status).toBe(401);
