@@ -501,7 +501,6 @@ export function createOrganisationService() {
       user: {
         id: string;
         handle: string;
-        email: string;
         displayName: string | null;
         avatarUrl: string | null;
         createdAt: Date;
@@ -540,7 +539,6 @@ export function createOrganisationService() {
             .select({
               id: users.id,
               handle: users.handle,
-              email: users.email,
               displayName: users.displayName,
               avatarUrl: users.avatarUrl,
               createdAt: users.createdAt,
@@ -560,7 +558,6 @@ export function createOrganisationService() {
         user: {
           id: r.id,
           handle: r.handle,
-          email: r.email,
           displayName: r.displayName,
           avatarUrl: r.avatarUrl,
           createdAt: r.createdAt,

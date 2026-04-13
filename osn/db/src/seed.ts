@@ -78,7 +78,6 @@ export function buildSeedUsers(now: Date): NewUser[] {
     id: `usr_seed_${name}`,
     accountId: `acc_seed_${name}`,
     handle: name,
-    email: `${name}@seed.osn.dev`,
     displayName,
     avatarUrl: null,
     isDefault: true,
@@ -122,7 +121,7 @@ export function buildSeedUsers(now: Date): NewUser[] {
       id: "usr_seed_multi_main",
       accountId: "acc_seed_multi",
       handle: "multi_main",
-      email: "multi@seed.osn.dev",
+
       displayName: "Multi Main",
       avatarUrl: null,
       isDefault: true,
@@ -133,7 +132,7 @@ export function buildSeedUsers(now: Date): NewUser[] {
       id: "usr_seed_multi_alt",
       accountId: "acc_seed_multi",
       handle: "multi_alt",
-      email: "multi@seed.osn.dev",
+
       displayName: "Multi Alt",
       avatarUrl: null,
       isDefault: false,
@@ -144,7 +143,7 @@ export function buildSeedUsers(now: Date): NewUser[] {
       id: "usr_seed_multi_work",
       accountId: "acc_seed_multi",
       handle: "multi_work",
-      email: "multi@seed.osn.dev",
+
       displayName: "Multi Work",
       avatarUrl: null,
       isDefault: false,

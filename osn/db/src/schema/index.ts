@@ -27,16 +27,13 @@ export const users = sqliteTable(
       .notNull()
       .references(() => accounts.id),
     handle: text("handle").notNull().unique(), // @handle — immutable social identity
-    // email is duplicated from accounts for backward compat in PR1.
-    // PR2 (auth refactor) will remove this and use accounts.email exclusively.
-    email: text("email").notNull(),
     displayName: text("display_name"),
     avatarUrl: text("avatar_url"),
     isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("users_account_idx").on(t.accountId), index("users_email_idx").on(t.email)],
+  (t) => [index("users_account_idx").on(t.accountId)],
 );
 
 export const passkeys = sqliteTable(

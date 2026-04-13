@@ -29,7 +29,6 @@ function createTestDb() {
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL REFERENCES accounts(id),
       handle TEXT NOT NULL UNIQUE,
-      email TEXT NOT NULL,
       display_name TEXT,
       avatar_url TEXT,
       is_default INTEGER NOT NULL DEFAULT 0,

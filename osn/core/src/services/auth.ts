@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { accounts, users, passkeys } from "@osn/db/schema";
-import type { User } from "@osn/db/schema";
+import type { Account, User } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import {
   generateRegistrationOptions,
@@ -232,6 +232,12 @@ export interface TokenSet {
 }
 
 /**
+ * A `User` row enriched with the `email` from the linked `accounts` row.
+ * Used throughout the auth service since `users` no longer carries email.
+ */
+export type UserWithEmail = User & { email: string };
+
+/**
  * The publicly-safe subset of `User` returned alongside a fresh session on
  * first-party login. Strips timestamps so clients don't accidentally depend
  * on them for anything display-related.
@@ -244,11 +250,11 @@ export interface PublicUser {
   avatarUrl: string | null;
 }
 
-function toPublicUser(u: User): PublicUser {
+function toPublicUser(u: User, email: string): PublicUser {
   return {
     id: u.id,
     handle: u.handle,
-    email: u.email,
+    email,
     displayName: u.displayName,
     avatarUrl: u.avatarUrl,
   };
@@ -317,41 +323,71 @@ export function createAuthService(config: AuthConfig) {
   // User helpers
   // -------------------------------------------------------------------------
 
-  const findUserByEmail = (email: string): Effect.Effect<User | null, DatabaseError, Db> =>
+  const findUserByEmail = (email: string): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.email, email)).limit(1),
+        try: () =>
+          db
+            .select({ user: users, account: accounts })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(eq(accounts.email, email))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      return result[0] ?? null;
+      const row = result[0];
+      if (!row) return null;
+      return { ...row.user, email: row.account.email };
     });
 
-  const findUserByHandle = (handle: string): Effect.Effect<User | null, DatabaseError, Db> =>
+  const findUserByHandle = (
+    handle: string,
+  ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.handle, handle)).limit(1),
+        try: () =>
+          db
+            .select({ user: users, account: accounts })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(eq(users.handle, handle))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      return result[0] ?? null;
+      const row = result[0];
+      if (!row) return null;
+      return { ...row.user, email: row.account.email };
     });
 
-  const findProfileById = (profileId: string): Effect.Effect<User | null, DatabaseError, Db> =>
+  const findProfileById = (
+    profileId: string,
+  ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, profileId)).limit(1),
+        try: () =>
+          db
+            .select({ user: users, account: accounts })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(eq(users.id, profileId))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      return result[0] ?? null;
+      const row = result[0];
+      if (!row) return null;
+      return { ...row.user, email: row.account.email };
     });
 
   /**
    * Resolves a (normalised) identifier to a user.
    * Identifiers containing "@" are treated as email addresses; all others as handles.
    */
-  const resolveIdentifier = (identifier: string): Effect.Effect<User | null, DatabaseError, Db> =>
+  const resolveIdentifier = (
+    identifier: string,
+  ): Effect.Effect<UserWithEmail | null, DatabaseError, Db> =>
     looksLikeEmail(identifier) ? findUserByEmail(identifier) : findUserByHandle(identifier);
 
   /**
@@ -362,7 +398,7 @@ export function createAuthService(config: AuthConfig) {
     email: string,
     handle: string,
     displayName?: string,
-  ): Effect.Effect<User, AuthError | ValidationError | DatabaseError, Db> =>
+  ): Effect.Effect<UserWithEmail, AuthError | ValidationError | DatabaseError, Db> =>
     Effect.gen(function* () {
       yield* Schema.decodeUnknown(EmailSchema)(email).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
@@ -402,7 +438,6 @@ export function createAuthService(config: AuthConfig) {
               id,
               accountId,
               handle,
-              email,
               displayName: dn,
               isDefault: true,
               createdAt: ts,
@@ -610,7 +645,6 @@ export function createAuthService(config: AuthConfig) {
                 id,
                 accountId,
                 handle: pending.handle,
-                email: pending.email,
                 displayName: pending.displayName,
                 isDefault: true,
                 createdAt: ts,
@@ -802,12 +836,7 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid code type" }));
       }
       const profileId = payload["sub"];
-      const { db } = yield* Db;
-      const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, profileId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-      const user = result[0];
+      const user = yield* findProfileById(profileId);
       if (!user) {
         return yield* Effect.fail(new AuthError({ message: "User not found" }));
       }
@@ -834,12 +863,7 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid token type" }));
       }
       const profileId = payload["sub"];
-      const { db } = yield* Db;
-      const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, profileId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-      const user = result[0];
+      const user = yield* findProfileById(profileId);
       if (!user) {
         return yield* Effect.fail(new AuthError({ message: "User not found" }));
       }
@@ -1053,7 +1077,7 @@ export function createAuthService(config: AuthConfig) {
   const verifyPasskeyAssertion = (
     identifier: string,
     assertion: AuthenticationResponseJSON,
-  ): Effect.Effect<User, AuthError | DatabaseError, Db> =>
+  ): Effect.Effect<UserWithEmail, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       // Check in-memory challenge guard before any DB lookup.
       const normalised = normaliseIdentifier(identifier);
@@ -1141,7 +1165,7 @@ export function createAuthService(config: AuthConfig) {
     Effect.gen(function* () {
       const user = yield* verifyPasskeyAssertion(identifier, assertion);
       const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
-      return { session, user: toPublicUser(user) };
+      return { session, user: toPublicUser(user, user.email) };
     }).pipe(withAuthLogin("passkey"));
 
   // -------------------------------------------------------------------------
@@ -1208,7 +1232,7 @@ export function createAuthService(config: AuthConfig) {
   const verifyOtpCode = (
     identifier: string,
     code: string,
-  ): Effect.Effect<User, AuthError | DatabaseError, Db> =>
+  ): Effect.Effect<UserWithEmail, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       // Check in-memory store first — no DB hit on expired/invalid attempts.
       const normalised = normaliseIdentifier(identifier);
@@ -1225,12 +1249,7 @@ export function createAuthService(config: AuthConfig) {
       }
       otpStore.delete(normalised);
 
-      const { db } = yield* Db;
-      const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, entry.profileId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-      const user = result[0];
+      const user = yield* findProfileById(entry.profileId);
       if (!user) {
         return yield* Effect.fail(new AuthError({ message: "User not found" }));
       }
@@ -1262,7 +1281,7 @@ export function createAuthService(config: AuthConfig) {
     Effect.gen(function* () {
       const user = yield* verifyOtpCode(identifier, code);
       const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
-      return { session, user: toPublicUser(user) };
+      return { session, user: toPublicUser(user, user.email) };
     }).pipe(withAuthLogin("otp"));
 
   // -------------------------------------------------------------------------
@@ -1326,7 +1345,9 @@ export function createAuthService(config: AuthConfig) {
   // party direct-session path.
   // -------------------------------------------------------------------------
 
-  const consumeMagicToken = (token: string): Effect.Effect<User, AuthError | DatabaseError, Db> =>
+  const consumeMagicToken = (
+    token: string,
+  ): Effect.Effect<UserWithEmail, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = magicStore.get(token);
       if (!entry || Date.now() > entry.expiresAt) {
@@ -1334,12 +1355,7 @@ export function createAuthService(config: AuthConfig) {
       }
       magicStore.delete(token);
 
-      const { db } = yield* Db;
-      const result = yield* Effect.tryPromise({
-        try: () => db.select().from(users).where(eq(users.id, entry.profileId)).limit(1),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
-      const user = result[0];
+      const user = yield* findProfileById(entry.profileId);
       if (!user) {
         return yield* Effect.fail(new AuthError({ message: "User not found" }));
       }
@@ -1375,7 +1391,7 @@ export function createAuthService(config: AuthConfig) {
     Effect.gen(function* () {
       const user = yield* consumeMagicToken(token);
       const session = yield* issueTokens(user.id, user.email, user.handle, user.displayName);
-      return { session, user: toPublicUser(user) };
+      return { session, user: toPublicUser(user, user.email) };
     }).pipe(withAuthLogin("magic_link"));
 
   return {
