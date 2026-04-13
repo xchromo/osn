@@ -183,6 +183,14 @@ describe("deleteOrganisation", () => {
       expect(error.message).toContain("owner");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("fails when org does not exist", () =>
+    Effect.gen(function* () {
+      const alice = yield* registerUser("alice@example.com", "alice");
+      const error = yield* Effect.flip(org.deleteOrganisation("org_nonexistent", alice.id));
+      expect(error._tag).toBe("NotFoundError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("listUserOrganisations", () => {
@@ -258,6 +266,16 @@ describe("addMember", () => {
       expect(error.message).toContain("Target user not found");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("fails when org does not exist", () =>
+    Effect.gen(function* () {
+      const alice = yield* registerUser("alice@example.com", "alice");
+      const error = yield* Effect.flip(
+        org.addMember("org_nonexistent", alice.id, alice.id, "member"),
+      );
+      expect(error._tag).toBe("NotFoundError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("removeMember", () => {
@@ -301,6 +319,14 @@ describe("removeMember", () => {
       const { alice, organisation } = yield* setupOrgWithOwner;
       const bob = yield* registerUser("bob@example.com", "bob");
       const error = yield* Effect.flip(org.removeMember(organisation.id, alice.id, bob.id));
+      expect(error._tag).toBe("NotFoundError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("fails when org does not exist", () =>
+    Effect.gen(function* () {
+      const alice = yield* registerUser("alice@example.com", "alice");
+      const error = yield* Effect.flip(org.removeMember("org_nonexistent", alice.id, alice.id));
       expect(error._tag).toBe("NotFoundError");
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -355,6 +381,27 @@ describe("updateMemberRole", () => {
       );
       expect(error._tag).toBe("OrgError");
       expect(error.message).toContain("owner's role");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("fails when org does not exist", () =>
+    Effect.gen(function* () {
+      const alice = yield* registerUser("alice@example.com", "alice");
+      const error = yield* Effect.flip(
+        org.updateMemberRole("org_nonexistent", alice.id, alice.id, "admin"),
+      );
+      expect(error._tag).toBe("NotFoundError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("fails when target member not found", () =>
+    Effect.gen(function* () {
+      const { alice, organisation } = yield* setupOrgWithOwner;
+      const bob = yield* registerUser("bob@example.com", "bob");
+      const error = yield* Effect.flip(
+        org.updateMemberRole(organisation.id, alice.id, bob.id, "admin"),
+      );
+      expect(error._tag).toBe("NotFoundError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });

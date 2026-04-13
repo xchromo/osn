@@ -237,6 +237,42 @@ describe("organisation routes", () => {
     expect(res.status).toBe(400);
   });
 
+  it("DELETE /organisations/:handle → 400 for non-owner admin", async () => {
+    const alice = await registerAndGetToken("alice@example.com", "alice");
+    const bob = await registerAndGetToken("bob@example.com", "bob");
+
+    await orgApp.handle(
+      new Request("http://localhost/organisations", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${alice.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ handle: "acme", name: "Acme Corp" }),
+      }),
+    );
+
+    // Add bob as admin
+    await orgApp.handle(
+      new Request("http://localhost/organisations/acme/members/bob", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${alice.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ role: "admin" }),
+      }),
+    );
+
+    const res = await orgApp.handle(
+      new Request("http://localhost/organisations/acme", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${bob.token}` },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   it("DELETE /organisations/:handle deletes the org", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
 
