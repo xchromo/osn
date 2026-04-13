@@ -379,11 +379,12 @@ export function createOrganisationRoutes(
           try {
             const list = await run(org.listMembers(organisation.id, parsePagination(query)));
             return {
-              members: list.map((m) => ({
-                ...userProjection(m.user),
-                role: m.role,
-                joinedAt: m.joinedAt.toISOString(),
-              })),
+              members: list.map((m) =>
+                Object.assign({}, userProjection(m.user), {
+                  role: m.role,
+                  joinedAt: m.joinedAt.toISOString(),
+                }),
+              ),
             };
           } catch (e) {
             set.status = 500;
