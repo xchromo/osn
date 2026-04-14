@@ -1030,26 +1030,12 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Account not found" }));
       }
 
-      // Lazy-fill passkeyUserId for accounts created before P6.
-      let passkeyUserId = account.passkeyUserId;
-      if (!passkeyUserId) {
-        passkeyUserId = crypto.randomUUID();
-        yield* Effect.tryPromise({
-          try: () =>
-            db
-              .update(accounts)
-              .set({ passkeyUserId, updatedAt: now() })
-              .where(eq(accounts.id, accountId)),
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-      }
-
       const options = yield* Effect.tryPromise({
         try: () =>
           generateRegistrationOptions({
             rpName: config.rpName,
             rpID: config.rpId,
-            userID: new TextEncoder().encode(passkeyUserId),
+            userID: new TextEncoder().encode(account.passkeyUserId),
             userName: `@${profile.handle}`,
             userDisplayName: profile.displayName ?? `@${profile.handle}`,
             attestationType: "none",
