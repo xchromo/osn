@@ -30,3 +30,37 @@ export function parseTokenResponse(raw: unknown): Session {
     scopes: t.scope ? t.scope.split(" ") : [],
   };
 }
+
+export interface PublicProfile {
+  id: string;
+  handle: string;
+  email: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+export interface ProfileToken {
+  accessToken: string;
+  /** Unix timestamp (ms) when the access token expires */
+  expiresAt: number;
+}
+
+export interface AccountSession {
+  refreshToken: string;
+  activeProfileId: string;
+  profileTokens: Record<string, ProfileToken>;
+  scopes: string[];
+  idToken: string | null;
+}
+
+/** Extract the `sub` claim from a JWT payload without cryptographic verification. */
+export function extractJwtSub(jwt: string): string | null {
+  try {
+    const payload = jwt.split(".")[1];
+    if (!payload) return null;
+    const decoded = JSON.parse(atob(payload)) as { sub?: string };
+    return decoded.sub ?? null;
+  } catch {
+    return null;
+  }
+}
