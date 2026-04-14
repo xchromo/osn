@@ -58,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .turbo
-          key: ${{ runner.os }}-turbo-check-${{ github.sha }}
+          key: ${{ runner.os }}-turbo-check-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-turbo-check-
 
@@ -90,7 +90,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .turbo
-          key: ${{ runner.os }}-turbo-build-${{ github.sha }}
+          key: ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-turbo-build-
 
