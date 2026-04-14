@@ -10,6 +10,7 @@ packages:
   - "@osn/db"
   - "@osn/core"
 last-reviewed: 2026-04-14
+p2-completed: 2026-04-14
 ---
 
 # Identity Model
@@ -115,10 +116,10 @@ Organisations are independent entities that are **composed of profiles, not acco
 | Token | Bound to | `sub` claim | TTL | Purpose |
 |-------|----------|-------------|-----|---------|
 | Access | Profile | `profileId` | 1 hour | Authorize API calls as a specific profile |
-| Refresh | Profile | `profileId` | 30 days | Re-issue access tokens |
+| Refresh | Account | `accountId` | 30 days | Re-issue access tokens; enables profile switching without re-authentication |
 | Enrollment | Account | `accountId` | 5 min | Passkey registration after signup |
 
-> **PR2 note**: The refresh token will be re-scoped to accounts (not profiles) when the two-tier token model lands. This enables profile switching without re-authentication.
+The two-tier token model (P2) scopes refresh tokens to accounts and access tokens to profiles. This enables `POST /profiles/switch` — clients present the account-scoped refresh token plus a target `profileId`, and receive a new access token for that profile without re-authenticating.
 
 ## Registration Flow
 
@@ -154,7 +155,7 @@ POST /register/complete → OTP →
 | Phase | Status | Scope |
 |-------|--------|-------|
 | P1: Schema + terminology | ✅ Done | `accounts` table, `userId` → `profileId`, seed data, email dedup, service/route/test rename from "user" → "profile" terminology |
-| P2: Auth refactor | Planned | Two-tier tokens (refresh=account, access=profile), profile switching |
+| P2: Auth refactor | ✅ Done | Two-tier tokens (refresh=account, access=profile), `POST /profiles/switch`, `GET /profiles`, `verifyRefreshToken`, `findDefaultProfile` |
 | P3: Profile CRUD | Planned | Create/list/delete profiles, maxProfiles enforcement |
 | P4: Client SDK | Planned | Multi-session storage, profile switcher methods |
 | P5: UI | Planned | Profile switcher component |

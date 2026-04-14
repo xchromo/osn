@@ -38,6 +38,8 @@ export type AuthRateLimiters = Readonly<{
   passkeyLoginComplete: RateLimiterBackend;
   passkeyRegisterBegin: RateLimiterBackend;
   passkeyRegisterComplete: RateLimiterBackend;
+  profileSwitch: RateLimiterBackend;
+  profileList: RateLimiterBackend;
 }>;
 
 /**
@@ -59,6 +61,8 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     passkeyLoginComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     passkeyRegisterBegin: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     passkeyRegisterComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    profileSwitch: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    profileList: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
   };
 }
 
@@ -901,6 +905,57 @@ export function createAuthRoutes(
         },
         {
           query: t.Object({ token: t.String() }),
+        },
+      )
+      // -------------------------------------------------------------------------
+      // Profile switching (P2 — multi-account)
+      // -------------------------------------------------------------------------
+      .get("/profiles", async ({ headers, set }) => {
+        const rlErr = await rateLimit(headers, "profile_list", rl.profileList);
+        if (rlErr) {
+          set.status = 429;
+          return rlErr;
+        }
+        const authHeader = headers["authorization"];
+        if (!authHeader?.startsWith("Bearer ")) {
+          set.status = 401;
+          return { error: "Missing or invalid Authorization header" };
+        }
+        const token = authHeader.slice(7);
+        try {
+          return await run(auth.listAccountProfiles(token));
+        } catch (e) {
+          const { status, body } = publicError(e);
+          set.status = status;
+          return body;
+        }
+      })
+      .post(
+        "/profiles/switch",
+        async ({ body, headers, set }) => {
+          const rlErr = await rateLimit(headers, "profile_switch", rl.profileSwitch);
+          if (rlErr) {
+            set.status = 429;
+            return rlErr;
+          }
+          try {
+            const result = await run(auth.switchProfile(body.refresh_token, body.profile_id));
+            return {
+              access_token: result.accessToken,
+              expires_in: result.expiresIn,
+              profile: result.profile,
+            };
+          } catch (e) {
+            const { status, body: errBody } = publicError(e);
+            set.status = status;
+            return errBody;
+          }
+        },
+        {
+          body: t.Object({
+            refresh_token: t.String(),
+            profile_id: t.String(),
+          }),
         },
       )
       // -------------------------------------------------------------------------
