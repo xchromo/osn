@@ -94,6 +94,49 @@ cn("px-4 py-2", props.class)
 
 Use `cn()` whenever you compose Tailwind classes from multiple sources (base styles + props + conditionals).
 
+## Performance Guidelines
+
+### Prefer `classList` for reactive class toggles
+
+SolidJS's `classList` directive performs fine-grained DOM updates — it adds/removes individual classes without touching the rest of the class string. When using `cn()` inside a `class` attribute binding, every signal change recomputes the entire class string and replaces the full `className`.
+
+For static or low-cardinality elements (a few buttons, a card header), `cn()` is fine. But inside `<For>` loops or any hot path that renders many items, prefer `classList`:
+
+```tsx
+// Prefer this in <For> loops:
+<button
+  class="rounded-md px-3 py-1.5 text-sm font-medium"
+  classList={{
+    "bg-primary text-primary-foreground": isActive(),
+    "bg-background text-foreground": !isActive(),
+  }}
+>
+
+// Avoid this in <For> loops:
+<button class={cn("rounded-md px-3 py-1.5 text-sm", isActive() ? "bg-primary" : "bg-background")}>
+```
+
+### Use `createMemo` for filtered/mapped arrays
+
+When passing a derived array to `<For>`, wrap it in `createMemo` so the array reference is stable unless the actual contents change:
+
+```tsx
+// Good — stable reference, <For> only diffs when filter result changes
+const visibleTabs = createMemo(() => tabs.filter((t) => t.show()));
+<For each={visibleTabs()}>{...}</For>
+
+// Avoid — new array on every render, <For> diffs all items every time
+<For each={tabs.filter((t) => t.show())}>{...}</For>
+```
+
+### Bundle size: `tailwind-merge`
+
+`tailwind-merge` (~12-14 KB min+gzip) is a runtime dependency of `cn()`. This is acceptable for design-system benefits, but if bundle size becomes a concern, consider:
+
+1. **Build-time evaluation** — a Vite plugin that statically resolves `cn()` calls with all-literal arguments at compile time (similar to `compiled-css`)
+2. **Drop to `clsx` only** — replace `cn()` with plain `clsx()` (~400 bytes) if class conflicts are manageable through convention
+3. **`tw-merge-plugin`** — community Vite/Babel plugin for static `twMerge` evaluation
+
 ## Component Patterns
 
 ### Variant Components (Button, Badge)
