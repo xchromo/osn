@@ -24,10 +24,14 @@ import { CreateProfileForm } from "../../src/auth/CreateProfileForm";
 
 describe("CreateProfileForm", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     hoisted.createProfile.mockReset();
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
   });
 
@@ -45,18 +49,99 @@ describe("CreateProfileForm", () => {
     expect(screen.getByText(/1-30 chars/)).toBeTruthy();
   });
 
-  it("submit button disabled when handle is empty", () => {
-    render(() => <CreateProfileForm />);
-    const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
+  describe("without checkHandle prop", () => {
+    it("submit button enabled when handle passes local validation", () => {
+      render(() => <CreateProfileForm />);
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "alice" } });
+      const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
+    });
+
+    it("submit button disabled when handle is empty", () => {
+      render(() => <CreateProfileForm />);
+      const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+    });
   });
 
-  it("submit button enabled when handle is valid", () => {
-    render(() => <CreateProfileForm />);
-    const input = screen.getByLabelText(/Handle/) as HTMLInputElement;
-    fireEvent.input(input, { target: { value: "alice" } });
-    const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
-    expect(submit.disabled).toBe(false);
+  describe("with checkHandle prop", () => {
+    let mockCheckHandle: ReturnType<
+      typeof vi.fn<(handle: string) => Promise<{ available: boolean }>>
+    >;
+
+    beforeEach(() => {
+      mockCheckHandle = vi.fn<(handle: string) => Promise<{ available: boolean }>>();
+    });
+
+    it("debounces availability check and shows 'available'", async () => {
+      mockCheckHandle.mockResolvedValue({ available: true });
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "alice" } });
+      expect(screen.getByText(/Checking/)).toBeTruthy();
+      expect(mockCheckHandle).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        expect(screen.getByText(/@alice is available/)).toBeTruthy();
+      });
+      expect(mockCheckHandle).toHaveBeenCalledWith("alice");
+    });
+
+    it("shows 'taken' when server reports unavailable", async () => {
+      mockCheckHandle.mockResolvedValue({ available: false });
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "taken" } });
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        expect(screen.getByText(/@taken is taken/)).toBeTruthy();
+      });
+    });
+
+    it("shows network error when checkHandle throws", async () => {
+      mockCheckHandle.mockRejectedValue(new Error("network down"));
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "alice" } });
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        expect(screen.getByText(/Couldn.t check availability/)).toBeTruthy();
+      });
+    });
+
+    it("submit disabled while handle status is 'checking'", () => {
+      mockCheckHandle.mockImplementation(() => new Promise(() => {}));
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "alice" } });
+      const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+    });
+
+    it("submit enabled once handle is available", async () => {
+      mockCheckHandle.mockResolvedValue({ available: true });
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "alice" } });
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
+        expect(submit.disabled).toBe(false);
+      });
+    });
+
+    it("submit disabled when handle is taken", async () => {
+      mockCheckHandle.mockResolvedValue({ available: false });
+      render(() => <CreateProfileForm checkHandle={mockCheckHandle} />);
+
+      fireEvent.input(screen.getByLabelText(/Handle/), { target: { value: "taken" } });
+      await vi.advanceTimersByTimeAsync(350);
+      await waitFor(() => {
+        const submit = screen.getByRole("button", { name: /Create profile/i }) as HTMLButtonElement;
+        expect(submit.disabled).toBe(true);
+      });
+    });
   });
 
   it("calls createProfile with handle and optional displayName on submit", async () => {

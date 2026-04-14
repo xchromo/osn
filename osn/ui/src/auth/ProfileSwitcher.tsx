@@ -17,6 +17,7 @@ import { clsx } from "../lib/utils";
 import { CreateProfileForm } from "./CreateProfileForm";
 
 export interface ProfileSwitcherProps {
+  checkHandle?: (handle: string) => Promise<{ available: boolean }>;
   onSwitch?: (profile: PublicProfile) => void;
   onCreate?: (profile: PublicProfile) => void;
 }
@@ -163,6 +164,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
           </DialogHeader>
           <div class="p-4">
             <CreateProfileForm
+              checkHandle={props.checkHandle}
               onSuccess={handleCreateSuccess}
               onCancel={() => setShowCreate(false)}
             />

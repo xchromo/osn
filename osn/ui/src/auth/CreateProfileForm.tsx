@@ -1,5 +1,5 @@
 import { useAuth } from "@osn/client/solid";
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { Button } from "../components/ui/button";
@@ -9,6 +9,12 @@ import { Label } from "../components/ui/label";
 const HANDLE_RE = /^[a-z0-9_]{1,30}$/;
 
 export interface CreateProfileFormProps {
+  /**
+   * Server-side handle availability check. When provided, the form debounces
+   * calls on input and gates the submit button on `available`. Build it from
+   * the existing `registrationClient.checkHandle` in the consuming app.
+   */
+  checkHandle?: (handle: string) => Promise<{ available: boolean }>;
   onSuccess?: (profile: { id: string; handle: string }) => void;
   onCancel?: () => void;
 }
@@ -19,16 +25,50 @@ export function CreateProfileForm(props: CreateProfileFormProps) {
   const [handle, setHandle] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [handleStatus, setHandleStatus] = createSignal<
+    "idle" | "checking" | "available" | "taken" | "invalid" | "error"
+  >("idle");
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  onCleanup(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+  });
 
   function onHandleInput(value: string) {
-    setHandle(value.toLowerCase().replace(/[^a-z0-9_]/g, ""));
+    const next = value.toLowerCase().replace(/[^a-z0-9_]/g, "");
+    setHandle(next);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (!next) {
+      setHandleStatus("idle");
+      return;
+    }
+    if (!HANDLE_RE.test(next)) {
+      setHandleStatus("invalid");
+      return;
+    }
+    if (!props.checkHandle) {
+      // No server check — treat local validation as sufficient.
+      setHandleStatus("available");
+      return;
+    }
+    setHandleStatus("checking");
+    debounceTimer = setTimeout(async () => {
+      try {
+        const { available } = await props.checkHandle!(next);
+        if (handle() !== next) return;
+        setHandleStatus(available ? "available" : "taken");
+      } catch {
+        if (handle() !== next) return;
+        setHandleStatus("error");
+      }
+    }, 300);
   }
 
-  const handleValid = () => HANDLE_RE.test(handle());
+  const canSubmit = () => handleStatus() === "available" && !busy();
 
   async function submit(e: Event) {
     e.preventDefault();
-    if (!handleValid() || busy()) return;
+    if (!canSubmit()) return;
     setBusy(true);
     try {
       const profile = await createProfile(handle(), displayName().trim() || undefined);
@@ -58,11 +98,23 @@ export function CreateProfileForm(props: CreateProfileFormProps) {
             class="flex-1"
           />
         </div>
-        {handle() && !handleValid() && (
+        <Show when={handleStatus() === "checking"}>
+          <span class="text-muted-foreground text-xs">Checking...</span>
+        </Show>
+        <Show when={handleStatus() === "available"}>
+          <span class="text-xs text-green-600">@{handle()} is available</span>
+        </Show>
+        <Show when={handleStatus() === "taken"}>
+          <span class="text-destructive text-xs">@{handle()} is taken</span>
+        </Show>
+        <Show when={handleStatus() === "invalid"}>
           <span class="text-destructive text-xs">
             1-30 chars: lowercase letters, numbers, underscores
           </span>
-        )}
+        </Show>
+        <Show when={handleStatus() === "error"}>
+          <span class="text-destructive text-xs">Couldn&apos;t check availability — try again</span>
+        </Show>
       </div>
 
       <div class="flex flex-col gap-1">
@@ -76,7 +128,7 @@ export function CreateProfileForm(props: CreateProfileFormProps) {
       </div>
 
       <div class="flex gap-2">
-        <Button type="submit" disabled={!handleValid() || busy()} class="flex-1">
+        <Button type="submit" disabled={!canSubmit()} class="flex-1">
           {busy() ? "Creating..." : "Create profile"}
         </Button>
         {props.onCancel && (

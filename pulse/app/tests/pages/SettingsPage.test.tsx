@@ -24,6 +24,10 @@ vi.mock("@osn/client/solid", () => ({
   }),
 }));
 
+vi.mock("../../src/lib/authClients", () => ({
+  registrationClient: { checkHandle: vi.fn() },
+}));
+
 // Mock the rsvps lib so we can assert updateMySettings is called and stub
 // success / failure paths without touching the network.
 const mockUpdate = vi.fn();

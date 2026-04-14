@@ -85,7 +85,10 @@ export function EventList() {
             </Button>
           </Show>
           <Show when={session()}>
-            <ProfileSwitcher onSwitch={() => refetch()} />
+            <ProfileSwitcher
+              checkHandle={registrationClient.checkHandle}
+              onSwitch={() => refetch()}
+            />
             <Button size="sm" onClick={() => setShowForm((v) => !v)}>
               {showForm() ? "Cancel" : "New Event"}
             </Button>

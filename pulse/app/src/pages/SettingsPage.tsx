@@ -8,6 +8,7 @@ import { A } from "@solidjs/router";
 import { createSignal, Show } from "solid-js";
 import { toast } from "solid-toast";
 
+import { registrationClient } from "../lib/authClients";
 import { updateMySettings } from "../lib/rsvps";
 
 type Visibility = "connections" | "no_one";
@@ -69,7 +70,7 @@ export function SettingsPage() {
         fallback={<p class="text-muted-foreground text-sm">Sign in to change your settings.</p>}
       >
         <div class="mb-4">
-          <ProfileOnboarding dismissible />
+          <ProfileOnboarding checkHandle={registrationClient.checkHandle} dismissible />
         </div>
         <Card class="flex flex-col gap-3 p-4">
           <Label class="text-base font-semibold">Who can see events you're attending?</Label>

@@ -9,6 +9,7 @@ import { CreateProfileForm } from "./CreateProfileForm";
 const DISMISSED_KEY = "@osn/ui:profile_onboarding_dismissed";
 
 export interface ProfileOnboardingProps {
+  checkHandle?: (handle: string) => Promise<{ available: boolean }>;
   dismissible?: boolean;
 }
 
@@ -56,6 +57,7 @@ export function ProfileOnboarding(props: ProfileOnboardingProps) {
           </DialogHeader>
           <div class="p-4">
             <CreateProfileForm
+              checkHandle={props.checkHandle}
               onSuccess={() => setShowCreate(false)}
               onCancel={() => setShowCreate(false)}
             />
