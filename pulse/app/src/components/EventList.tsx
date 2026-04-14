@@ -1,4 +1,5 @@
 import { useAuth } from "@osn/client/solid";
+import { ProfileSwitcher } from "@osn/ui/auth/ProfileSwitcher";
 import { Register } from "@osn/ui/auth/Register";
 import { SignIn } from "@osn/ui/auth/SignIn";
 import { Button, buttonVariants } from "@osn/ui/ui/button";
@@ -84,6 +85,7 @@ export function EventList() {
             </Button>
           </Show>
           <Show when={session()}>
+            <ProfileSwitcher onSwitch={() => refetch()} />
             <Button size="sm" onClick={() => setShowForm((v) => !v)}>
               {showForm() ? "Cancel" : "New Event"}
             </Button>
