@@ -96,6 +96,8 @@ Bun, TypeScript, Elysia, Effect.ts (trial), Drizzle, SQLite→Supabase, Eden+RES
 
 **Review Finding IDs** — S-C/H/M/L (security), P-C/W/I (performance), T-M/U/E/R/S (tests). Four-field format. See `[[wiki/conventions/review-findings]]`.
 
+**Component Library** — Zaidan-style (shadcn for SolidJS) components in `@osn/ui`, backed by Kobalte. Three class utilities: `bx()` for component defaults (zero-specificity `base:` variant), `clsx()` for conditional joining, `cn()` (with `tailwind-merge`) only when arbitrary conflicts exist. See `[[wiki/architecture/component-library]]`.
+
 ## Conventions
 
 - Tauri apps created via CLI (`bunx create-tauri-app`), not manually

@@ -19,7 +19,7 @@ related:
 packages:
   - "@pulse/app"
   - "@osn/ui"
-last-reviewed: 2026-04-13
+last-reviewed: 2026-04-14
 ---
 
 # Frontend Patterns

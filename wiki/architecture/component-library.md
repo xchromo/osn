@@ -20,7 +20,7 @@ related:
 packages:
   - "@osn/ui"
   - "@pulse/app"
-last-reviewed: 2026-04-13
+last-reviewed: 2026-04-14
 ---
 
 # Component Library (Zaidan)
@@ -41,7 +41,7 @@ All shared UI primitives live in `@osn/ui`:
 ```
 osn/ui/src/
 ├── lib/
-│   └── utils.ts              ← cn() utility (clsx + tailwind-merge)
+│   └── utils.ts              ← bx(), clsx re-export, cn() (fallback)
 ├── components/
 │   └── ui/
 │       ├── avatar.tsx         ← Avatar, AvatarImage, AvatarFallback
@@ -58,7 +58,7 @@ osn/ui/src/
 │       └── textarea.tsx       ← Textarea
 └── auth/
     ├── Register.tsx           ← uses Button, Input, Label
-    └── SignIn.tsx             ← uses Button, Input, Label, cn()
+    └── SignIn.tsx             ← uses Button, Input, Label, clsx()
 ```
 
 Consuming apps import via subpath exports:
@@ -66,7 +66,8 @@ Consuming apps import via subpath exports:
 ```typescript
 import { Button } from "@osn/ui/ui/button";
 import { Card } from "@osn/ui/ui/card";
-import { cn } from "@osn/ui/lib/utils";
+import { clsx } from "@osn/ui/lib/utils";  // for conditional class joining
+import { cn } from "@osn/ui/lib/utils";     // only if you need Tailwind conflict resolution
 ```
 
 ## Dependency Stack
@@ -76,7 +77,7 @@ import { cn } from "@osn/ui/lib/utils";
 | `@kobalte/core` | Headless UI primitives (Dialog, Popover, Tabs, RadioGroup, Checkbox) |
 | `class-variance-authority` | Type-safe variant definitions for Button, Badge |
 | `clsx` | Conditional class string joining |
-| `tailwind-merge` | Intelligent Tailwind class deduplication |
+| `tailwind-merge` | Tailwind class conflict resolution (used only via `cn()` fallback) |
 
 These are dependencies of `@osn/ui`. Consuming apps get them transitively — no extra installs needed.
 
@@ -262,25 +263,27 @@ Tailwind maps these via `@theme inline` to utility classes (`bg-primary`, `text-
 ## Adding a New Component
 
 1. Create the file in `osn/ui/src/components/ui/<name>.tsx`
-2. Follow the existing pattern: `splitProps` for `class`, compose with `cn()`, spread `...others`
+2. Follow the existing pattern: `splitProps` for `class`, use `bx()` for base defaults and `clsx()` for composition with `local.class`, spread `...others`
 3. For interactive components, use Kobalte primitives from `@kobalte/core/<name>`
-4. For variant components, use CVA and export both the component and the `variants` function
-5. Add a subpath export in `osn/ui/package.json`:
+4. For variant components, use CVA with `bx()` for each variant string, and export both the component and the `variants` function
+5. For internal child elements that don't accept consumer `class` overrides, use `bx()` directly (no `clsx` needed)
+6. Add a subpath export in `osn/ui/package.json`:
    ```json
    "./ui/<name>": "./src/components/ui/<name>.tsx"
    ```
-6. No barrel file needed — consumers import individual components by path
+7. No barrel file needed — consumers import individual components by path
 
 ## Testing Considerations
 
 - Components render standard HTML — tests use `@solidjs/testing-library` with role/label queries
 - **Kobalte portals**: Dialog and Popover content is portaled to `<body>`. Use `screen.queryByText()` (searches full document) instead of `container.querySelector()` (searches render container only)
-- **Avatar DOM structure**: The `Avatar` wrapper is `span.relative`, not `span.inline-flex`. The fallback text is inside a nested `<span>`. Tests that need to find avatars should select `span.relative`
-- **Close-friend ring**: Applied to the outer `Avatar` wrapper via `cn()`, not to the inner `<img>` or fallback `<span>`
+- **`base:` prefixed class selectors**: Component default classes are prefixed with `base:` in the DOM (e.g. `base:relative` instead of `relative`). CSS selectors must escape the colon: `span.base\\:relative`. Consumer-provided classes (via `class` prop) are NOT prefixed and can be selected normally
+- **Avatar DOM structure**: The `Avatar` wrapper has `base:relative` class. The fallback text is inside a nested `<span>`. Tests that find avatars should use `span.base\\:relative`
+- **Close-friend ring**: Applied to the outer `Avatar` wrapper via `clsx()` (not prefixed — it's a consumer class), not to the inner `<img>` or fallback `<span>`
 
 ## Source Files
 
 - [osn/ui/src/components/ui/](../../osn/ui/src/components/ui/) — all component source
-- [osn/ui/src/lib/utils.ts](../../osn/ui/src/lib/utils.ts) — `cn()` utility
+- [osn/ui/src/lib/utils.ts](../../osn/ui/src/lib/utils.ts) — `bx()`, `clsx`, `cn()` utilities
 - [osn/ui/package.json](../../osn/ui/package.json) — subpath exports
-- [pulse/app/src/App.css](../../pulse/app/src/App.css) — CSS variable theme
+- [pulse/app/src/App.css](../../pulse/app/src/App.css) — CSS variable theme + `@custom-variant base`
