@@ -9,6 +9,8 @@ const TokenResponseSchema = Schema.Struct({
   scope: Schema.optional(Schema.String),
 });
 
+const decodeTokenResponse = Schema.decodeUnknownSync(TokenResponseSchema);
+
 export interface Session {
   accessToken: string;
   refreshToken: string | null;
@@ -19,7 +21,7 @@ export interface Session {
 }
 
 export function parseTokenResponse(raw: unknown): Session {
-  const t = Schema.decodeUnknownSync(TokenResponseSchema)(raw);
+  const t = decodeTokenResponse(raw);
   return {
     accessToken: t.access_token,
     refreshToken: t.refresh_token ?? null,
