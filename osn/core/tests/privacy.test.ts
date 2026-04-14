@@ -157,7 +157,7 @@ describe("privacy invariants (P6)", () => {
 
   describe("WebAuthn userID isolation", () => {
     it("passkeyUserId is generated on account creation", async () => {
-      const { profile } = await registerAccount("priv6@test.com", "priv6");
+      const _reg = await registerAccount("priv6@test.com", "priv6");
       // Verify via service layer that the account has a passkeyUserId
       const result = await Effect.runPromise(
         auth.findProfileByEmail("priv6@test.com").pipe(Effect.provide(layer)),
