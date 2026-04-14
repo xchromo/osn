@@ -59,7 +59,7 @@ The `accounts` table is the **authentication principal** — the entity that log
 |--------|------|-------|
 | `id` | `text PK` | `acc_` prefix + 12 hex chars |
 | `email` | `text UNIQUE` | Login credential — the only place email lives |
-| `passkeyUserId` | `text` | Random UUID used as WebAuthn `user.id` — opaque, non-correlating (P6) |
+| `passkeyUserId` | `text NOT NULL UNIQUE` | Random UUID used as WebAuthn `user.id` — opaque, non-correlating (P6) |
 | `maxProfiles` | `integer` | Default 5; enforced by `createProfile` in P3 |
 | `createdAt` | `timestamp` | |
 | `updatedAt` | `timestamp` | |
