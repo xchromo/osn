@@ -80,19 +80,47 @@ import { cn } from "@osn/ui/lib/utils";
 
 These are dependencies of `@osn/ui`. Consuming apps get them transitively — no extra installs needed.
 
-## The `cn()` Utility
+## Class Composition: `bx()`, `clsx()`, and `cn()`
 
-Every component uses `cn()` for class composition. It wraps `clsx` (conditional joining) with `tailwind-merge` (conflict resolution):
+Three utilities handle class composition at different levels:
+
+### `bx()` — component defaults (zero-specificity via CSS)
+
+Component files use `bx()` to prefix default styles with the `base:` custom variant. These compile to `:where()` selectors with zero CSS specificity, so any consumer class automatically wins via cascade — no runtime JS needed:
+
+```typescript
+import { bx } from "@osn/ui/lib/utils";
+import { clsx } from "clsx";
+
+// In a component file:
+<div class={clsx(bx("bg-card rounded-xl border"), local.class)} />
+
+// bx("bg-card rounded-xl border") → "base:bg-card base:rounded-xl base:border"
+// Consumer passes class="bg-card/50 rounded-md" → wins via CSS cascade
+```
+
+### `clsx()` — conditional class joining (no conflict resolution)
+
+Use for composing non-conflicting class sets, conditional classes, and signal-driven toggles:
+
+```typescript
+import { clsx } from "@osn/ui/lib/utils";
+
+clsx("px-4 py-2", isActive && "font-bold", props.class)
+```
+
+### `cn()` — arbitrary runtime merging (with `tailwind-merge`)
+
+Reserved for rare cases where two arbitrary class sets may contain conflicting Tailwind utilities and neither is a component default. `cn()` wraps `clsx` + `tailwind-merge` (~14 KB) for runtime conflict resolution:
 
 ```typescript
 import { cn } from "@osn/ui/lib/utils";
 
-// Later classes win over earlier ones when they conflict:
-cn("px-4 py-2", props.class)
-// If props.class contains "px-2", the result is "py-2 px-2" (not "px-4 py-2 px-2")
+// Only use when you genuinely have unpredictable conflicts:
+cn(dynamicClassesFromSignalA(), dynamicClassesFromSignalB())
 ```
 
-Use `cn()` whenever you compose Tailwind classes from multiple sources (base styles + props + conditionals).
+**Rule of thumb**: component files use `bx()` + `clsx()`. Consumer code uses `clsx()`. Use `cn()` only when you'd otherwise get broken styles from conflicting classes.
 
 ## Performance Guidelines
 
@@ -129,13 +157,13 @@ const visibleTabs = createMemo(() => tabs.filter((t) => t.show()));
 <For each={tabs.filter((t) => t.show())}>{...}</For>
 ```
 
-### Bundle size: `tailwind-merge`
+### Bundle size: `tailwind-merge` and the `base:` variant
 
-`tailwind-merge` (~12-14 KB min+gzip) is a runtime dependency of `cn()`. This is acceptable for design-system benefits, but if bundle size becomes a concern, consider:
+Component files use `bx()` + `clsx()` for all default-vs-override class composition, which resolves conflicts via CSS cascade at zero runtime cost. `tailwind-merge` (~12-14 KB) is still bundled for the exported `cn()` function but is NOT called in the component render hot path.
 
-1. **Build-time evaluation** — a Vite plugin that statically resolves `cn()` calls with all-literal arguments at compile time (similar to `compiled-css`)
-2. **Drop to `clsx` only** — replace `cn()` with plain `clsx()` (~400 bytes) if class conflicts are manageable through convention
-3. **`tw-merge-plugin`** — community Vite/Babel plugin for static `twMerge` evaluation
+If `tailwind-merge` is tree-shaken (i.e. no consumer imports `cn()`), the bundle drops by ~14 KB. If bundle size is a concern and `cn()` is still imported somewhere, consider refactoring the consumer to use `clsx()` instead — most conditional class composition doesn't involve Tailwind conflicts.
+
+The `@custom-variant base (:where(&))` declaration in `App.css` is what makes this work. **Any new app** that uses `@osn/ui` components must include this variant declaration in its CSS.
 
 ## Component Patterns
 
