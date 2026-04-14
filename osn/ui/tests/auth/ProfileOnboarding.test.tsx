@@ -6,7 +6,7 @@ const DISMISSED_KEY = "@osn/ui:profile_onboarding_dismissed";
 
 const hoisted = vi.hoisted(() => {
   return {
-    session: vi.fn(() => ({ accessToken: "tok" })),
+    session: vi.fn((): { accessToken: string } | null => ({ accessToken: "tok" })),
     profiles: vi.fn(() => [
       { id: "p_1", handle: "alice", email: "a@b.com", displayName: null, avatarUrl: null },
     ]),
