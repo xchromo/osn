@@ -272,9 +272,11 @@ export function createAuthRoutes(
         "/register",
         async ({ body, set }) => {
           try {
-            const user = await run(auth.registerProfile(body.email, body.handle, body.displayName));
+            const profile = await run(
+              auth.registerProfile(body.email, body.handle, body.displayName),
+            );
             set.status = 201;
-            return { profileId: user.id, handle: user.handle, email: user.email };
+            return { profileId: profile.id, handle: profile.handle, email: profile.email };
           } catch (e) {
             set.status = 400;
             return { error: String(e) };

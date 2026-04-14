@@ -1,4 +1,4 @@
-import type { Organisation, User } from "@osn/db/schema";
+import type { Organisation, Profile } from "@osn/db/schema";
 import { DbLive, type Db } from "@osn/db/service";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
@@ -145,14 +145,14 @@ export function createOrganisationRoutes(
   async function resolveHandle(
     handle: string,
     set: { status?: number | string },
-  ): Promise<User | null> {
+  ): Promise<Profile | null> {
     try {
-      const user = await run(auth.findProfileByHandle(handle));
-      if (!user) {
+      const profile = await run(auth.findProfileByHandle(handle));
+      if (!profile) {
         set.status = 404;
         return null;
       }
-      return user;
+      return profile;
     } catch {
       set.status = 500;
       return null;

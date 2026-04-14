@@ -9,10 +9,21 @@ related:
 packages:
   - "@osn/db"
   - "@osn/core"
-last-reviewed: 2026-04-13
+last-reviewed: 2026-04-14
 ---
 
 # Identity Model
+
+## Terminology
+
+| Term | Meaning | Code entity |
+|------|---------|-------------|
+| **User** | The actual human person. Not a data structure — never a type name, column, or variable. | — |
+| **Account** | Login identity — email, passkeys, auth tokens. A user owns one account. | `accounts` table, `acc_` prefix |
+| **Profile** | Public-facing identity — handle, display name, avatar. An account can have multiple profiles. | `users` table (legacy name), `Profile` type, `usr_` prefix |
+| **Organisation** | Group identity composed of profiles. | `organisations` table, `org_` prefix |
+
+A user owns an account, which owns one or more profiles. The relationship is: **User (person) → Account (login) → Profiles (public identities)**.
 
 OSN uses a two-tier identity model inspired by Meta's Accounts Center. A single **account** (the login entity) can own multiple **profiles** (the public-facing handles). **Organisations** are separate entities composed of individual profiles.
 
@@ -129,7 +140,7 @@ POST /register/complete → OTP →
 | Zap chats | `createdByProfileId`, member `profileId` | Profiles in the chat |
 | Social graph | `requesterId`, `addresseeId` (both profile IDs) | Independent per profile |
 | ARC S2S | No profile context | Service-to-service only |
-| Login response | `{ session, user: PublicUser }` | Wire format uses `user` key — deferred rename to `profile` until client SDK major version |
+| Login response | `{ session, profile: PublicProfile }` | Wire format + SDK types renamed to match identity model |
 
 ## Privacy Rules
 

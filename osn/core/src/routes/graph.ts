@@ -1,4 +1,4 @@
-import type { User } from "@osn/db/schema";
+import type { Profile } from "@osn/db/schema";
 import { DbLive, type Db } from "@osn/db/service";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
@@ -61,7 +61,7 @@ const PaginationQuery = t.Object({
 });
 
 // Shared projection for profile fields in list responses (L3: displayName typed as nullable)
-function profileProjection(u: User) {
+function profileProjection(u: Profile) {
   return {
     handle: u.handle,
     displayName: u.displayName ?? null,
@@ -146,18 +146,18 @@ export function createGraphRoutes(
     return true;
   }
 
-  // Resolve a handle to a full User row, or set 404
+  // Resolve a handle to a full profile row, or set 404
   async function resolveHandle(
     handle: string,
     set: { status?: number | string },
-  ): Promise<User | null> {
+  ): Promise<Profile | null> {
     try {
-      const user = await run(auth.findProfileByHandle(handle));
-      if (!user) {
+      const profile = await run(auth.findProfileByHandle(handle));
+      if (!profile) {
         set.status = 404;
         return null;
       }
-      return user;
+      return profile;
     } catch {
       set.status = 500;
       return null;

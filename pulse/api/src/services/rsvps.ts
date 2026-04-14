@@ -14,7 +14,7 @@ import {
   OsnDb,
   type ProfileDisplay,
 } from "./graphBridge";
-import { ensurePulseUser, getAttendanceVisibilityBatch } from "./pulseUsers";
+import { ensurePulseProfile, getAttendanceVisibilityBatch } from "./pulseUsers";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -46,11 +46,11 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
  * Wire-level statuses accepted from clients. "invited" is reserved for the
  * organiser invite flow and is rejected on upsertRsvp.
  */
-const UserRsvpStatusSchema = Schema.Literal("going", "interested", "not_going");
-export type UserRsvpStatus = Schema.Schema.Type<typeof UserRsvpStatusSchema>;
+const RsvpStatusSchema = Schema.Literal("going", "interested", "not_going");
+export type RsvpStatus = Schema.Schema.Type<typeof RsvpStatusSchema>;
 
 const UpsertRsvpSchema = Schema.Struct({
-  status: UserRsvpStatusSchema,
+  status: RsvpStatusSchema,
 });
 
 const InviteGuestsSchema = Schema.Struct({
@@ -296,7 +296,7 @@ export const upsertRsvp = (
     if (existing === null) {
       // Only lazy-create the pulse_users row on first RSVP insert. On
       // update the row must already exist, so skip the extra round-trip.
-      yield* ensurePulseUser(profileId);
+      yield* ensurePulseProfile(profileId);
       const id = genRsvpId();
       yield* Effect.tryPromise({
         try: () =>

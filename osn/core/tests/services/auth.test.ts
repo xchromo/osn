@@ -17,19 +17,19 @@ const auth = createAuthService(config);
 describe("registerProfile", () => {
   it.effect("creates a new user with usr_ prefix and correct fields", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("alice@example.com", "alice", "Alice");
-      expect(user.id).toMatch(/^usr_/);
-      expect(user.email).toBe("alice@example.com");
-      expect(user.handle).toBe("alice");
-      expect(user.displayName).toBe("Alice");
+      const profile = yield* auth.registerProfile("alice@example.com", "alice", "Alice");
+      expect(profile.id).toMatch(/^usr_/);
+      expect(profile.email).toBe("alice@example.com");
+      expect(profile.handle).toBe("alice");
+      expect(profile.displayName).toBe("Alice");
     }).pipe(Effect.provide(createTestLayer())),
   );
 
   it.effect("creates user without displayName", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("bob@example.com", "bob");
-      expect(user.handle).toBe("bob");
-      expect(user.displayName).toBeNull();
+      const profile = yield* auth.registerProfile("bob@example.com", "bob");
+      expect(profile.handle).toBe("bob");
+      expect(profile.displayName).toBeNull();
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -377,8 +377,13 @@ describe("findProfileByEmail + findProfileByHandle", () => {
 describe("issueTokens + exchangeCode", () => {
   it.effect("issueTokens returns access + refresh tokens with handle in payload", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("ivan@example.com", "ivan", "Ivan");
-      const tokens = yield* auth.issueTokens(user.id, user.email, user.handle, user.displayName);
+      const profile = yield* auth.registerProfile("ivan@example.com", "ivan", "Ivan");
+      const tokens = yield* auth.issueTokens(
+        profile.id,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      );
       expect(tokens.accessToken).toBeTruthy();
       expect(tokens.refreshToken).toBeTruthy();
       expect(tokens.expiresIn).toBe(3600);
@@ -392,7 +397,7 @@ describe("issueTokens + exchangeCode", () => {
 
   it.effect("exchangeCode returns tokens for a valid auth code", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("judy@example.com", "judy");
+      const profile = yield* auth.registerProfile("judy@example.com", "judy");
       let capturedCode: string | undefined;
       const authSpy = createAuthService({
         ...config,
@@ -406,7 +411,7 @@ describe("issueTokens + exchangeCode", () => {
       const tokens = yield* auth.exchangeCode(code);
       expect(tokens.accessToken).toBeTruthy();
       const claims = yield* auth.verifyAccessToken(tokens.accessToken);
-      expect(claims.profileId).toBe(user.id);
+      expect(claims.profileId).toBe(profile.id);
       expect(claims.handle).toBe("judy");
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -517,8 +522,8 @@ describe("OTP flow", () => {
 describe("passkey registration", () => {
   it.effect("beginPasskeyRegistration returns options with @handle as userName", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("passkey@example.com", "passkeyuser");
-      const result = yield* auth.beginPasskeyRegistration(user.accountId);
+      const profile = yield* auth.registerProfile("passkey@example.com", "passkeyuser");
+      const result = yield* auth.beginPasskeyRegistration(profile.accountId);
       expect(result.options).toBeTruthy();
       expect(result.options.challenge).toBeTruthy();
       expect(result.options.user.name).toBe("@passkeyuser");
@@ -595,8 +600,13 @@ describe("magic link flow", () => {
 describe("token refresh", () => {
   it.effect("refreshTokens issues new tokens from a valid refresh token", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("quinn@example.com", "quinn");
-      const tokens = yield* auth.issueTokens(user.id, user.email, user.handle, user.displayName);
+      const profile = yield* auth.registerProfile("quinn@example.com", "quinn");
+      const tokens = yield* auth.issueTokens(
+        profile.id,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      );
       const refreshed = yield* auth.refreshTokens(tokens.refreshToken);
       expect(refreshed.accessToken).toBeTruthy();
       expect(refreshed.expiresIn).toBe(3600);
@@ -614,10 +624,15 @@ describe("token refresh", () => {
 describe("verifyAccessToken", () => {
   it.effect("verifies a valid access token and returns all claims", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("rose@example.com", "rose", "Rose");
-      const tokens = yield* auth.issueTokens(user.id, user.email, user.handle, user.displayName);
+      const profile = yield* auth.registerProfile("rose@example.com", "rose", "Rose");
+      const tokens = yield* auth.issueTokens(
+        profile.id,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      );
       const claims = yield* auth.verifyAccessToken(tokens.accessToken);
-      expect(claims.profileId).toBe(user.id);
+      expect(claims.profileId).toBe(profile.id);
       expect(claims.email).toBe("rose@example.com");
       expect(claims.handle).toBe("rose");
       expect(claims.displayName).toBe("Rose");
@@ -626,8 +641,13 @@ describe("verifyAccessToken", () => {
 
   it.effect("displayName is null when not set", () =>
     Effect.gen(function* () {
-      const user = yield* auth.registerProfile("sam@example.com", "sam");
-      const tokens = yield* auth.issueTokens(user.id, user.email, user.handle, user.displayName);
+      const profile = yield* auth.registerProfile("sam@example.com", "sam");
+      const tokens = yield* auth.issueTokens(
+        profile.id,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      );
       const claims = yield* auth.verifyAccessToken(tokens.accessToken);
       expect(claims.displayName).toBeNull();
     }).pipe(Effect.provide(createTestLayer())),

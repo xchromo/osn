@@ -664,12 +664,12 @@ describe("auth routes", () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as {
         session: { accessToken: string; refreshToken: string; expiresIn: number };
-        user: { id: string; handle: string; email: string };
+        profile: { id: string; handle: string; email: string };
       };
       expect(json.session.accessToken).toBeTruthy();
       expect(json.session.refreshToken).toBeTruthy();
-      expect(json.user.handle).toBe("otpdirect");
-      expect(json.user.email).toBe("otp-direct@example.com");
+      expect(json.profile.handle).toBe("otpdirect");
+      expect(json.profile.email).toBe("otp-direct@example.com");
     });
 
     it("returns 400 for a wrong code", async () => {
@@ -756,10 +756,10 @@ describe("auth routes", () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as {
         session: { accessToken: string };
-        user: { handle: string; email: string };
+        profile: { handle: string; email: string };
       };
       expect(json.session.accessToken).toBeTruthy();
-      expect(json.user.handle).toBe("magicdirect");
+      expect(json.profile.handle).toBe("magicdirect");
     });
 
     it("returns 400 for an unknown token", async () => {
@@ -845,22 +845,22 @@ describe("auth routes", () => {
      * token directly via the service. Mirrors what completeRegistration does
      * in the new flow.
      */
-    async function setupUserAndEnrollmentToken(): Promise<{
+    async function setupProfileAndEnrollmentToken(): Promise<{
       profileId: string;
       accountId: string;
       enrollmentToken: string;
     }> {
       const svc = createAuthService(config);
-      const user = await Effect.runPromise(
+      const profile = await Effect.runPromise(
         svc.registerProfile("paul@example.com", "paul").pipe(Effect.provide(layer)),
       );
       // Enrollment token sub = accountId (passkeys belong to accounts)
-      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.accountId));
-      return { profileId: user.id, accountId: user.accountId, enrollmentToken };
+      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(profile.accountId));
+      return { profileId: profile.id, accountId: profile.accountId, enrollmentToken };
     }
 
     it("S-C1: rejects with 401 when Authorization header is present but invalid", async () => {
-      const { profileId } = await setupUserAndEnrollmentToken();
+      const { profileId } = await setupProfileAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
@@ -875,7 +875,7 @@ describe("auth routes", () => {
     });
 
     it("S-C1: rejects with 401 when enrollment token's sub mismatches body.profileId", async () => {
-      const { enrollmentToken } = await setupUserAndEnrollmentToken();
+      const { enrollmentToken } = await setupProfileAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
@@ -890,7 +890,7 @@ describe("auth routes", () => {
     });
 
     it("accepts a valid enrollment token whose sub matches body.profileId's account", async () => {
-      const { profileId, enrollmentToken } = await setupUserAndEnrollmentToken();
+      const { profileId, enrollmentToken } = await setupProfileAndEnrollmentToken();
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
@@ -909,11 +909,11 @@ describe("auth routes", () => {
 
     it("accepts a normal access token (existing user adding a passkey)", async () => {
       const svc = createAuthService(config);
-      const user = await Effect.runPromise(
+      const profile = await Effect.runPromise(
         svc.registerProfile("quinn@example.com", "quinn").pipe(Effect.provide(layer)),
       );
       const tokens = await Effect.runPromise(
-        svc.issueTokens(user.id, user.email, user.handle, user.displayName),
+        svc.issueTokens(profile.id, profile.email, profile.handle, profile.displayName),
       );
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
@@ -922,7 +922,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${tokens.accessToken}`,
           },
-          body: JSON.stringify({ profileId: user.id }),
+          body: JSON.stringify({ profileId: profile.id }),
         }),
       );
       expect(res.status).toBe(200);
@@ -930,14 +930,14 @@ describe("auth routes", () => {
 
     it("rejects requests without Authorization header (S-H5: legacy path removed)", async () => {
       const svc = createAuthService(config);
-      const user = await Effect.runPromise(
+      const profile = await Effect.runPromise(
         svc.registerProfile("rita@example.com", "rita").pipe(Effect.provide(layer)),
       );
       const res = await app.handle(
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ profileId: user.id }),
+          body: JSON.stringify({ profileId: profile.id }),
         }),
       );
       expect(res.status).toBe(401);
@@ -947,10 +947,10 @@ describe("auth routes", () => {
   describe("POST /passkey/register/complete (enrollment token consumption)", () => {
     it("rejects when the enrollment token has already been consumed", async () => {
       const svc = createAuthService(config);
-      const user = await Effect.runPromise(
+      const profile = await Effect.runPromise(
         svc.registerProfile("sam@example.com", "samuser").pipe(Effect.provide(layer)),
       );
-      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(user.id));
+      const enrollmentToken = await Effect.runPromise(svc.issueEnrollmentToken(profile.id));
 
       // First call: consumes the token. The attestation is bogus so the
       // service will fail downstream — but the *consumption* happens in the
@@ -962,7 +962,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ profileId: user.id, attestation: { id: "x" } }),
+          body: JSON.stringify({ profileId: profile.id, attestation: { id: "x" } }),
         }),
       );
 
@@ -974,7 +974,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${enrollmentToken}`,
           },
-          body: JSON.stringify({ profileId: user.id, attestation: { id: "x" } }),
+          body: JSON.stringify({ profileId: profile.id, attestation: { id: "x" } }),
         }),
       );
       expect(second.status).toBe(401);
