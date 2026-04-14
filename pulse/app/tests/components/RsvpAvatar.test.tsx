@@ -17,9 +17,9 @@ const baseRsvp: Rsvp = {
   profile: { id: "usr_bob", handle: "bob", displayName: "Bob Smith", avatarUrl: null },
 };
 
-/** The Avatar component renders an outer <span> wrapper. */
+/** The Avatar component renders an outer <span> wrapper with base: variant classes. */
 function avatarWrapper(container: HTMLElement): HTMLElement {
-  return container.querySelector("span.relative") as HTMLElement;
+  return container.querySelector("span.base\\:relative") as HTMLElement;
 }
 
 /** The AvatarFallback renders the initials text. */

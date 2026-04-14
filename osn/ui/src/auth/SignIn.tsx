@@ -7,7 +7,7 @@ import { toast } from "solid-toast";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { cn } from "../lib/utils";
+import { clsx } from "../lib/utils";
 
 /**
  * Shared first-party sign-in component. Drives the new `/login/*` endpoints
@@ -165,7 +165,7 @@ export function SignIn(props: SignInProps) {
               role="tab"
               aria-selected={method() === "passkey"}
               onClick={() => switchMethod("passkey")}
-              class={cn(
+              class={clsx(
                 "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
                 method() === "passkey"
                   ? "bg-primary text-primary-foreground"
@@ -180,7 +180,7 @@ export function SignIn(props: SignInProps) {
             role="tab"
             aria-selected={method() === "otp"}
             onClick={() => switchMethod("otp")}
-            class={cn(
+            class={clsx(
               "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
               method() === "otp"
                 ? "bg-primary text-primary-foreground"
@@ -194,7 +194,7 @@ export function SignIn(props: SignInProps) {
             role="tab"
             aria-selected={method() === "magic"}
             onClick={() => switchMethod("magic")}
-            class={cn(
+            class={clsx(
               "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
               method() === "magic"
                 ? "bg-primary text-primary-foreground"

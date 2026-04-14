@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant base (:where(&));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

@@ -1,4 +1,4 @@
-import { cn } from "@osn/ui/lib/utils";
+import { clsx } from "@osn/ui/lib/utils";
 import { Avatar, AvatarImage, AvatarFallback } from "@osn/ui/ui/avatar";
 import { Show } from "solid-js";
 
@@ -21,7 +21,7 @@ export function RsvpAvatar(props: { rsvp: Rsvp; size?: "sm" | "md" }) {
 
   return (
     <Avatar
-      class={cn(
+      class={clsx(
         sizeClass(),
         "border-2 border-card",
         props.rsvp.isCloseFriend && CLOSE_FRIEND_RING_CLASS,
