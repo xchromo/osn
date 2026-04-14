@@ -97,57 +97,71 @@ export function createProfileService(authService: AuthService) {
       const { accountId } = yield* authService.verifyRefreshToken(refreshToken);
       const { db } = yield* Db;
 
-      // Parallel pre-checks: account limits + handle availability
-      const [accountRows, profileCount, existingHandle, existingOrgHandle] =
-        yield* Effect.tryPromise({
-          try: () =>
-            Promise.all([
-              db
-                .select({ maxProfiles: accounts.maxProfiles, email: accounts.email })
-                .from(accounts)
-                .where(eq(accounts.id, accountId))
-                .limit(1),
-              db
-                .select({ count: sql<number>`COUNT(*)` })
-                .from(users)
-                .where(eq(users.accountId, accountId)),
-              db.select({ id: users.id }).from(users).where(eq(users.handle, handle)).limit(1),
-              db
-                .select({ id: organisations.id })
-                .from(organisations)
-                .where(eq(organisations.handle, handle))
-                .limit(1),
-            ]),
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-
+      // Pre-check: account exists + get email/maxProfiles (needed outside txn for return value)
+      const accountRows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ maxProfiles: accounts.maxProfiles, email: accounts.email })
+            .from(accounts)
+            .where(eq(accounts.id, accountId))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
       const account = accountRows[0];
       if (!account) {
         return yield* Effect.fail(new AuthError({ message: "Account not found" }));
-      }
-      if (profileCount[0]!.count >= account.maxProfiles) {
-        return yield* Effect.fail(new AuthError({ message: "Maximum profiles reached" }));
-      }
-      if (existingHandle.length > 0 || existingOrgHandle.length > 0) {
-        return yield* Effect.fail(new AuthError({ message: "Handle already taken" }));
       }
 
       const id = genId("usr_");
       const ts = now();
       const dn = displayName ?? null;
 
+      // Atomic check-and-insert inside a transaction (S-H1, S-M2):
+      // - maxProfiles count and handle availability are re-checked inside the txn
+      // - UNIQUE constraint on users.handle is the final safety net
       yield* Effect.tryPromise({
         try: () =>
-          db.insert(users).values({
-            id,
-            accountId,
-            handle,
-            displayName: dn,
-            isDefault: false,
-            createdAt: ts,
-            updatedAt: ts,
+          db.transaction(async (tx) => {
+            const [profileCount, existingHandle, existingOrgHandle] = await Promise.all([
+              tx
+                .select({ count: sql<number>`COUNT(*)` })
+                .from(users)
+                .where(eq(users.accountId, accountId)),
+              tx.select({ id: users.id }).from(users).where(eq(users.handle, handle)).limit(1),
+              tx
+                .select({ id: organisations.id })
+                .from(organisations)
+                .where(eq(organisations.handle, handle))
+                .limit(1),
+            ]);
+
+            if (profileCount[0]!.count >= account.maxProfiles) {
+              throw new AuthError({ message: "Maximum profiles reached" });
+            }
+            if (existingHandle.length > 0 || existingOrgHandle.length > 0) {
+              throw new AuthError({ message: "Handle already taken" });
+            }
+
+            await tx.insert(users).values({
+              id,
+              accountId,
+              handle,
+              displayName: dn,
+              isDefault: false,
+              createdAt: ts,
+              updatedAt: ts,
+            });
           }),
-        catch: (cause) => new DatabaseError({ cause }),
+        catch: (cause) => {
+          // Re-throw tagged errors (AuthError thrown inside the txn)
+          if (cause instanceof AuthError) return cause;
+          // Map UNIQUE constraint violations to a friendly error
+          const msg = cause instanceof Error ? cause.message : String(cause);
+          if (msg.includes("UNIQUE constraint failed")) {
+            return new AuthError({ message: "Handle already taken" });
+          }
+          return new DatabaseError({ cause });
+        },
       });
 
       return { id, handle, email: account.email, displayName: dn, avatarUrl: null };
@@ -211,59 +225,58 @@ export function createProfileService(authService: AuthService) {
 
       const wasDefault = profile.isDefault;
 
-      // Cascade delete in a single transaction
+      // Atomic cascade delete + default-promotion in a single transaction (S-H2, P-W1, P-W2).
+      // Independent deletes are parallelised; the profile row delete runs last (FK safety).
+      // Default-promotion is inside the txn to prevent an account with no default.
       yield* Effect.tryPromise({
         try: () =>
           db.transaction(async (tx) => {
-            await tx
-              .delete(closeFriends)
-              .where(
-                or(
-                  eq(closeFriends.profileId, targetProfileId),
-                  eq(closeFriends.friendId, targetProfileId),
+            await Promise.all([
+              tx
+                .delete(closeFriends)
+                .where(
+                  or(
+                    eq(closeFriends.profileId, targetProfileId),
+                    eq(closeFriends.friendId, targetProfileId),
+                  ),
                 ),
-              );
-            await tx
-              .delete(connections)
-              .where(
-                or(
-                  eq(connections.requesterId, targetProfileId),
-                  eq(connections.addresseeId, targetProfileId),
+              tx
+                .delete(connections)
+                .where(
+                  or(
+                    eq(connections.requesterId, targetProfileId),
+                    eq(connections.addresseeId, targetProfileId),
+                  ),
                 ),
-              );
-            await tx
-              .delete(blocks)
-              .where(
-                or(eq(blocks.blockerId, targetProfileId), eq(blocks.blockedId, targetProfileId)),
-              );
-            await tx
-              .delete(organisationMembers)
-              .where(eq(organisationMembers.profileId, targetProfileId));
+              tx
+                .delete(blocks)
+                .where(
+                  or(eq(blocks.blockerId, targetProfileId), eq(blocks.blockedId, targetProfileId)),
+                ),
+              tx
+                .delete(organisationMembers)
+                .where(eq(organisationMembers.profileId, targetProfileId)),
+            ]);
             await tx.delete(users).where(eq(users.id, targetProfileId));
+
+            // Promote another profile to default if the deleted one was default
+            if (wasDefault) {
+              const remaining = await tx
+                .select({ id: users.id })
+                .from(users)
+                .where(eq(users.accountId, accountId))
+                .orderBy(asc(users.createdAt))
+                .limit(1);
+              if (remaining.length > 0) {
+                await tx
+                  .update(users)
+                  .set({ isDefault: true, updatedAt: now() })
+                  .where(eq(users.id, remaining[0]!.id));
+              }
+            }
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
-
-      // Promote another profile to default if the deleted one was default
-      if (wasDefault) {
-        yield* Effect.tryPromise({
-          try: async () => {
-            const remaining = await db
-              .select({ id: users.id })
-              .from(users)
-              .where(eq(users.accountId, accountId))
-              .orderBy(asc(users.createdAt))
-              .limit(1);
-            if (remaining.length > 0) {
-              await db
-                .update(users)
-                .set({ isDefault: true, updatedAt: now() })
-                .where(eq(users.id, remaining[0]!.id));
-            }
-          },
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-      }
     }).pipe(withProfileCrud("delete"));
 
   /**
