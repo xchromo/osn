@@ -771,7 +771,7 @@ export function createAuthRoutes(
       // =========================================================================
       // First-party direct-session login endpoints
       //
-      // These mirror the /register/* flow: they return a Session + PublicUser
+      // These mirror the /register/* flow: they return a Session + PublicProfile
       // directly, skipping the PKCE authorization-code round-trip. The hosted
       // HTML flow at /authorize continues to use the code-returning variants
       // above for third-party OAuth clients.
