@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect";
 import {
   createContext,
+  createEffect,
   createResource,
   createSignal,
   useContext,
@@ -48,16 +49,34 @@ export function AuthProvider(props: AuthProviderProps) {
     run(Effect.flatMap(OsnAuth, (auth) => auth.getSession())),
   );
 
+  // P-W2: Gate profiles on session — only fetch when a session exists.
+  // SolidJS createResource with a source signal only fires the fetcher when
+  // the source is truthy, preventing wasted requests for unauthenticated users.
   const [profiles, { mutate: mutateProfiles, refetch: refetchProfiles }] = createResource<
-    PublicProfile[] | null
-  >(() => run(Effect.flatMap(OsnAuth, (auth) => auth.listProfiles())).catch(() => null));
+    PublicProfile[] | null,
+    Session | null
+  >(
+    () => session() ?? null,
+    (sess) => {
+      if (!sess) return Promise.resolve(null);
+      return run(Effect.flatMap(OsnAuth, (auth) => auth.listProfiles()));
+    },
+  );
 
   const [activeProfileId, setActiveProfileId] = createSignal<string | null>(null);
 
-  // Initialise active profile ID on mount
-  run(Effect.flatMap(OsnAuth, (auth) => auth.getActiveProfile()))
-    .then(setActiveProfileId)
-    .catch(() => {});
+  // S-L2: Derive activeProfileId reactively from session state instead of
+  // a fire-and-forget initialisation call.
+  createEffect(() => {
+    const sess = session();
+    if (sess) {
+      run(Effect.flatMap(OsnAuth, (auth) => auth.getActiveProfile())).then(setActiveProfileId, () =>
+        setActiveProfileId(null),
+      );
+    } else if (sess === null) {
+      setActiveProfileId(null);
+    }
+  });
 
   const login = (redirectUri: string, scopes?: string[]) => {
     run(
@@ -78,28 +97,23 @@ export function AuthProvider(props: AuthProviderProps) {
     setActiveProfileId(null);
   };
 
+  // P-I2: Await refetches for consistent state before returning
   const handleCallback = async (params: { code: string; state: string; redirectUri: string }) => {
     await run(Effect.flatMap(OsnAuth, (auth) => auth.handleCallback(params)));
     await refetchSession();
-    run(Effect.flatMap(OsnAuth, (auth) => auth.getActiveProfile()))
-      .then(setActiveProfileId)
-      .catch(() => {});
-    refetchProfiles();
+    await refetchProfiles();
   };
 
   const adoptSession = async (next: Session) => {
     await run(Effect.flatMap(OsnAuth, (auth) => auth.setSession(next)));
     await refetchSession();
-    run(Effect.flatMap(OsnAuth, (auth) => auth.getActiveProfile()))
-      .then(setActiveProfileId)
-      .catch(() => {});
-    refetchProfiles();
+    await refetchProfiles();
   };
 
   const switchProfile = async (profileId: string) => {
     const result = await run(Effect.flatMap(OsnAuth, (auth) => auth.switchProfile(profileId)));
     await refetchSession();
-    setActiveProfileId(profileId);
+    setActiveProfileId(result.profile.id);
     return result;
   };
 
@@ -107,17 +121,14 @@ export function AuthProvider(props: AuthProviderProps) {
     const profile = await run(
       Effect.flatMap(OsnAuth, (auth) => auth.createProfile(handle, displayName)),
     );
-    refetchProfiles();
+    await refetchProfiles();
     return profile;
   };
 
   const deleteProfile = async (profileId: string) => {
     await run(Effect.flatMap(OsnAuth, (auth) => auth.deleteProfile(profileId)));
     await refetchSession();
-    run(Effect.flatMap(OsnAuth, (auth) => auth.getActiveProfile()))
-      .then(setActiveProfileId)
-      .catch(() => {});
-    refetchProfiles();
+    await refetchProfiles();
   };
 
   return (

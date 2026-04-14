@@ -10,7 +10,15 @@ import {
 } from "./errors";
 import { generateCodeChallenge, generateCodeVerifier } from "./pkce";
 import { Storage } from "./storage";
-import { extractJwtSub, parseTokenResponse } from "./tokens";
+import {
+  decodeAccountSession,
+  decodeCreateProfileResponse,
+  decodeListProfilesResponse,
+  decodeSession,
+  decodeSwitchProfileResponse,
+  extractJwtSub,
+  parseTokenResponse,
+} from "./tokens";
 import type { AccountSession, PublicProfile, Session } from "./tokens";
 
 const ACCOUNT_SESSION_KEY = "@osn/client:account_session";
@@ -46,6 +54,16 @@ function sessionToAccountSession(session: Session): AccountSession {
     scopes: session.scopes,
     idToken: session.idToken,
   };
+}
+
+/** Remove expired profile tokens from an AccountSession, except the active profile. (S-M2, P-W3) */
+function pruneExpiredTokens(account: AccountSession): void {
+  const now = Date.now();
+  for (const id of Object.keys(account.profileTokens)) {
+    if (id !== account.activeProfileId && account.profileTokens[id]!.expiresAt <= now) {
+      delete account.profileTokens[id];
+    }
+  }
 }
 
 export interface OsnAuthConfig {
@@ -114,26 +132,60 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
     Effect.gen(function* () {
       const storage = yield* Storage;
 
+      // P-W1: In-memory cache to avoid redundant storage reads + JSON.parse
+      // undefined = not loaded, null = no session, AccountSession = loaded
+      let cache: AccountSession | null | undefined;
+
       // ---------------------------------------------------------------------------
       // Internal helpers for the multi-key account session model
       // ---------------------------------------------------------------------------
 
-      const saveAccountSession = (account: AccountSession) =>
-        storage.set(ACCOUNT_SESSION_KEY, JSON.stringify(account));
+      const saveAccountSession = (account: AccountSession) => {
+        pruneExpiredTokens(account);
+        cache = account;
+        return storage.set(ACCOUNT_SESSION_KEY, JSON.stringify(account));
+      };
 
       /** Read account session from storage, migrating from the legacy single-key format if needed. */
       const getAccountSession = () =>
         Effect.gen(function* () {
+          // P-W1: Return cached value if available
+          if (cache !== undefined) return cache;
+
           const raw = yield* storage.get(ACCOUNT_SESSION_KEY);
-          if (raw) return JSON.parse(raw) as AccountSession;
+          if (raw) {
+            // S-H2: Validate storage data against schema before consuming
+            try {
+              const account = decodeAccountSession(JSON.parse(raw)) as AccountSession;
+              cache = account;
+              return account;
+            } catch {
+              yield* storage.remove(ACCOUNT_SESSION_KEY);
+              cache = null;
+              return null;
+            }
+          }
 
           // Attempt migration from legacy single-key storage
           const legacy = yield* storage.get(LEGACY_SESSION_KEY);
-          if (!legacy) return null;
+          if (!legacy) {
+            cache = null;
+            return null;
+          }
 
-          const legacySession = JSON.parse(legacy) as Session;
+          // S-H2: Validate legacy session data
+          let legacySession: Session;
+          try {
+            legacySession = decodeSession(JSON.parse(legacy)) as Session;
+          } catch {
+            yield* storage.remove(LEGACY_SESSION_KEY);
+            cache = null;
+            return null;
+          }
+
           if (!legacySession.refreshToken) {
             yield* storage.remove(LEGACY_SESSION_KEY);
+            cache = null;
             return null;
           }
 
@@ -277,6 +329,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
 
       const logout = () =>
         Effect.gen(function* () {
+          cache = null;
           yield* storage.remove(ACCOUNT_SESSION_KEY);
           yield* storage.remove(LEGACY_SESSION_KEY);
         });
@@ -287,6 +340,11 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       // Profile management methods (P4)
       // ---------------------------------------------------------------------------
 
+      // S-H1: These endpoints currently require the refresh token in the request
+      // body (server API design from P2/P3). A follow-up should migrate the server
+      // to accept Bearer access-token auth instead, reducing refresh-token exposure.
+      // Tracked in wiki/TODO.md security backlog.
+
       const listProfiles = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
@@ -296,20 +354,21 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
             );
           }
 
+          // S-M4: Validate response schema
           const res = yield* Effect.tryPromise({
-            try: () =>
-              fetch(`${config.issuerUrl}/profiles/list`, {
+            try: async () => {
+              const r = await fetch(`${config.issuerUrl}/profiles/list`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ refresh_token: account.refreshToken }),
-              }).then((r) => {
-                if (!r.ok) throw new Error(`Request failed: ${r.status}`);
-                return r.json() as Promise<{ profiles: PublicProfile[] }>;
-              }),
+              });
+              if (!r.ok) throw new Error(`Request failed: ${r.status}`);
+              return decodeListProfilesResponse(await r.json());
+            },
             catch: (cause) => new ProfileManagementError({ cause }),
           });
 
-          return res.profiles;
+          return res.profiles as PublicProfile[];
         });
 
       const switchProfile = (profileId: string) =>
@@ -321,32 +380,31 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
             );
           }
 
+          // S-M4: Validate response schema
           const res = yield* Effect.tryPromise({
-            try: () =>
-              fetch(`${config.issuerUrl}/profiles/switch`, {
+            try: async () => {
+              const r = await fetch(`${config.issuerUrl}/profiles/switch`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   refresh_token: account.refreshToken,
                   profile_id: profileId,
                 }),
-              }).then((r) => {
-                if (!r.ok) throw new Error(`Request failed: ${r.status}`);
-                return r.json() as Promise<{
-                  access_token: string;
-                  expires_in: number;
-                  profile: PublicProfile;
-                }>;
-              }),
+              });
+              if (!r.ok) throw new Error(`Request failed: ${r.status}`);
+              return decodeSwitchProfileResponse(await r.json());
+            },
             catch: (cause) => new ProfileManagementError({ cause }),
           });
 
+          // S-L1: Use server-authoritative profile ID, not caller-supplied
+          const serverProfileId = (res.profile as PublicProfile).id;
           const expiresAt = Date.now() + res.expires_in * 1000;
-          account.profileTokens[profileId] = {
+          account.profileTokens[serverProfileId] = {
             accessToken: res.access_token,
             expiresAt,
           };
-          account.activeProfileId = profileId;
+          account.activeProfileId = serverProfileId;
           yield* saveAccountSession(account);
 
           const session: Session = {
@@ -357,7 +415,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
             scopes: account.scopes,
           };
 
-          return { session, profile: res.profile };
+          return { session, profile: res.profile as PublicProfile };
         });
 
       const createProfile = (handle: string, displayName?: string) =>
@@ -375,20 +433,21 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           };
           if (displayName !== undefined) body.display_name = displayName;
 
+          // S-M4: Validate response schema
           const res = yield* Effect.tryPromise({
-            try: () =>
-              fetch(`${config.issuerUrl}/profiles/create`, {
+            try: async () => {
+              const r = await fetch(`${config.issuerUrl}/profiles/create`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
-              }).then((r) => {
-                if (!r.ok) throw new Error(`Request failed: ${r.status}`);
-                return r.json() as Promise<{ profile: PublicProfile }>;
-              }),
+              });
+              if (!r.ok) throw new Error(`Request failed: ${r.status}`);
+              return decodeCreateProfileResponse(await r.json());
+            },
             catch: (cause) => new ProfileManagementError({ cause }),
           });
 
-          return res.profile;
+          return res.profile as PublicProfile;
         });
 
       const deleteProfile = (profileId: string) =>
@@ -401,27 +460,26 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           }
 
           yield* Effect.tryPromise({
-            try: () =>
-              fetch(`${config.issuerUrl}/profiles/delete`, {
+            try: async () => {
+              const r = await fetch(`${config.issuerUrl}/profiles/delete`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   refresh_token: account.refreshToken,
                   profile_id: profileId,
                 }),
-              }).then((r) => {
-                if (!r.ok) throw new Error(`Request failed: ${r.status}`);
-                return r.json() as Promise<unknown>;
-              }),
+              });
+              if (!r.ok) throw new Error(`Request failed: ${r.status}`);
+              return (await r.json()) as unknown;
+            },
             catch: (cause) => new ProfileManagementError({ cause }),
           });
 
           delete account.profileTokens[profileId];
+          // S-M3: Handle deletion of the active profile gracefully
           if (account.activeProfileId === profileId) {
             const remaining = Object.keys(account.profileTokens);
-            if (remaining.length > 0) {
-              account.activeProfileId = remaining[0]!;
-            }
+            account.activeProfileId = remaining.length > 0 ? remaining[0]! : "";
           }
           yield* saveAccountSession(account);
         });
@@ -429,7 +487,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       const getActiveProfile = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
-          return account?.activeProfileId ?? null;
+          return account?.activeProfileId || null;
         });
 
       return {
