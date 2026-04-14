@@ -1447,6 +1447,21 @@ describe("auth routes", () => {
       );
       expect(res.status).toBeGreaterThanOrEqual(400);
     });
+
+    it("rate limits profile list requests", async () => {
+      const denyAll: RateLimiterBackend = { check: () => false };
+      const limiters = { ...createDefaultAuthRateLimiters(), profileList: denyAll };
+      const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
+      const res = await freshApp.handle(
+        new Request("http://localhost/profiles", {
+          headers: {
+            Authorization: "Bearer any",
+            "x-forwarded-for": "10.10.10.10",
+          },
+        }),
+      );
+      expect(res.status).toBe(429);
+    });
   });
 
   describe("POST /profiles/switch", () => {

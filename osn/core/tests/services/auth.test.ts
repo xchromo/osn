@@ -983,6 +983,27 @@ describe("two-tier token model (P2)", () => {
       expect(found).toBeNull();
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("rejects an access token used as a refresh token (type mismatch)", () =>
+    Effect.gen(function* () {
+      const profile = yield* auth.registerProfile("typemix@example.com", "typemix");
+      const tokens = yield* auth.issueTokens(
+        profile.id,
+        profile.accountId,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      );
+      // Access token has no type: "refresh" claim — must be rejected
+      const switchErr = yield* Effect.flip(auth.switchProfile(tokens.accessToken, profile.id));
+      expect(switchErr._tag).toBe("AuthError");
+      expect(switchErr.message).toContain("Invalid token type");
+
+      const listErr = yield* Effect.flip(auth.listAccountProfiles(tokens.accessToken));
+      expect(listErr._tag).toBe("AuthError");
+      expect(listErr.message).toContain("Invalid token type");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 // ---------------------------------------------------------------------------
