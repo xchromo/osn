@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { describe, it, expect, beforeEach } from "vitest";
 
+import type { RateLimiterBackend } from "../../src/lib/rate-limit";
 import { createProfileRoutes } from "../../src/routes/profile";
 import { createAuthService } from "../../src/services/auth";
 import { createTestLayer } from "../helpers/db";
@@ -174,6 +175,159 @@ describe("profile routes", () => {
         }),
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Rate limiting (T-R1)
+  // -------------------------------------------------------------------------
+  describe("rate limiting", () => {
+    it("returns 429 after exceeding rate limit on /profiles/create", async () => {
+      const freshApp = createProfileRoutes(config, layer);
+      const rt = await getRefreshToken("rl1@test.com", "rl1user");
+      // profileCreate allows 5 req/min
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/profiles/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "1.2.3.4" },
+            body: JSON.stringify({ refresh_token: rt, handle: `rl1_alt${i}` }),
+          }),
+        );
+      }
+      const blocked = await freshApp.handle(
+        new Request("http://localhost/profiles/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": "1.2.3.4" },
+          body: JSON.stringify({ refresh_token: rt, handle: "rl1_blocked" }),
+        }),
+      );
+      expect(blocked.status).toBe(429);
+      const json = (await blocked.json()) as { error: string };
+      expect(json.error).toBe("rate_limited");
+    });
+
+    it("returns 429 after exceeding rate limit on /profiles/delete", async () => {
+      const freshApp = createProfileRoutes(config, layer);
+      const rt = await getRefreshToken("rl2@test.com", "rl2user");
+      // profileDelete allows 5 req/min — fire 5 requests (they may fail as 400, that's fine)
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/profiles/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "2.2.2.2" },
+            body: JSON.stringify({ refresh_token: rt, profile_id: `usr_00000000000${i}` }),
+          }),
+        );
+      }
+      const blocked = await freshApp.handle(
+        new Request("http://localhost/profiles/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": "2.2.2.2" },
+          body: JSON.stringify({ refresh_token: rt, profile_id: "usr_000000000099" }),
+        }),
+      );
+      expect(blocked.status).toBe(429);
+    });
+
+    it("returns 429 after exceeding rate limit on /profiles/:profileId/default", async () => {
+      const freshApp = createProfileRoutes(config, layer);
+      const rt = await getRefreshToken("rl3@test.com", "rl3user");
+      // profileSetDefault allows 10 req/min
+      for (let i = 0; i < 10; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/profiles/usr_000000000000/default", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "3.3.3.3" },
+            body: JSON.stringify({ refresh_token: rt }),
+          }),
+        );
+      }
+      const blocked = await freshApp.handle(
+        new Request("http://localhost/profiles/usr_000000000000/default", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": "3.3.3.3" },
+          body: JSON.stringify({ refresh_token: rt }),
+        }),
+      );
+      expect(blocked.status).toBe(429);
+    });
+
+    it("rate limits are per-IP — different IPs are independent", async () => {
+      const freshApp = createProfileRoutes(config, layer);
+      const rt = await getRefreshToken("rl4@test.com", "rl4user");
+      // Exhaust limit for IP A
+      for (let i = 0; i < 5; i++) {
+        // eslint-disable-next-line no-await-in-loop -- sequential dispatch required for rate-limit correctness
+        await freshApp.handle(
+          new Request("http://localhost/profiles/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-forwarded-for": "10.0.0.1" },
+            body: JSON.stringify({ refresh_token: rt, handle: `rl4_a${i}` }),
+          }),
+        );
+      }
+      // IP A is blocked
+      const blockedA = await freshApp.handle(
+        new Request("http://localhost/profiles/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": "10.0.0.1" },
+          body: JSON.stringify({ refresh_token: rt, handle: "rl4_blocked" }),
+        }),
+      );
+      expect(blockedA.status).toBe(429);
+      // IP B is not blocked
+      const allowedB = await freshApp.handle(
+        new Request("http://localhost/profiles/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-forwarded-for": "10.0.0.2" },
+          body: JSON.stringify({ refresh_token: rt, handle: "rl4_b" }),
+        }),
+      );
+      expect(allowedB.status).not.toBe(429);
+    });
+
+    it("uses injected reject-all rate limiter", async () => {
+      const rejectAll: RateLimiterBackend = { check: async () => false };
+      const freshApp = createProfileRoutes(config, layer, undefined, {
+        profileCreate: rejectAll,
+        profileDelete: rejectAll,
+        profileSetDefault: rejectAll,
+      });
+      const rt = await getRefreshToken("rl5@test.com", "rl5user");
+      const res = await freshApp.handle(
+        new Request("http://localhost/profiles/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: rt, handle: "rl5_alt" }),
+        }),
+      );
+      expect(res.status).toBe(429);
+    });
+
+    it("fails closed when rate limiter backend throws (S-M1)", async () => {
+      const brokenBackend: RateLimiterBackend = {
+        check: async () => {
+          throw new Error("Redis connection refused");
+        },
+      };
+      const freshApp = createProfileRoutes(config, layer, undefined, {
+        profileCreate: brokenBackend,
+        profileDelete: brokenBackend,
+        profileSetDefault: brokenBackend,
+      });
+      const rt = await getRefreshToken("rl6@test.com", "rl6user");
+      const res = await freshApp.handle(
+        new Request("http://localhost/profiles/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: rt, handle: "rl6_alt" }),
+        }),
+      );
+      expect(res.status).toBe(429);
     });
   });
 });

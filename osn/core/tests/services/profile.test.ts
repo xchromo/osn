@@ -95,6 +95,39 @@ describe("createProfile", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  it.effect("rejects empty handle", () =>
+    Effect.gen(function* () {
+      const { refreshToken } = yield* setupAccount("empty@test.com", "emptyuser");
+      const error = yield* Effect.flip(profile.createProfile(refreshToken, ""));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("accepts 30-character handle (boundary)", () =>
+    Effect.gen(function* () {
+      const { refreshToken } = yield* setupAccount("bound@test.com", "bounduser");
+      const handle30 = "a".repeat(30);
+      const result = yield* profile.createProfile(refreshToken, handle30);
+      expect(result.handle).toBe(handle30);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects 31-character handle (over boundary)", () =>
+    Effect.gen(function* () {
+      const { refreshToken } = yield* setupAccount("over@test.com", "overuser");
+      const error = yield* Effect.flip(profile.createProfile(refreshToken, "a".repeat(31)));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects handle with special characters", () =>
+    Effect.gen(function* () {
+      const { refreshToken } = yield* setupAccount("spec@test.com", "specuser");
+      const error = yield* Effect.flip(profile.createProfile(refreshToken, "user-name"));
+      expect(error._tag).toBe("ValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("rejects handle that collides with organisation handle", () =>
     Effect.gen(function* () {
       const { profile: owner, refreshToken } = yield* setupAccount("orgcol@test.com", "orgcoluser");
