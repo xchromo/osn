@@ -45,6 +45,8 @@ describe("ProfileSwitcher", () => {
     hoisted.switchProfile.mockReset();
     hoisted.deleteProfile.mockReset();
     hoisted.createProfile.mockReset();
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
   });
 
   afterEach(() => {
@@ -145,6 +147,19 @@ describe("ProfileSwitcher", () => {
       expect(hoisted.deleteProfile).toHaveBeenCalledWith("p_2");
       expect(toast.success).toHaveBeenCalledWith("Profile @bob deleted");
     });
+  });
+
+  it("does not call switchProfile when clicking already-active profile", async () => {
+    render(() => <ProfileSwitcher />);
+
+    fireEvent.click(screen.getByRole("button", { name: /@alice/ }));
+    await waitFor(() => screen.getByText("Profiles"));
+
+    // Click alice's row (active profile)
+    const aliceBtn = document.querySelector("button[aria-current='true']") as HTMLButtonElement;
+    fireEvent.click(aliceBtn);
+
+    expect(hoisted.switchProfile).not.toHaveBeenCalled();
   });
 
   it("shows '+ Add profile' button that opens create dialog", async () => {
