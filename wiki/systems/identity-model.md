@@ -119,7 +119,11 @@ Organisations are independent entities that are **composed of profiles, not acco
 | Refresh | Account | `accountId` | 30 days | Re-issue access tokens; enables profile switching without re-authentication |
 | Enrollment | Account | `accountId` | 5 min | Passkey registration after signup |
 
-The two-tier token model (P2) scopes refresh tokens to accounts and access tokens to profiles. This enables `POST /profiles/switch` — clients present the account-scoped refresh token plus a target `profileId`, and receive a new access token for that profile without re-authenticating.
+The two-tier token model (P2) scopes refresh tokens to accounts and access tokens to profiles. Refresh tokens include a `scope: "account"` claim that is explicitly validated on verification.
+
+Two profile management endpoints:
+- `POST /profiles/switch` — present the account-scoped refresh token + target `profileId` in the request body; receive a new access token for that profile. Per-account rate limited (20 switches/hr).
+- `POST /profiles/list` — present the refresh token in the request body; receive all profiles for the account. Refresh tokens are never sent via `Authorization` headers to avoid conflation with access tokens.
 
 ## Registration Flow
 
@@ -155,7 +159,7 @@ POST /register/complete → OTP →
 | Phase | Status | Scope |
 |-------|--------|-------|
 | P1: Schema + terminology | ✅ Done | `accounts` table, `userId` → `profileId`, seed data, email dedup, service/route/test rename from "user" → "profile" terminology |
-| P2: Auth refactor | ✅ Done | Two-tier tokens (refresh=account, access=profile), `POST /profiles/switch`, `GET /profiles`, `verifyRefreshToken`, `findDefaultProfile` |
+| P2: Auth refactor | ✅ Done | Two-tier tokens (refresh=account, access=profile), `POST /profiles/switch`, `POST /profiles/list`, `verifyRefreshToken`, `findDefaultProfile`, scope claim validation, per-account rate limiting |
 | P3: Profile CRUD | Planned | Create/list/delete profiles, maxProfiles enforcement |
 | P4: Client SDK | Planned | Multi-session storage, profile switcher methods |
 | P5: UI | Planned | Profile switcher component |
