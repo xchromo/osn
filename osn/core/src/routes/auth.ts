@@ -910,26 +910,28 @@ export function createAuthRoutes(
       // -------------------------------------------------------------------------
       // Profile switching (P2 — multi-account)
       // -------------------------------------------------------------------------
-      .get("/profiles", async ({ headers, set }) => {
-        const rlErr = await rateLimit(headers, "profile_list", rl.profileList);
-        if (rlErr) {
-          set.status = 429;
-          return rlErr;
-        }
-        const authHeader = headers["authorization"];
-        if (!authHeader?.startsWith("Bearer ")) {
-          set.status = 401;
-          return { error: "Missing or invalid Authorization header" };
-        }
-        const token = authHeader.slice(7);
-        try {
-          return await run(auth.listAccountProfiles(token));
-        } catch (e) {
-          const { status, body } = publicError(e);
-          set.status = status;
-          return body;
-        }
-      })
+      .post(
+        "/profiles/list",
+        async ({ body, headers, set }) => {
+          const rlErr = await rateLimit(headers, "profile_list", rl.profileList);
+          if (rlErr) {
+            set.status = 429;
+            return rlErr;
+          }
+          try {
+            return await run(auth.listAccountProfiles(body.refresh_token));
+          } catch (e) {
+            const { status, body: errBody } = publicError(e);
+            set.status = status;
+            return errBody;
+          }
+        },
+        {
+          body: t.Object({
+            refresh_token: t.String(),
+          }),
+        },
+      )
       .post(
         "/profiles/switch",
         async ({ body, headers, set }) => {
@@ -954,7 +956,7 @@ export function createAuthRoutes(
         {
           body: t.Object({
             refresh_token: t.String(),
-            profile_id: t.String(),
+            profile_id: t.String({ pattern: "^usr_[a-f0-9]{12}$" }),
           }),
         },
       )

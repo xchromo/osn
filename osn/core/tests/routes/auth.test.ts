@@ -1385,7 +1385,7 @@ describe("auth routes", () => {
   // Profile switching (P2)
   // -------------------------------------------------------------------------
 
-  describe("GET /profiles", () => {
+  describe("POST /profiles/list", () => {
     async function getRefreshToken(): Promise<{ refreshToken: string; profileId: string }> {
       let captured: string | undefined;
       const verifiedConfig = {
@@ -1424,8 +1424,10 @@ describe("auth routes", () => {
     it("returns the list of profiles for a valid refresh token", async () => {
       const { refreshToken } = await getRefreshToken();
       const res = await app.handle(
-        new Request("http://localhost/profiles", {
-          headers: { Authorization: `Bearer ${refreshToken}` },
+        new Request("http://localhost/profiles/list", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
         }),
       );
       expect(res.status).toBe(200);
@@ -1434,15 +1436,12 @@ describe("auth routes", () => {
       expect(json.profiles[0]!.handle).toBe("profilelist");
     });
 
-    it("returns 401 without Authorization header", async () => {
-      const res = await app.handle(new Request("http://localhost/profiles"));
-      expect(res.status).toBe(401);
-    });
-
     it("returns error with an invalid token", async () => {
       const res = await app.handle(
-        new Request("http://localhost/profiles", {
-          headers: { Authorization: "Bearer not.a.valid.token" },
+        new Request("http://localhost/profiles/list", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: "not.a.valid.token" }),
         }),
       );
       expect(res.status).toBeGreaterThanOrEqual(400);
@@ -1453,11 +1452,13 @@ describe("auth routes", () => {
       const limiters = { ...createDefaultAuthRateLimiters(), profileList: denyAll };
       const freshApp = createAuthRoutes(config, layer, Layer.empty, limiters);
       const res = await freshApp.handle(
-        new Request("http://localhost/profiles", {
+        new Request("http://localhost/profiles/list", {
+          method: "POST",
           headers: {
-            Authorization: "Bearer any",
+            "Content-Type": "application/json",
             "x-forwarded-for": "10.10.10.10",
           },
+          body: JSON.stringify({ refresh_token: "any" }),
         }),
       );
       expect(res.status).toBe(429);
@@ -1534,7 +1535,7 @@ describe("auth routes", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             refresh_token: refreshToken,
-            profile_id: "usr_nonexistent",
+            profile_id: "usr_aabbccddeeff",
           }),
         }),
       );
@@ -1548,7 +1549,7 @@ describe("auth routes", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             refresh_token: "not.a.token",
-            profile_id: "usr_any",
+            profile_id: "usr_aabbccddeeff",
           }),
         }),
       );
@@ -1568,7 +1569,7 @@ describe("auth routes", () => {
           },
           body: JSON.stringify({
             refresh_token: "any",
-            profile_id: "any",
+            profile_id: "usr_aabbccddeeff",
           }),
         }),
       );

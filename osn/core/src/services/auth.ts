@@ -16,7 +16,7 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { SignJWT, jwtVerify } from "jose";
 
@@ -115,6 +115,28 @@ interface PendingRegistration {
 const MAX_PENDING_REGISTRATIONS = 10_000;
 // Max OTP guesses against a single pending entry before it is wiped.
 const MAX_OTP_ATTEMPTS = 5;
+
+// Per-account profile-switch rate limiting (S-M3). Fixed window:
+// max 20 switches per hour per account. Module-level so it survives
+// across request boundaries (same as OTP / challenge stores).
+const PROFILE_SWITCH_MAX = 20;
+const PROFILE_SWITCH_WINDOW_MS = 3_600_000; // 1 hour
+const profileSwitchCounts = new Map<string, { count: number; resetAt: number }>();
+
+function checkProfileSwitchLimit(accountId: string): boolean {
+  const currentMs = Date.now();
+  const entry = profileSwitchCounts.get(accountId);
+  if (!entry || currentMs >= entry.resetAt) {
+    profileSwitchCounts.set(accountId, {
+      count: 1,
+      resetAt: currentMs + PROFILE_SWITCH_WINDOW_MS,
+    });
+    return true;
+  }
+  if (entry.count >= PROFILE_SWITCH_MAX) return false;
+  entry.count++;
+  return true;
+}
 
 // keyed by accountId for registration, by email for login
 const registrationChallenges = new Map<string, ChallengeEntry>();
@@ -877,15 +899,20 @@ export function createAuthService(config: AuthConfig) {
         try: () => verifyJwt(token, config.jwtSecret),
         catch: () => new AuthError({ message: "Invalid or expired refresh token" }),
       });
-      if (payload["type"] !== "refresh" || typeof payload["sub"] !== "string") {
+      if (
+        payload["type"] !== "refresh" ||
+        payload["scope"] !== "account" ||
+        typeof payload["sub"] !== "string"
+      ) {
         return yield* Effect.fail(new AuthError({ message: "Invalid token type" }));
       }
       return { accountId: payload["sub"] };
     });
 
   /**
-   * Finds the default profile for an account. Falls back to the first profile
-   * if no profile has `isDefault = true` (defensive — registration always sets one).
+   * Finds the default profile for an account. Uses DESC ordering on isDefault
+   * so the default profile sorts first (true=1 before false=0), then takes
+   * limit(1). Falls back to the first profile if none has isDefault=true.
    */
   const findDefaultProfile = (
     accountId: string,
@@ -899,15 +926,13 @@ export function createAuthService(config: AuthConfig) {
             .from(users)
             .innerJoin(accounts, eq(users.accountId, accounts.id))
             .where(eq(users.accountId, accountId))
-            .orderBy(users.isDefault)
-            .limit(2),
+            .orderBy(desc(users.isDefault))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      // isDefault is 0/1 in SQLite; ORDER BY isDefault ASC puts false first.
-      // Pick the default (last if both exist), or the only row.
-      const defaultRow = result.find((r) => r.profile.isDefault) ?? result[0];
-      if (!defaultRow) return null;
-      return { ...defaultRow.profile, email: defaultRow.account.email };
+      const row = result[0];
+      if (!row) return null;
+      return { ...row.profile, email: row.account.email };
     });
 
   const refreshTokens = (
@@ -1522,6 +1547,10 @@ export function createAuthService(config: AuthConfig) {
   > =>
     Effect.gen(function* () {
       const { accountId } = yield* verifyRefreshToken(refreshToken);
+      // Per-account rate limit (S-M3): bounds damage from a stolen refresh token.
+      if (!checkProfileSwitchLimit(accountId)) {
+        return yield* Effect.fail(new AuthError({ message: "Too many profile switches" }));
+      }
       const profile = yield* findProfileById(targetProfileId);
       if (!profile) {
         return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
