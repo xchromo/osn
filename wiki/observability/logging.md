@@ -77,7 +77,7 @@ Redaction is non-negotiable, but the deny-list is kept minimal. The logger layer
 
 ## Dev-mode OTP/magic-link logging
 
-Dev-mode OTP/magic-link logging uses `Effect.logDebug` gated on `NODE_ENV !== "production"`. The OTP code, email, and magic link URL are interpolated into the message string (not annotations) so the redacting logger doesn't scrub them -- the whole point of the dev log is to expose those values to the developer. In production these branches never run because `config.sendEmail` is wired up.
+Dev-mode OTP/magic-link logging uses `Effect.logDebug` gated on `OSN_ENV` being unset or `"dev"` (S-L2). The guard excludes both staging and production, providing defence in depth alongside the log-level minimum. The OTP code, email, and magic link URL are interpolated into the message string (not annotations) so the redacting logger doesn't scrub them -- the whole point of the dev log is to expose those values to the developer. In production these branches never run because `config.sendEmail` is wired up.
 
 ## Route-level logger wiring
 
