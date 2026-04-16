@@ -7,6 +7,7 @@ import {
   closeFriends,
   organisations,
   organisationMembers,
+  serviceAccounts,
 } from "./schema";
 import type {
   NewAccount,
@@ -15,6 +16,7 @@ import type {
   NewCloseFriend,
   NewOrganisation,
   NewOrganisationMember,
+  NewServiceAccount,
 } from "./schema";
 import { DbLive, Db } from "./service";
 
@@ -260,6 +262,36 @@ export function buildSeedCloseFriends(now: Date): NewCloseFriend[] {
 }
 
 // ---------------------------------------------------------------------------
+// Seed service accounts
+// ---------------------------------------------------------------------------
+
+/**
+ * Dev-only key pair for the pulse-api service account. This public key matches
+ * the private key in `pulse/api/.env.example` (PULSE_API_ARC_PRIVATE_KEY).
+ *
+ * These are local-dev-only keys — not secret, never used in production.
+ * Generate a real key pair per environment before deploying.
+ */
+const PULSE_API_DEV_PUBLIC_KEY_JWK = JSON.stringify({
+  kty: "EC",
+  crv: "P-256",
+  x: "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+  y: "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+});
+
+export function buildSeedServiceAccounts(now: Date): NewServiceAccount[] {
+  return [
+    {
+      serviceId: "pulse-api",
+      publicKeyJwk: PULSE_API_DEV_PUBLIC_KEY_JWK,
+      allowedScopes: "graph:read",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Seed organisations
 // ---------------------------------------------------------------------------
 
@@ -382,9 +414,15 @@ const seed = Effect.gen(function* () {
     catch: (cause) => new SeedError({ cause }),
   });
 
+  yield* Effect.tryPromise({
+    try: () =>
+      db.insert(serviceAccounts).values(buildSeedServiceAccounts(now)).onConflictDoNothing(),
+    catch: (cause) => new SeedError({ cause }),
+  });
+
   // eslint-disable-next-line no-console -- CLI seed script output
   console.log(
-    "Seed complete — 21 accounts, 23 profiles, 28 connections, 3 close friends, 2 orgs, 6 org members inserted (existing rows skipped).",
+    "Seed complete — 21 accounts, 23 profiles, 28 connections, 3 close friends, 2 orgs, 6 org members, 1 service account inserted (existing rows skipped).",
   );
 }).pipe(Effect.provide(DbLive));
 

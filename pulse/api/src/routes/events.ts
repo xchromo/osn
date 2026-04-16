@@ -19,7 +19,6 @@ import {
   listTodayEvents,
   updateEvent,
 } from "../services/events";
-import { OsnDb, OsnDbLayer } from "../services/graphBridge";
 import { updateSettings } from "../services/pulseUsers";
 import {
   inviteGuests,
@@ -116,11 +115,8 @@ const DEFAULT_JWT_SECRET = process.env.OSN_JWT_SECRET ?? "dev-secret-change-in-p
 export const createEventsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
   jwtSecret: string = DEFAULT_JWT_SECRET,
-  osnDbLayer: Layer.Layer<OsnDb> = OsnDbLayer,
 ) => {
   const secretBytes = new TextEncoder().encode(jwtSecret);
-  // Routes that need both DB layers merge them once up front.
-  const combinedLayer = Layer.mergeAll(dbLayer, osnDbLayer);
 
   return (
     new Elysia({ prefix: "/events" })
@@ -347,7 +343,7 @@ export const createEventsRoutes = (
                   return { error: "Failed to list RSVPs" } as const;
                 }),
               ),
-              Effect.provide(combinedLayer),
+              Effect.provide(dbLayer),
             ),
           );
           if (result === null) {
@@ -428,7 +424,7 @@ export const createEventsRoutes = (
                   return { error: "Failed to list RSVPs" } as const;
                 }),
               ),
-              Effect.provide(combinedLayer),
+              Effect.provide(dbLayer),
             ),
           );
           if (result === null) {

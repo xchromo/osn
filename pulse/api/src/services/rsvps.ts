@@ -11,7 +11,6 @@ import {
   getConnectionIds,
   getProfileDisplays,
   GraphBridgeError,
-  OsnDb,
   type ProfileDisplay,
 } from "./graphBridge";
 import { ensurePulseProfile, getAttendanceVisibilityBatch } from "./pulseUsers";
@@ -152,7 +151,7 @@ const loadRsvp = (
 const computeCanSeeAnyRsvps = (
   event: Event,
   viewerId: string | null,
-): Effect.Effect<boolean, DatabaseError | GraphBridgeError, Db | OsnDb> =>
+): Effect.Effect<boolean, DatabaseError | GraphBridgeError, Db> =>
   Effect.gen(function* () {
     if (viewerId && viewerId === event.createdByProfileId) return true;
     switch (event.guestListVisibility) {
@@ -193,7 +192,7 @@ const filterByAttendeePrivacy = (
   event: Event,
   rows: RsvpWithProfile[],
   viewerId: string | null,
-): Effect.Effect<RsvpWithProfile[], DatabaseError | GraphBridgeError, Db | OsnDb> =>
+): Effect.Effect<RsvpWithProfile[], DatabaseError | GraphBridgeError, Db> =>
   Effect.gen(function* () {
     const attendeeIds = Array.from(new Set(rows.map((r) => r.profileId)));
 
@@ -413,7 +412,7 @@ export const listRsvps = (
     status?: EventRsvp["status"];
     limit?: number;
   } = {},
-): Effect.Effect<RsvpWithProfile[], EventNotFound | DatabaseError | GraphBridgeError, Db | OsnDb> =>
+): Effect.Effect<RsvpWithProfile[], EventNotFound | DatabaseError | GraphBridgeError, Db> =>
   Effect.gen(function* () {
     const event = yield* loadEvent(eventId);
 
@@ -494,7 +493,7 @@ export const latestRsvps = (
   eventId: string,
   viewerId: string | null,
   limit = 5,
-): Effect.Effect<RsvpWithProfile[], EventNotFound | DatabaseError | GraphBridgeError, Db | OsnDb> =>
+): Effect.Effect<RsvpWithProfile[], EventNotFound | DatabaseError | GraphBridgeError, Db> =>
   listRsvps(eventId, viewerId, { status: "going", limit });
 
 /**
