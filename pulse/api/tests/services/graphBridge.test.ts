@@ -1,6 +1,19 @@
 import { Effect } from "effect";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Mock @osn/crypto so key generation never hits the real Web Crypto API.
+// generateArcKeyPair is slow (> 5 s) in the test environment; mocking it
+// keeps all graphBridge tests under the default 5000 ms timeout.
+vi.mock("@osn/crypto", () => ({
+  generateArcKeyPair: vi.fn().mockResolvedValue({
+    privateKey: {} as CryptoKey,
+    publicKey: {} as CryptoKey,
+  }),
+  importKeyFromJwk: vi.fn().mockResolvedValue({} as CryptoKey),
+  getOrCreateArcToken: vi.fn().mockResolvedValue("test-arc-token"),
+}));
+
+import { MAX_EVENT_GUESTS } from "../../src/lib/limits";
 import {
   getCloseFriendIds,
   getCloseFriendsOf,
@@ -43,13 +56,21 @@ describe("getConnectionIds", () => {
     expect(result.size).toBe(0);
   });
 
-  it("calls the correct endpoint with profileId encoded", async () => {
+  it("calls the correct endpoint with profileId and limit encoded", async () => {
     const spy = mockFetch({ connectionIds: [] });
     await Effect.runPromise(getConnectionIds("usr_alice"));
     const url = (spy.mock.calls[0]![0] as string).split("?")[0];
     expect(url).toContain("/graph/internal/connections");
     const search = new URLSearchParams((spy.mock.calls[0]![0] as string).split("?")[1]);
     expect(search.get("profileId")).toBe("usr_alice");
+    expect(search.get("limit")).toBe(String(MAX_EVENT_GUESTS));
+  });
+
+  it("sends ARC Authorization header on GET requests", async () => {
+    const spy = mockFetch({ connectionIds: [] });
+    await Effect.runPromise(getConnectionIds("usr_alice"));
+    const headers = spy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers["authorization"]).toMatch(/^ARC /);
   });
 
   it("fails with GraphBridgeError on HTTP error", async () => {
@@ -109,6 +130,13 @@ describe("getCloseFriendsOf", () => {
     expect(spy.mock.calls[0]![1]?.method).toBe("POST");
     const body = JSON.parse(spy.mock.calls[0]![1]?.body as string) as unknown;
     expect(body).toMatchObject({ viewerId: "usr_alice", profileIds: ["usr_bob"] });
+  });
+
+  it("sends ARC Authorization header on POST requests", async () => {
+    const spy = mockFetch({ closeFriendIds: [] });
+    await Effect.runPromise(getCloseFriendsOf("usr_alice", ["usr_bob"]));
+    const headers = spy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers["authorization"]).toMatch(/^ARC /);
   });
 
   it("fails with GraphBridgeError on HTTP error", async () => {
