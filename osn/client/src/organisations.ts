@@ -42,13 +42,31 @@ export class OrgClientError extends Error {
 // Internal fetch helpers
 // ---------------------------------------------------------------------------
 
+/** Parse response body as JSON, returning null if the body isn't JSON (S-L2). */
+async function safeJson<T>(res: Response): Promise<(T & { error?: string }) | null> {
+  try {
+    return (await res.json()) as T & { error?: string };
+  } catch {
+    return null;
+  }
+}
+
+/** Cap server-supplied error strings before surfacing to the UI (S-L2). */
+function safeErrorMessage(value: unknown, status: number): string {
+  if (typeof value !== "string" || value.length === 0) return `Request failed: ${status}`;
+  return value.length > 200 ? `${value.slice(0, 200)}…` : value;
+}
+
 async function authGet<T>(url: string, token: string): Promise<T> {
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const json = (await res.json()) as T & { error?: string };
+  const json = await safeJson<T>(res);
   if (!res.ok) {
-    throw new OrgClientError(json.error ?? `Request failed: ${res.status}`);
+    throw new OrgClientError(safeErrorMessage(json?.error, res.status));
+  }
+  if (json === null) {
+    throw new OrgClientError(`Invalid response: ${res.status}`);
   }
   return json;
 }
@@ -62,9 +80,12 @@ async function authPost<T>(url: string, token: string, body?: unknown): Promise<
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  const json = (await res.json()) as T & { error?: string };
+  const json = await safeJson<T>(res);
   if (!res.ok) {
-    throw new OrgClientError(json.error ?? `Request failed: ${res.status}`);
+    throw new OrgClientError(safeErrorMessage(json?.error, res.status));
+  }
+  if (json === null) {
+    throw new OrgClientError(`Invalid response: ${res.status}`);
   }
   return json;
 }
@@ -78,9 +99,12 @@ async function authPatch<T>(url: string, token: string, body: unknown): Promise<
     },
     body: JSON.stringify(body),
   });
-  const json = (await res.json()) as T & { error?: string };
+  const json = await safeJson<T>(res);
   if (!res.ok) {
-    throw new OrgClientError(json.error ?? `Request failed: ${res.status}`);
+    throw new OrgClientError(safeErrorMessage(json?.error, res.status));
+  }
+  if (json === null) {
+    throw new OrgClientError(`Invalid response: ${res.status}`);
   }
   return json;
 }
@@ -91,8 +115,8 @@ async function authDelete(url: string, token: string): Promise<void> {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    const json = (await res.json()) as { error?: string };
-    throw new OrgClientError(json.error ?? `Request failed: ${res.status}`);
+    const json = await safeJson<Record<string, unknown>>(res);
+    throw new OrgClientError(safeErrorMessage(json?.error, res.status));
   }
 }
 

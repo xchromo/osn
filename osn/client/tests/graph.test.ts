@@ -154,6 +154,39 @@ describe("createGraphClient — error surface", () => {
     );
     await expect(client.sendConnectionRequest(TOKEN, "alice")).rejects.toThrow(/Request failed/);
   });
+
+  it("throws GraphClientError (not SyntaxError) when the error body is not JSON (S-L2)", async () => {
+    // E.g. a proxy returns an HTML error page. The client must not leak
+    // the SyntaxError from res.json() to the caller.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new SyntaxError("Unexpected token <")),
+      }),
+    );
+    await expect(client.sendConnectionRequest(TOKEN, "alice")).rejects.toBeInstanceOf(
+      GraphClientError,
+    );
+  });
+
+  it("throws GraphClientError when a 200 response body is not JSON (S-L2)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token <")),
+      }),
+    );
+    await expect(client.listConnections(TOKEN)).rejects.toBeInstanceOf(GraphClientError);
+  });
+
+  it("truncates long error strings (S-L2)", async () => {
+    const long = "x".repeat(500);
+    mockFetch({ ok: false, json: () => Promise.resolve({ error: long }) });
+    await expect(client.sendConnectionRequest(TOKEN, "alice")).rejects.toThrow(/^x{200}…$/);
+  });
 });
 
 describe("createGraphClient — configuration", () => {
