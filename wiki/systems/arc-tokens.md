@@ -21,7 +21,8 @@ finding-ids:
 packages:
   - "@osn/crypto"
   - "@osn/core"
-last-reviewed: 2026-04-12
+  - "@pulse/api"
+last-reviewed: 2026-04-17
 ---
 
 # ARC Tokens (S2S Auth)
@@ -58,22 +59,23 @@ clearTokenCache() / clearPublicKeyCache()                 // → for testing / k
 
 | Scenario | Use ARC? | Why |
 |----------|----------|-----|
-| Pulse API -> OSN Core graph (current) | No | Direct package import (`createGraphService()`); zero overhead |
-| Pulse API -> OSN Core graph (multi-process) | **Yes** | HTTP call to `/graph/internal/*` must prove caller identity |
+| Pulse API -> OSN Core graph | **Yes** | HTTP call to `/graph/internal/*` must prove caller identity |
 | Third-party app -> any OSN endpoint | **Yes** | Caller has no shared secret; presents its public key via JWKS |
 | User-facing API call | No | Use user JWT (Bearer token); ARC is machine-to-machine only |
 | Background job -> OSN Core | **Yes** | Job acts as a service, not a user |
 
-## Calling Service (Token Issuer) -- Typical Pattern
+## Calling Service (Token Issuer) — Typical Pattern
 
 ```typescript
-import { getOrCreateArcToken, importKeyFromJwk } from "@osn/crypto/arc";
+import { getOrCreateArcToken, generateArcKeyPair, exportKeyToJwk } from "@osn/crypto";
 
-// Boot-time: load private key from env/secret store
-const privateKey = await importKeyFromJwk(process.env.ARC_PRIVATE_KEY_JWK!);
+// Boot-time: either load pre-distributed private key or generate ephemeral pair
+// See pulse/api/src/services/graphBridge.ts for the Promise-singleton pattern.
+const pair = await generateArcKeyPair();
+// Register public key with osn/api using INTERNAL_SERVICE_SECRET...
 
 // Per-request: get a cached or fresh token
-const token = await getOrCreateArcToken(privateKey, {
+const token = await getOrCreateArcToken(pair.privateKey, {
   iss: "pulse-api",      // this service's service_id
   aud: "osn-core",       // target service
   scope: "graph:read",   // minimal required scope
@@ -109,23 +111,32 @@ const arcMiddleware = (requiredScope: string) => async (ctx) => {
 
 ## Service Registration
 
-Each first-party service must have a row in `service_accounts`:
+Two strategies for registering a service's public key:
 
-```sql
-INSERT INTO service_accounts (service_id, public_key_jwk, allowed_scopes)
-VALUES ('pulse-api', '<exported-public-key-jwk>', 'graph:read');
+### Option A — Startup self-registration (recommended for dev/staging)
+
+`osn/api` exposes `POST /graph/internal/register-service`, protected by a shared `INTERNAL_SERVICE_SECRET` Bearer token. On startup, a service:
+
+1. Generates an ephemeral P-256 key pair (`generateArcKeyPair()`)
+2. Exports the public key (`exportKeyToJwk(pair.publicKey)`)
+3. POSTs `{ serviceId, publicKeyJwk, allowedScopes }` to the endpoint
+
+No private key in any file — only `INTERNAL_SERVICE_SECRET` (a simple string) in both services' env. The endpoint upserts the `service_accounts` row, so key rotation is free (just restart).
+
+```bash
+# Both env files need:
+INTERNAL_SERVICE_SECRET=<shared-random-string>
 ```
 
-Steps:
-1. Generate a key pair once at service setup with `generateArcKeyPair()`
-2. Store the **private key** in an env/secret store (never in the DB)
-3. Insert the **public key** (via `exportKeyToJwk`) into the `service_accounts` DB table
+### Option B — Pre-distributed stable key (production)
+
+1. Generate a key pair once: `bunx --bun tsx osn/crypto/scripts/gen-arc-keypair.ts`
+2. Set `PULSE_API_ARC_PRIVATE_KEY=<private-key-jwk>` in the service's env (never commit)
+3. Insert the public key into `service_accounts` via migration or admin tool
 
 ## Current S2S Strategy
 
-Pulse API imports `createGraphService()` from `@osn/core` directly (zero network overhead). ARC tokens guard HTTP-based S2S (`/graph/internal/*`) -- needed when scaling to multi-process, and immediately for any third-party app. See the "S2S scaling" deferred decision in TODO.md.
-
-**Implemented:** ARC token verification middleware (`requireArc` in `osn/core/src/lib/arc-middleware.ts`) protects seven read-only `/graph/internal/*` endpoints (see `osn/core/src/routes/graph-internal.ts`). The graphBridge in Pulse API can migrate to HTTP calls against these endpoints when scaling to multi-process.
+Pulse API calls `osn/api`'s `/graph/internal/*` endpoints over HTTP, authenticated with ARC tokens. ARC token verification middleware (`requireArc` in `osn/core/src/lib/arc-middleware.ts`) protects all inbound calls. The [[s2s-patterns|graphBridge]] in `pulse/api` is the only file that makes these calls.
 
 ## Security Notes
 

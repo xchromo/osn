@@ -128,7 +128,7 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 - [ ] Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (currently N individual writes)
 - [ ] Eliminate extra `getEvent` round-trip in `createEvent` via `RETURNING *`
-- [ ] S2S graph access: add `@osn/core` + `@osn/db` deps; use `createGraphService()` read-only for event filtering — first ARC token consumer
+- [x] S2S graph access: graphBridge migrated to ARC-token HTTP calls against `/graph/internal/*` (direct @osn/core import removed)
 - [ ] OSN/messaging domain modules
 - [ ] WebSocket setup for real-time
 - [ ] REST endpoints for third-party consumers
@@ -212,7 +212,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L2 — `Effect.orDie` in `requireAuth` swallows auth errors — replace with `Effect.either` + 401
 - [ ] S-L3 — Tauri CSP is `null` — allowlist `photon.komoot.io`, `maps.google.com`, `*.tile.openstreetmap.org`
 - [ ] S-L4 — `createdByAvatar` always null — no avatar claim in JWT
-- [ ] S-L7 — `jwtSecret` falls back to `"dev-secret"` — throw at startup in production
+- [x] S-L7 — `jwtSecret` falls back to `"dev-secret"` — throw at startup in production. **Fixed**: `OSN_JWT_SECRET` is validated at startup in `pulse/api/src/index.ts` (throws when unset in non-test env)
 - [x] S-L8 — OTP codes and magic link URLs logged to stdout. **Fixed** — guard tightened to `OSN_ENV` (excludes staging); dev log level defaults to debug so codes are visible without manual config.
 - [ ] S-L9 — `imageUrl` allows `data:` URIs — add CSP `img-src` header
 - [ ] S-L10 — SimpleWebAuthn loaded from unpkg CDN without SRI hash
@@ -249,6 +249,8 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W2 — `resolvePublicKey` hits DB despite warm cache — cache `CryptoKey` + `allowedScopes` together — see [[arc-tokens]]
 - [ ] P-W3 — `sendConnectionRequest` two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — see [[redis]]
+- [ ] P-W1 (pulse) — Duplicate event DB load per RSVP route: `loadVisibleEvent` fetches the row for the access gate; `listRsvps`/`rsvpCounts` re-fetch the same row internally. Thread the loaded `Event` into service functions — see [[s2s-patterns]]
+- [ ] P-W3 (pulse) — `listTodayEvents` has no `LIMIT` clause; fetches all matching rows for the day into memory — see [[event-access]]
 - [ ] P-W5 — Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (N individual writes)
 - [ ] P-W10 — `RegistrationClient.checkHandle` has no `AbortController` — debounced bursts leave multiple in-flight requests
 - [ ] P-W11 — `beginRegistration` issues two parallel queries instead of single `WHERE email = ? OR handle = ?`
@@ -276,6 +278,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I7 — Eliminate extra `getEvent` round-trip in `createEvent` via `RETURNING *`
 - [ ] P-I8 — `resolveHandle` re-fetches user from DB when handler already has the User row
 - [ ] P-I9 — Graph list endpoints load entire result set before slicing — add DB-level `LIMIT`/`OFFSET`
+- [ ] P-I2 (pulse) — Missing `(event_id, status)` composite index on `event_rsvps`; status filter applied as a post-index scan — add `index("event_rsvps_event_status_idx").on(t.eventId, t.status)` to `pulse/db` schema
 - [ ] P-I14 — `GET /events/:id/ics` has no `Cache-Control` / `ETag` headers
 - [ ] P-I15 — `rsvpCounts` calls `loadEvent(eventId)` redundantly (route already gates via `loadVisibleEvent`)
 - [ ] P-I1 (client) — Duplicated `authGet`/`authPost`/`authPatch`/`authDelete` helpers across `graph.ts`, `organisations.ts`, `recommendations.ts`. Factor to `@osn/client/src/lib/auth-fetch.ts` parameterised by error-class constructor — see [[component-library]]
@@ -300,7 +303,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 | Max event duration | Prompt user when creating events without endTime | When Pulse event creation UI is built |
 | Redis provider — see [[redis]] | Upstash (serverless, free tier) vs Redis Cloud vs self-hosted | When deploying beyond localhost |
 | DB table rename `users` → `profiles` | Table represents profiles; renaming is migration-heavy for minimal benefit | Only if it causes genuine confusion |
-| S2S scaling — see [[s2s-patterns]], [[arc-tokens]], [[s2s-migration]] | Current: direct package import. Migrate to HTTP + ARC when scaling horizontally. Prereq: `pulse-api` key pair + service account seeding + HTTP client | When multi-process deployment needed |
+| S2S scaling — see [[s2s-patterns]], [[arc-tokens]], [[s2s-migration]] | `pulse/api` graphBridge now uses HTTP + ARC. Remaining: `zap/api` bridge still uses direct import | When `zap/api` needs horizontal scaling |
 | Per-app blocking — see [[social-graph]] | Blocks global across all OSN apps. Per-app scope deferred | When Messaging or third-party app needs independent block lists |
 | `@chenglou/pretext` for Zap virtual scroll — see [[zap]] | Pure-JS text measurement/layout. Enables virtualised message lists | When Zap UI needs message list virtualisation |
 | Profile transfer between accounts | Meta supports unlinking/relinking profiles | After multi-account ships (P6) |
