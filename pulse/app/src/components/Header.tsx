@@ -37,10 +37,13 @@ export function Header() {
   const [showSignIn, setShowSignIn] = createSignal(false);
   const [showSwitcher, setShowSwitcher] = createSignal(false);
   const [switching, setSwitching] = createSignal(false);
+  const [createHovered, setCreateHovered] = createSignal(false);
 
   const accessToken = () => session()?.accessToken ?? null;
   const claims = createMemo(() => getTokenClaims(accessToken()));
-  const activeProfile = () => profiles()?.find((p) => p.id === activeProfileId()) ?? null;
+  const activeProfile = createMemo(
+    () => profiles()?.find((p) => p.id === activeProfileId()) ?? null,
+  );
 
   async function handleSwitch(profile: PublicProfile) {
     if (switching() || profile.id === activeProfileId()) return;
@@ -100,18 +103,14 @@ export function Header() {
             <button
               type="button"
               onClick={() => setShowCreateForm((v) => !v)}
-              class="group bg-foreground text-background flex h-9 cursor-pointer items-center rounded-full px-2.5 overflow-hidden transition-[max-width,padding] duration-300 ease-out"
-              style={{ "max-width": "36px" }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.maxWidth = "200px";
-                e.currentTarget.style.paddingLeft = "12px";
-                e.currentTarget.style.paddingRight = "14px";
+              class="group bg-foreground text-background flex h-9 cursor-pointer items-center rounded-full overflow-hidden transition-[max-width,padding] duration-300 ease-out"
+              style={{
+                "max-width": createHovered() ? "200px" : "36px",
+                "padding-left": createHovered() ? "12px" : "10px",
+                "padding-right": createHovered() ? "14px" : "10px",
               }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.maxWidth = "36px";
-                e.currentTarget.style.paddingLeft = "";
-                e.currentTarget.style.paddingRight = "";
-              }}
+              onMouseEnter={() => setCreateHovered(true)}
+              onMouseLeave={() => setCreateHovered(false)}
               aria-label="Create new event"
             >
               <svg
