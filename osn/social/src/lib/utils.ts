@@ -6,6 +6,16 @@ export function profileInitials(profile: PublicProfile | null): string {
   return name.slice(0, 2).toUpperCase();
 }
 
+/**
+ * Only allow http(s) avatar URLs. Defense-in-depth against a
+ * hypothetical server-side regression that lets users set avatarUrl to
+ * a data: or other URL scheme (S-L3).
+ */
+export function safeAvatarUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.startsWith("https://") || url.startsWith("http://") ? url : null;
+}
+
 function decodeJwtPayload(accessToken: string): Record<string, unknown> | null {
   try {
     return JSON.parse(atob(accessToken.split(".")[1]!)) as Record<string, unknown>;

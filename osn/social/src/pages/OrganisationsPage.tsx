@@ -10,6 +10,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { orgClient } from "../lib/api";
+import { safeAvatarUrl } from "../lib/utils";
 
 export function OrganisationsPage() {
   const { session } = useAuth();
@@ -97,8 +98,15 @@ export function OrganisationsPage() {
                     class="border-border hover:bg-muted/30 flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors"
                   >
                     <Avatar class="h-10 w-10">
-                      <Show when={org.avatarUrl}>
-                        {(url) => <AvatarImage src={url()} alt={org.name} />}
+                      <Show when={safeAvatarUrl(org.avatarUrl)}>
+                        {(url) => (
+                          <AvatarImage
+                            src={url()}
+                            alt={org.name}
+                            referrerpolicy="no-referrer"
+                            loading="lazy"
+                          />
+                        )}
                       </Show>
                       <AvatarFallback class="text-xs">
                         {org.name.slice(0, 2).toUpperCase()}

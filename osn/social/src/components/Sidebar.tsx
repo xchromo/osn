@@ -20,7 +20,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { registrationClient, loginClient } from "../lib/authClients";
-import { getTokenClaims, profileInitials } from "../lib/utils";
+import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
 
 interface NavItem {
   href: string;
@@ -205,8 +205,15 @@ export function Sidebar() {
             <DropdownMenu>
               <DropdownMenuTrigger class="hover:bg-muted flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 outline-none transition-colors">
                 <Avatar class="h-8 w-8">
-                  <Show when={activeProfile()?.avatarUrl}>
-                    {(url) => <AvatarImage src={url()} alt={activeProfile()!.handle} />}
+                  <Show when={safeAvatarUrl(activeProfile()?.avatarUrl)}>
+                    {(url) => (
+                      <AvatarImage
+                        src={url()}
+                        alt={activeProfile()!.handle}
+                        referrerpolicy="no-referrer"
+                        loading="lazy"
+                      />
+                    )}
                   </Show>
                   <AvatarFallback class="text-[10px]">
                     {profileInitials(activeProfile())}
@@ -278,8 +285,15 @@ export function Sidebar() {
                     onClick={() => handleSwitch(profile)}
                   >
                     <Avatar class="h-7 w-7">
-                      <Show when={profile.avatarUrl}>
-                        {(url) => <AvatarImage src={url()} alt={profile.handle} />}
+                      <Show when={safeAvatarUrl(profile.avatarUrl)}>
+                        {(url) => (
+                          <AvatarImage
+                            src={url()}
+                            alt={profile.handle}
+                            referrerpolicy="no-referrer"
+                            loading="lazy"
+                          />
+                        )}
                       </Show>
                       <AvatarFallback class="text-[10px]">
                         {profileInitials(profile)}

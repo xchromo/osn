@@ -32,7 +32,6 @@ function Layout(props: { children?: import("solid-js").JSX.Element }) {
     <div class="flex h-screen overflow-hidden">
       <Sidebar />
       <div class="flex flex-1 flex-col overflow-y-auto">
-        <CallbackHandler />
         <MagicLinkHandler client={loginClient} />
         {props.children}
       </div>
@@ -51,6 +50,7 @@ export default function App() {
         <Route path="/organisations" component={OrganisationsPage} />
         <Route path="/organisations/:id" component={OrgDetailPage} />
         <Route path="/settings" component={SettingsPage} />
+        <Route path="/callback" component={CallbackHandler} />
       </Router>
     </AuthProvider>
   );

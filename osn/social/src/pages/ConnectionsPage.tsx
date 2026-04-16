@@ -23,25 +23,56 @@ export function ConnectionsPage() {
   const token = () => session()?.accessToken ?? "";
   const [tab, setTab] = createSignal<Tab>("all");
 
-  const [connections, { refetch: refetchConnections }] = createResource(
-    () => (token() && tab() === "all" ? token() : false),
-    (t) => graphClient.listConnections(t as string),
+  // Single keyed resource for all four tabs (P-W5). Rapid tab-switching
+  // produces a single in-flight request at a time thanks to Solid's
+  // source-change cancellation semantics, rather than firing one request
+  // per tab entered.
+  type TabPayload =
+    | { kind: "all"; data: Awaited<ReturnType<typeof graphClient.listConnections>> }
+    | { kind: "pending"; data: Awaited<ReturnType<typeof graphClient.listPendingRequests>> }
+    | { kind: "close-friends"; data: Awaited<ReturnType<typeof graphClient.listCloseFriends>> }
+    | { kind: "blocked"; data: Awaited<ReturnType<typeof graphClient.listBlocks>> };
+
+  const [payload, { refetch: refetchPayload }] = createResource<
+    TabPayload | undefined,
+    { tab: Tab; token: string }
+  >(
+    () => (token() ? { tab: tab(), token: token() } : undefined),
+    async ({ tab: t, token: tk }): Promise<TabPayload> => {
+      switch (t) {
+        case "all":
+          return { kind: "all", data: await graphClient.listConnections(tk) };
+        case "pending":
+          return { kind: "pending", data: await graphClient.listPendingRequests(tk) };
+        case "close-friends":
+          return { kind: "close-friends", data: await graphClient.listCloseFriends(tk) };
+        case "blocked":
+          return { kind: "blocked", data: await graphClient.listBlocks(tk) };
+      }
+    },
   );
 
-  const [pending, { refetch: refetchPending }] = createResource(
-    () => (token() && tab() === "pending" ? token() : false),
-    (t) => graphClient.listPendingRequests(t as string),
-  );
+  // Narrowed accessors — each returns the tab's payload when active, else null.
+  const connections = () =>
+    payload()?.kind === "all"
+      ? (payload() as Extract<TabPayload, { kind: "all" }>).data
+      : undefined;
+  const pending = () =>
+    payload()?.kind === "pending"
+      ? (payload() as Extract<TabPayload, { kind: "pending" }>).data
+      : undefined;
+  const closeFriends = () =>
+    payload()?.kind === "close-friends"
+      ? (payload() as Extract<TabPayload, { kind: "close-friends" }>).data
+      : undefined;
+  const blocked = () =>
+    payload()?.kind === "blocked"
+      ? (payload() as Extract<TabPayload, { kind: "blocked" }>).data
+      : undefined;
 
-  const [closeFriends, { refetch: refetchCloseFriends }] = createResource(
-    () => (token() && tab() === "close-friends" ? token() : false),
-    (t) => graphClient.listCloseFriends(t as string),
-  );
-
-  const [blocked] = createResource(
-    () => (token() && tab() === "blocked" ? token() : false),
-    (t) => graphClient.listBlocks(t as string),
-  );
+  const refetchConnections = refetchPayload;
+  const refetchPending = refetchPayload;
+  const refetchCloseFriends = refetchPayload;
 
   async function removeConnection(handle: string) {
     try {
@@ -134,9 +165,9 @@ export function ConnectionsPage() {
 
         {/* All connections */}
         <Show when={tab() === "all"}>
-          <Show when={!connections.loading} fallback={<LoadingSkeleton count={3} />}>
+          <Show when={!payload.loading} fallback={<LoadingSkeleton count={3} />}>
             <Show
-              when={(connections()?.connections.length ?? 0) > 0}
+              when={(connections()?.connections?.length ?? 0) > 0}
               fallback={
                 <EmptyState message="No connections yet. Discover people to connect with." />
               }
@@ -186,7 +217,7 @@ export function ConnectionsPage() {
 
         {/* Pending requests */}
         <Show when={tab() === "pending"}>
-          <Show when={!pending.loading} fallback={<LoadingSkeleton count={2} />}>
+          <Show when={!payload.loading} fallback={<LoadingSkeleton count={2} />}>
             <Show
               when={(pending()?.pending.length ?? 0) > 0}
               fallback={<EmptyState message="No pending connection requests." />}
@@ -235,7 +266,7 @@ export function ConnectionsPage() {
 
         {/* Close friends */}
         <Show when={tab() === "close-friends"}>
-          <Show when={!closeFriends.loading} fallback={<LoadingSkeleton count={2} />}>
+          <Show when={!payload.loading} fallback={<LoadingSkeleton count={2} />}>
             <Show
               when={(closeFriends()?.closeFriends.length ?? 0) > 0}
               fallback={
@@ -280,7 +311,7 @@ export function ConnectionsPage() {
 
         {/* Blocked */}
         <Show when={tab() === "blocked"}>
-          <Show when={!blocked.loading} fallback={<LoadingSkeleton count={1} />}>
+          <Show when={!payload.loading} fallback={<LoadingSkeleton count={1} />}>
             <Show
               when={(blocked()?.blocks.length ?? 0) > 0}
               fallback={<EmptyState message="You haven't blocked anyone." />}

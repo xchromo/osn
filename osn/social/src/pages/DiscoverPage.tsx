@@ -4,7 +4,8 @@ import { Button } from "@osn/ui/ui/button";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
-import { fetchRecommendations, graphClient } from "../lib/api";
+import { graphClient, recommendationClient } from "../lib/api";
+import { safeAvatarUrl } from "../lib/utils";
 
 export function DiscoverPage() {
   const { session } = useAuth();
@@ -12,7 +13,7 @@ export function DiscoverPage() {
 
   const [recommendations, { refetch }] = createResource(
     () => token() || false,
-    (t) => fetchRecommendations(t as string, 20),
+    (t) => recommendationClient.suggestConnections(t as string, { limit: 20 }),
   );
 
   const [sending, setSending] = createSignal<Set<string>>(new Set());
@@ -75,8 +76,15 @@ export function DiscoverPage() {
                   <div class="border-border hover:bg-muted/30 flex flex-col gap-3 rounded-lg border p-4 transition-colors">
                     <div class="flex items-center gap-3">
                       <Avatar class="h-10 w-10">
-                        <Show when={suggestion.avatarUrl}>
-                          {(url) => <AvatarImage src={url()} alt={suggestion.handle} />}
+                        <Show when={safeAvatarUrl(suggestion.avatarUrl)}>
+                          {(url) => (
+                            <AvatarImage
+                              src={url()}
+                              alt={suggestion.handle}
+                              referrerpolicy="no-referrer"
+                              loading="lazy"
+                            />
+                          )}
                         </Show>
                         <AvatarFallback class="text-xs">
                           {suggestion.handle.slice(0, 2).toUpperCase()}

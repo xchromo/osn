@@ -7,10 +7,11 @@ import { Input } from "@osn/ui/ui/input";
 import { Label } from "@osn/ui/ui/label";
 import { Textarea } from "@osn/ui/ui/textarea";
 import { useParams, useNavigate } from "@solidjs/router";
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { orgClient } from "../lib/api";
+import { safeAvatarUrl } from "../lib/utils";
 
 export function OrgDetailPage() {
   const params = useParams<{ id: string }>();
@@ -18,23 +19,30 @@ export function OrgDetailPage() {
   const { session } = useAuth();
   const token = () => session()?.accessToken ?? "";
 
-  const [org, { refetch: refetchOrg }] = createResource(
-    () => (token() && params.id ? { token: token(), id: params.id } : false),
-    (args) =>
-      orgClient.getOrg(
-        (args as { token: string; id: string }).token,
-        (args as { token: string; id: string }).id,
-      ),
-  );
+  // Stable memoised source key (P-W4). Returning a fresh object per read
+  // makes Solid's === equality check always fail, triggering a refetch
+  // on every signal tick. A string key is referentially stable per
+  // (token, id) pair so the resource only refetches when one changes.
+  const resourceKey = createMemo(() => {
+    const t = token();
+    const id = params.id;
+    return t && id ? `${t}|${id}` : false;
+  });
 
-  const [members, { refetch: refetchMembers }] = createResource(
-    () => (token() && params.id ? { token: token(), id: params.id } : false),
-    (args) =>
-      orgClient.listMembers(
-        (args as { token: string; id: string }).token,
-        (args as { token: string; id: string }).id,
-      ),
-  );
+  const parseKey = (key: string): { token: string; id: string } => {
+    const sep = key.indexOf("|");
+    return { token: key.slice(0, sep), id: key.slice(sep + 1) };
+  };
+
+  const [org, { refetch: refetchOrg }] = createResource(resourceKey, (key) => {
+    const { token, id } = parseKey(key as string);
+    return orgClient.getOrg(token, id);
+  });
+
+  const [members, { refetch: refetchMembers }] = createResource(resourceKey, (key) => {
+    const { token, id } = parseKey(key as string);
+    return orgClient.listMembers(token, id);
+  });
 
   const [showEdit, setShowEdit] = createSignal(false);
   const [editName, setEditName] = createSignal("");
@@ -106,8 +114,15 @@ export function OrgDetailPage() {
             <div class="mb-8 flex items-start justify-between">
               <div class="flex items-center gap-4">
                 <Avatar class="h-14 w-14">
-                  <Show when={orgData().avatarUrl}>
-                    {(url) => <AvatarImage src={url()} alt={orgData().name} />}
+                  <Show when={safeAvatarUrl(orgData().avatarUrl)}>
+                    {(url) => (
+                      <AvatarImage
+                        src={url()}
+                        alt={orgData().name}
+                        referrerpolicy="no-referrer"
+                        loading="lazy"
+                      />
+                    )}
                   </Show>
                   <AvatarFallback>{orgData().name.slice(0, 2).toUpperCase()}</AvatarFallback>
                 </Avatar>
@@ -151,8 +166,15 @@ export function OrgDetailPage() {
                     {(member) => (
                       <div class="hover:bg-muted/50 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors">
                         <Avatar class="h-8 w-8">
-                          <Show when={member.profile.avatarUrl}>
-                            {(url) => <AvatarImage src={url()} alt={member.profile.handle} />}
+                          <Show when={safeAvatarUrl(member.profile.avatarUrl)}>
+                            {(url) => (
+                              <AvatarImage
+                                src={url()}
+                                alt={member.profile.handle}
+                                referrerpolicy="no-referrer"
+                                loading="lazy"
+                              />
+                            )}
                           </Show>
                           <AvatarFallback class="text-[10px]">
                             {member.profile.handle.slice(0, 2).toUpperCase()}

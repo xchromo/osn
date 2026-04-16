@@ -9,7 +9,7 @@ import { Label } from "@osn/ui/ui/label";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { registrationClient } from "../lib/authClients";
-import { getTokenClaims, profileInitials } from "../lib/utils";
+import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
 
 type Section = "profile" | "account" | "apps";
 
@@ -74,8 +74,15 @@ export function SettingsPage() {
           <Card class="flex flex-col gap-5 p-5">
             <div class="flex items-center gap-4">
               <Avatar class="h-16 w-16">
-                <Show when={activeProfile()?.avatarUrl}>
-                  {(url) => <AvatarImage src={url()} alt={claims().handle ?? ""} />}
+                <Show when={safeAvatarUrl(activeProfile()?.avatarUrl)}>
+                  {(url) => (
+                    <AvatarImage
+                      src={url()}
+                      alt={claims().handle ?? ""}
+                      referrerpolicy="no-referrer"
+                      loading="lazy"
+                    />
+                  )}
                 </Show>
                 <AvatarFallback class="text-lg">{profileInitials(activeProfile())}</AvatarFallback>
               </Avatar>
