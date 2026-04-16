@@ -75,8 +75,8 @@ interface KeyInit {
   publicKey: CryptoKey | null;
   /** UUID that becomes the `kid` JWT header field. */
   keyId: string;
-  /** Unix ms when this key expires; null for pre-distributed stable keys. */
-  expiresAt: number | null;
+  /** Unix ms when this key expires. Always set — both paths schedule auto-rotation. */
+  expiresAt: number;
 }
 
 let _keyInitPromise: Promise<KeyInit> | null = null;
@@ -86,9 +86,12 @@ function initKeys(): Promise<KeyInit> {
     const jwkEnv = process.env.PULSE_API_ARC_PRIVATE_KEY;
     if (jwkEnv) {
       const privateKey = await importKeyFromJwk(JSON.parse(jwkEnv) as Record<string, unknown>);
-      // Key is pre-registered (e.g. via seed); no public key needed for registration.
+      // Pre-distributed key: already registered in the DB. publicKey is null because
+      // we don't need to register it on startup. On first rotation, a fresh ephemeral
+      // pair is generated and registered, transitioning off the stable key.
       const keyId = process.env.PULSE_API_ARC_KEY_ID ?? "dev-pulse-api-key-1";
-      return { privateKey, publicKey: null, keyId, expiresAt: null };
+      const expiresAt = Date.now() + KEY_TTL_MS;
+      return { privateKey, publicKey: null, keyId, expiresAt };
     }
     const pair = await generateArcKeyPair();
     const keyId = crypto.randomUUID();
@@ -143,16 +146,17 @@ async function osPost<T>(path: string, body: unknown): Promise<T> {
 // ---------------------------------------------------------------------------
 
 /**
- * Registers (or re-registers) the current public key with osn/api.
- * Only called when the key was generated ephemerally — if
- * PULSE_API_ARC_PRIVATE_KEY is set the key is assumed to be pre-registered.
+ * Registers the current public key with osn/api on startup.
+ * Skipped when using a pre-distributed stable key (PULSE_API_ARC_PRIVATE_KEY)
+ * since that key is already in the DB. Auto-rotation will register subsequent
+ * ephemeral keys regardless of which path was used to bootstrap.
  *
  * Requires INTERNAL_SERVICE_SECRET to match the value configured in osn/api.
  * Silently skips when INTERNAL_SERVICE_SECRET is unset (unit tests, CI).
  */
 async function registerWithOsnApi(): Promise<void> {
   const { publicKey, keyId, expiresAt } = await initKeys();
-  if (publicKey === null) return; // pre-configured key; already registered
+  if (publicKey === null) return; // pre-distributed key; already in DB
 
   const secret = process.env.INTERNAL_SERVICE_SECRET;
   if (!secret) return; // no shared secret → can't register; skip silently
@@ -169,8 +173,7 @@ async function registerWithOsnApi(): Promise<void> {
       keyId,
       publicKeyJwk,
       allowedScopes: "graph:read",
-      // unix seconds; omitted for non-expiring stable keys
-      ...(expiresAt !== null ? { expiresAt: Math.floor(expiresAt / 1000) } : {}),
+      expiresAt: Math.floor(expiresAt / 1000),
     }),
   });
 
@@ -242,9 +245,7 @@ async function rotateKey(): Promise<void> {
 export async function startKeyRotation(): Promise<void> {
   await registerWithOsnApi();
   const { expiresAt } = await initKeys();
-  if (expiresAt !== null) {
-    scheduleRotation(expiresAt);
-  }
+  scheduleRotation(expiresAt);
 }
 
 // ---------------------------------------------------------------------------
