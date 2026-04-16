@@ -25,15 +25,17 @@ function extractArcToken(authorization: string | undefined): string | null {
 }
 
 /**
- * Decodes the JWT payload once without verification to read `iss` and `scope`.
- * Needed to look up the issuer's public key before we can verify the
- * signature. Returns null if the token is malformed.
+ * Decodes the JWT header and payload without verification to read `kid`,
+ * `iss`, and `scope`. Needed to look up the issuer's public key before
+ * we can verify the signature. Returns null if the token is malformed.
  */
-function peekClaims(token: string): { iss: string; scopes: string[] } | null {
+function peekClaims(token: string): { kid: string; iss: string; scopes: string[] } | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
+    const header = JSON.parse(atob(parts[0])) as { kid?: string };
     const payload = JSON.parse(atob(parts[1])) as { iss?: string; scope?: string };
+    if (typeof header.kid !== "string") return null;
     if (typeof payload.iss !== "string") return null;
     const scopes =
       typeof payload.scope === "string"
@@ -42,7 +44,7 @@ function peekClaims(token: string): { iss: string; scopes: string[] } | null {
             .map((s) => s.trim().toLowerCase())
             .filter(Boolean)
         : [];
-    return { iss: payload.iss, scopes };
+    return { kid: header.kid, iss: payload.iss, scopes };
   } catch {
     return null;
   }
@@ -93,7 +95,7 @@ export async function requireArc(
     // so the DB scope check here is a fail-fast optimisation, not the
     // sole gate. The cryptographic verification below is authoritative.
     const publicKey = await Effect.runPromise(
-      resolvePublicKey(peeked.iss, peeked.scopes).pipe(Effect.provide(dbLayer)),
+      resolvePublicKey(peeked.kid, peeked.iss, peeked.scopes).pipe(Effect.provide(dbLayer)),
     );
 
     // Verify signature, audience, expiry, and required scope (authoritative).

@@ -55,6 +55,16 @@ if (process.env.NODE_ENV === "production" && !OSN_API_URL.startsWith("https://")
 }
 
 // ---------------------------------------------------------------------------
+// Key rotation config
+// ---------------------------------------------------------------------------
+
+/** How long a newly generated key is valid. Only applies to ephemeral keys. */
+const KEY_TTL_MS = parseFloat(process.env.KEY_TTL_HOURS ?? "24") * 3600 * 1000;
+/** How early before expiry to rotate. Must be > ARC token TTL (5 min). */
+const KEY_ROTATION_BUFFER_MS =
+  parseFloat(process.env.KEY_ROTATION_BUFFER_HOURS ?? "2") * 3600 * 1000;
+
+// ---------------------------------------------------------------------------
 // Key-pair singleton — Promise-based so concurrent startup callers collapse
 // onto a single in-flight generation (fixes the async TOCTOU race).
 // ---------------------------------------------------------------------------
@@ -63,6 +73,10 @@ interface KeyInit {
   privateKey: CryptoKey;
   /** null when key was loaded from PULSE_API_ARC_PRIVATE_KEY env var. */
   publicKey: CryptoKey | null;
+  /** UUID that becomes the `kid` JWT header field. */
+  keyId: string;
+  /** Unix ms when this key expires; null for pre-distributed stable keys. */
+  expiresAt: number | null;
 }
 
 let _keyInitPromise: Promise<KeyInit> | null = null;
@@ -73,16 +87,19 @@ function initKeys(): Promise<KeyInit> {
     if (jwkEnv) {
       const privateKey = await importKeyFromJwk(JSON.parse(jwkEnv) as Record<string, unknown>);
       // Key is pre-registered (e.g. via seed); no public key needed for registration.
-      return { privateKey, publicKey: null };
+      const keyId = process.env.PULSE_API_ARC_KEY_ID ?? "dev-pulse-api-key-1";
+      return { privateKey, publicKey: null, keyId, expiresAt: null };
     }
     const pair = await generateArcKeyPair();
-    return { privateKey: pair.privateKey, publicKey: pair.publicKey };
+    const keyId = crypto.randomUUID();
+    const expiresAt = Date.now() + KEY_TTL_MS;
+    return { privateKey: pair.privateKey, publicKey: pair.publicKey, keyId, expiresAt };
   })();
   return _keyInitPromise;
 }
 
 async function arcAuthHeader(): Promise<string> {
-  const { privateKey } = await initKeys();
+  const { privateKey, keyId } = await initKeys();
   const token = await getOrCreateArcToken(privateKey, {
     iss: "pulse-api",
     aud: "osn-core",
@@ -91,6 +108,7 @@ async function arcAuthHeader(): Promise<string> {
     // If a truly mutating S2S POST is ever added, introduce a new scope and a
     // separate osPost variant rather than expanding this one.
     scope: "graph:read",
+    kid: keyId,
   });
   return `ARC ${token}`;
 }
@@ -125,15 +143,15 @@ async function osPost<T>(path: string, body: unknown): Promise<T> {
 // ---------------------------------------------------------------------------
 
 /**
- * Registers this service's public key with osn/api so ARC token verification
- * succeeds. Only called when the key was generated ephemerally — if
+ * Registers (or re-registers) the current public key with osn/api.
+ * Only called when the key was generated ephemerally — if
  * PULSE_API_ARC_PRIVATE_KEY is set the key is assumed to be pre-registered.
  *
  * Requires INTERNAL_SERVICE_SECRET to match the value configured in osn/api.
  * Silently skips when INTERNAL_SERVICE_SECRET is unset (unit tests, CI).
  */
-export async function registerWithOsnApi(): Promise<void> {
-  const { publicKey } = await initKeys();
+async function registerWithOsnApi(): Promise<void> {
+  const { publicKey, keyId, expiresAt } = await initKeys();
   if (publicKey === null) return; // pre-configured key; already registered
 
   const secret = process.env.INTERNAL_SERVICE_SECRET;
@@ -148,13 +166,84 @@ export async function registerWithOsnApi(): Promise<void> {
     },
     body: JSON.stringify({
       serviceId: "pulse-api",
+      keyId,
       publicKeyJwk,
       allowedScopes: "graph:read",
+      // unix seconds; omitted for non-expiring stable keys
+      ...(expiresAt !== null ? { expiresAt: Math.floor(expiresAt / 1000) } : {}),
     }),
   });
 
   if (!res.ok) {
     throw new Error(`pulse-api failed to register with osn/api: HTTP ${res.status}`);
+  }
+}
+
+/**
+ * Schedules automatic key rotation before `expiresAtMs`.
+ * On failure, retries in 5 minutes.
+ */
+function scheduleRotation(expiresAtMs: number): void {
+  const rotateAt = expiresAtMs - KEY_ROTATION_BUFFER_MS;
+  const delay = Math.max(rotateAt - Date.now(), 0);
+  setTimeout(() => void rotateKey(), delay).unref?.();
+}
+
+async function rotateKey(): Promise<void> {
+  try {
+    const pair = await generateArcKeyPair();
+    const keyId = crypto.randomUUID();
+    const expiresAt = Date.now() + KEY_TTL_MS;
+
+    const secret = process.env.INTERNAL_SERVICE_SECRET;
+    if (!secret) return; // rotation only works with shared secret
+
+    const publicKeyJwk = await exportKeyToJwk(pair.publicKey);
+    const res = await fetch(`${OSN_API_URL}/graph/internal/register-service`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify({
+        serviceId: "pulse-api",
+        keyId,
+        publicKeyJwk,
+        allowedScopes: "graph:read",
+        expiresAt: Math.floor(expiresAt / 1000),
+      }),
+    });
+    if (!res.ok) throw new Error(`key rotation failed: HTTP ${res.status}`);
+
+    // Swap singleton AFTER successful registration so no requests use the
+    // new key before osn/api knows about it.
+    _keyInitPromise = Promise.resolve<KeyInit>({
+      privateKey: pair.privateKey,
+      publicKey: pair.publicKey,
+      keyId,
+      expiresAt,
+    });
+
+    scheduleRotation(expiresAt);
+  } catch {
+    // Back-off 5 min on failure — will retry before buffer exhausts (2h window)
+    setTimeout(() => void rotateKey(), 5 * 60 * 1000).unref?.();
+  }
+}
+
+/**
+ * Registers the service's public key with osn/api and schedules automatic
+ * key rotation (ephemeral key path only). Call once at startup.
+ *
+ * - Pre-distributed key (`PULSE_API_ARC_PRIVATE_KEY`): no-op (key is
+ *   already in the DB; rotation is manual/per-deployment).
+ * - No `INTERNAL_SERVICE_SECRET`: no-op (registration disabled).
+ */
+export async function startKeyRotation(): Promise<void> {
+  await registerWithOsnApi();
+  const { expiresAt } = await initKeys();
+  if (expiresAt !== null) {
+    scheduleRotation(expiresAt);
   }
 }
 

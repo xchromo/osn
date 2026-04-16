@@ -1,6 +1,6 @@
-import { serviceAccounts } from "@osn/db";
+import { serviceAccounts, serviceAccountKeys } from "@osn/db";
 import { Db } from "@osn/db/service";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, gt, or } from "drizzle-orm";
 import { Effect, Data } from "effect";
 import { SignJWT, jwtVerify, importJWK, exportJWK } from "jose";
 
@@ -31,9 +31,15 @@ export interface ArcTokenClaims {
   readonly iss: string;
   readonly aud: string;
   readonly scope: string;
+  /** Key ID — identifies which public key to use for verification. Becomes the `kid` JWT header. */
+  readonly kid: string;
 }
 
-export interface ArcTokenPayload extends ArcTokenClaims {
+/** Verified payload claims returned from verifyArcToken. Does not include `kid` (a JWT header field). */
+export interface ArcTokenPayload {
+  readonly iss: string;
+  readonly aud: string;
+  readonly scope: string;
   readonly iat: number;
   readonly exp: number;
 }
@@ -153,7 +159,7 @@ export async function createArcToken(
   validateScopeFormat(scopes);
 
   const token = await new SignJWT({ scope: scopes.join(",") })
-    .setProtectedHeader({ alg: ARC_ALG })
+    .setProtectedHeader({ alg: ARC_ALG, kid: claims.kid })
     .setIssuer(claims.iss)
     .setAudience(claims.aud)
     .setIssuedAt()
@@ -229,64 +235,73 @@ export async function verifyArcToken(
 // Public key resolution (Effect-based, requires Db)
 // ---------------------------------------------------------------------------
 
-/** In-memory cache for resolved CryptoKeys (service_id → { key, expiresAt }). */
+/** In-memory cache for resolved CryptoKeys (kid → { key, expiresAt }). */
 const publicKeyCache = new Map<string, { key: CryptoKey; expiresAt: number }>();
 const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
 
 /**
- * Resolves a service's public key from the `service_accounts` table.
- * Also validates that the token's scopes are within the service's `allowed_scopes`.
+ * Resolves a service's public key from the `service_account_keys` table by `kid`.
+ * Also validates that `serviceId == issuer` and the token's scopes are within
+ * the service's `allowed_scopes` (from `service_accounts`).
  *
- * Results are cached in-memory for 5 minutes to avoid repeated DB + JWK import.
+ * Results are cached in-memory for 5 minutes (by `kid`) to avoid repeated
+ * DB + JWK import. Revoked and expired keys are never cached.
  */
 export const resolvePublicKey = (
+  kid: string,
   issuer: string,
   tokenScopes?: string[],
 ): Effect.Effect<CryptoKey, ArcTokenError, Db> =>
   Effect.gen(function* () {
     const now = Math.floor(Date.now() / 1000);
 
-    // Check CryptoKey cache first. Cache entries only exist for
-    // issuers we've already verified against the DB, so recording the
-    // hit metric with `issuer` here is safe (S-C2).
-    const cached = publicKeyCache.get(issuer);
+    // Check CryptoKey cache first. Cache entries only exist for keys that have
+    // already passed the DB ownership + scope check, so the `issuer` metric
+    // label is safe (S-C2).
+    const cached = publicKeyCache.get(kid);
     if (cached && cached.expiresAt > now) {
-      // Still need to validate scopes against DB if tokenScopes provided
-      // but skip the DB query for key material — we fetch allowedScopes below
       if (!tokenScopes || tokenScopes.length === 0) {
         metricArcPublicKeyCacheHit(issuer);
         return cached.key;
       }
     }
 
-    // S-C2: do NOT record the miss metric yet. At this point `issuer`
-    // is attacker-controlled (it's the `iss` claim of an unverified
-    // token). Recording it as a metric label would let anyone explode
-    // cardinality. Defer until the DB lookup confirms the issuer
-    // exists in `service_accounts`.
+    // S-C2: do NOT record the miss metric yet — `kid` and `issuer` are
+    // attacker-controlled (unverified JWT fields). Defer until the DB
+    // lookup confirms the key exists and belongs to the issuer.
     const { db } = yield* Db;
 
     const rows = yield* Effect.tryPromise({
       try: () =>
         db
           .select({
-            publicKeyJwk: serviceAccounts.publicKeyJwk,
+            publicKeyJwk: serviceAccountKeys.publicKeyJwk,
             allowedScopes: serviceAccounts.allowedScopes,
           })
-          .from(serviceAccounts)
-          .where(eq(serviceAccounts.serviceId, issuer))
+          .from(serviceAccountKeys)
+          .innerJoin(serviceAccounts, eq(serviceAccountKeys.serviceId, serviceAccounts.serviceId))
+          .where(
+            and(
+              eq(serviceAccountKeys.keyId, kid),
+              eq(serviceAccountKeys.serviceId, issuer),
+              isNull(serviceAccountKeys.revokedAt),
+              or(isNull(serviceAccountKeys.expiresAt), gt(serviceAccountKeys.expiresAt, now)),
+            ),
+          )
           .limit(1),
-      catch: (cause) => new ArcTokenError({ message: "Failed to query service_accounts", cause }),
+      catch: (cause) =>
+        new ArcTokenError({ message: "Failed to query service_account_keys", cause }),
     });
 
     if (rows.length === 0) {
-      // Unknown issuer — record the miss against the "unknown" bucket
-      // so we still observe the probe volume.
+      // Unknown or revoked/expired key — record against "unknown" bucket.
       metricArcPublicKeyCacheMiss("unknown");
-      return yield* Effect.fail(new ArcTokenError({ message: `Unknown service: ${issuer}` }));
+      return yield* Effect.fail(
+        new ArcTokenError({ message: `Unknown or invalid key: ${kid} for service: ${issuer}` }),
+      );
     }
 
-    // Issuer verified — safe to record against the real service ID.
+    // Key verified against DB — safe to record the metric.
     metricArcPublicKeyCacheMiss(issuer);
 
     const { publicKeyJwk, allowedScopes } = rows[0];
@@ -315,8 +330,8 @@ export const resolvePublicKey = (
       catch: (cause) => new ArcTokenError({ message: `Invalid public key for ${issuer}`, cause }),
     });
 
-    // Cache the resolved CryptoKey
-    publicKeyCache.set(issuer, { key, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
+    // Cache the resolved CryptoKey by kid
+    publicKeyCache.set(kid, { key, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
 
     return key;
   });
@@ -339,8 +354,8 @@ interface CachedToken {
 
 const tokenCache = new Map<string, CachedToken>();
 
-function cacheKey(iss: string, aud: string, scope: string): string {
-  return `${iss}:${aud}:${scope}`;
+function cacheKey(kid: string, iss: string, aud: string, scope: string): string {
+  return `${kid}:${iss}:${aud}:${scope}`;
 }
 
 /**
@@ -355,7 +370,7 @@ export async function getOrCreateArcToken(
 ): Promise<string> {
   validateTtl(ttl);
 
-  const key = cacheKey(claims.iss, claims.aud, claims.scope);
+  const key = cacheKey(claims.kid, claims.iss, claims.aud, claims.scope);
   const now = Math.floor(Date.now() / 1000);
 
   // Auto-evict expired entries on every access

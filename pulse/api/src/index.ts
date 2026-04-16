@@ -4,7 +4,7 @@ import { Effect, Logger } from "effect";
 import { Elysia } from "elysia";
 
 import { eventsRoutes, settingsRoutes } from "./routes/events";
-import { registerWithOsnApi } from "./services/graphBridge";
+import { startKeyRotation } from "./services/graphBridge";
 
 // Initialise observability (logger, tracing, metrics) before building the app.
 // No-op in test runs — tests never call listen() so the layer is never provided.
@@ -28,11 +28,11 @@ if (process.env.NODE_ENV !== "test") {
 
   app.listen({ port, reusePort: false });
 
-  // Register our public key with osn/api (ephemeral key path).
-  // No-op when PULSE_API_ARC_PRIVATE_KEY is set (pre-registered stable key)
-  // or when INTERNAL_SERVICE_SECRET is unset.
-  void registerWithOsnApi().catch((err: unknown) => {
-    console.error("pulse-api: failed to register ARC public key with osn/api", err);
+  // Register our public key with osn/api and schedule automatic rotation
+  // (ephemeral key path). No-op when PULSE_API_ARC_PRIVATE_KEY is set
+  // (pre-distributed stable key) or when INTERNAL_SERVICE_SECRET is unset.
+  void startKeyRotation().catch((err: unknown) => {
+    console.error("pulse-api: failed to start ARC key rotation", err);
     process.exit(1);
   });
 

@@ -8,6 +8,7 @@ import {
   organisations,
   organisationMembers,
   serviceAccounts,
+  serviceAccountKeys,
 } from "./schema";
 import type {
   NewAccount,
@@ -17,6 +18,7 @@ import type {
   NewOrganisation,
   NewOrganisationMember,
   NewServiceAccount,
+  NewServiceAccountKey,
 } from "./schema";
 import { DbLive, Db } from "./service";
 
@@ -262,12 +264,24 @@ export function buildSeedCloseFriends(now: Date): NewCloseFriend[] {
 }
 
 // ---------------------------------------------------------------------------
-// Seed service accounts
+// Seed service accounts + keys
 // ---------------------------------------------------------------------------
 
+export function buildSeedServiceAccounts(now: Date): NewServiceAccount[] {
+  return [
+    {
+      serviceId: "pulse-api",
+      allowedScopes: "graph:read",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
 /**
- * Dev-only key pair for the pulse-api service account. This public key matches
- * the private key in `pulse/api/.env.example` (PULSE_API_ARC_PRIVATE_KEY).
+ * Dev-only public key for the pulse-api service account.
+ * Key ID "dev-pulse-api-key-1" — matches PULSE_API_ARC_KEY_ID in
+ * `pulse/api/.env.example` when using the pre-distributed key path.
  *
  * These are local-dev-only keys — not secret, never used in production.
  * Generate a real key pair per environment before deploying.
@@ -279,14 +293,15 @@ const PULSE_API_DEV_PUBLIC_KEY_JWK = JSON.stringify({
   y: "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
 });
 
-export function buildSeedServiceAccounts(now: Date): NewServiceAccount[] {
+export function buildSeedServiceAccountKeys(now: Date): NewServiceAccountKey[] {
   return [
     {
+      keyId: "dev-pulse-api-key-1",
       serviceId: "pulse-api",
       publicKeyJwk: PULSE_API_DEV_PUBLIC_KEY_JWK,
-      allowedScopes: "graph:read",
-      createdAt: now,
-      updatedAt: now,
+      registeredAt: now,
+      expiresAt: null, // dev key never expires
+      revokedAt: null,
     },
   ];
 }
@@ -420,9 +435,15 @@ const seed = Effect.gen(function* () {
     catch: (cause) => new SeedError({ cause }),
   });
 
+  yield* Effect.tryPromise({
+    try: () =>
+      db.insert(serviceAccountKeys).values(buildSeedServiceAccountKeys(now)).onConflictDoNothing(),
+    catch: (cause) => new SeedError({ cause }),
+  });
+
   // eslint-disable-next-line no-console -- CLI seed script output
   console.log(
-    "Seed complete — 21 accounts, 23 profiles, 28 connections, 3 close friends, 2 orgs, 6 org members, 1 service account inserted (existing rows skipped).",
+    "Seed complete — 21 accounts, 23 profiles, 28 connections, 3 close friends, 2 orgs, 6 org members, 1 service account, 1 service key inserted (existing rows skipped).",
   );
 }).pipe(Effect.provide(DbLive));
 

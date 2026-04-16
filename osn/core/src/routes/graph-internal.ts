@@ -1,6 +1,6 @@
-import { serviceAccounts, users } from "@osn/db/schema";
+import { serviceAccounts, serviceAccountKeys, users } from "@osn/db/schema";
 import { Db, DbLive } from "@osn/db/service";
-import { inArray } from "drizzle-orm";
+import { inArray, eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -246,12 +246,19 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
         },
       )
       // -----------------------------------------------------------------------
-      // Service account self-registration (ephemeral key bootstrap)
+      // Service account self-registration / key rotation
       //
       // A S2S service (e.g. pulse-api) calls this on startup to register (or
       // rotate) its public key. Protected by INTERNAL_SERVICE_SECRET — a
       // shared secret between osn/api and the registering service. This
       // eliminates the need for pre-distributed private keys in .env files.
+      //
+      // Body:
+      //   serviceId     — the service identifier (e.g. "pulse-api")
+      //   keyId         — UUID that becomes the `kid` JWT header field
+      //   publicKeyJwk  — ES256 public key in JWK JSON string form
+      //   allowedScopes — comma-separated scopes (e.g. "graph:read")
+      //   expiresAt     — optional unix seconds; omit for non-expiring stable keys
       //
       // Omit INTERNAL_SERVICE_SECRET in the environment to disable this
       // endpoint (it returns 501 when the env var is unset).
@@ -273,22 +280,45 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
             await run(
               Effect.gen(function* () {
                 const { db } = yield* Db;
+                // Upsert service_accounts for allowed scopes
                 yield* Effect.tryPromise({
                   try: () =>
                     db
                       .insert(serviceAccounts)
                       .values({
                         serviceId: body.serviceId,
-                        publicKeyJwk: body.publicKeyJwk,
                         allowedScopes: body.allowedScopes,
                         createdAt: now,
                         updatedAt: now,
                       })
                       .onConflictDoUpdate({
                         target: serviceAccounts.serviceId,
-                        set: { publicKeyJwk: body.publicKeyJwk, updatedAt: now },
+                        set: { allowedScopes: body.allowedScopes, updatedAt: now },
                       }),
-                  catch: (cause) => new Error("DB error", { cause }),
+                  catch: (cause) => new Error("DB error upserting service_accounts", { cause }),
+                });
+                // Upsert key row in service_account_keys
+                yield* Effect.tryPromise({
+                  try: () =>
+                    db
+                      .insert(serviceAccountKeys)
+                      .values({
+                        keyId: body.keyId,
+                        serviceId: body.serviceId,
+                        publicKeyJwk: body.publicKeyJwk,
+                        registeredAt: now,
+                        expiresAt: body.expiresAt ?? null,
+                        revokedAt: null,
+                      })
+                      .onConflictDoUpdate({
+                        target: serviceAccountKeys.keyId,
+                        set: {
+                          publicKeyJwk: body.publicKeyJwk,
+                          expiresAt: body.expiresAt ?? null,
+                          revokedAt: null,
+                        },
+                      }),
+                  catch: (cause) => new Error("DB error upserting service_account_keys", { cause }),
                 });
               }),
             );
@@ -301,9 +331,55 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
         {
           body: t.Object({
             serviceId: t.String({ minLength: 1 }),
+            keyId: t.String({ minLength: 1 }),
             publicKeyJwk: t.String({ minLength: 1 }),
             allowedScopes: t.String({ minLength: 1 }),
+            expiresAt: t.Optional(t.Number()),
           }),
+        },
+      )
+      // -----------------------------------------------------------------------
+      // Revoke a service key by ID
+      //
+      // Sets revokedAt on the key row; the key will be rejected by
+      // resolvePublicKey immediately (no wait for natural expiry).
+      // Protected by the same INTERNAL_SERVICE_SECRET.
+      // -----------------------------------------------------------------------
+      .delete(
+        "/service-keys/:keyId",
+        async ({ params, headers, set }) => {
+          const secret = process.env.INTERNAL_SERVICE_SECRET;
+          if (!secret) {
+            set.status = 501;
+            return { error: "Service registration is disabled on this instance" };
+          }
+          if (headers["authorization"] !== `Bearer ${secret}`) {
+            set.status = 401;
+            return { error: "Unauthorized" };
+          }
+          try {
+            const nowSecs = Math.floor(Date.now() / 1000);
+            await run(
+              Effect.gen(function* () {
+                const { db } = yield* Db;
+                yield* Effect.tryPromise({
+                  try: () =>
+                    db
+                      .update(serviceAccountKeys)
+                      .set({ revokedAt: nowSecs })
+                      .where(eq(serviceAccountKeys.keyId, params.keyId)),
+                  catch: (cause) => new Error("DB error revoking key", { cause }),
+                });
+              }),
+            );
+            return { ok: true };
+          } catch (e) {
+            set.status = 500;
+            return { error: safeError(e) };
+          }
+        },
+        {
+          params: t.Object({ keyId: t.String({ minLength: 1 }) }),
         },
       )
       // -----------------------------------------------------------------------

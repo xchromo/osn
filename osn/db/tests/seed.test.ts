@@ -12,6 +12,7 @@ import {
   buildSeedOrganisations,
   buildSeedOrgMembers,
   buildSeedServiceAccounts,
+  buildSeedServiceAccountKeys,
 } from "../src/seed";
 
 function createTestDb() {
@@ -81,10 +82,19 @@ function createTestDb() {
   sqlite.run(`
     CREATE TABLE service_accounts (
       service_id TEXT PRIMARY KEY,
-      public_key_jwk TEXT NOT NULL,
       allowed_scopes TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    )
+  `);
+  sqlite.run(`
+    CREATE TABLE service_account_keys (
+      key_id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL REFERENCES service_accounts(service_id),
+      public_key_jwk TEXT NOT NULL,
+      registered_at INTEGER NOT NULL,
+      expires_at INTEGER,
+      revoked_at INTEGER
     )
   `);
   sqlite.run(`
@@ -380,9 +390,28 @@ describe("buildSeedServiceAccounts", () => {
     const rows = buildSeedServiceAccounts(new Date());
     expect(rows[0]!.allowedScopes).toBe("graph:read");
   });
+});
+
+describe("buildSeedServiceAccountKeys", () => {
+  it("returns exactly 1 key row", () => {
+    const rows = buildSeedServiceAccountKeys(new Date());
+    expect(rows).toHaveLength(1);
+  });
+
+  it("dev key has stable ID 'dev-pulse-api-key-1'", () => {
+    const rows = buildSeedServiceAccountKeys(new Date());
+    expect(rows[0]!.keyId).toBe("dev-pulse-api-key-1");
+    expect(rows[0]!.serviceId).toBe("pulse-api");
+  });
+
+  it("dev key never expires", () => {
+    const rows = buildSeedServiceAccountKeys(new Date());
+    expect(rows[0]!.expiresAt).toBeNull();
+    expect(rows[0]!.revokedAt).toBeNull();
+  });
 
   it("publicKeyJwk is valid JSON with EC P-256 fields", () => {
-    const rows = buildSeedServiceAccounts(new Date());
+    const rows = buildSeedServiceAccountKeys(new Date());
     const jwk = JSON.parse(rows[0]!.publicKeyJwk) as Record<string, unknown>;
     expect(jwk.kty).toBe("EC");
     expect(jwk.crv).toBe("P-256");
@@ -415,6 +444,10 @@ describe("seed idempotency", () => {
       .insert(schema.serviceAccounts)
       .values(buildSeedServiceAccounts(now))
       .onConflictDoNothing();
+    await db
+      .insert(schema.serviceAccountKeys)
+      .values(buildSeedServiceAccountKeys(now))
+      .onConflictDoNothing();
 
     // Second run — onConflictDoNothing must prevent duplicates.
     await db.insert(schema.accounts).values(buildSeedAccounts(now)).onConflictDoNothing();
@@ -430,6 +463,10 @@ describe("seed idempotency", () => {
       .insert(schema.serviceAccounts)
       .values(buildSeedServiceAccounts(now))
       .onConflictDoNothing();
+    await db
+      .insert(schema.serviceAccountKeys)
+      .values(buildSeedServiceAccountKeys(now))
+      .onConflictDoNothing();
 
     const accounts = await db.select().from(schema.accounts);
     const users = await db.select().from(schema.users);
@@ -438,6 +475,7 @@ describe("seed idempotency", () => {
     const organisations = await db.select().from(schema.organisations);
     const orgMembers = await db.select().from(schema.organisationMembers);
     const serviceAccounts = await db.select().from(schema.serviceAccounts);
+    const serviceKeys = await db.select().from(schema.serviceAccountKeys);
 
     expect(accounts).toHaveLength(21);
     expect(users).toHaveLength(23);
@@ -446,5 +484,6 @@ describe("seed idempotency", () => {
     expect(organisations).toHaveLength(2);
     expect(orgMembers).toHaveLength(6);
     expect(serviceAccounts).toHaveLength(1);
+    expect(serviceKeys).toHaveLength(1);
   });
 });
