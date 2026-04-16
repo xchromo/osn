@@ -1,5 +1,7 @@
 export * from "./errors";
+export * from "./graph";
 export * from "./login";
+export * from "./organisations";
 export * from "./pkce";
 export * from "./register";
 export * from "./service";
