@@ -55,7 +55,7 @@ getConnectionIds(profileId)                    // accepted connections set
 getCloseFriendIds(profileId)                   // outbound close-friends set
 getCloseFriendsOf(viewerId, attendeeIds[])     // attendees who marked viewer as CF
 getProfileDisplays(profileIds[])               // batched profile metadata join
-registerWithOsnApi()                           // startup self-registration (ephemeral key path)
+startKeyRotation()                             // startup: register key + schedule auto-rotation
 ```
 
 ## Bounded Sets
@@ -73,11 +73,11 @@ Graph membership sets are bounded by `MAX_EVENT_GUESTS` (see [[platform-limits]]
 
 `pulse/api` uses one of two strategies (in priority order):
 
-1. **Ephemeral key + self-registration** (dev default): generate a fresh P-256 key pair on startup, call `POST /graph/internal/register-service` (authenticated with `INTERNAL_SERVICE_SECRET`) to upsert the public key in `osn/api`'s `service_accounts` table. No private key in any file.
+1. **Ephemeral key + auto-rotation** (dev default): generate a fresh P-256 key pair on startup, register it via `POST /graph/internal/register-service` (authenticated with `INTERNAL_SERVICE_SECRET`), then schedule automatic rotation before the key expires. No private key in any file. Each key has a stable UUID `keyId` that becomes the `kid` JWT header field.
 
-2. **Pre-distributed stable key** (production): set `PULSE_API_ARC_PRIVATE_KEY` env var to a JWK private key. The matching public key must already be registered in the `service_accounts` table. Skips self-registration.
+2. **Pre-distributed stable key** (production): set `PULSE_API_ARC_PRIVATE_KEY` + `PULSE_API_ARC_KEY_ID` env vars. The matching public key row must already exist in `service_account_keys`. No automatic rotation — rotate manually per deployment.
 
-See [[arc-tokens]] for the full ARC token system and `POST /graph/internal/register-service` endpoint details.
+See [[arc-tokens]] for the full ARC token system, `kid`-based key lookup, and `service_account_keys` schema.
 
 ## Performance Notes
 

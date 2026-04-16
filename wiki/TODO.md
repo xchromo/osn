@@ -56,7 +56,7 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 - [ ] `bunx create-tauri-app` for `@zap/app` (iOS target enabled, Solid template)
 - [ ] `@zap/app` consumes `@osn/client` + `@osn/ui/auth` for sign-in (re-uses `<SignIn>` / `<Register>` from Pulse)
-- [ ] Register `zap-app` and `zap-api` in `service_accounts` (ARC token issuer rows)
+- [ ] Register `zap-app` and `zap-api` in `service_accounts` + `service_account_keys` (ARC issuer rows + initial key)
 
 ### M1 — 1:1 DMs (E2E)
 
@@ -141,7 +141,7 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 ### Crypto (`osn/crypto`)
 
-- [ ] JWKS URL fallback in `resolvePublicKey` for third-party apps
+- [ ] JWKS URL fallback in `resolvePublicKey` for third-party apps (currently first-party only via `service_account_keys`)
 
 ### UI Components (`osn/ui`)
 
@@ -246,7 +246,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W2 (zap) — `addMember` fetches all members to check count. Use `COUNT(*)` or catch unique constraint
 - [ ] P-W3 (zap) — `provisionEventChat` non-atomic cross-DB writes
 - [ ] P-W4 (zap) — `getChatMembers` returns all members without pagination
-- [ ] P-W2 — `resolvePublicKey` hits DB despite warm cache — cache `CryptoKey` + `allowedScopes` together — see [[arc-tokens]]
+- [ ] P-W2 — `resolvePublicKey` hits DB when `tokenScopes` provided even if `kid` cache is warm — cache `CryptoKey` + `allowedScopes` together under `kid` — see [[arc-tokens]]
 - [ ] P-W3 — `sendConnectionRequest` two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — see [[redis]]
 - [ ] P-W1 (pulse) — Duplicate event DB load per RSVP route: `loadVisibleEvent` fetches the row for the access gate; `listRsvps`/`rsvpCounts` re-fetch the same row internally. Thread the loaded `Event` into service functions — see [[s2s-patterns]]
