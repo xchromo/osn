@@ -196,11 +196,27 @@ const filterByAttendeePrivacy = (
   Effect.gen(function* () {
     const attendeeIds = Array.from(new Set(rows.map((r) => r.profileId)));
 
-    // Set of attendee ids who have marked the viewer as a close friend,
-    // used to stamp the display flag and drive the sort.
-    const closeFriendsOfViewer = viewerId
-      ? yield* getCloseFriendsOf(viewerId, attendeeIds)
-      : new Set<string>();
+    // Determine whether we'll need the viewer's connection set before making
+    // any graph calls. The connections call is only needed in the
+    // non-organiser, non-public path; skipping it for the other paths avoids
+    // a redundant HTTP round-trip.
+    const needsConnections =
+      viewerId !== null &&
+      viewerId !== event.createdByProfileId &&
+      event.guestListVisibility !== "public";
+
+    // Fan out both graph calls in parallel when we need both; otherwise issue
+    // only the close-friends call. This cuts the hot path from three
+    // sequential HTTP RTTs to two.
+    const [closeFriendsOfViewer, viewerConnections] = yield* Effect.all(
+      [
+        viewerId ? getCloseFriendsOf(viewerId, attendeeIds) : Effect.succeed(new Set<string>()),
+        needsConnections && viewerId
+          ? getConnectionIds(viewerId)
+          : Effect.succeed(new Set<string>()),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
 
     const stampCloseFriend = (row: RsvpWithProfile): RsvpWithProfile => ({
       ...row,
@@ -223,9 +239,6 @@ const filterByAttendeePrivacy = (
 
     // Batch-fetch attendance visibility for every attendee in one query.
     const visibilityMap = yield* getAttendanceVisibilityBatch(attendeeIds);
-
-    // For "connections" we need the viewer's connection set.
-    const viewerConnections = viewerId ? yield* getConnectionIds(viewerId) : new Set<string>();
 
     return rows
       .filter((row) => {
@@ -436,10 +449,10 @@ export const listRsvps = (
 
     // Fetch a wider pool than `limit` so the close-friend-first sort
     // below can surface friendly attendees that would otherwise fall
-    // outside a small window (e.g. the 5-row inline strip). Capped at
-    // 200 to keep the pool bounded; beyond that we accept that close
-    // friends outside the most-recent-200 window won't get promoted.
-    const fetchLimit = Math.min(Math.max(limit, 200), 200);
+    // outside a small window (e.g. the 5-row inline strip). 4× gives
+    // enough headroom to promote close friends without over-fetching —
+    // a 5-row strip scans 20 rows, a 50-row page scans 200.
+    const fetchLimit = Math.min(limit * 4, 200);
 
     const filters = [eq(eventRsvps.eventId, eventId)];
     if (options.status) filters.push(eq(eventRsvps.status, options.status));

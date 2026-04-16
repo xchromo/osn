@@ -110,11 +110,9 @@ async function extractClaims(
   }
 }
 
-const DEFAULT_JWT_SECRET = process.env.OSN_JWT_SECRET ?? "dev-secret-change-in-prod";
-
 export const createEventsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
-  jwtSecret: string = DEFAULT_JWT_SECRET,
+  jwtSecret: string = process.env.OSN_JWT_SECRET ?? "",
 ) => {
   const secretBytes = new TextEncoder().encode(jwtSecret);
 
@@ -652,7 +650,7 @@ export const createEventsRoutes = (
 
 export const createSettingsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
-  jwtSecret: string = DEFAULT_JWT_SECRET,
+  jwtSecret: string = process.env.OSN_JWT_SECRET ?? "",
 ) => {
   const secretBytes = new TextEncoder().encode(jwtSecret);
   return new Elysia({ prefix: "/me" }).patch(

@@ -1,4 +1,4 @@
-import { users } from "@osn/db/schema";
+import { serviceAccounts, users } from "@osn/db/schema";
 import { Db, DbLive } from "@osn/db/service";
 import { inArray } from "drizzle-orm";
 import { Effect, Layer } from "effect";
@@ -242,6 +242,67 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
           body: t.Object({
             viewerId: t.String({ minLength: 1 }),
             profileIds: t.Array(t.String({ minLength: 1 }), { maxItems: MAX_BATCH_PROFILE_IDS }),
+          }),
+        },
+      )
+      // -----------------------------------------------------------------------
+      // Service account self-registration (ephemeral key bootstrap)
+      //
+      // A S2S service (e.g. pulse-api) calls this on startup to register (or
+      // rotate) its public key. Protected by INTERNAL_SERVICE_SECRET — a
+      // shared secret between osn/api and the registering service. This
+      // eliminates the need for pre-distributed private keys in .env files.
+      //
+      // Omit INTERNAL_SERVICE_SECRET in the environment to disable this
+      // endpoint (it returns 501 when the env var is unset).
+      // -----------------------------------------------------------------------
+      .post(
+        "/register-service",
+        async ({ body, headers, set }) => {
+          const secret = process.env.INTERNAL_SERVICE_SECRET;
+          if (!secret) {
+            set.status = 501;
+            return { error: "Service registration is disabled on this instance" };
+          }
+          if (headers["authorization"] !== `Bearer ${secret}`) {
+            set.status = 401;
+            return { error: "Unauthorized" };
+          }
+          try {
+            const now = new Date();
+            await run(
+              Effect.gen(function* () {
+                const { db } = yield* Db;
+                yield* Effect.tryPromise({
+                  try: () =>
+                    db
+                      .insert(serviceAccounts)
+                      .values({
+                        serviceId: body.serviceId,
+                        publicKeyJwk: body.publicKeyJwk,
+                        allowedScopes: body.allowedScopes,
+                        createdAt: now,
+                        updatedAt: now,
+                      })
+                      .onConflictDoUpdate({
+                        target: serviceAccounts.serviceId,
+                        set: { publicKeyJwk: body.publicKeyJwk, updatedAt: now },
+                      }),
+                  catch: (cause) => new Error("DB error", { cause }),
+                });
+              }),
+            );
+            return { ok: true };
+          } catch (e) {
+            set.status = 500;
+            return { error: safeError(e) };
+          }
+        },
+        {
+          body: t.Object({
+            serviceId: t.String({ minLength: 1 }),
+            publicKeyJwk: t.String({ minLength: 1 }),
+            allowedScopes: t.String({ minLength: 1 }),
           }),
         },
       )

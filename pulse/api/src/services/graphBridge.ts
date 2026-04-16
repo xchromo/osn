@@ -1,4 +1,9 @@
-import { generateArcKeyPair, getOrCreateArcToken, importKeyFromJwk } from "@osn/crypto";
+import {
+  exportKeyToJwk,
+  generateArcKeyPair,
+  getOrCreateArcToken,
+  importKeyFromJwk,
+} from "@osn/crypto";
 import { Data, Effect } from "effect";
 
 import { MAX_EVENT_GUESTS } from "../lib/limits";
@@ -30,38 +35,69 @@ export interface ProfileDisplay {
  * Other services call through here so changes to the transport layer stay
  * local to this file — no touching of `rsvps.ts` or routes.
  *
- * Auth: `PULSE_API_ARC_PRIVATE_KEY` (JWK). When unset, an ephemeral key is
- * generated on startup — fine for unit tests and local dev (the OSN API
- * accepts the registered dev key from the seed; ephemerals won't verify
- * against a running OSN API but tests mock fetch anyway).
+ * Auth strategy (in priority order):
+ *   1. `PULSE_API_ARC_PRIVATE_KEY` env var — use a pre-distributed stable
+ *      key (production). The matching public key must already be in the
+ *      osn/api service_accounts table (e.g. seeded or added via admin).
+ *   2. Ephemeral key + self-registration — generate a fresh P-256 key pair
+ *      on startup and register the public key via `registerWithOsnApi()`
+ *      (which calls `POST /graph/internal/register-service` using the
+ *      shared `INTERNAL_SERVICE_SECRET`). No private key in any file.
  */
 
 const OSN_API_URL = process.env.OSN_API_URL ?? "http://localhost:4000";
 
-/** Private key singleton — loaded once from env or generated ephemerally. */
-let _privateKey: CryptoKey | null = null;
+// Validate the URL scheme in production to prevent ARC tokens being sent
+// over plaintext. The check runs once at module load; it never fires in
+// tests because NODE_ENV is "test".
+if (process.env.NODE_ENV === "production" && !OSN_API_URL.startsWith("https://")) {
+  throw new Error(`OSN_API_URL must use https:// in production (got: ${OSN_API_URL})`);
+}
 
-async function getPrivateKey(): Promise<CryptoKey> {
-  if (_privateKey) return _privateKey;
-  const jwkEnv = process.env.PULSE_API_ARC_PRIVATE_KEY;
-  if (jwkEnv) {
-    _privateKey = await importKeyFromJwk(JSON.parse(jwkEnv) as Record<string, unknown>);
-  } else {
+// ---------------------------------------------------------------------------
+// Key-pair singleton — Promise-based so concurrent startup callers collapse
+// onto a single in-flight generation (fixes the async TOCTOU race).
+// ---------------------------------------------------------------------------
+
+interface KeyInit {
+  privateKey: CryptoKey;
+  /** null when key was loaded from PULSE_API_ARC_PRIVATE_KEY env var. */
+  publicKey: CryptoKey | null;
+}
+
+let _keyInitPromise: Promise<KeyInit> | null = null;
+
+function initKeys(): Promise<KeyInit> {
+  _keyInitPromise ??= (async (): Promise<KeyInit> => {
+    const jwkEnv = process.env.PULSE_API_ARC_PRIVATE_KEY;
+    if (jwkEnv) {
+      const privateKey = await importKeyFromJwk(JSON.parse(jwkEnv) as Record<string, unknown>);
+      // Key is pre-registered (e.g. via seed); no public key needed for registration.
+      return { privateKey, publicKey: null };
+    }
     const pair = await generateArcKeyPair();
-    _privateKey = pair.privateKey;
-  }
-  return _privateKey;
+    return { privateKey: pair.privateKey, publicKey: pair.publicKey };
+  })();
+  return _keyInitPromise;
 }
 
 async function arcAuthHeader(): Promise<string> {
-  const key = await getPrivateKey();
-  const token = await getOrCreateArcToken(key, {
+  const { privateKey } = await initKeys();
+  const token = await getOrCreateArcToken(privateKey, {
     iss: "pulse-api",
     aud: "osn-core",
+    // POST endpoints (/close-friends-of, /profile-displays) are read-equivalent
+    // enrichment calls; graph:read is the correct scope for all four bridge calls.
+    // If a truly mutating S2S POST is ever added, introduce a new scope and a
+    // separate osPost variant rather than expanding this one.
     scope: "graph:read",
   });
   return `ARC ${token}`;
 }
+
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
 
 async function osGet<T>(path: string): Promise<T> {
   const res = await fetch(`${OSN_API_URL}${path}`, {
@@ -82,6 +118,44 @@ async function osPost<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) throw new Error(`OSN API POST ${path} returned ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+// ---------------------------------------------------------------------------
+// Startup self-registration (ephemeral key path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers this service's public key with osn/api so ARC token verification
+ * succeeds. Only called when the key was generated ephemerally — if
+ * PULSE_API_ARC_PRIVATE_KEY is set the key is assumed to be pre-registered.
+ *
+ * Requires INTERNAL_SERVICE_SECRET to match the value configured in osn/api.
+ * Silently skips when INTERNAL_SERVICE_SECRET is unset (unit tests, CI).
+ */
+export async function registerWithOsnApi(): Promise<void> {
+  const { publicKey } = await initKeys();
+  if (publicKey === null) return; // pre-configured key; already registered
+
+  const secret = process.env.INTERNAL_SERVICE_SECRET;
+  if (!secret) return; // no shared secret → can't register; skip silently
+
+  const publicKeyJwk = await exportKeyToJwk(publicKey);
+  const res = await fetch(`${OSN_API_URL}/graph/internal/register-service`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${secret}`,
+    },
+    body: JSON.stringify({
+      serviceId: "pulse-api",
+      publicKeyJwk,
+      allowedScopes: "graph:read",
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`pulse-api failed to register with osn/api: HTTP ${res.status}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
