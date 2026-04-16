@@ -6,6 +6,7 @@ import {
   createOrganisationRoutes,
   createInternalOrganisationRoutes,
   createProfileRoutes,
+  createRecommendationRoutes,
   createRedisAuthRateLimiters,
   createRedisGraphRateLimiter,
   createRedisOrgRateLimiter,
@@ -63,7 +64,8 @@ const app = new Elysia()
   .use(createInternalGraphRoutes(DbLive))
   .use(createOrganisationRoutes(authConfig, DbLive, observabilityLayer, orgRateLimiter))
   .use(createInternalOrganisationRoutes(DbLive))
-  .use(createProfileRoutes(authConfig, DbLive, observabilityLayer, profileRateLimiters));
+  .use(createProfileRoutes(authConfig, DbLive, observabilityLayer, profileRateLimiters))
+  .use(createRecommendationRoutes(authConfig, DbLive, observabilityLayer));
 
 if (process.env.NODE_ENV !== "test") {
   app.listen({ port, reusePort: false });

@@ -15,6 +15,9 @@ export { createProfileRoutes, createDefaultProfileRateLimiters } from "./routes/
 export type { ProfileRateLimiters } from "./routes/profile";
 export { createProfileService } from "./services/profile";
 export type { ProfileService } from "./services/profile";
+export { createRecommendationRoutes } from "./routes/recommendations";
+export { createRecommendationService } from "./services/recommendations";
+export type { RecommendationService } from "./services/recommendations";
 export { createRateLimiter, getClientIp, type RateLimiterBackend } from "./lib/rate-limit";
 export {
   createRedisAuthRateLimiters,
