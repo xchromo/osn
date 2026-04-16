@@ -18,6 +18,13 @@ packages:
   - "@pulse/api"
   - "@osn/core"
 last-reviewed: 2026-04-17
+security-fixes:
+  - S-H100
+  - S-H101
+  - S-M100
+  - S-M101
+  - S-M102
+  - S-L101
 ---
 
 # Cross-Package S2S Patterns
@@ -71,11 +78,13 @@ Graph membership sets are bounded by `MAX_EVENT_GUESTS` (see [[platform-limits]]
 
 ## ARC Key Management
 
-`pulse/api` uses one of two strategies (in priority order):
+`pulse/api` uses **ephemeral key + auto-rotation** exclusively:
 
-1. **Ephemeral key + auto-rotation** (dev default): generate a fresh P-256 key pair on startup, register it via `POST /graph/internal/register-service` (authenticated with `INTERNAL_SERVICE_SECRET`), then schedule automatic rotation before the key expires. No private key in any file. Each key has a stable UUID `keyId` that becomes the `kid` JWT header field.
+1. On startup, `startKeyRotation()` generates a fresh P-256 key pair and registers the public key via `POST /graph/internal/register-service` (authenticated with `INTERNAL_SERVICE_SECRET`). Throws at startup if `INTERNAL_SERVICE_SECRET` is unset.
+2. Rotation fires `KEY_ROTATION_BUFFER_HOURS` (default 2h) before expiry. New key is registered BEFORE the signing singleton is swapped — zero downtime.
+3. On rotation failure, retries after 5 min with ±30 s jitter to prevent thundering-herd across horizontal instances.
 
-2. **Pre-distributed stable key** (production): set `PULSE_API_ARC_PRIVATE_KEY` + `PULSE_API_ARC_KEY_ID` env vars. The matching public key row must already exist in `service_account_keys`. No automatic rotation — rotate manually per deployment.
+No private key in any file. No manual key management needed.
 
 See [[arc-tokens]] for the full ARC token system, `kid`-based key lookup, and `service_account_keys` schema.
 

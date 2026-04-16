@@ -23,6 +23,19 @@ packages:
   - "@osn/core"
   - "@pulse/api"
 last-reviewed: 2026-04-17
+security-fixes:
+  - S-H100
+  - S-H101
+  - S-M100
+  - S-M101
+  - S-M102
+  - S-L101
+perf-fixes:
+  - P-W100
+  - P-W101
+  - P-W102
+  - P-I100
+  - P-I101
 ---
 
 # ARC Tokens (S2S Auth)
@@ -55,6 +68,8 @@ verifyArcToken(token, publicKey, expectedAud, scope?)           // → ArcTokenP
 resolvePublicKey(kid, issuer, tokenScopes?)                    // → Effect<CryptoKey, ArcTokenError, Db>
 getOrCreateArcToken(privateKey, { iss, aud, scope, kid }, ttl?) // → cached JWT (cache key: kid:iss:aud:scope)
 clearTokenCache() / clearPublicKeyCache()                      // → for testing / key rotation
+evictPublicKeyCacheEntry(kid)                                  // → immediate per-key cache eviction (call on revoke)
+evictExpiredTokens()                                           // → force-sweep expired tokens (no debounce)
 ```
 
 ## When to Use ARC Tokens
@@ -124,9 +139,9 @@ Two DB tables cooperate:
 
 ## Service Registration
 
-Two strategies for registering a service's public key:
+Ephemeral key auto-rotation is the only supported strategy. Pre-distributed stable keys are not used.
 
-### Option A — Startup self-registration with auto-rotation (recommended for dev/staging)
+### Startup self-registration with auto-rotation
 
 `osn/api` exposes `POST /graph/internal/register-service`, protected by a shared `INTERNAL_SERVICE_SECRET` Bearer token. On startup, `startKeyRotation()` in `pulse/api`:
 
@@ -136,24 +151,20 @@ Two strategies for registering a service's public key:
 4. Schedules rotation `KEY_ROTATION_BUFFER_HOURS` (default 2h) before expiry
 5. On rotation: registers the new key BEFORE swapping the signing singleton — zero downtime
 
-No private key in any file. Env vars: `INTERNAL_SERVICE_SECRET`, `KEY_TTL_HOURS` (default 24), `KEY_ROTATION_BUFFER_HOURS` (default 2).
+Throws at startup if `INTERNAL_SERVICE_SECRET` is unset — misconfiguration is surfaced immediately rather than failing silently on the first S2S call.
+
+Env vars: `INTERNAL_SERVICE_SECRET`, `KEY_TTL_HOURS` (default 24), `KEY_ROTATION_BUFFER_HOURS` (default 2).
 
 ```bash
 # Both env files need:
 INTERNAL_SERVICE_SECRET=<shared-random-string>
 ```
 
-### Option B — Pre-distributed stable key (production)
-
-1. Generate a key pair once: `bunx --bun tsx osn/crypto/scripts/gen-arc-keypair.ts`
-2. Set `PULSE_API_ARC_PRIVATE_KEY=<private-key-jwk>` and `PULSE_API_ARC_KEY_ID=<uuid>` in the service's env (never commit)
-3. Insert a row into `service_account_keys` (and `service_accounts`) via migration or admin tool; `expires_at NULL` for no expiry
-
-Rotation is manual per-deployment: deploy new private key + insert new key row, revoke old via `DELETE /graph/internal/service-keys/:oldKeyId`.
-
 ### Key revocation
 
-`DELETE /graph/internal/service-keys/:keyId` (also protected by `INTERNAL_SERVICE_SECRET`) sets `revoked_at` immediately. Tokens signed with that key are rejected at the next verification attempt (no wait for expiry).
+`DELETE /graph/internal/service-keys/:keyId` (also protected by `INTERNAL_SERVICE_SECRET`) sets `revoked_at` in the DB AND evicts the in-process public key cache entry immediately — revocation takes effect on the next request with no wait for the 5-minute cache TTL (S-H100).
+
+`/register-service` validates requested `allowedScopes` against a server-side allowlist (`PERMITTED_SCOPES`). Any unknown scope returns 400 — a service cannot self-promote its scope set (S-M101).
 
 ## Current S2S Strategy
 
@@ -161,7 +172,12 @@ Pulse API calls `osn/api`'s `/graph/internal/*` endpoints over HTTP, authenticat
 
 ## Security Notes
 
-- **S-C2 (fixed):** Untrusted ARC `iss` claim was used as a metric label before verification. Fixed with `safeIssuer()` runtime guard in `arc-metrics.ts` -- any `iss`/`aud` not matching `/^[a-z][a-z0-9-]{1,30}$/` collapses to `"unknown"`.
+- **S-C2 (fixed):** Untrusted ARC `iss` claim was used as a metric label before verification. Fixed with `safeIssuer()` runtime guard in `arc-metrics.ts`.
+- **S-H100 (fixed):** Revocation now evicts `publicKeyCache` immediately via `evictPublicKeyCacheEntry(kid)` — no 5-minute window.
+- **S-H101 (fixed):** `INTERNAL_SERVICE_SECRET` comparison uses `crypto.timingSafeEqual` — no timing oracle.
+- **S-M100 (fixed):** `peekClaims` uses base64url decode (RFC 7515 §2) — `-` and `_` in UUID `kid`s are handled correctly.
+- **S-M101 (fixed):** `/register-service` validates `allowedScopes` against `PERMITTED_SCOPES` allowlist — services cannot self-promote.
+- **S-M102 (fixed):** `resolvePublicKey` cache hit stores `allowedScopes` and validates scopes on every hit — no bypass when `tokenScopes` is omitted.
 - ARC tokens are machine-to-machine only. Never use them for user-facing authentication (use user JWTs for that).
 - The `Authorization: ARC ...` header is the trust boundary for inbound trace context propagation -- only ARC-authenticated callers have their `traceparent` honoured.
 

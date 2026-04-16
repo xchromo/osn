@@ -1,9 +1,4 @@
-import {
-  exportKeyToJwk,
-  generateArcKeyPair,
-  getOrCreateArcToken,
-  importKeyFromJwk,
-} from "@osn/crypto";
+import { exportKeyToJwk, generateArcKeyPair, getOrCreateArcToken } from "@osn/crypto";
 import { Data, Effect } from "effect";
 
 import { MAX_EVENT_GUESTS } from "../lib/limits";
@@ -71,11 +66,10 @@ const KEY_ROTATION_BUFFER_MS =
 
 interface KeyInit {
   privateKey: CryptoKey;
-  /** null when key was loaded from PULSE_API_ARC_PRIVATE_KEY env var. */
-  publicKey: CryptoKey | null;
+  publicKey: CryptoKey;
   /** UUID that becomes the `kid` JWT header field. */
   keyId: string;
-  /** Unix ms when this key expires. Always set — both paths schedule auto-rotation. */
+  /** Unix ms when this key expires. */
   expiresAt: number;
 }
 
@@ -83,16 +77,6 @@ let _keyInitPromise: Promise<KeyInit> | null = null;
 
 function initKeys(): Promise<KeyInit> {
   _keyInitPromise ??= (async (): Promise<KeyInit> => {
-    const jwkEnv = process.env.PULSE_API_ARC_PRIVATE_KEY;
-    if (jwkEnv) {
-      const privateKey = await importKeyFromJwk(JSON.parse(jwkEnv) as Record<string, unknown>);
-      // Pre-distributed key: already registered in the DB. publicKey is null because
-      // we don't need to register it on startup. On first rotation, a fresh ephemeral
-      // pair is generated and registered, transitioning off the stable key.
-      const keyId = process.env.PULSE_API_ARC_KEY_ID ?? "dev-pulse-api-key-1";
-      const expiresAt = Date.now() + KEY_TTL_MS;
-      return { privateKey, publicKey: null, keyId, expiresAt };
-    }
     const pair = await generateArcKeyPair();
     const keyId = crypto.randomUUID();
     const expiresAt = Date.now() + KEY_TTL_MS;
@@ -147,20 +131,18 @@ async function osPost<T>(path: string, body: unknown): Promise<T> {
 
 /**
  * Registers the current public key with osn/api on startup.
- * Skipped when using a pre-distributed stable key (PULSE_API_ARC_PRIVATE_KEY)
- * since that key is already in the DB. Auto-rotation will register subsequent
- * ephemeral keys regardless of which path was used to bootstrap.
- *
- * Requires INTERNAL_SERVICE_SECRET to match the value configured in osn/api.
- * Silently skips when INTERNAL_SERVICE_SECRET is unset (unit tests, CI).
+ * Requires INTERNAL_SERVICE_SECRET — throws if unset so the misconfiguration
+ * is caught immediately at boot rather than failing silently (S-L101).
  */
 async function registerWithOsnApi(): Promise<void> {
-  const { publicKey, keyId, expiresAt } = await initKeys();
-  if (publicKey === null) return; // pre-distributed key; already in DB
-
   const secret = process.env.INTERNAL_SERVICE_SECRET;
-  if (!secret) return; // no shared secret → can't register; skip silently
+  if (!secret) {
+    throw new Error(
+      "INTERNAL_SERVICE_SECRET must be set — pulse-api cannot register its ARC key without it",
+    );
+  }
 
+  const { publicKey, keyId, expiresAt } = await initKeys();
   const publicKeyJwk = await exportKeyToJwk(publicKey);
   const res = await fetch(`${OSN_API_URL}/graph/internal/register-service`, {
     method: "POST",
@@ -229,18 +211,18 @@ async function rotateKey(): Promise<void> {
 
     scheduleRotation(expiresAt);
   } catch {
-    // Back-off 5 min on failure — will retry before buffer exhausts (2h window)
-    setTimeout(() => void rotateKey(), 5 * 60 * 1000).unref?.();
+    // Back-off 5 min on failure with ±30 s jitter to avoid thundering-herd
+    // when multiple instances fail simultaneously (P-I100).
+    setTimeout(() => void rotateKey(), 5 * 60 * 1000 + Math.random() * 30_000).unref?.();
   }
 }
 
 /**
- * Registers the service's public key with osn/api and schedules automatic
- * key rotation (ephemeral key path only). Call once at startup.
+ * Registers the service's ephemeral public key with osn/api and schedules
+ * automatic key rotation. Call once at startup.
  *
- * - Pre-distributed key (`PULSE_API_ARC_PRIVATE_KEY`): no-op (key is
- *   already in the DB; rotation is manual/per-deployment).
- * - No `INTERNAL_SERVICE_SECRET`: no-op (registration disabled).
+ * Throws if `INTERNAL_SERVICE_SECRET` is unset — misconfiguration is surfaced
+ * immediately at boot rather than failing silently on the first S2S call.
  */
 export async function startKeyRotation(): Promise<void> {
   await registerWithOsnApi();

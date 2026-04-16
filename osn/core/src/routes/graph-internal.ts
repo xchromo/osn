@@ -1,3 +1,4 @@
+import { evictPublicKeyCacheEntry } from "@osn/crypto";
 import { serviceAccounts, serviceAccountKeys, users } from "@osn/db/schema";
 import { Db, DbLive } from "@osn/db/service";
 import { inArray, eq } from "drizzle-orm";
@@ -15,10 +16,22 @@ const AUDIENCE = "osn-core";
 const SCOPE_GRAPH_READ = "graph:read";
 /** Max profile IDs per batch request — stays well under SQLite's variable limit (999). */
 const MAX_BATCH_PROFILE_IDS = 200;
+/** Exhaustive list of scopes this server will grant to any service. S-M101. */
+const PERMITTED_SCOPES = new Set(["graph:read"]);
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Constant-time string equality check for shared-secret comparison (S-H101).
+ * Length inequality is checked first; a mismatch returns false immediately
+ * since length is not secret in a `Bearer <secret>` scheme.
+ */
+function isTimingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 /** Extracts a safe, non-leaking message from a caught error. */
 function safeError(e: unknown): string {
@@ -271,9 +284,19 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
             set.status = 501;
             return { error: "Service registration is disabled on this instance" };
           }
-          if (headers["authorization"] !== `Bearer ${secret}`) {
+          if (!isTimingSafeEqual(headers["authorization"] ?? "", `Bearer ${secret}`)) {
             set.status = 401;
             return { error: "Unauthorized" };
+          }
+          // Validate requested scopes against the server-side allowlist (S-M101).
+          const requestedScopes = body.allowedScopes
+            .split(",")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
+          const invalidScopes = requestedScopes.filter((s) => !PERMITTED_SCOPES.has(s));
+          if (invalidScopes.length > 0) {
+            set.status = 400;
+            return { error: `Unknown scopes: ${invalidScopes.join(", ")}` };
           }
           try {
             const now = new Date();
@@ -353,7 +376,7 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
             set.status = 501;
             return { error: "Service registration is disabled on this instance" };
           }
-          if (headers["authorization"] !== `Bearer ${secret}`) {
+          if (!isTimingSafeEqual(headers["authorization"] ?? "", `Bearer ${secret}`)) {
             set.status = 401;
             return { error: "Unauthorized" };
           }
@@ -372,6 +395,9 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
                 });
               }),
             );
+            // Evict immediately so the revocation takes effect in this process
+            // without waiting for the 5-minute cache TTL (S-H100).
+            evictPublicKeyCacheEntry(params.keyId);
             return { ok: true };
           } catch (e) {
             set.status = 500;

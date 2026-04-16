@@ -177,6 +177,8 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 
 - [ ] S-H1 (client) — Refresh token sent in JSON body to `/profiles/list`, `/profiles/switch`, `/profiles/create`, `/profiles/delete`. Migrate server endpoints to accept Bearer access-token auth instead, reducing refresh-token exposure surface — see [[identity-model]], [[arc-tokens]]
 - [x] S-H21 — Dev-mode `console.log` of OTP codes + recipient email in `osn/core/src/services/auth.ts`. **Fixed** — already uses `Effect.logDebug` (not `console.log`); guard tightened to `OSN_ENV` in log-level-debug PR.
+- [x] S-H100 — Revoked ARC keys valid for 5 min after revocation (in-process cache bypass). **Fixed** — `evictPublicKeyCacheEntry(kid)` called immediately on revoke; `publicKeyCache` stores `allowedScopes` for cache-hit scope validation — see [[arc-tokens]]
+- [x] S-H101 — `INTERNAL_SERVICE_SECRET` comparison not timing-safe. **Fixed** — `crypto.timingSafeEqual` in both `/register-service` and `/service-keys/:keyId` — see [[arc-tokens]]
 
 ### Medium
 
@@ -194,6 +196,9 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-M34 — Rate limiter trusts `X-Forwarded-For` without reverse-proxy guarantee — see [[rate-limiting]]
 - [ ] S-M35 — Redirect URI allowlist matches origin only, not exact URI per RFC 9700 §4.1.3
 - [ ] S-M43 — No rate limiting on `/graph/internal/*` S2S endpoints — see [[arc-tokens]]
+- [x] S-M100 — `peekClaims` used `atob()` which breaks on base64url (`-`/`_` in UUID kids). **Fixed** — `decodeJwtSegment` converts base64url → base64 before decode (RFC 7515 §2) — see [[arc-tokens]]
+- [x] S-M101 — `/register-service` stored arbitrary `allowedScopes` without server-side validation. **Fixed** — `PERMITTED_SCOPES` allowlist in `graph-internal.ts`; unknown scopes return 400 — see [[arc-tokens]]
+- [x] S-M102 — `resolvePublicKey` cache hit skipped scope check when `tokenScopes` empty. **Fixed** — cache entry now stores `allowedScopes`; scope validated on every cache hit — see [[arc-tokens]]
 - [ ] S-M1 (zap) — No rate limiting on Zap API endpoints — see [[rate-limiting]]
 - [ ] S-M2 (zap) — CORS wildcard on `@zap/api` — restrict to known client origins
 - [ ] S-M3 (zap) — `zapBridge.provisionEventChat` does not verify caller owns event
@@ -221,6 +226,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L13 — PKCE `state` not validated against stored nonce
 - [ ] S-L14 — `assertion: t.Any()` on passkey routes — add TypeBox shape validation
 - [ ] S-L15 — No reserved-handle blocklist in DB
+- [x] S-L101 — `registerWithOsnApi()` silently returned early when `INTERNAL_SERVICE_SECRET` unset. **Fixed** — now throws, caught at startup by `index.ts` — see [[arc-tokens]]
 - [ ] S-L22 — `listRsvps` counts privacy-filtered rows toward `limit` (weak side-channel oracle)
 - [ ] S-L23 — `pkceStore` has no size bound or eviction sweep
 - [ ] S-L24 — `/token` and legacy `POST /register` have no rate limiting
@@ -246,7 +252,10 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W2 (zap) — `addMember` fetches all members to check count. Use `COUNT(*)` or catch unique constraint
 - [ ] P-W3 (zap) — `provisionEventChat` non-atomic cross-DB writes
 - [ ] P-W4 (zap) — `getChatMembers` returns all members without pagination
-- [ ] P-W2 — `resolvePublicKey` hits DB when `tokenScopes` provided even if `kid` cache is warm — cache `CryptoKey` + `allowedScopes` together under `kid` — see [[arc-tokens]]
+- [x] P-W2 — `resolvePublicKey` hits DB when `tokenScopes` provided even if `kid` cache is warm. **Fixed** — cache entry now stores `CryptoKey` + `allowedScopes`; scope validated from cache on hit, no DB round-trip — see [[arc-tokens]]
+- [x] P-W100 — `publicKeyCache` unbounded under key rotation churn. **Fixed** — `MAX_CACHE_SIZE` cap with oldest-entry eviction on write — see [[arc-tokens]]
+- [x] P-W101 — `peekClaims` decoded payload before checking header validity. **Fixed** — header decoded first; payload decode gated on `kid` present — see [[arc-tokens]]
+- [x] P-W102 — `evictExpiredTokens` O(n) scan on every `getOrCreateArcToken` call. **Fixed** — internal debounced sweep (`maybeSweepExpiredTokens`) runs at most once per 30 s; public `evictExpiredTokens` still sweeps immediately — see [[arc-tokens]]
 - [ ] P-W3 — `sendConnectionRequest` two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — see [[redis]]
 - [ ] P-W1 (pulse) — Duplicate event DB load per RSVP route: `loadVisibleEvent` fetches the row for the access gate; `listRsvps`/`rsvpCounts` re-fetch the same row internally. Thread the loaded `Event` into service functions — see [[s2s-patterns]]
@@ -263,7 +272,9 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 
 ### Info
 
-- [ ] P-I1 — `evictExpiredTokens` iterates full cache on every `getOrCreateArcToken` call — throttle or remove
+- [x] P-I1 — `evictExpiredTokens` iterates full cache on every `getOrCreateArcToken` call. **Fixed as P-W102** — debounced internal sweep — see [[arc-tokens]]
+- [x] P-I100 — `rotateKey` retry had no jitter; simultaneous failures on horizontal instances caused thundering-herd on `/register-service`. **Fixed** — retry delay is `5 min ± 30 s` — see [[arc-tokens]]
+- [x] P-I101 — `startKeyRotation` scheduled a rotation timer for the pre-distributed key path that always silently no-oped. **Fixed** — pre-distributed key path removed entirely; all rotation is ephemeral auto-rotation — see [[arc-tokens]]
 - [ ] P-I2 — `new TextEncoder()` allocated per JWT sign/verify call — cache or import `CryptoKey` once
 - [ ] P-I3 — `new TextEncoder()` per `verifyPkceChallenge` call — move to module scope
 - [ ] P-I1 (pulse) — `Register`/`SignIn` eagerly imported in `Header.tsx` — lazy-load for authenticated users — see [[component-library]]

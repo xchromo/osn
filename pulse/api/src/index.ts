@@ -28,9 +28,8 @@ if (process.env.NODE_ENV !== "test") {
 
   app.listen({ port, reusePort: false });
 
-  // Register our public key with osn/api and schedule automatic rotation
-  // (ephemeral key path). No-op when PULSE_API_ARC_PRIVATE_KEY is set
-  // (pre-distributed stable key) or when INTERNAL_SERVICE_SECRET is unset.
+  // Register our ephemeral public key with osn/api and schedule automatic
+  // rotation. Exits the process if INTERNAL_SERVICE_SECRET is unset.
   void startKeyRotation().catch((err: unknown) => {
     console.error("pulse-api: failed to start ARC key rotation", err);
     process.exit(1);

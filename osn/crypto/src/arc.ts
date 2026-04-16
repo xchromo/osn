@@ -235,8 +235,11 @@ export async function verifyArcToken(
 // Public key resolution (Effect-based, requires Db)
 // ---------------------------------------------------------------------------
 
-/** In-memory cache for resolved CryptoKeys (kid → { key, expiresAt }). */
-const publicKeyCache = new Map<string, { key: CryptoKey; expiresAt: number }>();
+/** In-memory cache for resolved CryptoKeys (kid → { key, allowedScopes, expiresAt }). */
+const publicKeyCache = new Map<
+  string,
+  { key: CryptoKey; allowedScopes: string; expiresAt: number }
+>();
 const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
 
 /**
@@ -245,7 +248,8 @@ const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
  * the service's `allowed_scopes` (from `service_accounts`).
  *
  * Results are cached in-memory for 5 minutes (by `kid`) to avoid repeated
- * DB + JWK import. Revoked and expired keys are never cached.
+ * DB + JWK import. Revoked and expired keys are never cached. On cache hit,
+ * scope validation runs against the cached `allowedScopes` — no DB round-trip.
  */
 export const resolvePublicKey = (
   kid: string,
@@ -255,15 +259,24 @@ export const resolvePublicKey = (
   Effect.gen(function* () {
     const now = Math.floor(Date.now() / 1000);
 
-    // Check CryptoKey cache first. Cache entries only exist for keys that have
-    // already passed the DB ownership + scope check, so the `issuer` metric
-    // label is safe (S-C2).
+    // Cache hit path — validate scopes against stored allowedScopes so we
+    // never skip scope enforcement even when tokenScopes is omitted (S-M102).
     const cached = publicKeyCache.get(kid);
     if (cached && cached.expiresAt > now) {
-      if (!tokenScopes || tokenScopes.length === 0) {
-        metricArcPublicKeyCacheHit(issuer);
-        return cached.key;
+      if (tokenScopes && tokenScopes.length > 0) {
+        const allowed = normaliseScopes(cached.allowedScopes);
+        for (const s of tokenScopes) {
+          if (!allowed.includes(s.trim().toLowerCase())) {
+            return yield* Effect.fail(
+              new ArcTokenError({
+                message: `Service "${issuer}" not authorised for scope: ${s}`,
+              }),
+            );
+          }
+        }
       }
+      metricArcPublicKeyCacheHit(issuer);
+      return cached.key;
     }
 
     // S-C2: do NOT record the miss metric yet — `kid` and `issuer` are
@@ -320,27 +333,36 @@ export const resolvePublicKey = (
       }
     }
 
-    // Use cached CryptoKey if still valid (we only needed DB for scope check)
-    if (cached && cached.expiresAt > now) {
-      return cached.key;
-    }
-
     const key = yield* Effect.tryPromise({
       try: () => importKeyFromJwk(publicKeyJwk),
       catch: (cause) => new ArcTokenError({ message: `Invalid public key for ${issuer}`, cause }),
     });
 
-    // Cache the resolved CryptoKey by kid
-    publicKeyCache.set(kid, { key, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
+    // Cache the resolved CryptoKey with its allowedScopes for scope validation on future hits.
+    // Enforce size cap — evict the oldest entry when full (P-W100).
+    if (publicKeyCache.size >= MAX_CACHE_SIZE) {
+      const oldest = publicKeyCache.keys().next().value;
+      if (oldest !== undefined) publicKeyCache.delete(oldest);
+    }
+    publicKeyCache.set(kid, { key, allowedScopes, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
 
     return key;
   });
 
 /**
- * Clears the public key cache. Useful for testing and key rotation.
+ * Clears the public key cache. Useful for testing.
  */
 export function clearPublicKeyCache(): void {
   publicKeyCache.clear();
+}
+
+/**
+ * Evicts a single entry from the public key cache by `kid`.
+ * Call immediately after revoking a key so the revocation takes effect in
+ * this process without waiting for the 5-minute cache TTL to expire (S-H100).
+ */
+export function evictPublicKeyCacheEntry(kid: string): void {
+  publicKeyCache.delete(kid);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +383,7 @@ function cacheKey(kid: string, iss: string, aud: string, scope: string): string 
 /**
  * Returns a cached ARC token if it's still valid (with 30s buffer),
  * or creates a new one. The cache is bounded to MAX_CACHE_SIZE entries;
- * expired entries are evicted on every call.
+ * expired entries are evicted at most once per 30 seconds (P-W102).
  */
 export async function getOrCreateArcToken(
   privateKey: CryptoKey,
@@ -373,8 +395,8 @@ export async function getOrCreateArcToken(
   const key = cacheKey(claims.kid, claims.iss, claims.aud, claims.scope);
   const now = Math.floor(Date.now() / 1000);
 
-  // Auto-evict expired entries on every access
-  evictExpiredTokens();
+  // Debounced eviction — avoid O(n) scan on every outbound S2S request (P-W102).
+  maybeSweepExpiredTokens();
 
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt - CACHE_REISSUE_BUFFER_SECONDS > now) {
@@ -400,18 +422,37 @@ export async function getOrCreateArcToken(
  */
 export function clearTokenCache(): void {
   tokenCache.clear();
+  _lastEvictionMs = 0; // reset debounce so the next auto-sweep fires immediately
+}
+
+let _lastEvictionMs = 0;
+const EVICTION_DEBOUNCE_MS = 30_000; // internal sweep at most once every 30 s
+
+/**
+ * Internal debounced sweep — called by getOrCreateArcToken on every access
+ * but runs at most once per 30 s to avoid O(n) scanning on the hot S2S
+ * request path (P-W102).
+ */
+function maybeSweepExpiredTokens(): void {
+  const nowMs = Date.now();
+  if (nowMs - _lastEvictionMs < EVICTION_DEBOUNCE_MS) return;
+  _lastEvictionMs = nowMs;
+  const now = Math.floor(nowMs / 1000);
+  for (const [key, entry] of tokenCache) {
+    if (entry.expiresAt <= now) tokenCache.delete(key);
+  }
 }
 
 /**
- * Evicts expired entries from the token cache.
- * Called automatically by getOrCreateArcToken on every access.
+ * Evicts all expired entries from the token cache immediately (no debounce).
+ * Also resets the debounce window so the next automatic sweep can run.
+ * Exported for testing and explicit cache management.
  */
 export function evictExpiredTokens(): void {
+  _lastEvictionMs = Date.now();
   const now = Math.floor(Date.now() / 1000);
   for (const [key, entry] of tokenCache) {
-    if (entry.expiresAt <= now) {
-      tokenCache.delete(key);
-    }
+    if (entry.expiresAt <= now) tokenCache.delete(key);
   }
 }
 
