@@ -230,13 +230,16 @@ describe("Register component", () => {
       });
     });
 
-    it("submit stays disabled until 6 digits are entered", async () => {
+    it("submit stays disabled until 6 digits are entered, then enables", async () => {
       await advanceToVerify();
       fillOtpDigits("123");
       const submit = screen.getByRole("button", {
         name: /Verify email/i,
       }) as HTMLButtonElement;
       expect(submit.disabled).toBe(true);
+
+      fillOtpDigits("123456");
+      expect(submit.disabled).toBe(false);
     });
 
     it("OTP input rejects non-digit characters", async () => {
