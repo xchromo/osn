@@ -8,7 +8,9 @@
     "dev": "vite --port 1422",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bunx --bun vitest",
+    "test:run": "bunx --bun vitest run"
   },
   "license": "GPL-3.0",
   "dependencies": {
