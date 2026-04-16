@@ -131,25 +131,45 @@ describe("recommendations routes", () => {
     expect(res.status).toBe(200);
   });
 
-  it("handles a non-numeric ?limit without 500ing (T-S1)", async () => {
-    // parseInt("abc") === NaN — route must not error; service clamps via
-    // Math.max/min which return NaN, slice(0, NaN) returns [] — so we accept
-    // a 200 with empty suggestions rather than a 500.
+  it("rejects a non-numeric ?limit at the HTTP boundary (S-M1/P-W1)", async () => {
+    // With t.Numeric in the schema, Elysia returns 422 for non-numeric
+    // input rather than silently collapsing to an empty result.
     const alice = await registerAndGetToken("a@e.com", "alice");
-    const bob = await registerAndGetToken("b@e.com", "bob");
-    const dana = await registerAndGetToken("d@e.com", "dana");
-    await connect(alice.token, "bob", bob.token, "alice");
-    await connect(bob.token, "dana", dana.token, "bob");
 
     const res = await recsApp.handle(
       new Request("http://localhost/recommendations/connections?limit=abc", {
         headers: { Authorization: `Bearer ${alice.token}` },
       }),
     );
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { suggestions: unknown[] };
-    // Bounded behaviour: either empty (NaN collapse) or at most the default.
-    expect(Array.isArray(json.suggestions)).toBe(true);
-    expect(json.suggestions.length).toBeLessThanOrEqual(10);
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects a too-large ?limit at the HTTP boundary", async () => {
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    const res = await recsApp.handle(
+      new Request("http://localhost/recommendations/connections?limit=1000", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  // -------------------------------------------------------------------------
+  // Rate limiting (S-H1/P-C2)
+  // -------------------------------------------------------------------------
+
+  it("returns 429 when the rate limiter rejects", async () => {
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    // Build an app with a limiter that always fails closed.
+    const { createRecommendationRoutes: mkRoutes } =
+      await import("../../src/routes/recommendations");
+    const alwaysRejected = { check: () => Promise.resolve(false) };
+    const limitedApp = mkRoutes(config, layer, undefined, alwaysRejected);
+    const res = await limitedApp.handle(
+      new Request("http://localhost/recommendations/connections", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(429);
   });
 });

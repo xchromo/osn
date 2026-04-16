@@ -16,6 +16,25 @@ export class DatabaseError extends Data.TaggedError("DatabaseError")<{
 }> {}
 
 // ---------------------------------------------------------------------------
+// Bounds
+// ---------------------------------------------------------------------------
+
+/**
+ * Caller's connection list is capped before we expand to friends-of-friends.
+ * Prevents a hub user with thousands of connections from producing an
+ * unbounded FOF fan-out (P-C1). Tuned for the "enough candidates to produce
+ * a good top-N list" sweet spot.
+ */
+const MAX_MY_CONNECTIONS_FOR_FOF = 500;
+
+/**
+ * Hard cap on the FOF fan-out row count. Worst-case defence alongside
+ * MAX_MY_CONNECTIONS_FOR_FOF — a viral cluster with very dense connections
+ * would still be bounded by this limit.
+ */
+const MAX_FOF_FANOUT_ROWS = 10_000;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -35,9 +54,9 @@ export function createRecommendationService() {
    * Suggest "people you may know" based on mutual connections (friends-of-friends).
    *
    * Algorithm:
-   * 1. Get all profile IDs the caller is connected to (accepted only).
+   * 1. Get up to MAX_MY_CONNECTIONS_FOR_FOF accepted connections of the caller.
    * 2. Get all blocked profile IDs (both directions).
-   * 3. For each of the caller's connections, find *their* connections.
+   * 3. For each of the caller's connections, find *their* connections (capped).
    * 4. Exclude self, existing connections, and blocked profiles.
    * 5. Count mutual connections per candidate and sort descending.
    * 6. Hydrate top results with profile data.
@@ -48,20 +67,27 @@ export function createRecommendationService() {
   ): Effect.Effect<Suggestion[], DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
-      const safeLimit = Math.min(Math.max(limit, 1), 50);
+      // Defence-in-depth: the Elysia schema enforces [1, 50], but non-HTTP
+      // callers might pass NaN / Infinity / negatives. Coerce any non-finite
+      // input back to the default before clamping.
+      const safeLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 10, 1), 50);
 
-      // Step 1: Get my accepted connection IDs
+      // Step 1: Get my accepted connection IDs (capped to bound fan-out).
       const myConnectionRows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              requesterId: connections.requesterId,
+              addresseeId: connections.addresseeId,
+            })
             .from(connections)
             .where(
               and(
                 eq(connections.status, "accepted"),
                 or(eq(connections.requesterId, profileId), eq(connections.addresseeId, profileId)),
               ),
-            ),
+            )
+            .limit(MAX_MY_CONNECTIONS_FOR_FOF),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -71,11 +97,14 @@ export function createRecommendationService() {
 
       if (myConnectionIds.length === 0) return [];
 
-      // Step 2: Get blocks (both directions)
+      // Step 2: Get blocks (both directions).
       const blockRows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              blockerId: blocks.blockerId,
+              blockedId: blocks.blockedId,
+            })
             .from(blocks)
             .where(or(eq(blocks.blockerId, profileId), eq(blocks.blockedId, profileId))),
         catch: (cause) => new DatabaseError({ cause }),
@@ -85,13 +114,19 @@ export function createRecommendationService() {
         r.blockerId === profileId ? r.blockedId : r.blockerId,
       );
 
-      const excludeIds = new Set([profileId, ...myConnectionIds, ...blockedIds]);
+      // Set for O(1) membership lookup in the aggregation loop (P-W2).
+      const myConnectionIdSet = new Set(myConnectionIds);
+      const excludeIds = new Set<string>([profileId, ...myConnectionIds, ...blockedIds]);
 
-      // Step 3: For each of my connections, find THEIR accepted connections
+      // Step 3: For each of my connections, find THEIR accepted connections.
+      // Capped fan-out bounds worst-case aggregation cost.
       const fofRows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              requesterId: connections.requesterId,
+              addresseeId: connections.addresseeId,
+            })
             .from(connections)
             .where(
               and(
@@ -101,19 +136,19 @@ export function createRecommendationService() {
                   inArray(connections.addresseeId, myConnectionIds),
                 ),
               ),
-            ),
+            )
+            .limit(MAX_FOF_FANOUT_ROWS),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      // Step 4: Aggregate candidates, counting mutual connections
+      // Step 4: Aggregate candidates, counting mutual connections.
       const mutualCounts = new Map<string, number>();
 
       for (const row of fofRows) {
-        // Determine which side is the mutual friend and which is the candidate
-        const isMutualRequester = myConnectionIds.includes(row.requesterId);
-        const isMutualAddressee = myConnectionIds.includes(row.addresseeId);
+        const isMutualRequester = myConnectionIdSet.has(row.requesterId);
+        const isMutualAddressee = myConnectionIdSet.has(row.addresseeId);
 
-        // Both sides could be my connections — skip (that's just a connection between two of my friends)
+        // Both sides are my connections — edge between two of my friends.
         if (isMutualRequester && isMutualAddressee) continue;
 
         const candidateId = isMutualRequester ? row.addresseeId : row.requesterId;
@@ -125,14 +160,14 @@ export function createRecommendationService() {
 
       if (mutualCounts.size === 0) return [];
 
-      // Step 5: Sort by mutual count descending and take top N
+      // Step 5: Sort by mutual count descending and take top N.
       const sorted = [...mutualCounts.entries()]
         .toSorted((a, b) => b[1] - a[1])
         .slice(0, safeLimit);
 
       const candidateIds = sorted.map(([id]) => id);
 
-      // Step 6: Hydrate with profile info
+      // Step 6: Hydrate with profile info.
       const profiles = yield* Effect.tryPromise({
         try: () =>
           db
