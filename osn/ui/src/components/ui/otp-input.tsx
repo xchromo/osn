@@ -17,6 +17,7 @@ interface OtpInputProps {
 }
 
 const LENGTH = 6;
+const INDICES = Array.from({ length: LENGTH });
 
 const OtpInput: Component<OtpInputProps> = (props) => {
   const [local] = splitProps(props, ["value", "onChange", "status", "disabled", "autofocus"]);
@@ -97,7 +98,7 @@ const OtpInput: Component<OtpInputProps> = (props) => {
 
   return (
     <div class="base:flex base:gap-2" role="group" aria-label="Verification code">
-      <For each={Array.from({ length: LENGTH })}>
+      <For each={INDICES}>
         {(_, i) => (
           <input
             ref={(el) => (inputs[i()] = el)}

@@ -54,6 +54,7 @@ export function SignIn(props: SignInProps) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [otpStatus, setOtpStatus] = createSignal<OtpStatus>("idle");
+  const [resendCooldown, setResendCooldown] = createSignal(0);
 
   // If the requested default tab is passkey but the environment doesn't
   // support it, silently fall through to OTP. Done in an onMount to avoid
@@ -137,14 +138,28 @@ export function SignIn(props: SignInProps) {
     }
   }
 
+  function startResendCooldown() {
+    setResendCooldown(30);
+    const id = setInterval(() => {
+      setResendCooldown((n) => {
+        if (n <= 1) {
+          clearInterval(id);
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+  }
+
   async function resendOtpCode() {
-    if (busy() || !identifier().trim()) return;
+    if (busy() || !identifier().trim() || resendCooldown() > 0) return;
     setBusy(true);
     setError(null);
     try {
       await client.otpBegin(identifier().trim());
       setOtpCode("");
       setOtpStatus("idle");
+      startResendCooldown();
       toast.success("New code sent");
     } catch (err) {
       reportError(err, "Couldn't resend code");
@@ -299,10 +314,10 @@ export function SignIn(props: SignInProps) {
             <button
               type="button"
               onClick={resendOtpCode}
-              class="text-primary text-sm font-medium hover:underline"
-              disabled={busy()}
+              class="text-primary text-sm font-medium hover:underline disabled:opacity-50"
+              disabled={busy() || resendCooldown() > 0}
             >
-              Resend code
+              {resendCooldown() > 0 ? `Resend code (${resendCooldown()}s)` : "Resend code"}
             </button>
           </Show>
           <Button variant="ghost" size="sm" onClick={() => setStep("identifier")}>

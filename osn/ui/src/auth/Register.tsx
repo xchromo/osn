@@ -39,6 +39,7 @@ export function Register(props: RegisterProps) {
   const [otp, setOtp] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [otpStatus, setOtpStatus] = createSignal<OtpStatus>("idle");
+  const [resendCooldown, setResendCooldown] = createSignal(0);
   const [profileId, setProfileId] = createSignal<string | null>(null);
   const [enrollmentToken, setEnrollmentToken] = createSignal<string | null>(null);
 
@@ -147,8 +148,21 @@ export function Register(props: RegisterProps) {
     }
   }
 
+  function startResendCooldown() {
+    setResendCooldown(30);
+    const id = setInterval(() => {
+      setResendCooldown((n) => {
+        if (n <= 1) {
+          clearInterval(id);
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+  }
+
   async function resendCode() {
-    if (busy()) return;
+    if (busy() || resendCooldown() > 0) return;
     setBusy(true);
     try {
       await client.beginRegistration({
@@ -158,6 +172,7 @@ export function Register(props: RegisterProps) {
       });
       setOtp("");
       setOtpStatus("idle");
+      startResendCooldown();
       toast.success("New code sent");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not resend code");
@@ -304,10 +319,10 @@ export function Register(props: RegisterProps) {
             <button
               type="button"
               onClick={resendCode}
-              class="text-primary text-sm font-medium hover:underline"
-              disabled={busy()}
+              class="text-primary text-sm font-medium hover:underline disabled:opacity-50"
+              disabled={busy() || resendCooldown() > 0}
             >
-              Resend code
+              {resendCooldown() > 0 ? `Resend code (${resendCooldown()}s)` : "Resend code"}
             </button>
           </Show>
           <Button variant="ghost" size="sm" onClick={() => setStep("details")}>
