@@ -12,6 +12,8 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] Build first observability dashboards (HTTP RED, auth funnel, ARC verification, events CRUD) — see [[observability/overview]]
 - [ ] Zap route-level tests + zapBridge tests (T-R1, T-M1 from review)
 - [ ] Zap rate limiting on write endpoints (S-M1) — see [[rate-limiting]]
+- [ ] Recommendations SQL aggregation + caching (P-W6/P-W7) — next step after the in-JS fan-out cap shipped in this PR — see [[social-graph]]
+- [ ] Factor shared `authGet/Post/Patch/Delete` helpers in `@osn/client` (P-I1)
 
 ---
 
@@ -40,7 +42,8 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] Per-app vs global blocking logic (deferred — global blocking across all OSN apps for now)
 - [ ] Interest profile selection (onboarding)
 - [ ] Third-party app authorization flow
-- [ ] Organisation frontend — management UI in Pulse or standalone `@osn/social` Tauri app
+- [x] Organisation frontend — standalone `@osn/social` app delivered (2026-04-16); Tauri wrapping deferred
+- [ ] Recommendations SQL aggregation + compound indexes (P-W7) — push FOF counting into DB, add `connections(status, requester_id)` + `connections(status, addressee_id)` — see [[social-graph]]
 - [ ] Unified `handles` reservation table (user + org handles share namespace; currently enforced at service layer — see Deferred Decisions)
 
 ---
