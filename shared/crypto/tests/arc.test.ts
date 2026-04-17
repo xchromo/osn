@@ -758,9 +758,13 @@ describe("publicKeyCache LRU eviction", () => {
 
   it("cache size stays bounded at the configured max", async () => {
     const layer = createTestLayer();
-    for (let i = 0; i < 6; i++) {
-      await seedAndResolve(layer, `svc-${i}`, `key-${i}`);
-    }
+    // Insert sequentially so eviction order is deterministic
+    await seedAndResolve(layer, "svc-0", "key-0");
+    await seedAndResolve(layer, "svc-1", "key-1");
+    await seedAndResolve(layer, "svc-2", "key-2");
+    await seedAndResolve(layer, "svc-3", "key-3");
+    await seedAndResolve(layer, "svc-4", "key-4");
+    await seedAndResolve(layer, "svc-5", "key-5");
     expect(publicKeyCacheSize()).toBe(3);
   });
 });
