@@ -78,11 +78,28 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
   };
 }
 
-/** Convert an internal camelCase TokenSet to the snake_case OAuth wire format. */
+/**
+ * Convert an internal camelCase TokenSet to the snake_case OAuth wire format.
+ * Used for third-party PKCE flows where the client can't use cookies.
+ */
 function toTokenResponse(ts: { accessToken: string; refreshToken: string; expiresIn: number }) {
   return {
     access_token: ts.accessToken,
     refresh_token: ts.refreshToken,
+    token_type: "Bearer" as const,
+    expires_in: ts.expiresIn,
+    scope: "openid profile",
+  };
+}
+
+/**
+ * Convert a TokenSet to wire format WITHOUT the refresh token (S-M2).
+ * Used for first-party flows where the refresh token is in the HttpOnly cookie.
+ * Omitting it from the body prevents XSS exfiltration of the session token.
+ */
+function toTokenResponseCookieOnly(ts: { accessToken: string; expiresIn: number }) {
+  return {
+    access_token: ts.accessToken,
     token_type: "Bearer" as const,
     expires_in: ts.expiresIn,
     scope: "openid profile",
@@ -355,7 +372,7 @@ export function createAuthRoutes(
               profileId: result.profileId,
               handle: result.handle,
               email: result.email,
-              session: toTokenResponse(result),
+              session: toTokenResponseCookieOnly(result),
               enrollment_token: result.enrollmentToken,
             };
           } catch (e) {
@@ -514,7 +531,7 @@ export function createAuthRoutes(
               const tokens = await run(auth.refreshTokens(refresh_token));
               // Set the rotated session token as a cookie
               set.headers["set-cookie"] = buildSessionCookie(tokens.refreshToken, cookieConfig);
-              return toTokenResponse(tokens);
+              return toTokenResponseCookieOnly(tokens);
             } catch (e) {
               set.status = 400;
               return { error: "invalid_grant", message: String(e) };
@@ -826,7 +843,7 @@ export function createAuthRoutes(
               cookieConfig,
             );
             return {
-              session: toTokenResponse(result.session),
+              session: toTokenResponseCookieOnly(result.session),
               profile: result.profile,
             };
           } catch (e) {
@@ -878,7 +895,7 @@ export function createAuthRoutes(
               cookieConfig,
             );
             return {
-              session: toTokenResponse(result.session),
+              session: toTokenResponseCookieOnly(result.session),
               profile: result.profile,
             };
           } catch (e) {
@@ -920,7 +937,7 @@ export function createAuthRoutes(
               cookieConfig,
             );
             return {
-              session: toTokenResponse(result.session),
+              session: toTokenResponseCookieOnly(result.session),
               profile: result.profile,
             };
           } catch (e) {

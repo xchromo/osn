@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 
 import { createOriginGuard } from "../../src/lib/origin-guard";
 
-function makeContext(method: string, url: string, origin?: string) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function makeContext(method: string, url: string, origin?: string): any {
   const headers = new Headers();
   if (origin) headers.set("origin", origin);
 
   return {
     request: new Request(url, { method, headers }),
-    set: { status: 200 } as { status: number },
+    set: { status: 200 },
   };
 }
 

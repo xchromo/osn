@@ -123,7 +123,15 @@ const cookieConfig: CookieSessionConfig = {
 };
 
 // M1: Origin guard — validate Origin header on state-changing requests.
+// S-L1: warn if allowlist is empty in non-local envs (guard would be disabled).
 const corsOriginSet = new Set(Array.isArray(corsOrigins) ? corsOrigins : [corsOrigins]);
+if (corsOriginSet.size === 0 && cookieConfig.secure) {
+  void Effect.runPromise(
+    Effect.logWarning(
+      "OSN_CORS_ORIGIN is empty in a non-local environment — Origin guard is disabled. Set OSN_CORS_ORIGIN to enable CSRF protection.",
+    ).pipe(Effect.provide(observabilityLayer)),
+  );
+}
 const originGuard = createOriginGuard({ allowedOrigins: corsOriginSet });
 
 const app = new Elysia()
