@@ -60,23 +60,26 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 
 ### Searching the wiki
 
-Always check for the Obsidian CLI before falling back to grep:
+Always check for the Obsidian CLI first (requires Obsidian app to be running):
 
 ```bash
 # 1. Check availability
-which obs 2>/dev/null && OBS=obs || OBS=""
+which obsidian 2>/dev/null && OBSCLI=obsidian || OBSCLI=""
 
-# 2a. If available — use obs for semantic search
-$OBS search "arc tokens"          # full-text search across vault
-$OBS list --tag systems           # list pages by tag
-$OBS open "wiki/systems/arc-tokens"
+# 2a. If available — use obsidian CLI (vault-aware, follows [[wikilinks]])
+obsidian search query="arc tokens"                     # full-text search
+obsidian search:context query="arc tokens"             # search with line context
+obsidian tag name=systems verbose                      # list files tagged #systems
+obsidian read path=wiki/systems/arc-tokens.md          # read a page
+obsidian backlinks file=arc-tokens                     # find pages linking to it
+obsidian files folder=wiki/systems                     # list files in a folder
 
-# 2b. Fallback — grep over markdown files
-grep -r "arc token" wiki/ --include="*.md" -l          # find pages
+# 2b. Fallback — grep over markdown files (always works)
+grep -r "arc token" wiki/ --include="*.md" -l          # find matching pages
 grep -r "arc token" wiki/ --include="*.md" -n          # with line numbers
 ```
 
-Install: `bun add -g obs` (or `npm i -g obs`). Once installed, `obs` reads the vault root automatically when run from the repo root.
+Note: the `obsidian` CLI communicates with the running Obsidian app — fall back to grep if Obsidian is not open.
 
 ### Wiki maintenance rules
 
