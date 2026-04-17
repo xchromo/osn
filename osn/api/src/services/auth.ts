@@ -248,7 +248,7 @@ function generateSessionToken(): string {
  * because the token has 160 bits of entropy — brute-forcing the preimage
  * of SHA-256 is infeasible.
  */
-export function hashSessionToken(token: string): string {
+function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -1077,7 +1077,12 @@ export function createAuthService(config: AuthConfig) {
         try: () => db.delete(sessions).where(eq(sessions.familyId, entry.familyId)),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      rotatedSessions.delete(sessionHash);
+      // S-M1: Sweep ALL rotated hashes in this family, not just the replayed one.
+      // Prevents stale map entries and ensures consistent observability if
+      // an attacker replays multiple exfiltrated tokens from the same chain.
+      for (const [k, v] of rotatedSessions) {
+        if (v.familyId === entry.familyId) rotatedSessions.delete(k);
+      }
       metricSessionFamilyRevoked();
     }).pipe(Effect.withSpan("auth.session.reuse_detect"));
   };
@@ -1272,8 +1277,10 @@ export function createAuthService(config: AuthConfig) {
   const completePasskeyRegistration = (
     accountId: string,
     attestation: RegistrationResponseJSON,
-    /** When provided, all sessions except this one are revoked (H1). */
-    currentSessionHash?: string,
+    /** Raw session token of the caller. When provided, hashed internally
+     *  and all OTHER sessions for this account are revoked (H1). Keeps
+     *  the raw-token → hash boundary inside the service (S-H2). */
+    currentSessionToken?: string,
   ): Effect.Effect<{ passkeyId: string }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = registrationChallenges.get(accountId);
@@ -1321,8 +1328,8 @@ export function createAuthService(config: AuthConfig) {
       // H1: Invalidate all other sessions on passkey registration.
       // An attacker who stole a session token cannot persist after the
       // legitimate user adds a passkey.
-      if (currentSessionHash) {
-        yield* invalidateOtherAccountSessions(accountId, currentSessionHash);
+      if (currentSessionToken) {
+        yield* invalidateOtherAccountSessions(accountId, hashSessionToken(currentSessionToken));
       }
 
       return { passkeyId: id };

@@ -7,7 +7,7 @@ import { Elysia, t } from "elysia";
 import { verifyPkceChallenge } from "../lib/crypto";
 import { buildAuthorizeHtml } from "../lib/html";
 import { metricAuthJwksServed, metricAuthRateLimited } from "../metrics";
-import { createAuthService, hashSessionToken, type AuthConfig } from "../services/auth";
+import { createAuthService, type AuthConfig } from "../services/auth";
 
 // In-memory PKCE challenge store (keyed by state)
 interface PkceEntry {
@@ -277,9 +277,7 @@ export function createAuthRoutes(
    * Used by the S-H1-migrated profile endpoints that authenticate via
    * access token instead of refresh token in body.
    */
-  async function resolveAccessTokenPrincipal(
-    authHeader: string | undefined,
-  ): Promise<{
+  async function resolveAccessTokenPrincipal(authHeader: string | undefined): Promise<{
     profileId: string;
     email: string;
     handle: string;
@@ -633,18 +631,14 @@ export function createAuthRoutes(
               set.status = 401;
               return { error: "unauthorized" };
             }
-            // H1: If the client sends a session_token, compute its hash so
-            // completePasskeyRegistration can revoke all OTHER sessions for
-            // this account. On the enrollment path (new user just registered)
-            // there is typically only one session, so session_token is optional.
-            const currentSessionHash = body.session_token
-              ? hashSessionToken(body.session_token)
-              : undefined;
+            // H1: Pass raw session_token to the service — it handles hashing
+            // internally (S-H2). On the enrollment path (new user) there is
+            // typically only one session, so session_token is optional.
             const result = await run(
               auth.completePasskeyRegistration(
                 principal.accountId,
                 body.attestation,
-                currentSessionHash,
+                body.session_token,
               ),
             );
             return result;
