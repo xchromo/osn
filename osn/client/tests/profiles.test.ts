@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect";
 import { vi } from "vitest";
 
 import { OsnAuth, createOsnAuthLive } from "../src/service";
-import { Storage, createMemoryStorage } from "../src/storage";
+import { createMemoryStorage } from "../src/storage";
 
 const config = { issuerUrl: "https://osn.example.com", clientId: "test-client" };
 
