@@ -1,12 +1,12 @@
+import { serviceAccounts, serviceAccountKeys } from "@osn/db/schema";
+import { Db } from "@osn/db/service";
+import type { Db as DbTag } from "@osn/db/service";
 import {
   generateArcKeyPair,
   exportKeyToJwk,
   createArcToken,
   clearPublicKeyCache,
-} from "@osn/crypto";
-import { serviceAccounts, serviceAccountKeys } from "@osn/db/schema";
-import { Db } from "@osn/db/service";
-import type { Db as DbTag } from "@osn/db/service";
+} from "@shared/crypto";
 import { Effect } from "effect";
 import { describe, it, expect, beforeEach } from "vitest";
 
@@ -36,7 +36,7 @@ describe("internal graph routes (ARC-protected)", () => {
   async function setupArcService(
     serviceId: string = "pulse-api",
     scopes: string = "graph:read",
-    audience: string = "osn-core",
+    audience: string = "osn-api",
   ): Promise<{ token: string; keyPair: CryptoKeyPair; keyId: string }> {
     const kp = await generateArcKeyPair();
     const pubJwk = await exportKeyToJwk(kp.publicKey);
@@ -129,7 +129,7 @@ describe("internal graph routes (ARC-protected)", () => {
       const kp = await generateArcKeyPair();
       const token = await createArcToken(kp.privateKey, {
         iss: "unknown-service",
-        aud: "osn-core",
+        aud: "osn-api",
         scope: "graph:read",
         kid: "no-such-key",
       });
@@ -143,7 +143,7 @@ describe("internal graph routes (ARC-protected)", () => {
     });
 
     it("returns 401 with wrong audience", async () => {
-      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-core");
+      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-api");
       // Create token with wrong audience
       const badToken = await createArcToken(kp.privateKey, {
         iss: "pulse-api",
@@ -161,11 +161,11 @@ describe("internal graph routes (ARC-protected)", () => {
     });
 
     it("returns 401 with wrong scope", async () => {
-      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-core");
+      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-api");
       // Create token with wrong scope (service is only allowed graph:read)
       const badToken = await createArcToken(kp.privateKey, {
         iss: "pulse-api",
-        aud: "osn-core",
+        aud: "osn-api",
         scope: "graph:write",
         kid: keyId,
       });
@@ -179,11 +179,11 @@ describe("internal graph routes (ARC-protected)", () => {
     });
 
     it("returns 401 with expired ARC token", async () => {
-      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-core");
+      const { keyPair: kp, keyId } = await setupArcService("pulse-api", "graph:read", "osn-api");
       // Create token with minimum TTL (1 second)
       const expiredToken = await createArcToken(
         kp.privateKey,
-        { iss: "pulse-api", aud: "osn-core", scope: "graph:read", kid: keyId },
+        { iss: "pulse-api", aud: "osn-api", scope: "graph:read", kid: keyId },
         1,
       );
 

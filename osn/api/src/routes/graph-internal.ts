@@ -1,6 +1,6 @@
-import { evictPublicKeyCacheEntry } from "@osn/crypto";
 import { serviceAccounts, serviceAccountKeys, users } from "@osn/db/schema";
 import { Db, DbLive } from "@osn/db/service";
+import { evictPublicKeyCacheEntry } from "@shared/crypto";
 import { inArray, eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
@@ -12,7 +12,7 @@ import { createGraphService } from "../services/graph";
 // Constants
 // ---------------------------------------------------------------------------
 
-const AUDIENCE = "osn-core";
+const AUDIENCE = "osn-api";
 const SCOPE_GRAPH_READ = "graph:read";
 /** Max profile IDs per batch request — stays well under SQLite's variable limit (999). */
 const MAX_BATCH_PROFILE_IDS = 200;
@@ -51,7 +51,7 @@ function safeError(e: unknown): string {
  * Creates the `/graph/internal/*` route group for service-to-service calls.
  *
  * All routes require `Authorization: ARC <token>` with `graph:read` scope
- * and audience `"osn-core"`. These are read-only endpoints consumed by
+ * and audience `"osn-api"`. These are read-only endpoints consumed by
  * other OSN services (e.g. Pulse API via the graphBridge).
  *
  * @param dbLayer - Effect Layer providing Db (defaults to DbLive)

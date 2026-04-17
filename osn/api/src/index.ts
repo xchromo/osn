@@ -1,24 +1,24 @@
 import { cors } from "@elysiajs/cors";
-import {
-  createAuthRoutes,
-  createGraphRoutes,
-  createInternalGraphRoutes,
-  createOrganisationRoutes,
-  createInternalOrganisationRoutes,
-  createProfileRoutes,
-  createRecommendationRoutes,
-  createRedisAuthRateLimiters,
-  createRedisGraphRateLimiter,
-  createRedisOrgRateLimiter,
-  createRedisProfileRateLimiters,
-  createRedisRecommendationRateLimiter,
-} from "@osn/core";
 import { DbLive } from "@osn/db/service";
 import { healthRoutes, initObservability, observabilityPlugin } from "@shared/observability";
 import { Effect, Logger } from "effect";
 import { Elysia } from "elysia";
 
+import {
+  createRedisAuthRateLimiters,
+  createRedisGraphRateLimiter,
+  createRedisOrgRateLimiter,
+  createRedisProfileRateLimiters,
+  createRedisRecommendationRateLimiter,
+} from "./lib/redis-rate-limiters";
 import { initRedisClient } from "./redis";
+import { createAuthRoutes } from "./routes/auth";
+import { createGraphRoutes } from "./routes/graph";
+import { createInternalGraphRoutes } from "./routes/graph-internal";
+import { createOrganisationRoutes } from "./routes/organisation";
+import { createInternalOrganisationRoutes } from "./routes/organisation-internal";
+import { createProfileRoutes } from "./routes/profile";
+import { createRecommendationRoutes } from "./routes/recommendations";
 
 const SERVICE_NAME = "osn-api";
 const port = Number(process.env.PORT) || 4000;

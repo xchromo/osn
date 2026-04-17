@@ -1,10 +1,10 @@
 import { Effect } from "effect";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock @osn/crypto so key generation never hits the real Web Crypto API.
+// Mock @shared/crypto so key generation never hits the real Web Crypto API.
 // generateArcKeyPair is slow (> 5 s) in the test environment; mocking it
 // keeps all graphBridge tests under the default 5000 ms timeout.
-vi.mock("@osn/crypto", () => ({
+vi.mock("@shared/crypto", () => ({
   generateArcKeyPair: vi.fn().mockResolvedValue({
     privateKey: {} as CryptoKey,
     publicKey: {} as CryptoKey,

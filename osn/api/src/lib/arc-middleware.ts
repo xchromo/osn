@@ -1,5 +1,5 @@
-import { verifyArcToken, resolvePublicKey, type ArcTokenPayload } from "@osn/crypto";
 import type { Db } from "@osn/db/service";
+import { verifyArcToken, resolvePublicKey, type ArcTokenPayload } from "@shared/crypto";
 import { Effect, type Layer } from "effect";
 
 /**
@@ -9,7 +9,7 @@ import { Effect, type Layer } from "effect";
 export interface ArcCaller {
   /** Issuer service ID (e.g. "pulse-api") */
   readonly iss: string;
-  /** Audience (this service, e.g. "osn-core") */
+  /** Audience (this service, e.g. "osn-api") */
   readonly aud: string;
   /** Comma-separated scopes the token was issued with */
   readonly scope: string;
@@ -80,7 +80,7 @@ function peekClaims(token: string): { kid: string; iss: string; scopes: string[]
  * @param authorization - The raw Authorization header value
  * @param set - Elysia's response status setter
  * @param dbLayer - The Effect Layer providing the Db service
- * @param expectedAudience - The service ID this token must be addressed to (e.g. "osn-core")
+ * @param expectedAudience - The service ID this token must be addressed to (e.g. "osn-api")
  * @param requiredScope - The scope the token must include (e.g. "graph:read")
  */
 export async function requireArc(
