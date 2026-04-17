@@ -7,7 +7,7 @@ import { Elysia, t } from "elysia";
 import { verifyPkceChallenge } from "../lib/crypto";
 import { buildAuthorizeHtml } from "../lib/html";
 import { metricAuthJwksServed, metricAuthRateLimited } from "../metrics";
-import { createAuthService, type AuthConfig } from "../services/auth";
+import { createAuthService, hashSessionToken, type AuthConfig } from "../services/auth";
 
 // In-memory PKCE challenge store (keyed by state)
 interface PkceEntry {
@@ -269,6 +269,27 @@ export function createAuthRoutes(
     }
 
     return { unauthorized: true };
+  }
+
+  /**
+   * Resolves a Bearer access token from the Authorization header. Returns
+   * the token claims on success, or null if the header is missing / invalid.
+   * Used by the S-H1-migrated profile endpoints that authenticate via
+   * access token instead of refresh token in body.
+   */
+  async function resolveAccessTokenPrincipal(
+    authHeader: string | undefined,
+  ): Promise<{
+    profileId: string;
+    email: string;
+    handle: string;
+    displayName: string | null;
+  } | null> {
+    if (!authHeader || !/^Bearer\s+/i.test(authHeader)) return null;
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    const result = await Effect.runPromise(Effect.either(auth.verifyAccessToken(token)));
+    if (result._tag === "Right") return result.right;
+    return null;
   }
 
   return (
@@ -612,8 +633,19 @@ export function createAuthRoutes(
               set.status = 401;
               return { error: "unauthorized" };
             }
+            // H1: If the client sends a session_token, compute its hash so
+            // completePasskeyRegistration can revoke all OTHER sessions for
+            // this account. On the enrollment path (new user just registered)
+            // there is typically only one session, so session_token is optional.
+            const currentSessionHash = body.session_token
+              ? hashSessionToken(body.session_token)
+              : undefined;
             const result = await run(
-              auth.completePasskeyRegistration(principal.accountId, body.attestation),
+              auth.completePasskeyRegistration(
+                principal.accountId,
+                body.attestation,
+                currentSessionHash,
+              ),
             );
             return result;
           } catch (e) {
@@ -626,6 +658,7 @@ export function createAuthRoutes(
           body: t.Object({
             profileId: t.String(),
             attestation: t.Any(),
+            session_token: t.Optional(t.String()),
           }),
         },
       )
@@ -927,29 +960,35 @@ export function createAuthRoutes(
       )
       // -------------------------------------------------------------------------
       // Profile switching (P2 — multi-account)
+      //
+      // S-H1: these endpoints authenticate via Bearer access token (not
+      // refresh token in body). The access token's `sub` is `profileId`;
+      // we resolve `accountId` via DB lookup.
       // -------------------------------------------------------------------------
-      .post(
-        "/profiles/list",
-        async ({ body, headers, set }) => {
-          const rlErr = await rateLimit(headers, "profile_list", rl.profileList);
-          if (rlErr) {
-            set.status = 429;
-            return rlErr;
+      .get("/profiles/list", async ({ headers, set }) => {
+        const rlErr = await rateLimit(headers, "profile_list", rl.profileList);
+        if (rlErr) {
+          set.status = 429;
+          return rlErr;
+        }
+        try {
+          const claims = await resolveAccessTokenPrincipal(headers.authorization);
+          if (!claims) {
+            set.status = 401;
+            return { error: "unauthorized" };
           }
-          try {
-            return await run(auth.listAccountProfiles(body.refresh_token));
-          } catch (e) {
-            const { status, body: errBody } = publicError(e);
-            set.status = status;
-            return errBody;
+          const profile = await run(auth.findProfileById(claims.profileId));
+          if (!profile) {
+            set.status = 401;
+            return { error: "unauthorized" };
           }
-        },
-        {
-          body: t.Object({
-            refresh_token: t.String(),
-          }),
-        },
-      )
+          return await run(auth.listAccountProfiles(profile.accountId));
+        } catch (e) {
+          const { status, body: errBody } = publicError(e);
+          set.status = status;
+          return errBody;
+        }
+      })
       .post(
         "/profiles/switch",
         async ({ body, headers, set }) => {
@@ -959,7 +998,17 @@ export function createAuthRoutes(
             return rlErr;
           }
           try {
-            const result = await run(auth.switchProfile(body.refresh_token, body.profile_id));
+            const claims = await resolveAccessTokenPrincipal(headers.authorization);
+            if (!claims) {
+              set.status = 401;
+              return { error: "unauthorized" };
+            }
+            const profile = await run(auth.findProfileById(claims.profileId));
+            if (!profile) {
+              set.status = 401;
+              return { error: "unauthorized" };
+            }
+            const result = await run(auth.switchProfile(profile.accountId, body.profile_id));
             return {
               access_token: result.accessToken,
               expires_in: result.expiresIn,
@@ -973,7 +1022,6 @@ export function createAuthRoutes(
         },
         {
           body: t.Object({
-            refresh_token: t.String(),
             profile_id: t.String({ pattern: "^usr_[a-f0-9]{12}$" }),
           }),
         },
