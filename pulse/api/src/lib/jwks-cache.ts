@@ -2,8 +2,13 @@
  * In-process JWKS public key cache for verifying OSN-issued user access tokens.
  *
  * Fetches the OSN API's JWKS endpoint on cache miss and caches resolved
- * CryptoKeys by `kid` for JWKS_CACHE_TTL_MS. On verification failure, the
- * cache is bypassed once (refresh path) to handle key rotation.
+ * CryptoKeys by `${jwksUrl}:${kid}` for JWKS_CACHE_TTL_MS. On verification
+ * failure, the cache is bypassed once (refresh path) to handle key rotation.
+ *
+ * P-W2: bounded to CACHE_MAX_SIZE entries via LRU eviction — mirrors the
+ * pattern in @shared/crypto/arc.ts (PR #63).
+ * S-M3: cache key includes the JWKS URL so keys from different issuers never
+ * collide even if kid values overlap.
  */
 
 import { importKeyFromJwk } from "@shared/crypto";
@@ -12,6 +17,9 @@ import { instrumentedFetch } from "@shared/observability/fetch";
 import { metricJwksCacheLookup } from "../metrics";
 
 const JWKS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// P-W2: realistic key-rotation scenarios will never exceed single digits;
+// cap prevents heap exhaustion from JWTs with crafted kid values.
+const CACHE_MAX_SIZE = 256;
 
 interface CachedKey {
   key: CryptoKey;
@@ -19,17 +27,37 @@ interface CachedKey {
 }
 
 const cache = new Map<string, CachedKey>();
+/** Last-access timestamps for LRU eviction (same pattern as @shared/crypto). */
+const lastAccess = new Map<string, number>();
+
+/** S-M3: include jwksUrl in cache key to isolate keys by issuer. */
+function cacheKey(kid: string, jwksUrl: string): string {
+  return `${jwksUrl}:${kid}`;
+}
+
+function evictLru(): void {
+  let lruKey: string | undefined;
+  let lruTime = Infinity;
+  for (const [k, t] of lastAccess) {
+    if (t < lruTime) {
+      lruTime = t;
+      lruKey = k;
+    }
+  }
+  if (lruKey !== undefined) {
+    cache.delete(lruKey);
+    lastAccess.delete(lruKey);
+  }
+}
 
 async function fetchPublicKey(kid: string, jwksUrl: string): Promise<CryptoKey | null> {
   let res: Response;
   try {
     res = await instrumentedFetch(jwksUrl);
   } catch (err) {
-    // Log without console.* — structured log is emitted by the OTel layer
-    // but we're outside an Effect context here, so we record the metric and
-    // return null to treat it as an auth miss (soft fail).
+    // We're outside an Effect context here so we record the metric and
+    // re-throw so callers can distinguish a network failure from key-not-found.
     metricJwksCacheLookup("miss");
-    // Re-throw so callers know the fetch itself failed (distinct from key-not-found).
     throw err;
   }
 
@@ -65,6 +93,13 @@ async function fetchPublicKey(kid: string, jwksUrl: string): Promise<CryptoKey |
   }
 }
 
+function storeInCache(ck: string, key: CryptoKey): void {
+  if (cache.size >= CACHE_MAX_SIZE) evictLru();
+  const now = Date.now();
+  cache.set(ck, { key, fetchedAt: now });
+  lastAccess.set(ck, now);
+}
+
 /**
  * Returns the CryptoKey for `kid` from the cache or the JWKS endpoint.
  * Returns `null` if the key cannot be resolved (network error, unknown kid, malformed JWK).
@@ -73,16 +108,18 @@ export async function resolvePublicKeyForKid(
   kid: string,
   jwksUrl: string,
 ): Promise<CryptoKey | null> {
+  const ck = cacheKey(kid, jwksUrl);
   const now = Date.now();
-  const cached = cache.get(kid);
+  const cached = cache.get(ck);
   if (cached && now - cached.fetchedAt < JWKS_CACHE_TTL_MS) {
+    lastAccess.set(ck, now);
     metricJwksCacheLookup("hit");
     return cached.key;
   }
 
   const key = await fetchPublicKey(kid, jwksUrl);
   if (key) {
-    cache.set(kid, { key, fetchedAt: now });
+    storeInCache(ck, key);
     metricJwksCacheLookup("miss");
   }
   return key;
@@ -99,7 +136,7 @@ export async function refreshPublicKeyForKid(
 ): Promise<CryptoKey | null> {
   const key = await fetchPublicKey(kid, jwksUrl);
   if (key) {
-    cache.set(kid, { key, fetchedAt: Date.now() });
+    storeInCache(cacheKey(kid, jwksUrl), key);
     metricJwksCacheLookup("refresh");
   }
   return key;
@@ -108,4 +145,5 @@ export async function refreshPublicKeyForKid(
 /** Clears the key cache. Tests only. */
 export function clearJwksCache(): void {
   cache.clear();
+  lastAccess.clear();
 }

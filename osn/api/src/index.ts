@@ -43,8 +43,14 @@ async function loadJwtKeyPair() {
   const rawPriv = process.env.OSN_JWT_PRIVATE_KEY;
   const rawPub = process.env.OSN_JWT_PUBLIC_KEY;
 
-  if (process.env.NODE_ENV === "production" && (!rawPriv || !rawPub)) {
-    throw new Error("OSN_JWT_PRIVATE_KEY and OSN_JWT_PUBLIC_KEY must be set in production");
+  // S-H2: use OSN_ENV (the project's canonical env discriminator) rather than
+  // NODE_ENV. A staging deploy with NODE_ENV=development would silently fall
+  // through to an ephemeral key pair and issue tokens that can't survive restarts.
+  const nonLocal = process.env.OSN_ENV && process.env.OSN_ENV !== "local";
+  if (nonLocal && (!rawPriv || !rawPub)) {
+    throw new Error(
+      "OSN_JWT_PRIVATE_KEY and OSN_JWT_PUBLIC_KEY must be set in non-local environments",
+    );
   }
 
   if (rawPriv && rawPub) {

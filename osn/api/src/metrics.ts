@@ -25,7 +25,6 @@ import type {
   ProfileSwitchAction,
   RegisterStep,
   Result,
-  JwksCacheResult,
 } from "@shared/observability/metrics";
 import { Effect } from "effect";
 

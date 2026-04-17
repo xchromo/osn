@@ -95,54 +95,26 @@ type Claims = {
 };
 
 /**
- * Resolves public key via provider, verifying with ES256.
- * On verification failure, attempts a cache refresh once (rotation handling).
+ * Verifies token signature with a pre-resolved key. Returns claims or null.
+ * P-W1: accepts pre-decoded kid to avoid re-parsing the JWT header.
  */
-async function verifyTokenWithKey(
-  token: string,
-  resolveKey: (kid: string) => Promise<CryptoKey | null>,
-): Promise<Claims | null> {
-  let header: { kid?: string; alg?: string };
+async function verifyTokenWithKey(token: string, key: CryptoKey): Promise<Claims | null> {
   try {
-    header = decodeProtectedHeader(token);
+    const { payload } = await jwtVerify(token, key, { algorithms: ["ES256"] });
+    const profileId = typeof payload.sub === "string" ? payload.sub : null;
+    if (!profileId) return null;
+    return {
+      profileId,
+      email: typeof payload.email === "string" ? payload.email : null,
+      handle: typeof payload.handle === "string" ? payload.handle : null,
+      displayName: typeof payload.displayName === "string" ? payload.displayName : null,
+    };
   } catch {
     return null;
   }
-
-  if (header.alg !== "ES256" || typeof header.kid !== "string") return null;
-  const kid = header.kid;
-
-  const tryVerify = async (key: CryptoKey): Promise<Claims | null> => {
-    try {
-      const { payload } = await jwtVerify(token, key, { algorithms: ["ES256"] });
-      const profileId = typeof payload.sub === "string" ? payload.sub : null;
-      if (!profileId) return null;
-      return {
-        profileId,
-        email: typeof payload.email === "string" ? payload.email : null,
-        handle: typeof payload.handle === "string" ? payload.handle : null,
-        displayName: typeof payload.displayName === "string" ? payload.displayName : null,
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const key = await resolveKey(kid);
-  if (!key) return null;
-  return tryVerify(key);
 }
 
 /** Extracts verified claims from a Bearer token. Returns null on any failure. */
-async function extractClaims(
-  authHeader: string | undefined,
-  jwksUrl: string,
-): Promise<Claims | null>;
-async function extractClaims(
-  authHeader: string | undefined,
-  jwksUrl: string,
-  _testKey: CryptoKey,
-): Promise<Claims | null>;
 async function extractClaims(
   authHeader: string | undefined,
   jwksUrl: string,
@@ -151,27 +123,31 @@ async function extractClaims(
   if (!authHeader?.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
 
-  if (_testKey) {
-    return verifyTokenWithKey(token, async () => _testKey);
-  }
-
-  // Try cached key first; on failure, refresh once (handles rotation).
+  // P-W1: decode the JWT header exactly once regardless of code path.
   let header: { kid?: string; alg?: string };
   try {
     header = decodeProtectedHeader(token);
   } catch {
     return null;
   }
-  if (typeof header.kid !== "string") return null;
+  if (header.alg !== "ES256" || typeof header.kid !== "string") return null;
   const kid = header.kid;
 
-  const result = await verifyTokenWithKey(token, (k) => resolvePublicKeyForKid(k, jwksUrl));
-  if (result) return result;
+  if (_testKey) {
+    return verifyTokenWithKey(token, _testKey);
+  }
+
+  // Try cached key first; on failure, refresh once (handles rotation).
+  const key = await resolvePublicKeyForKid(kid, jwksUrl);
+  if (key) {
+    const result = await verifyTokenWithKey(token, key);
+    if (result) return result;
+  }
 
   // Verification failed — refresh key in case it was rotated, then retry.
   const freshKey = await refreshPublicKeyForKid(kid, jwksUrl);
   if (!freshKey) return null;
-  return verifyTokenWithKey(token, async () => freshKey);
+  return verifyTokenWithKey(token, freshKey);
 }
 
 const DEFAULT_JWKS_URL = process.env.OSN_JWKS_URL ?? "http://localhost:4000/.well-known/jwks.json";

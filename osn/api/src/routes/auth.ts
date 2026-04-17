@@ -107,6 +107,22 @@ export function createAuthRoutes(
     }
   }
 
+  // P-I2: pre-build the static JWKS response once at route construction time.
+  // The key does not change during the server's lifetime — no need to allocate
+  // a new object (and spread-copy all JWK fields) on every request.
+  // S-L2: include key_ops alongside use for RFC 7517 compliance.
+  const jwksResponse = {
+    keys: [
+      {
+        ...authConfig.jwtPublicKeyJwk,
+        use: "sig",
+        alg: "ES256",
+        kid: authConfig.jwtKid,
+        key_ops: ["verify"],
+      },
+    ],
+  } as const;
+
   const auth = createAuthService(authConfig);
 
   const run = <A, E>(eff: Effect.Effect<A, E, Db>): Promise<A> =>
@@ -976,13 +992,11 @@ export function createAuthRoutes(
         scopes_supported: ["openid", "profile", "email"],
         id_token_signing_alg_values_supported: ["ES256"],
       }))
-      .get("/.well-known/jwks.json", () => {
+      .get("/.well-known/jwks.json", ({ set }) => {
+        // S-H1: explicit caching contract — aligns with pulse-side JWKS_CACHE_TTL_MS (5 min).
+        set.headers["cache-control"] = "public, max-age=300, stale-while-revalidate=60";
         metricAuthJwksServed();
-        return {
-          keys: [
-            { ...authConfig.jwtPublicKeyJwk, use: "sig", alg: "ES256", kid: authConfig.jwtKid },
-          ],
-        };
+        return jwksResponse;
       })
   );
 }
