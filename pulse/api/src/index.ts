@@ -22,10 +22,6 @@ const app = new Elysia()
 const port = process.env.PORT || 3001;
 
 if (process.env.NODE_ENV !== "test") {
-  if (!process.env.OSN_JWT_SECRET) {
-    throw new Error("OSN_JWT_SECRET must be set");
-  }
-
   app.listen({ port, reusePort: false });
 
   // Register our ephemeral public key with osn/api and schedule automatic

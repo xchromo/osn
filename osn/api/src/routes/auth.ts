@@ -6,7 +6,7 @@ import { Elysia, t } from "elysia";
 
 import { verifyPkceChallenge } from "../lib/crypto";
 import { buildAuthorizeHtml } from "../lib/html";
-import { metricAuthRateLimited } from "../metrics";
+import { metricAuthJwksServed, metricAuthRateLimited } from "../metrics";
 import { createAuthService, type AuthConfig } from "../services/auth";
 
 // In-memory PKCE challenge store (keyed by state)
@@ -969,10 +969,20 @@ export function createAuthRoutes(
         issuer: authConfig.issuerUrl,
         authorization_endpoint: `${authConfig.issuerUrl}/authorize`,
         token_endpoint: `${authConfig.issuerUrl}/token`,
+        jwks_uri: `${authConfig.issuerUrl}/.well-known/jwks.json`,
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
         scopes_supported: ["openid", "profile", "email"],
+        id_token_signing_alg_values_supported: ["ES256"],
       }))
+      .get("/.well-known/jwks.json", () => {
+        metricAuthJwksServed();
+        return {
+          keys: [
+            { ...authConfig.jwtPublicKeyJwk, use: "sig", alg: "ES256", kid: authConfig.jwtKid },
+          ],
+        };
+      })
   );
 }
