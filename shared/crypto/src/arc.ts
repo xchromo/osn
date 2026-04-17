@@ -235,11 +235,21 @@ export async function verifyArcToken(
 // Public key resolution (Effect-based, requires Db)
 // ---------------------------------------------------------------------------
 
-/** In-memory cache for resolved CryptoKeys (kid → { key, allowedScopes, expiresAt }). */
+/**
+ * In-memory cache for resolved CryptoKeys.
+ * `allowedScopes` is stored as a pre-parsed `Set<string>` to avoid
+ * re-splitting the comma string on every cache-hit scope check (P-W2).
+ */
 const publicKeyCache = new Map<
   string,
-  { key: CryptoKey; allowedScopes: string; expiresAt: number }
+  { key: CryptoKey; allowedScopes: Set<string>; expiresAt: number }
 >();
+/**
+ * Last-access timestamps for LRU eviction (P-W1).
+ * Updated on every cache hit; scanned only at insert time (DB-miss path).
+ * Avoids the Map delete+re-insert on the hot cache-hit path.
+ */
+const publicKeyLastAccess = new Map<string, number>();
 const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
 
 // Mutable cap — overrideable in tests via _setPublicKeyCacheMaxSizeForTest.
@@ -267,9 +277,8 @@ export const resolvePublicKey = (
     const cached = publicKeyCache.get(kid);
     if (cached && cached.expiresAt > now) {
       if (tokenScopes && tokenScopes.length > 0) {
-        const allowed = normaliseScopes(cached.allowedScopes);
         for (const s of tokenScopes) {
-          if (!allowed.includes(s.trim().toLowerCase())) {
+          if (!cached.allowedScopes.has(s.trim().toLowerCase())) {
             return yield* Effect.fail(
               new ArcTokenError({
                 message: `Service "${issuer}" not authorised for scope: ${s}`,
@@ -278,10 +287,10 @@ export const resolvePublicKey = (
           }
         }
       }
-      // LRU touch: re-insert at the end of the Map so this entry is the
-      // most-recently-used and survives the next eviction sweep (P-W25).
-      publicKeyCache.delete(kid);
-      publicKeyCache.set(kid, cached);
+      // LRU touch: record access time in ms (P-W1). Side-map write is O(1)
+      // and avoids Map delete+re-insert on the hot cache-hit path. Using
+      // Date.now() (ms) gives sub-second precision for test determinism.
+      publicKeyLastAccess.set(kid, Date.now());
       metricArcPublicKeyCacheHit(issuer);
       return cached.key;
     }
@@ -345,14 +354,30 @@ export const resolvePublicKey = (
       catch: (cause) => new ArcTokenError({ message: `Invalid public key for ${issuer}`, cause }),
     });
 
-    // Cache the resolved CryptoKey with its allowedScopes for scope validation on future hits.
-    // LRU eviction: the Map preserves insertion/access order; deleting the first
-    // key removes the least-recently-used entry (P-W25).
+    // Cache the resolved CryptoKey. Store allowedScopes as a Set for O(1)
+    // hit-path scope checks (P-W2). LRU eviction scans the side-timestamp map
+    // to find the least-recently-used entry (P-W1) — O(n) but only on the
+    // slow DB-miss path.
     if (publicKeyCache.size >= _publicKeyCacheMaxSize) {
-      const lru = publicKeyCache.keys().next().value;
-      if (lru !== undefined) publicKeyCache.delete(lru);
+      let lruKid: string | undefined;
+      let lruTime = Infinity;
+      for (const [k, t] of publicKeyLastAccess) {
+        if (t < lruTime) {
+          lruTime = t;
+          lruKid = k;
+        }
+      }
+      if (lruKid !== undefined) {
+        publicKeyCache.delete(lruKid);
+        publicKeyLastAccess.delete(lruKid);
+      }
     }
-    publicKeyCache.set(kid, { key, allowedScopes, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
+    publicKeyCache.set(kid, {
+      key,
+      allowedScopes: new Set(normaliseScopes(allowedScopes)),
+      expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS,
+    });
+    publicKeyLastAccess.set(kid, Date.now());
 
     return key;
   });
@@ -362,6 +387,7 @@ export const resolvePublicKey = (
  */
 export function clearPublicKeyCache(): void {
   publicKeyCache.clear();
+  publicKeyLastAccess.clear();
 }
 
 /**
@@ -371,6 +397,7 @@ export function clearPublicKeyCache(): void {
  */
 export function evictPublicKeyCacheEntry(kid: string): void {
   publicKeyCache.delete(kid);
+  publicKeyLastAccess.delete(kid);
 }
 
 /** Returns the current public key cache size. Useful for testing. */
@@ -401,6 +428,7 @@ interface CachedToken {
 }
 
 const tokenCache = new Map<string, CachedToken>();
+const tokenLastAccess = new Map<string, number>();
 
 function cacheKey(kid: string, iss: string, aud: string, scope: string): string {
   return `${kid}:${iss}:${aud}:${scope}`;
@@ -426,6 +454,7 @@ export async function getOrCreateArcToken(
 
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt - CACHE_REISSUE_BUFFER_SECONDS > now) {
+    tokenLastAccess.set(key, Date.now());
     metricArcTokenCacheHit(claims.iss);
     return cached.token;
   }
@@ -433,13 +462,24 @@ export async function getOrCreateArcToken(
   metricArcTokenCacheMiss(claims.iss);
   const token = await createArcToken(privateKey, claims, ttl);
 
-  // Enforce max cache size — evict oldest entry if full
+  // Enforce max cache size — evict LRU entry if full (P-I2).
   if (tokenCache.size >= MAX_CACHE_SIZE) {
-    const oldest = tokenCache.keys().next().value;
-    if (oldest !== undefined) tokenCache.delete(oldest);
+    let lruKey: string | undefined;
+    let lruTime = Infinity;
+    for (const [k, t] of tokenLastAccess) {
+      if (t < lruTime) {
+        lruTime = t;
+        lruKey = k;
+      }
+    }
+    if (lruKey !== undefined) {
+      tokenCache.delete(lruKey);
+      tokenLastAccess.delete(lruKey);
+    }
   }
 
   tokenCache.set(key, { token, expiresAt: now + ttl });
+  tokenLastAccess.set(key, Date.now());
   return token;
 }
 
@@ -448,6 +488,7 @@ export async function getOrCreateArcToken(
  */
 export function clearTokenCache(): void {
   tokenCache.clear();
+  tokenLastAccess.clear();
   _lastEvictionMs = 0; // reset debounce so the next auto-sweep fires immediately
 }
 
@@ -465,7 +506,10 @@ function maybeSweepExpiredTokens(): void {
   _lastEvictionMs = nowMs;
   const now = Math.floor(nowMs / 1000);
   for (const [key, entry] of tokenCache) {
-    if (entry.expiresAt <= now) tokenCache.delete(key);
+    if (entry.expiresAt <= now) {
+      tokenCache.delete(key);
+      tokenLastAccess.delete(key);
+    }
   }
 }
 
@@ -478,7 +522,10 @@ export function evictExpiredTokens(): void {
   _lastEvictionMs = Date.now();
   const now = Math.floor(Date.now() / 1000);
   for (const [key, entry] of tokenCache) {
-    if (entry.expiresAt <= now) tokenCache.delete(key);
+    if (entry.expiresAt <= now) {
+      tokenCache.delete(key);
+      tokenLastAccess.delete(key);
+    }
   }
 }
 

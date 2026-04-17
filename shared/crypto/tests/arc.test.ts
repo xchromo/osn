@@ -767,4 +767,64 @@ describe("publicKeyCache LRU eviction", () => {
     await seedAndResolve(layer, "svc-5", "key-5");
     expect(publicKeyCacheSize()).toBe(3);
   });
+
+  // T-S1: a scope-denied cache hit must NOT promote the entry to MRU
+  it("scope-failure hit does not update lastAccess — entry still gets evicted (T-S1)", async () => {
+    const layer = createTestLayer();
+    const run = <A>(eff: Effect.Effect<A, unknown, Db>) =>
+      Effect.runPromise(eff.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
+
+    // Fill cache: A (oldest), B, C — A's lastAccess is the earliest
+    await seedAndResolve(layer, "ts1-svc-a", "ts1-key-a");
+    await seedAndResolve(layer, "ts1-svc-b", "ts1-key-b");
+    await seedAndResolve(layer, "ts1-svc-c", "ts1-key-c");
+    expect(publicKeyCacheSize()).toBe(3);
+
+    // Delete A from DB so we can detect eviction (cache miss → DB miss → error)
+    await run(
+      Effect.gen(function* () {
+        const { db } = yield* Db;
+        yield* Effect.tryPromise({
+          try: () => db.delete(serviceAccountKeys).where(eq(serviceAccountKeys.keyId, "ts1-key-a")),
+          catch: (e) => e,
+        });
+      }),
+    );
+
+    // Scope-denied hit on A — "graph:write" not in allowedScopes ("graph:read")
+    // This should NOT update lastAccess for A; A remains the LRU candidate
+    await run(
+      Effect.gen(function* () {
+        const err = yield* Effect.flip(resolvePublicKey("ts1-key-a", "ts1-svc-a", ["graph:write"]));
+        expect(err._tag).toBe("ArcTokenError");
+      }),
+    );
+
+    // Insert D → eviction must pick A (lowest lastAccess), not B or C
+    await seedAndResolve(layer, "ts1-svc-d", "ts1-key-d");
+    expect(publicKeyCacheSize()).toBe(3);
+
+    // A evicted and not in DB → fails; B, C, D survive
+    const resA = await Effect.runPromise(
+      Effect.either(resolvePublicKey("ts1-key-a", "ts1-svc-a")).pipe(Effect.provide(layer)),
+    );
+    const resB = await Effect.runPromise(
+      Effect.either(resolvePublicKey("ts1-key-b", "ts1-svc-b")).pipe(Effect.provide(layer)),
+    );
+    expect(resA._tag).toBe("Left"); // A was evicted and deleted from DB
+    expect(resB._tag).toBe("Right"); // B survived — was not LRU
+  });
+
+  // T-S2: cap=1 boundary — only one entry fits at a time
+  it("cap=1: second entry evicts first, size stays 1 (T-S2)", async () => {
+    clearPublicKeyCache();
+    _setPublicKeyCacheMaxSizeForTest(1);
+
+    const layer = createTestLayer();
+    await seedAndResolve(layer, "t2-svc-a", "t2-key-a");
+    expect(publicKeyCacheSize()).toBe(1);
+
+    await seedAndResolve(layer, "t2-svc-b", "t2-key-b");
+    expect(publicKeyCacheSize()).toBe(1);
+  });
 });
