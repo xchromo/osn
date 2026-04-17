@@ -37,9 +37,11 @@ export function createOriginGuard(config: OriginGuardConfig) {
     // Skip for non-state-changing methods (GET, HEAD, OPTIONS)
     if (!STATE_CHANGING_METHODS.has(request.method)) return;
 
-    // Skip for S2S endpoints — they use ARC tokens, not cookies
-    const url = new URL(request.url);
-    if (S2S_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return;
+    // Skip for S2S endpoints — they use ARC tokens, not cookies.
+    // P-W1: extract pathname without full URL parse to avoid per-request allocation.
+    const pathStart = request.url.indexOf("/", request.url.indexOf("//") + 2);
+    const path = pathStart >= 0 ? request.url.slice(pathStart) : request.url;
+    if (S2S_PREFIXES.some((prefix) => path.startsWith(prefix))) return;
 
     // In dev mode (no allowlist configured), skip validation
     if (config.allowedOrigins.size === 0) return;
