@@ -73,10 +73,10 @@ Monorepo organised by domain. Four directories, four prefixes — see `[[wiki/ar
 
 | Dir | Prefix | What lives here |
 |-----|--------|-----------------|
-| `osn/` | `@osn/*` | Identity stack (auth, graph, organisations, recommendations, SDK, crypto, landing, social app) |
+| `osn/` | `@osn/*` | Identity stack (auth, graph, organisations, recommendations, SDK, landing, social app) — crypto moved to `@shared/crypto` |
 | `pulse/` | `@pulse/*` | Events stack (app, API, DB) |
 | `zap/` | `@zap/*` | Messaging stack (API on port 3002, DB) |
-| `shared/` | `@shared/*` | Cross-cutting utilities |
+| `shared/` | `@shared/*` | Cross-cutting utilities (`@shared/crypto` for ARC tokens, `@shared/observability`, `@shared/rate-limit`) |
 
 ## Tech (one-liner)
 
@@ -84,7 +84,7 @@ Bun, TypeScript, Elysia, Effect.ts (trial), Drizzle, SQLite→Supabase, Eden+RES
 
 ## Key Patterns (summaries)
 
-**ARC Tokens** — S2S auth via self-issued ES256 JWTs. Lives in `@osn/crypto/arc`. See `[[wiki/systems/arc-tokens]]`.
+**ARC Tokens** — S2S auth via self-issued ES256 JWTs. Lives in `@shared/crypto`. See `[[wiki/systems/arc-tokens]]`.
 
 **Observability** — OpenTelemetry end-to-end, shipped to Grafana Cloud. Three golden rules: no `console.*`, no raw OTel constructors, no unbounded metric attributes. See `[[wiki/observability/overview]]`.
 
@@ -133,7 +133,7 @@ bun run check            # Type-check all packages (turbo)
 # Testing
 bun run test                          # run all tests (turbo, skips packages without test script)
 bun run --cwd pulse/api test:run          # run Pulse events API tests once
-bun run --cwd osn/core test:run           # run OSN core auth tests once
+bun run --cwd osn/api test:run            # run OSN API (auth + graph) tests once
 bun run --cwd osn/client test:run         # run OSN client SDK tests once
 bun run --cwd osn/ui test:run             # run shared auth component tests once
 bun run --cwd pulse/db test:run           # run Pulse DB schema tests once
