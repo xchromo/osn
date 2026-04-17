@@ -58,6 +58,26 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 | Check security or perf findings | `wiki/TODO.md` (Security Backlog / Performance Backlog sections) |
 | Track progress and priorities | `wiki/TODO.md` |
 
+### Searching the wiki
+
+Always check for the Obsidian CLI before falling back to grep:
+
+```bash
+# 1. Check availability
+which obs 2>/dev/null && OBS=obs || OBS=""
+
+# 2a. If available — use obs for semantic search
+$OBS search "arc tokens"          # full-text search across vault
+$OBS list --tag systems           # list pages by tag
+$OBS open "wiki/systems/arc-tokens"
+
+# 2b. Fallback — grep over markdown files
+grep -r "arc token" wiki/ --include="*.md" -l          # find pages
+grep -r "arc token" wiki/ --include="*.md" -n          # with line numbers
+```
+
+Install: `bun add -g obs` (or `npm i -g obs`). Once installed, `obs` reads the vault root automatically when run from the repo root.
+
 ### Wiki maintenance rules
 
 - **When you add a new system or pattern**, create a wiki page and link it from the table above and from `[[wiki/index]]`.
