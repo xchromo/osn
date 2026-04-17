@@ -3,11 +3,14 @@ import { serviceAccounts, serviceAccountKeys } from "@osn/db";
 import { Db } from "@osn/db/service";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import {
   generateArcKeyPair,
   exportKeyToJwk,
+  publicKeyCacheSize,
+  _setPublicKeyCacheMaxSizeForTest,
+  _resetPublicKeyCacheMaxSize,
   importKeyFromJwk,
   createArcToken,
   verifyArcToken,
@@ -640,4 +643,124 @@ describe("resolvePublicKey", () => {
       expect(error.message).toContain("Unknown or invalid key");
     }).pipe(Effect.provide(createTestLayer())),
   );
+});
+
+// ---------------------------------------------------------------------------
+// P-W25: publicKeyCache LRU eviction
+// ---------------------------------------------------------------------------
+
+describe("publicKeyCache LRU eviction", () => {
+  /** Insert a service account + key into the DB and resolve its public key (warm the cache). */
+  async function seedAndResolve(
+    layer: ReturnType<typeof createTestLayer>,
+    serviceId: string,
+    keyId: string,
+  ): Promise<CryptoKey> {
+    const run = <A>(eff: Effect.Effect<A, unknown, Db>) =>
+      Effect.runPromise(eff.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
+
+    const kp = await generateArcKeyPair();
+    const jwk = await exportKeyToJwk(kp.publicKey);
+    const now = new Date();
+
+    await run(
+      Effect.gen(function* () {
+        const { db } = yield* Db;
+        yield* Effect.tryPromise({
+          try: () =>
+            db.insert(serviceAccounts).values({
+              serviceId,
+              allowedScopes: "graph:read",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          catch: (e) => e,
+        });
+        yield* Effect.tryPromise({
+          try: () =>
+            db.insert(serviceAccountKeys).values({
+              keyId,
+              serviceId,
+              publicKeyJwk: jwk,
+              registeredAt: now,
+              expiresAt: null,
+              revokedAt: null,
+            }),
+          catch: (e) => e,
+        });
+      }),
+    );
+
+    return run(resolvePublicKey(keyId, serviceId));
+  }
+
+  beforeEach(() => {
+    clearPublicKeyCache();
+    _setPublicKeyCacheMaxSizeForTest(3);
+  });
+
+  afterEach(() => {
+    clearPublicKeyCache();
+    _resetPublicKeyCacheMaxSize();
+  });
+
+  it("evicts the least-recently-used entry, not the first-inserted one", async () => {
+    const layer = createTestLayer();
+    const run = <A>(eff: Effect.Effect<A, unknown, Db>) =>
+      Effect.runPromise(eff.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
+
+    // Fill cache to max (3): A, B, C inserted in order → A is oldest/LRU
+    await seedAndResolve(layer, "svc-a", "key-a");
+    await seedAndResolve(layer, "svc-b", "key-b");
+    await seedAndResolve(layer, "svc-c", "key-c");
+    expect(publicKeyCacheSize()).toBe(3);
+
+    // Delete B from the DB so it cannot be re-resolved after cache eviction.
+    // This lets us distinguish "evicted and gone" from "evicted but re-fetched from DB".
+    await run(
+      Effect.gen(function* () {
+        const { db } = yield* Db;
+        yield* Effect.tryPromise({
+          try: () => db.delete(serviceAccountKeys).where(eq(serviceAccountKeys.keyId, "key-b")),
+          catch: (e) => e,
+        });
+      }),
+    );
+
+    // Touch A — makes A the MRU; B is now the LRU
+    await run(resolvePublicKey("key-a", "svc-a"));
+
+    // Insert D — should evict B (LRU), not A (recently touched)
+    await seedAndResolve(layer, "svc-d", "key-d");
+    expect(publicKeyCacheSize()).toBe(3);
+
+    // A, C, D remain in cache; B was the LRU and is now gone from both cache and DB
+    const [resA, resB, resC, resD] = await Promise.all([
+      Effect.runPromise(
+        Effect.either(resolvePublicKey("key-a", "svc-a")).pipe(Effect.provide(layer)),
+      ),
+      Effect.runPromise(
+        Effect.either(resolvePublicKey("key-b", "svc-b")).pipe(Effect.provide(layer)),
+      ),
+      Effect.runPromise(
+        Effect.either(resolvePublicKey("key-c", "svc-c")).pipe(Effect.provide(layer)),
+      ),
+      Effect.runPromise(
+        Effect.either(resolvePublicKey("key-d", "svc-d")).pipe(Effect.provide(layer)),
+      ),
+    ]);
+
+    expect(resA._tag).toBe("Right"); // A survived (was touched → MRU)
+    expect(resB._tag).toBe("Left"); // B evicted (was LRU) and deleted from DB
+    expect(resC._tag).toBe("Right"); // C survived
+    expect(resD._tag).toBe("Right"); // D just inserted
+  });
+
+  it("cache size stays bounded at the configured max", async () => {
+    const layer = createTestLayer();
+    for (let i = 0; i < 6; i++) {
+      await seedAndResolve(layer, `svc-${i}`, `key-${i}`);
+    }
+    expect(publicKeyCacheSize()).toBe(3);
+  });
 });

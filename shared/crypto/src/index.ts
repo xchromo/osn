@@ -16,6 +16,9 @@ export {
   resolvePublicKey,
   clearPublicKeyCache,
   evictPublicKeyCacheEntry,
+  publicKeyCacheSize,
+  _setPublicKeyCacheMaxSizeForTest,
+  _resetPublicKeyCacheMaxSize,
   // Token cache
   getOrCreateArcToken,
   clearTokenCache,

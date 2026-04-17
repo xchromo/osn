@@ -242,6 +242,9 @@ const publicKeyCache = new Map<
 >();
 const PUBLIC_KEY_CACHE_TTL_SECONDS = 300; // 5 min
 
+// Mutable cap — overrideable in tests via _setPublicKeyCacheMaxSizeForTest.
+let _publicKeyCacheMaxSize = MAX_CACHE_SIZE;
+
 /**
  * Resolves a service's public key from the `service_account_keys` table by `kid`.
  * Also validates that `serviceId == issuer` and the token's scopes are within
@@ -275,6 +278,10 @@ export const resolvePublicKey = (
           }
         }
       }
+      // LRU touch: re-insert at the end of the Map so this entry is the
+      // most-recently-used and survives the next eviction sweep (P-W25).
+      publicKeyCache.delete(kid);
+      publicKeyCache.set(kid, cached);
       metricArcPublicKeyCacheHit(issuer);
       return cached.key;
     }
@@ -339,10 +346,11 @@ export const resolvePublicKey = (
     });
 
     // Cache the resolved CryptoKey with its allowedScopes for scope validation on future hits.
-    // Enforce size cap — evict the oldest entry when full (P-W100).
-    if (publicKeyCache.size >= MAX_CACHE_SIZE) {
-      const oldest = publicKeyCache.keys().next().value;
-      if (oldest !== undefined) publicKeyCache.delete(oldest);
+    // LRU eviction: the Map preserves insertion/access order; deleting the first
+    // key removes the least-recently-used entry (P-W25).
+    if (publicKeyCache.size >= _publicKeyCacheMaxSize) {
+      const lru = publicKeyCache.keys().next().value;
+      if (lru !== undefined) publicKeyCache.delete(lru);
     }
     publicKeyCache.set(kid, { key, allowedScopes, expiresAt: now + PUBLIC_KEY_CACHE_TTL_SECONDS });
 
@@ -363,6 +371,24 @@ export function clearPublicKeyCache(): void {
  */
 export function evictPublicKeyCacheEntry(kid: string): void {
   publicKeyCache.delete(kid);
+}
+
+/** Returns the current public key cache size. Useful for testing. */
+export function publicKeyCacheSize(): number {
+  return publicKeyCache.size;
+}
+
+/**
+ * Overrides the public key cache max size. **Tests only** — restores to
+ * MAX_CACHE_SIZE in the same afterEach that calls clearPublicKeyCache().
+ */
+export function _setPublicKeyCacheMaxSizeForTest(n: number): void {
+  _publicKeyCacheMaxSize = n;
+}
+
+/** Resets the public key cache max size to the production default. */
+export function _resetPublicKeyCacheMaxSize(): void {
+  _publicKeyCacheMaxSize = MAX_CACHE_SIZE;
 }
 
 // ---------------------------------------------------------------------------
