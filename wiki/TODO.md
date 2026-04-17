@@ -211,6 +211,8 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-M6 (zap) — Truncated UUIDs (12 hex chars = 48 bits)
 - [x] S-L1 (multi) — `maxProfiles` column set to 5 but never enforced. **Fixed in P3** — `createProfile` checks count vs `accounts.maxProfiles`
 - [x] S-L2 (multi) — Email duplication between `accounts.email` and `users.email`. **Resolved** — `users` table has no `email` column; all email access via JOIN to `accounts`
+- [ ] S-H1 (session) — In-memory `rotatedSessions` map does not survive restarts or scale across instances. Move to Redis when multi-replica deploys — see [[identity-model]]
+- [ ] S-M2 (auth) — `resolveAccessTokenPrincipal` and `resolveAccountId` duplicated across `routes/auth.ts` and `routes/profile.ts`. Extract shared Elysia derive — see [[identity-model]]
 - [ ] S-H1 (org) — `listMembers` service returns full profile rows; route projects, but service should restrict
 - [ ] S-M1 (org) — `GET /organisations/:handle/members` has no membership gate
 - [ ] S-M3 (org) — `getOrganisation` returns `ownerId` internal ID
@@ -266,6 +268,8 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [x] P-W100 — `publicKeyCache` unbounded under key rotation churn. **Fixed** — `MAX_CACHE_SIZE` cap with oldest-entry eviction on write — see [[arc-tokens]]
 - [x] P-W101 — `peekClaims` decoded payload before checking header validity. **Fixed** — header decoded first; payload decode gated on `kid` present — see [[arc-tokens]]
 - [x] P-W102 — `evictExpiredTokens` O(n) scan on every `getOrCreateArcToken` call. **Fixed** — internal debounced sweep (`maybeSweepExpiredTokens`) runs at most once per 30 s; public `evictExpiredTokens` still sweeps immediately — see [[arc-tokens]]
+- [ ] P-W1 (session) — `trackRotatedSession` sweeps in-memory Map O(n) on every refresh. Decouple via periodic `setInterval` or move to Redis TTL keys — see [[identity-model]]
+- [ ] P-W2 (session) — S-H1 migration adds extra `findProfileById` DB round-trip on every profile endpoint. Embed `accountId` in access token or add profileId→accountId cache — see [[identity-model]]
 - [ ] P-W3 — `sendConnectionRequest` two sequential independent DB reads — use `Effect.all` with `concurrency: "unbounded"`
 - [ ] P-W3 (jwks) — `extractClaims` in pulse/api serialises JWKS resolve before DB I/O on read-only routes — parallelise with `Promise.all` for anonymous-capable endpoints — see [[arc-tokens]]
 - [ ] P-W4 — Auth Maps (`otpStore`, `magicStore`, `pkceStore`) never evict expired entries — see [[redis]]
