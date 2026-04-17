@@ -209,14 +209,12 @@ describe("startKeyRotation", () => {
   });
 
   it("makes a POST to /graph/internal/register-service with correct shape", async () => {
-    const spy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
 
     await startKeyRotation();
 
