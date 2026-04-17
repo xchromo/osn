@@ -566,15 +566,23 @@ describe("internal graph routes (ARC-protected)", () => {
 
   describe("POST /graph/internal/register-service", () => {
     const SECRET = "test-internal-secret";
-    const validBody = {
-      serviceId: "zap-api",
-      keyId: "key-reg-1",
-      publicKeyJwk: '{"kty":"EC","crv":"P-256","x":"a","y":"b"}',
-      allowedScopes: "graph:read",
+    let validBody: {
+      serviceId: string;
+      keyId: string;
+      publicKeyJwk: string;
+      allowedScopes: string;
     };
 
-    beforeEach(() => {
+    beforeEach(async () => {
       process.env.INTERNAL_SERVICE_SECRET = SECRET;
+      // S-M1 requires a genuinely importable JWK — generate a real key pair.
+      const kp = await generateArcKeyPair();
+      validBody = {
+        serviceId: "zap-api",
+        keyId: "key-reg-1",
+        publicKeyJwk: await exportKeyToJwk(kp.publicKey),
+        allowedScopes: "graph:read",
+      };
     });
 
     afterEach(() => {

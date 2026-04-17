@@ -1,6 +1,6 @@
 import type { Db } from "@osn/db/service";
 import { verifyArcToken, resolvePublicKey, type ArcTokenPayload } from "@shared/crypto";
-import { Effect, type Layer } from "effect";
+import type { Effect } from "effect";
 
 /**
  * Verified ARC caller claims attached to the request context after
@@ -79,14 +79,14 @@ function peekClaims(token: string): { kid: string; iss: string; scopes: string[]
  *
  * @param authorization - The raw Authorization header value
  * @param set - Elysia's response status setter
- * @param dbLayer - The Effect Layer providing the Db service
+ * @param run - Effect runner bound to the request's Db layer
  * @param expectedAudience - The service ID this token must be addressed to (e.g. "osn-api")
  * @param requiredScope - The scope the token must include (e.g. "graph:read")
  */
 export async function requireArc(
   authorization: string | undefined,
   set: { status?: number | string },
-  dbLayer: Layer.Layer<Db>,
+  run: <A>(eff: Effect.Effect<A, unknown, Db>) => Promise<A>,
   expectedAudience: string,
   requiredScope: string,
 ): Promise<ArcCaller | null> {
@@ -109,9 +109,7 @@ export async function requireArc(
     // base64 payload, verifyArcToken below will reject the signature —
     // so the DB scope check here is a fail-fast optimisation, not the
     // sole gate. The cryptographic verification below is authoritative.
-    const publicKey = await Effect.runPromise(
-      resolvePublicKey(peeked.kid, peeked.iss, peeked.scopes).pipe(Effect.provide(dbLayer)),
-    );
+    const publicKey = await run(resolvePublicKey(peeked.kid, peeked.iss, peeked.scopes));
 
     // Verify signature, audience, expiry, and required scope (authoritative).
     const payload: ArcTokenPayload = await verifyArcToken(

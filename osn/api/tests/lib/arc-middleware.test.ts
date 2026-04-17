@@ -1,4 +1,6 @@
+import type { Db } from "@osn/db/service";
 import { clearPublicKeyCache } from "@shared/crypto";
+import { Effect } from "effect";
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { requireArc } from "../../src/lib/arc-middleware";
@@ -14,6 +16,8 @@ import { createTestLayer } from "../helpers/db";
 // ---------------------------------------------------------------------------
 
 const dbLayer = createTestLayer();
+const run = <A>(eff: Effect.Effect<A, unknown, Db>) =>
+  Effect.runPromise(eff.pipe(Effect.provide(dbLayer)) as Effect.Effect<A, never, never>);
 
 function makeSet(): { status?: number | string } {
   return {};
@@ -31,21 +35,21 @@ beforeEach(() => {
 describe("requireArc — missing / non-ARC authorization", () => {
   it("returns null + 401 when Authorization header is missing", async () => {
     const set = makeSet();
-    const result = await requireArc(undefined, set, dbLayer, "osn-api", "graph:read");
+    const result = await requireArc(undefined, set, run, "osn-api", "graph:read");
     expect(result).toBeNull();
     expect(set.status).toBe(401);
   });
 
   it("returns null + 401 for Bearer scheme (not ARC)", async () => {
     const set = makeSet();
-    const result = await requireArc("Bearer some-jwt", set, dbLayer, "osn-api", "graph:read");
+    const result = await requireArc("Bearer some-jwt", set, run, "osn-api", "graph:read");
     expect(result).toBeNull();
     expect(set.status).toBe(401);
   });
 
   it("returns null + 401 for empty string", async () => {
     const set = makeSet();
-    const result = await requireArc("", set, dbLayer, "osn-api", "graph:read");
+    const result = await requireArc("", set, run, "osn-api", "graph:read");
     expect(result).toBeNull();
     expect(set.status).toBe(401);
   });
@@ -54,7 +58,7 @@ describe("requireArc — missing / non-ARC authorization", () => {
 describe("requireArc — malformed ARC token structure", () => {
   it("returns null + 401 for a token with only two segments", async () => {
     const set = makeSet();
-    const result = await requireArc("ARC header.payload", set, dbLayer, "osn-api", "graph:read");
+    const result = await requireArc("ARC header.payload", set, run, "osn-api", "graph:read");
     expect(result).toBeNull();
     expect(set.status).toBe(401);
   });
@@ -65,7 +69,7 @@ describe("requireArc — malformed ARC token structure", () => {
     const result = await requireArc(
       "ARC bm90anNvbg.payload.sig",
       set,
-      dbLayer,
+      run,
       "osn-api",
       "graph:read",
     );
@@ -80,7 +84,7 @@ describe("requireArc — malformed ARC token structure", () => {
     const result = await requireArc(
       `ARC ${header}.${payload}.fakesig`,
       set,
-      dbLayer,
+      run,
       "osn-api",
       "graph:read",
     );
@@ -95,7 +99,7 @@ describe("requireArc — malformed ARC token structure", () => {
     const result = await requireArc(
       `ARC ${header}.${payload}.fakesig`,
       set,
-      dbLayer,
+      run,
       "osn-api",
       "graph:read",
     );
@@ -112,7 +116,7 @@ describe("requireArc — valid structure but unregistered service", () => {
     const result = await requireArc(
       `ARC ${header}.${payload}.fakesig`,
       set,
-      dbLayer,
+      run,
       "osn-api",
       "graph:read",
     );

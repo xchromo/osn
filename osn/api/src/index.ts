@@ -23,6 +23,11 @@ import { createRecommendationRoutes } from "./routes/recommendations";
 const SERVICE_NAME = "osn-api";
 const port = Number(process.env.PORT) || 4000;
 
+// S-L2: Fail at startup in production when the JWT signing secret is not set.
+if (process.env.NODE_ENV === "production" && !process.env.OSN_JWT_SECRET) {
+  throw new Error("OSN_JWT_SECRET must be set in production");
+}
+
 // Initialise observability (logger, tracing, metrics) before building the app.
 const { layer: observabilityLayer } = initObservability({ serviceName: SERVICE_NAME });
 
@@ -56,8 +61,14 @@ const orgRateLimiter = createRedisOrgRateLimiter(redisClient);
 const profileRateLimiters = createRedisProfileRateLimiters(redisClient);
 const recommendationRateLimiter = createRedisRecommendationRateLimiter(redisClient);
 
+// S-L1: Restrict CORS to the known app origin instead of the open wildcard.
+// OSN_CORS_ORIGIN may be a comma-separated list for multi-origin setups.
+const corsOrigins = process.env.OSN_CORS_ORIGIN
+  ? process.env.OSN_CORS_ORIGIN.split(",").map((o) => o.trim())
+  : authConfig.origin;
+
 const app = new Elysia()
-  .use(cors())
+  .use(cors({ origin: corsOrigins }))
   .use(observabilityPlugin({ serviceName: SERVICE_NAME }))
   .use(healthRoutes({ serviceName: SERVICE_NAME }))
   .get("/", () => ({ status: "ok", service: "osn-auth" }))
