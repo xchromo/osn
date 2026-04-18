@@ -1894,7 +1894,7 @@ export function createAuthService(config: AuthConfig) {
 
   const generateRecoveryCodesForAccount = (
     accountId: string,
-  ): Effect.Effect<{ codes: string[] }, DatabaseError, Db> =>
+  ): Effect.Effect<{ recoveryCodes: string[] }, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const codes = cryptoGenerateRecoveryCodes(RECOVERY_CODE_COUNT);
@@ -1917,7 +1917,13 @@ export function createAuthService(config: AuthConfig) {
       });
 
       metricRecoveryCodesGenerated();
-      return { codes };
+      // S-L3 (symmetric): regenerating the set is a security-relevant event
+      // worth surfacing on the session-invalidation dashboard. It doesn't
+      // revoke sessions itself, but it does invalidate the previous code set
+      // — an out-of-band regen (XSS-triggered, S-M1) is exactly the pattern
+      // we want to notice.
+      metricSessionSecurityInvalidation("recovery_code_generate");
+      return { recoveryCodes: codes };
     }).pipe(withAuthRecovery("generate"));
 
   /**
@@ -1928,6 +1934,11 @@ export function createAuthService(config: AuthConfig) {
    * Always fails with the same generic AuthError on unknown identifier,
    * unknown/used code, or expired lookups — does not distinguish between
    * "wrong identifier" and "wrong code" over the wire.
+   *
+   * S-M2: both branches (unknown identifier vs known identifier + wrong code)
+   * execute the same work — identifier lookup, a `hashRecoveryCode` call, and
+   * an indexed SELECT against `recovery_codes` — so wall-clock latency does
+   * not reveal whether the identifier exists.
    */
   const consumeRecoveryCode = (
     identifier: string,
@@ -1936,13 +1947,34 @@ export function createAuthService(config: AuthConfig) {
     Effect.gen(function* () {
       const normalised = normaliseIdentifier(identifier);
       const profile = yield* resolveIdentifier(normalised);
+      const { db } = yield* Db;
+
+      // Compute the hash up front regardless of profile existence so both
+      // branches pay the same SHA-256 cost (S-M2).
+      const codeHash = hashRecoveryCode(code);
+
       if (!profile) {
+        // Equalise DB work on the unknown-identifier branch with a same-shape
+        // no-op lookup (predicate can never match since the accountId is an
+        // impossible sentinel). Indexed by `recovery_codes_account_idx`.
+        yield* Effect.tryPromise({
+          try: () =>
+            db
+              .select()
+              .from(recoveryCodes)
+              .where(
+                and(
+                  eq(recoveryCodes.accountId, "__nonexistent__"),
+                  eq(recoveryCodes.codeHash, codeHash),
+                ),
+              )
+              .limit(1),
+          catch: (cause) => new DatabaseError({ cause }),
+        });
         metricRecoveryCodeConsumed("invalid");
         return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
       }
 
-      const codeHash = hashRecoveryCode(code);
-      const { db } = yield* Db;
       const result = yield* Effect.tryPromise({
         try: () =>
           db
@@ -1984,6 +2016,9 @@ export function createAuthService(config: AuthConfig) {
       });
 
       metricRecoveryCodeConsumed("success");
+      // S-L3: whole-account session wipe is a security-relevant event — emit
+      // the canonical invalidation metric so the existing dashboard covers it.
+      metricSessionSecurityInvalidation("recovery_code_consume");
       return { profile };
     }).pipe(withAuthRecovery("consume"));
 

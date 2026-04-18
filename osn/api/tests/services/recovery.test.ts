@@ -25,7 +25,9 @@ describe("generateRecoveryCodesForAccount", () => {
   it.effect("returns a fresh 10-code batch, format xxxx-xxxx-xxxx-xxxx", () =>
     Effect.gen(function* () {
       const profile = yield* registered("alice@example.com", "alice");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
       expect(codes).toHaveLength(10);
       for (const c of codes) {
         expect(c).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
@@ -48,12 +50,12 @@ describe("generateRecoveryCodesForAccount", () => {
 
       // An old code from `first` should no longer consume.
       const result = yield* Effect.flip(
-        auth.consumeRecoveryCode("bob@example.com", first.codes[0]!),
+        auth.consumeRecoveryCode("bob@example.com", first.recoveryCodes[0]!),
       );
       expect(result._tag).toBe("AuthError");
 
       // A code from the new set works.
-      yield* auth.consumeRecoveryCode("bob@example.com", second.codes[0]!);
+      yield* auth.consumeRecoveryCode("bob@example.com", second.recoveryCodes[0]!);
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
@@ -62,7 +64,9 @@ describe("consumeRecoveryCode", () => {
   it.effect("succeeds on first use and returns the right profile", () =>
     Effect.gen(function* () {
       const profile = yield* registered("carol@example.com", "carol");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
       const { profile: consumed } = yield* auth.consumeRecoveryCode("carol@example.com", codes[0]!);
       expect(consumed.id).toBe(profile.id);
     }).pipe(Effect.provide(createTestLayer())),
@@ -71,7 +75,9 @@ describe("consumeRecoveryCode", () => {
   it.effect("reusing the same code fails (single-use)", () =>
     Effect.gen(function* () {
       const profile = yield* registered("dan@example.com", "dan");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
       yield* auth.consumeRecoveryCode("dan@example.com", codes[0]!);
       const err = yield* Effect.flip(auth.consumeRecoveryCode("dan@example.com", codes[0]!));
       expect(err._tag).toBe("AuthError");
@@ -81,7 +87,9 @@ describe("consumeRecoveryCode", () => {
   it.effect("accepts identifier as handle", () =>
     Effect.gen(function* () {
       const profile = yield* registered("eve@example.com", "eve");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
       yield* auth.consumeRecoveryCode("eve", codes[0]!);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -93,6 +101,27 @@ describe("consumeRecoveryCode", () => {
       );
       expect(err._tag).toBe("AuthError");
       expect(err.message).toBe("Invalid request");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // S-M2: known vs unknown identifier should present the same error AND
+  // execute the same set of DB + hash work, so the caller can't distinguish
+  // "identifier doesn't exist" from "code is wrong" via timing.
+  it.effect("unknown identifier and wrong-code return the same generic error", () =>
+    Effect.gen(function* () {
+      const profile = yield* registered("same-error@example.com", "sameerr");
+      yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+
+      const unknown = yield* Effect.flip(
+        auth.consumeRecoveryCode("nobody@example.com", "abcd-1234-5678-ef00"),
+      );
+      const wrong = yield* Effect.flip(
+        auth.consumeRecoveryCode("same-error@example.com", "abcd-1234-5678-ef00"),
+      );
+
+      expect(unknown._tag).toBe("AuthError");
+      expect(wrong._tag).toBe("AuthError");
+      expect(unknown.message).toBe(wrong.message);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -111,7 +140,9 @@ describe("consumeRecoveryCode", () => {
   it.effect("revokes all existing sessions on successful consume", () =>
     Effect.gen(function* () {
       const profile = yield* registered("gus@example.com", "gus");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
 
       // Seed two active sessions for the account.
       const first = yield* auth.issueTokens(
@@ -145,7 +176,9 @@ describe("completeRecoveryLogin", () => {
   it.effect("returns a fresh session + PublicProfile", () =>
     Effect.gen(function* () {
       const profile = yield* registered("hank@example.com", "hank");
-      const { codes } = yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      const { recoveryCodes: codes } = yield* auth.generateRecoveryCodesForAccount(
+        profile.accountId,
+      );
       const result = yield* auth.completeRecoveryLogin("hank@example.com", codes[0]!);
       expect(result.profile.id).toBe(profile.id);
       expect(result.session.accessToken).toMatch(/^eyJ/);

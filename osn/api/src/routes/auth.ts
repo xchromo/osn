@@ -80,8 +80,10 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     profileSwitch: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     profileList: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     // Recovery generation is authenticated + deliberate — a user should only
-    // trigger it occasionally. Tight cap bounds abuse of the metric signal.
-    recoveryGenerate: createRateLimiter({ maxRequests: 3, windowMs: 3_600_000 }),
+    // trigger it once per day. Tight cap is the stop-gap for S-M1 (bearer
+    // access token alone is a weaker authenticator than the ceremony that
+    // originally issued the codes; full step-up auth is tracked as M-PK).
+    recoveryGenerate: createRateLimiter({ maxRequests: 1, windowMs: 86_400_000 }),
     // Recovery login is an IP-side limit; the underlying DB hash comparison
     // is already constant-time, but per-IP throttling curbs online brute
     // force across different account identifiers.
@@ -1057,7 +1059,9 @@ export function createAuthRoutes(
             return { error: "unauthorized" };
           }
           const result = await run(auth.generateRecoveryCodesForAccount(profile.accountId));
-          return { codes: result.codes };
+          // S-L2: wire field is `recoveryCodes` (not `codes`) so the
+          // redaction deny-list entry actually matches in logs.
+          return { recoveryCodes: result.recoveryCodes };
         } catch (e) {
           const { status, body: errBody } = handleError(e);
           set.status = status;

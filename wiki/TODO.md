@@ -253,6 +253,10 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L3 (org) — TOCTOU gap in handle uniqueness check
 - [ ] S-L1 (social) — Access tokens in `localStorage` via `StorageLive` — XSS = token exfiltration. Inherited from `@osn/client`; revisit alongside S-M20 by moving to HttpOnly cookie BFF or `sessionStorage` with tight TTL — see [[identity-model]]
 - [ ] S-L4 (recs) — `mutualCount` discloses graph-inference signal; adversary with many test accounts can combine counts to deduce third-party connection sets. Consider bucketing (e.g. "10+") above a threshold — see [[social-graph]]
+- [ ] S-L1 (auth-fetch) — `OsnAuthService.authFetch` attaches `Authorization: Bearer` + `credentials: include` to any URL; no origin allowlist. Add `allowedOrigins` to `OsnAuthConfig` and skip header attachment off-list (defence-in-depth against mis-routed fetches / injected URLs) — see [[identity-model]]
+
+### Recovery / passkey-primary (Phase 5 prerequisites)
+- [ ] M-PK1 — Step-up auth for `POST /recovery/generate` (S-M1 full fix). Bearer access token alone is a weaker authenticator than the ceremony that minted the codes; an XSS-stolen token currently can still mint a new set (mitigated by 1/day rate limit + `recovery_code_generate` invalidation metric, not closed). Add a short-lived step-up token issued by a fresh passkey re-assertion (mirrors the enrollment-token pattern) and require it on `/recovery/generate`. Also surface out-of-band regeneration to the user (email/in-app banner) — see [[recovery-codes]]
 
 ---
 
@@ -290,6 +294,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [x] P-W3 (org) — Sequential queries in `removeMember` and `updateOrganisation` could be parallelised. **Fixed** — `callerMember`+`targetMember` in `removeMember` and `orgRows`+`memberRows` in `updateOrganisation` now use `Effect.all({ concurrency: 2 })`. `resolveOrg`+`resolveHandle` in the three member routes now run via `Promise.all`
 - [ ] P-W6 (recs) — No caching/pagination contract on `/recommendations/connections`. Every request re-runs the FOF pipeline. Add short-lived per-caller cache (5-15 min) and/or `generated_at` timestamp so clients can detect cached responses — see [[social-graph]]
 - [ ] P-W7 (recs) — FOF aggregation in JS after capping fan-out (current). Next step: push aggregation to SQL via `SELECT candidate_id, COUNT(*) FROM (...) GROUP BY candidate_id ORDER BY count DESC LIMIT ?`. Add compound indexes `connections(status, requester_id)` + `connections(status, addressee_id)` — see [[social-graph]]
+- [ ] P-W2 (auth-ttl) — 3600s → 300s access-token TTL raises `/token` write load ~12× per session (DELETE+INSERT on `sessions` each refresh). Single-flight refresh (shipped as S-H1 fix) caps concurrent multiplication but doesn't change the baseline. Before horizontal-scale promotion: (a) watch `osn.auth.token.refresh` rate, (b) consider window-based session rotation (only rotate the refresh-token row when `now - createdAt > rotateAfterMs`) so the common case becomes "issue new access token, leave sessions row untouched" while still preserving C2 reuse detection — see [[identity-model]]
 
 ### Info
 
@@ -304,6 +309,9 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I5 — Auth Dialog components always mounted in EventList (vs conditional `<Show>`) — negligible for two forms but revisit if dialogs grow heavier
 - [ ] P-I4 — `AuthProvider` reconstructs Effect `Layer` on every render — wrap with `createMemo`
 - [ ] P-I5 — `/graph/internal/connections` and `/close-friends` no `offset` parameter — see [[arc-tokens]]
+- [ ] P-I1 (recovery) — `countActiveRecoveryCodes` SELECTs full rows then filters in JS to compute count. Bounded to ~10 rows today so impact is nil, but the helper returns secret-bearing `code_hash` values over the wire just to take a length. Replace with `SELECT SUM(CASE WHEN used_at IS NULL THEN 1 ELSE 0 END) AS active, COUNT(*) AS total FROM recovery_codes WHERE account_id = ?` — see [[recovery-codes]]
+- [ ] P-I2 (recovery) — `consumeRecoveryCode` issues SELECT + separate transaction. Collapse into a single conditional update: `UPDATE recovery_codes SET used_at = ? WHERE id = ? AND code_hash = ? AND account_id = ? AND used_at IS NULL RETURNING id` — one atomic round-trip, single-use race-free on every backend — see [[recovery-codes]]
+- [ ] P-I3 (recovery) — `generateRecoveryCodesForAccount` computes `genId()` + `hashRecoveryCode()` synchronously for the whole batch before the DB transaction. Nil impact at `RECOVERY_CODE_COUNT = 10` with SHA-256; flag only as a precondition for any future switch to a memory-hard KDF — wrap the `rows.map(...)` in `Effect.sync` so the runtime can yield — see [[recovery-codes]]
 - [ ] P-I5b — `completePasskeyLogin` calls `findProfileByEmail` redundantly — `pk.userId` already on passkey row
 - [ ] P-I10 — `beginPasskeyRegistration` fetches all passkeys without `LIMIT` — add `maxPasskeys` cap at registration time — see [[identity-model]]
 - [ ] P-I6 — Duplicate index on `users.email` — `unique()` already creates one implicitly in SQLite

@@ -262,7 +262,25 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           return toSession(account);
         });
 
-      const refreshSession = () =>
+      // -----------------------------------------------------------------------
+      // Single-flight refresh (S-H1 / P-W1).
+      //
+      // Multiple concurrent authFetch calls that all 401 must NOT each fire
+      // /token. The server rotates the session token on every grant (Copenhagen
+      // Book C2); replaying the rotated-out cookie value a second time trips
+      // reuse detection and revokes every session in the family — the user
+      // gets logged out across all devices.
+      //
+      // Store the in-flight refresh as a shared Promise<Either>. Concurrent
+      // callers join it instead of kicking off a second /token roundtrip.
+      // -----------------------------------------------------------------------
+
+      type RefreshEither =
+        | { readonly _tag: "Left"; readonly left: TokenRefreshError | StorageError }
+        | { readonly _tag: "Right"; readonly right: Session };
+      let inFlightRefresh: Promise<RefreshEither> | null = null;
+
+      const doRefresh = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
           if (!account) {
@@ -302,6 +320,31 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
 
           yield* saveAccountSession(account);
           return next;
+        });
+
+      const refreshSession = () =>
+        Effect.gen(function* () {
+          // Join the in-flight refresh if one is already running.
+          if (!inFlightRefresh) {
+            // Either-wrapped so the shared promise never rejects — survives
+            // FiberFailure wrapping from runPromise across Effect versions.
+            const promise = Effect.runPromise(Effect.either(doRefresh())) as Promise<RefreshEither>;
+            inFlightRefresh = promise;
+            // Clear the cache once the refresh settles so the next 401 burst
+            // kicks off a fresh refresh rather than replaying a stale result.
+            void promise.finally(() => {
+              if (inFlightRefresh === promise) inFlightRefresh = null;
+            });
+          }
+
+          const result = yield* Effect.tryPromise({
+            try: () => inFlightRefresh!,
+            catch: (cause) => new TokenRefreshError({ cause }),
+          });
+          if (result._tag === "Left") {
+            return yield* Effect.fail(result.left);
+          }
+          return result.right;
         });
 
       const logout = () =>

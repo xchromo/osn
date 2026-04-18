@@ -11,6 +11,7 @@ packages:
   - "@osn/client"
   - "@osn/ui"
 last-reviewed: 2026-04-18
+updated: 2026-04-18
 ---
 
 # Recovery Codes
@@ -45,9 +46,11 @@ Migration: `osn/db/drizzle/0004_add_recovery_codes.sql`.
 POST /recovery/generate
   Authorization: Bearer <access_token>
   Body: {}
-  → 200 { codes: [ "xxxx-xxxx-xxxx-xxxx", ... × 10 ] }
-  Rate limited: 3/hour/IP (recoveryGenerate)
+  → 200 { recoveryCodes: [ "xxxx-xxxx-xxxx-xxxx", ... × 10 ] }
+  Rate limited: 1/day/IP (recoveryGenerate) — stop-gap for S-M1
 ```
+
+Wire field is `recoveryCodes` (not `codes`) so the redaction deny-list entry matches (S-L2). Emits `osn.auth.session.security_invalidation{trigger="recovery_code_generate"}` on every successful generate so out-of-band regeneration is visible in the existing session-invalidation dashboard.
 
 Regenerating atomically replaces any previous set — the transaction deletes the existing rows and inserts the new ones. The previous codes become permanently invalid.
 
@@ -60,10 +63,10 @@ POST /login/recovery/complete
 
 On success the server:
 1. Marks the consumed row's `used_at` — the row is kept for audit.
-2. **Revokes every session on the account** in the same transaction. The fresh session issued by the login step is the only one standing afterwards.
+2. **Revokes every session on the account** in the same transaction. The fresh session issued by the login step is the only one standing afterwards. Emits `osn.auth.session.security_invalidation{trigger="recovery_code_consume"}`.
 3. Sets the HttpOnly session cookie (C3) and returns the access token in the body.
 
-All failure modes — unknown identifier, bad code, used code — surface as `{ error: "invalid_request" }` with no distinguishing detail, preserving the no-enumeration posture from `/login/otp`.
+All failure modes — unknown identifier, bad code, used code — surface as `{ error: "invalid_request" }` with no distinguishing detail, preserving the no-enumeration posture from `/login/otp`. Both the known-identifier + wrong-code branch and the unknown-identifier branch execute the same set of DB + SHA-256 work so latency does not disclose user existence (S-M2).
 
 ## Service layer
 

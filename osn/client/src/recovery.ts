@@ -67,11 +67,11 @@ export function createRecoveryClient(config: RecoveryClientConfig): RecoveryClie
       credentials: "include",
       body: "{}",
     });
-    const json = (await res.json()) as { codes?: string[]; error?: string };
-    if (!res.ok || !Array.isArray(json.codes)) {
+    const json = (await res.json()) as { recoveryCodes?: string[]; error?: string };
+    if (!res.ok || !Array.isArray(json.recoveryCodes)) {
       throw new RecoveryError(json.error ?? `Request failed: ${res.status}`);
     }
-    return { codes: json.codes };
+    return { codes: json.recoveryCodes };
   };
 
   const loginWithRecoveryCode = async (input: { identifier: string; code: string }) => {

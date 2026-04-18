@@ -77,6 +77,7 @@ export type JwksCacheResult = "hit" | "miss" | "refresh";
 export type SecurityInvalidationTrigger =
   | "passkey_register"
   | "email_change"
+  | "recovery_code_generate"
   | "recovery_code_consume";
 
 /** Recovery code (Copenhagen Book M2) operation steps. */

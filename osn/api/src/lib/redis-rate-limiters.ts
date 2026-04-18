@@ -46,8 +46,8 @@ export function createRedisAuthRateLimiters(client: RedisClient): AuthRateLimite
     profileList: rl("auth:profile_list", 10),
     recoveryGenerate: createRedisRateLimiter(client, {
       namespace: "auth:recovery_generate",
-      maxRequests: 3,
-      windowMs: ONE_HOUR_MS,
+      maxRequests: 1,
+      windowMs: 24 * ONE_HOUR_MS,
     }),
     recoveryComplete: createRedisRateLimiter(client, {
       namespace: "auth:recovery_complete",

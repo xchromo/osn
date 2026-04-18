@@ -69,7 +69,7 @@ describe("createRecoveryClient", () => {
 
   describe("generateRecoveryCodes", () => {
     it("POSTs /recovery/generate with Bearer auth and returns the codes", async () => {
-      const { calls } = stubFetch(() => jsonResponse({ codes: sampleCodes }));
+      const { calls } = stubFetch(() => jsonResponse({ recoveryCodes: sampleCodes }));
       const result = await client.generateRecoveryCodes({ accessToken: "acc_live" });
 
       expect(result.codes).toEqual(sampleCodes);
@@ -88,7 +88,7 @@ describe("createRecoveryClient", () => {
       ).rejects.toBeInstanceOf(RecoveryError);
     });
 
-    it("throws RecoveryError when the response body lacks a codes array", async () => {
+    it("throws RecoveryError when the response body lacks a recoveryCodes array", async () => {
       stubFetch(() => jsonResponse({}, { status: 200 }));
       await expect(
         client.generateRecoveryCodes({ accessToken: "acc_live" }),
@@ -97,7 +97,7 @@ describe("createRecoveryClient", () => {
 
     it("strips a trailing slash from issuerUrl", async () => {
       const trailing = createRecoveryClient({ issuerUrl: "https://osn.example.com/" });
-      const { calls } = stubFetch(() => jsonResponse({ codes: sampleCodes }));
+      const { calls } = stubFetch(() => jsonResponse({ recoveryCodes: sampleCodes }));
       await trailing.generateRecoveryCodes({ accessToken: "acc_live" });
       expect(calls[0]!.url).toBe("https://osn.example.com/recovery/generate");
     });

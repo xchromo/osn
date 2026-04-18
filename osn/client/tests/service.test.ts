@@ -296,3 +296,96 @@ it.effect("authFetch fails with AuthExpiredError when there is no session", () =
     expect(err._tag).toBe("AuthExpiredError");
   }).pipe(Effect.provide(createTestLayer())),
 );
+
+// S-H1 / P-W1: single-flight refresh. Parallel 401s must fire exactly ONE
+// /token roundtrip — a second roundtrip would replay the rotated-out cookie
+// and trip C2 reuse detection, revoking every session in the family.
+it.effect("authFetch dedupes concurrent refreshes — only ONE /token roundtrip fires", () =>
+  Effect.gen(function* () {
+    let tokenCalls = 0;
+    const fetchMock = vi
+      .fn<(...args: Parameters<typeof fetch>) => Promise<Response>>()
+      .mockImplementation((input) => {
+        const url = typeof input === "string" ? input : ((input as Request).url ?? "");
+        if (url.endsWith("/token")) {
+          tokenCalls += 1;
+          // Slow the refresh to widen the race window.
+          return new Promise((resolve) =>
+            setTimeout(() => {
+              resolve(
+                mockResponse(200, {
+                  access_token: "acc_refreshed",
+                  token_type: "Bearer",
+                  expires_in: 300,
+                  scope: "openid profile",
+                }),
+              );
+            }, 10),
+          );
+        }
+        // First call on each resource 401s; further calls (the retry) 200.
+        return Promise.resolve(
+          url.includes("retry") ? mockResponse(200, { ok: true }) : mockResponse(401),
+        );
+      });
+
+    // Second-call recognition: after the refresh, subsequent requests should
+    // carry the new token; mark-and-return on the retry path.
+    const mockWithRetry = vi
+      .fn<(...args: Parameters<typeof fetch>) => Promise<Response>>()
+      .mockImplementation((input, init) => {
+        const url = typeof input === "string" ? input : ((input as Request).url ?? "");
+        const headers = new Headers(init?.headers);
+        const bearer = headers.get("authorization") ?? "";
+        if (url.endsWith("/token")) {
+          tokenCalls += 1;
+          return new Promise((resolve) =>
+            setTimeout(() => {
+              resolve(
+                mockResponse(200, {
+                  access_token: "acc_refreshed",
+                  token_type: "Bearer",
+                  expires_in: 300,
+                  scope: "openid profile",
+                }),
+              );
+            }, 10),
+          );
+        }
+        // Respond 200 only if the call is using the refreshed token.
+        return Promise.resolve(
+          bearer.includes("acc_refreshed") ? mockResponse(200, { ok: true }) : mockResponse(401),
+        );
+      });
+    vi.stubGlobal("fetch", mockWithRetry);
+    void fetchMock; // silence unused; kept above for readability
+
+    const auth = yield* OsnAuth;
+    yield* auth.setSession({
+      accessToken: "acc_stale",
+      refreshToken: "ref_live",
+      idToken: null,
+      expiresAt: Date.now() + 60_000,
+      scopes: ["openid", "profile"],
+    });
+
+    // Fire three authFetch calls in parallel — all will 401 and all will
+    // trigger the refresh path. With single-flight, only ONE /token call fires.
+    const [r1, r2, r3] = yield* Effect.all(
+      [
+        auth.authFetch("https://api.example.com/a"),
+        auth.authFetch("https://api.example.com/b"),
+        auth.authFetch("https://api.example.com/c"),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r3.status).toBe(200);
+    // The critical assertion — without single-flight, this would be 3.
+    expect(tokenCalls).toBe(1);
+
+    vi.unstubAllGlobals();
+  }).pipe(Effect.provide(createTestLayer())),
+);

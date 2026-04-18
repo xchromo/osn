@@ -1629,9 +1629,9 @@ describe("auth routes", () => {
         }),
       );
       expect(res.status).toBe(200);
-      const json = (await res.json()) as { codes: string[] };
-      expect(json.codes).toHaveLength(10);
-      for (const c of json.codes) {
+      const json = (await res.json()) as { recoveryCodes: string[] };
+      expect(json.recoveryCodes).toHaveLength(10);
+      for (const c of json.recoveryCodes) {
         expect(c).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
       }
     });
@@ -1659,7 +1659,7 @@ describe("auth routes", () => {
           body: "{}",
         }),
       );
-      const { codes } = (await genRes.json()) as { codes: string[] };
+      const { recoveryCodes: codes } = (await genRes.json()) as { recoveryCodes: string[] };
 
       const loginRes = await app.handle(
         new Request("http://localhost/login/recovery/complete", {
@@ -1690,7 +1690,7 @@ describe("auth routes", () => {
           body: "{}",
         }),
       );
-      const { codes } = (await genRes.json()) as { codes: string[] };
+      const { recoveryCodes: codes } = (await genRes.json()) as { recoveryCodes: string[] };
 
       await app.handle(
         new Request("http://localhost/login/recovery/complete", {
