@@ -52,6 +52,10 @@ export type AuthRateLimiters = Readonly<{
   passkeyRegisterComplete: RateLimiterBackend;
   profileSwitch: RateLimiterBackend;
   profileList: RateLimiterBackend;
+  /** Recovery code generation (authenticated) — per-account quota. */
+  recoveryGenerate: RateLimiterBackend;
+  /** Recovery code login — per-IP quota, stricter than normal login completers. */
+  recoveryComplete: RateLimiterBackend;
 }>;
 
 /**
@@ -75,6 +79,13 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     passkeyRegisterComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     profileSwitch: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     profileList: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    // Recovery generation is authenticated + deliberate — a user should only
+    // trigger it occasionally. Tight cap bounds abuse of the metric signal.
+    recoveryGenerate: createRateLimiter({ maxRequests: 3, windowMs: 3_600_000 }),
+    // Recovery login is an IP-side limit; the underlying DB hash comparison
+    // is already constant-time, but per-IP throttling curbs online brute
+    // force across different account identifiers.
+    recoveryComplete: createRateLimiter({ maxRequests: 5, windowMs: 3_600_000 }),
   };
 }
 
@@ -1015,6 +1026,70 @@ export function createAuthRoutes(
           body: t.Object({
             profile_id: t.String({ pattern: "^usr_[a-f0-9]{12}$" }),
           }),
+        },
+      )
+      // -------------------------------------------------------------------------
+      // Recovery codes (Copenhagen Book M2)
+      //
+      // POST /recovery/generate  — authenticated. Returns a fresh set of 10
+      //                            single-use recovery codes as plaintext once.
+      //                            Replaces any existing set. Tight rate limit.
+      //
+      // POST /login/recovery/complete — unauthenticated. Exchanges an identifier
+      //                            + recovery code for a full session + profile,
+      //                            and revokes all other sessions for the account.
+      // -------------------------------------------------------------------------
+      .post("/recovery/generate", async ({ headers, set }) => {
+        const rlErr = await rateLimit(headers, "recovery_generate", rl.recoveryGenerate);
+        if (rlErr) {
+          set.status = 429;
+          return rlErr;
+        }
+        try {
+          const claims = await resolveAccessTokenPrincipal(auth, headers.authorization);
+          if (!claims) {
+            set.status = 401;
+            return { error: "unauthorized" };
+          }
+          const profile = await run(auth.findProfileById(claims.profileId));
+          if (!profile) {
+            set.status = 401;
+            return { error: "unauthorized" };
+          }
+          const result = await run(auth.generateRecoveryCodesForAccount(profile.accountId));
+          return { codes: result.codes };
+        } catch (e) {
+          const { status, body: errBody } = handleError(e);
+          set.status = status;
+          return errBody;
+        }
+      })
+      .post(
+        "/login/recovery/complete",
+        async ({ body, set, headers }) => {
+          const rlErr = await rateLimit(headers, "recovery_complete", rl.recoveryComplete);
+          if (rlErr) {
+            set.status = 429;
+            return rlErr;
+          }
+          try {
+            const result = await run(auth.completeRecoveryLogin(body.identifier, body.code));
+            set.headers["set-cookie"] = buildSessionCookie(
+              result.session.refreshToken,
+              cookieConfig,
+            );
+            return {
+              session: toTokenResponseCookieOnly(result.session),
+              profile: result.profile,
+            };
+          } catch (e) {
+            const { status, body: errBody } = handleError(e);
+            set.status = status;
+            return errBody;
+          }
+        },
+        {
+          body: t.Object({ identifier: t.String(), code: t.String() }),
         },
       )
       // -------------------------------------------------------------------------

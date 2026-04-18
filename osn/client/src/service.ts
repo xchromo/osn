@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect";
 
 import {
+  AuthExpiredError,
   AuthorizationError,
   ProfileManagementError,
   StateMismatchError,
@@ -120,6 +121,21 @@ export interface OsnAuthService {
   ) => Effect.Effect<void, ProfileManagementError | StorageError>;
 
   readonly getActiveProfile: () => Effect.Effect<string | null, StorageError>;
+
+  /**
+   * Access-token-aware fetch. Adds `Authorization: Bearer <accessToken>` and
+   * transparently retries once on a 401 after silent-refreshing the session.
+   * If the retry also 401s, surfaces `AuthExpiredError` and clears the
+   * cached session — callers should redirect to sign-in.
+   *
+   * Short access-token TTL (5 min) makes this the expected fast path for
+   * first-party API calls; the refresh token sits in an HttpOnly cookie so
+   * the rotation is invisible to the user.
+   */
+  readonly authFetch: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Effect.Effect<Response, AuthExpiredError | StorageError>;
 }
 
 export class OsnAuth extends Context.Tag("@osn/client/OsnAuth")<OsnAuth, OsnAuthService>() {}
@@ -495,6 +511,70 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           return account?.activeProfileId || null;
         });
 
+      /**
+       * authFetch — attach the current access token and silent-refresh once on 401.
+       *
+       * Rationale: access tokens are short-lived (5 min default) so the 401
+       * path is the common case for any long-lived session. Retrying once
+       * after a successful refresh makes the UX indistinguishable from a
+       * long-TTL token while capping XSS blast radius to ~5 min.
+       *
+       * Contract:
+       * - Adds `Authorization: Bearer <accessToken>` to the request headers
+       *   unless caller has already set one (caller-supplied wins).
+       * - On response.status === 401 exactly once, calls `refreshSession()`
+       *   and reissues the original request with the new token.
+       * - If refresh fails, or the retry also 401s, returns
+       *   `AuthExpiredError` and clears the cached session. Callers should
+       *   redirect to sign-in.
+       */
+      const authFetch = (input: RequestInfo | URL, init?: RequestInit) =>
+        Effect.gen(function* () {
+          const account = yield* getAccountSession();
+          if (!account) {
+            return yield* Effect.fail(new AuthExpiredError({ cause: "no session" }));
+          }
+          const current = account.profileTokens[account.activeProfileId];
+          if (!current) {
+            return yield* Effect.fail(new AuthExpiredError({ cause: "no access token" }));
+          }
+
+          const withAuth = (token: string): RequestInit => {
+            const headers = new Headers(init?.headers);
+            if (!headers.has("authorization")) {
+              headers.set("Authorization", `Bearer ${token}`);
+            }
+            return { credentials: "include", ...init, headers };
+          };
+
+          const first = yield* Effect.tryPromise({
+            try: () => fetch(input, withAuth(current.accessToken)),
+            catch: (cause) => new AuthExpiredError({ cause }),
+          });
+          if (first.status !== 401) return first;
+
+          // Silent refresh + retry once.
+          const refreshed = yield* Effect.either(refreshSession());
+          if (refreshed._tag === "Left") {
+            cache = null;
+            yield* storage.remove(ACCOUNT_SESSION_KEY);
+            return yield* Effect.fail(new AuthExpiredError({ cause: refreshed.left }));
+          }
+
+          const second = yield* Effect.tryPromise({
+            try: () => fetch(input, withAuth(refreshed.right.accessToken)),
+            catch: (cause) => new AuthExpiredError({ cause }),
+          });
+          if (second.status === 401) {
+            cache = null;
+            yield* storage.remove(ACCOUNT_SESSION_KEY);
+            return yield* Effect.fail(
+              new AuthExpiredError({ cause: "refresh did not repair 401" }),
+            );
+          }
+          return second;
+        });
+
       return {
         startLogin,
         handleCallback,
@@ -507,6 +587,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
         createProfile,
         deleteProfile,
         getActiveProfile,
+        authFetch,
       };
     }),
   );

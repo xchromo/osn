@@ -15,6 +15,8 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] Recommendations SQL aggregation + caching (P-W6/P-W7) — next step after the in-JS fan-out cap shipped in this PR — see [[social-graph]]
 - [ ] Factor shared `authGet/Post/Patch/Delete` helpers in `@osn/client` (P-I1)
 - [x] Auth Improvements Phase 1: Server-side sessions + refresh token rotation + session invalidation (C1/C2/H1)
+- [x] Auth Improvements Phase 4: Recovery codes (M2) + short access-token TTL (5 min) with client silent-refresh on 401 — see [[recovery-codes]]
+- [ ] Auth Improvements Phase 5: Redis-backed rotated-session store + session listing/revocation UI + passkey-primary login
 
 ---
 
@@ -194,7 +196,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-M13 — Photon geocoding sends keystrokes to third-party with no user notice — add consent UI or proxy
 - [ ] S-M14 — Pulse `REDIRECT_URI` falls back to `window.location.origin` — validate allowed redirect URIs server-side (see S-H3)
 - [ ] S-M19 — Legacy `/register` does not lowercase emails — add `lower(email)` unique index
-- [ ] S-M20 — Refresh tokens in `localStorage` — XSS = permanent account takeover. Swap to keychain/HttpOnly cookies
+- [x] S-M20 — Refresh tokens in `localStorage` — XSS = permanent account takeover. **Mitigated** by C3 (refresh tokens in HttpOnly cookie) + Phase 4 short access-token TTL (5 min) with `authFetch` silent-refresh. Access token remains in `localStorage` but blast radius is ≤5 min. See [[identity-model]]
 - [ ] S-M21 — `/register/begin` differential timing oracle on silent no-op branch
 - [ ] S-M34 — Rate limiter trusts `X-Forwarded-For` without reverse-proxy guarantee — see [[rate-limiting]]
 - [ ] S-M35 — Redirect URI allowlist matches origin only, not exact URI per RFC 9700 §4.1.3
@@ -335,9 +337,15 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 - [ ] H4: Migrate `@zap/api` from shared-secret JWT verification to JWKS-based (align with Pulse) — see [[arc-tokens]]
 
 ### Phase 4 — Hardening (Medium)
-- [ ] M2: Recovery codes for passkey-primary users (40+ bits entropy, Argon2id hashed) — see [[identity-model]]
+- [x] M2: Recovery codes — 10 × 64-bit single-use codes, SHA-256 hashed at rest, revoke-all-sessions on consume. See [[recovery-codes]] + [[identity-model]]
 - [ ] M3: Email max length validation (≤255 chars) in `EmailSchema`
 - [ ] M5: Increase registration OTP from 6-digit to 8-digit (or 6-char alphanumeric)
+- [x] C3-follow-up: Access token TTL cut from 1h → 5min; client `authFetch` silent-refreshes on 401 via the HttpOnly session cookie. Caps XSS blast radius on the remaining localStorage secret. See [[identity-model]]
+
+### Phase 5 — Passkey-primary (Next)
+- [ ] S-H1 (session): Move in-memory `rotatedSessions` map to Redis so C2 reuse detection survives restart + scales across processes. Depends on: nothing.
+- [ ] Device/session listing + revocation UI (`GET /sessions`, `DELETE /sessions/:id`). Requires `sessions.user_agent`/`ip_hash` columns. Depends on: nothing.
+- [ ] M-PK: Switch to passkey-primary login, demote OTP/magic-link to recovery-only paths gated behind a recovery code. Depends on: M2 ✅
 
 ---
 
