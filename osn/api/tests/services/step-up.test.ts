@@ -133,4 +133,34 @@ describe("step-up OTP ceremony", () => {
       expect(err._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // T-S1: 5-min TTL is the containment window. A regression that drops the
+  // `exp` claim or mis-sets the TTL would silently weaken the threat model.
+  // Use a 1-second TTL so the real-clock wait is cheap. `Effect.sleep` runs
+  // synchronously under the default test runtime, so we use a Promise-based
+  // delay (yielded via Effect.promise) to actually advance wall time.
+  it.effect(
+    "expired token is rejected",
+    () =>
+      Effect.gen(function* () {
+        const profile = yield* registered("su-expiry@example.com", "suexpiry");
+        let captured: string | undefined;
+        const shortTtlAuth = createAuthService({
+          ...config,
+          sendEmail: async (_to, _subject, body) => {
+            const m = body.match(/step-up code is: (\d{6})/);
+            if (m) captured = m[1];
+          },
+          stepUpTokenTtl: 1,
+        });
+        yield* shortTtlAuth.beginStepUpOtp(profile.accountId);
+        const { stepUpToken } = yield* shortTtlAuth.completeStepUpOtp(profile.accountId, captured!);
+        yield* Effect.promise(() => new Promise((r) => setTimeout(r, 1100)));
+        const err = yield* Effect.flip(
+          shortTtlAuth.verifyStepUpForRecoveryGenerate(profile.accountId, stepUpToken),
+        );
+        expect(err._tag).toBe("AuthError");
+      }).pipe(Effect.provide(createTestLayer())),
+    { timeout: 10_000 },
+  );
 });

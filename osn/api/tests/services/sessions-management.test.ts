@@ -153,6 +153,39 @@ describe("revokeAccountSession", () => {
   );
 });
 
+// T-S2: session rotation (C2) must preserve the uaLabel / ipHash it was
+// issued with. Otherwise the Settings "Firefox on macOS" device flips to
+// "Unknown device" on every refresh — a subtle UX regression that doesn't
+// fail any existing assertion.
+describe("session metadata carry-through on rotation", () => {
+  it.effect("refreshTokens copies uaLabel to the rotated session row", () =>
+    Effect.gen(function* () {
+      const profile = yield* auth.registerProfile("rot-meta@example.com", "rotmeta");
+      const original = yield* auth.issueTokens(
+        profile.id,
+        profile.accountId,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+        undefined,
+        { uaLabel: "Firefox on macOS" },
+      );
+
+      const rotated = yield* auth.refreshTokens(original.refreshToken);
+
+      const { sessions } = yield* auth.listAccountSessions(
+        profile.accountId,
+        auth.hashSessionToken(rotated.refreshToken),
+      );
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]!.uaLabel).toBe("Firefox on macOS");
+      expect(sessions[0]!.isCurrent).toBe(true);
+      // lastUsedAt must be populated on the fresh row (rotation timestamp).
+      expect(sessions[0]!.lastUsedAt).not.toBeNull();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
 describe("revokeAllOtherAccountSessions", () => {
   it.effect("keeps the current session and kills the rest", () =>
     Effect.gen(function* () {
