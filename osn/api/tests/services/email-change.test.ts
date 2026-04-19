@@ -93,18 +93,18 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("rejects when the new email is already in use", () =>
+  // S-H2: begin must NOT reveal collisions — silently returns { sent: true }
+  // so an authenticated caller cannot enumerate other users' email addresses.
+  it.effect("silently succeeds on collision (no enumeration oracle)", () =>
     Effect.gen(function* () {
       const { auth, profile, stepUpToken } = yield* setup("ec-conflict@example.com", "ecconflict");
       // Reserve the target address with another account.
       yield* auth.registerProfile("ec-target@example.com", "ectarget");
 
-      const err = yield* Effect.flip(
-        auth.beginEmailChange(profile.accountId, "ec-target@example.com"),
-      );
-      expect(err._tag).toBe("AuthError");
-      expect(err.message).toMatch(/already in use/i);
-      // Silences unused var lint — stepUpToken isn't needed on the begin-phase reject.
+      const result = yield* auth.beginEmailChange(profile.accountId, "ec-target@example.com");
+      expect(result.sent).toBe(true);
+      // The complete step would still reject the collision via UNIQUE(email),
+      // so the protection is where it matters — on the write.
       void stepUpToken;
     }).pipe(Effect.provide(createTestLayer())),
   );

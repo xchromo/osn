@@ -91,6 +91,7 @@ export function createTestLayer() {
   `);
   sqlite.run(`CREATE INDEX sessions_account_idx ON sessions (account_id)`);
   sqlite.run(`CREATE INDEX sessions_family_idx ON sessions (family_id)`);
+  sqlite.run(`CREATE INDEX sessions_account_last_used_idx ON sessions (account_id, last_used_at)`);
   sqlite.run(`
     CREATE TABLE email_changes (
       id TEXT PRIMARY KEY,

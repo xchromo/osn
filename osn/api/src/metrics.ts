@@ -81,7 +81,7 @@ type RegisterAttrs = { step: RegisterStep; result: Result };
 type LoginAttrs = { method: AuthMethod; result: Result };
 type TokenRefreshAttrs = { result: Result };
 type HandleCheckAttrs = { result: "available" | "taken" | "invalid" };
-type OtpSentAttrs = { purpose: "registration" | "login" };
+type OtpSentAttrs = { purpose: "registration" | "login" | "step_up" | "email_change" };
 type MagicLinkSentAttrs = { result: Result };
 type AuthRateLimitAttrs = { endpoint: AuthRateLimitedEndpoint };
 type GraphConnectionAttrs = { action: GraphConnectionAction; result: Result };
@@ -377,8 +377,9 @@ export const withGraphCloseFriendOp =
 export const metricAuthHandleCheck = (result: "available" | "taken" | "invalid"): void =>
   authHandleCheck.inc({ result });
 
-export const metricAuthOtpSent = (purpose: "registration" | "login"): void =>
-  authOtpSent.inc({ purpose });
+export const metricAuthOtpSent = (
+  purpose: "registration" | "login" | "step_up" | "email_change",
+): void => authOtpSent.inc({ purpose });
 
 export const metricAuthMagicLinkSent = (result: Result): void => authMagicLinkSent.inc({ result });
 

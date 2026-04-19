@@ -227,6 +227,9 @@ export const sessions = sqliteTable(
   (t) => [
     index("sessions_account_idx").on(t.accountId),
     index("sessions_family_idx").on(t.familyId),
+    // P-W2: composite index serves ORDER BY last_used_at DESC for
+    // listAccountSessions + LRU eviction scan in issueTokens.
+    index("sessions_account_last_used_idx").on(t.accountId, t.lastUsedAt),
   ],
 );
 

@@ -18,4 +18,9 @@ CREATE TABLE `email_changes` (
 	FOREIGN KEY (`account_id`) REFERENCES `accounts`(`id`) ON UPDATE no action ON DELETE no action
 );--> statement-breakpoint
 CREATE INDEX `email_changes_account_idx` ON `email_changes` (`account_id`);--> statement-breakpoint
-CREATE INDEX `email_changes_completed_at_idx` ON `email_changes` (`completed_at`);
+CREATE INDEX `email_changes_completed_at_idx` ON `email_changes` (`completed_at`);--> statement-breakpoint
+
+-- P-W2: composite index so `listAccountSessions`'s ORDER BY last_used_at DESC
+-- is served from the index rather than an in-memory sort. Also serves the
+-- LRU eviction scan in `issueTokens` (same ORDER BY).
+CREATE INDEX `sessions_account_last_used_idx` ON `sessions` (`account_id`, `last_used_at`);

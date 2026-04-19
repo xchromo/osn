@@ -133,7 +133,10 @@ describe("revokeAccountSession", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("refuses a handle that doesn't belong to the caller's account", () =>
+  // S-M4: idempotent — a handle from another account (or a made-up one)
+  // returns { revokedSelf: false } rather than surfacing "Session not
+  // found", so revoke can't be weaponised as a handle-existence oracle.
+  it.effect("silently ignores a handle that doesn't belong to the caller's account", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("rev-a@example.com", "reva");
       const bob = yield* auth.registerProfile("rev-b@example.com", "revb");
@@ -145,8 +148,8 @@ describe("revokeAccountSession", () => {
         bob.displayName,
       );
       const bobHandle = auth.hashSessionToken(bobSess.refreshToken).slice(0, 16);
-      const err = yield* Effect.flip(auth.revokeAccountSession(alice.accountId, bobHandle, null));
-      expect(err._tag).toBe("AuthError");
+      const result = yield* auth.revokeAccountSession(alice.accountId, bobHandle, null);
+      expect(result.revokedSelf).toBe(false);
       // Bob's session must still be alive.
       yield* auth.verifyRefreshToken(bobSess.refreshToken);
     }).pipe(Effect.provide(createTestLayer())),

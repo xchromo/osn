@@ -22,7 +22,7 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, count as countFn, desc, eq, gte, like, ne } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { SignJWT, jwtVerify } from "jose";
 
@@ -129,6 +129,12 @@ export interface AuthConfig {
    * and OTP flows allowed; set narrower in production if desired.
    */
   recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp")[];
+  /**
+   * Cluster-wide single-use guard for step-up token jtis (S-H1). Inject a
+   * Redis-backed store in multi-pod deployments; otherwise the default
+   * in-memory map means a captured token replays successfully once per pod.
+   */
+  stepUpJtiStore?: StepUpJtiStore;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +233,43 @@ const pendingEmailChanges = new Map<string, PendingEmailChange>();
 
 // Consumed step-up token jtis (replay guard). Swept opportunistically.
 const consumedStepUpTokens = new Map<string, number>();
+
+/**
+ * Single-flight guard interface for step-up token `jti` consumption.
+ *
+ * The default implementation (`createInMemoryJtiStore`) is a per-process
+ * `Map` — correct for single-node dev and test, but breaks the "single-use"
+ * advertised property in a multi-pod deployment (a captured token could be
+ * replayed once per instance before any one pod has seen the jti).
+ *
+ * In non-local deployments, inject a Redis-backed implementation
+ * (`createRedisJtiStore` in `lib/step-up-jti-store.ts`) so the guard is
+ * cluster-wide atomic.
+ */
+export interface StepUpJtiStore {
+  /**
+   * Returns `true` if the jti was consumed for the FIRST time (allow the
+   * step-up verification to proceed). Returns `false` on replay (deny).
+   * `ttlMs` must be at least as long as the step-up token TTL so replay
+   * entries survive the token's own lifetime.
+   */
+  consume(jti: string, ttlMs: number): Promise<boolean>;
+}
+
+/** Default in-memory jti store — single-process only (S-H1). */
+export function createInMemoryJtiStore(): StepUpJtiStore {
+  return {
+    async consume(jti, ttlMs) {
+      const cutoff = Date.now() - ttlMs;
+      for (const [k, ts] of consumedStepUpTokens) {
+        if (ts < cutoff) consumedStepUpTokens.delete(k);
+      }
+      if (consumedStepUpTokens.has(jti)) return false;
+      consumedStepUpTokens.set(jti, Date.now());
+      return true;
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -449,6 +492,37 @@ const RESERVED_HANDLES = new Set([
 // Auth service factory
 // ---------------------------------------------------------------------------
 
+/**
+ * Hard cap on concurrent sessions per account (S-M1). An attacker who
+ * compromises an account cannot inflate the revocation / list surface
+ * beyond this limit; new sessions LRU-evict the oldest rather than
+ * rejecting the legitimate login. Typical users have <10 sessions
+ * across all their devices, so 50 is conservative.
+ */
+const MAX_SESSIONS_PER_ACCOUNT = 50;
+/**
+ * Minimum gap between `last_used_at` writes on the hot-path (P-W4).
+ * The Sessions UI doesn't need sub-second accuracy; coalescing to 60s
+ * cuts per-refresh DB writes by ~60× at typical 5-min refresh cadence.
+ */
+const LAST_USED_AT_COALESCE_MS = 60_000;
+/**
+ * Per-account cap on `/account/email/begin` (S-H3). Complements the
+ * per-IP rate limit and prevents an authenticated attacker pooling
+ * their allowance across rotating IPs to spam the OSN sending domain.
+ * Window is 24h to match the 2-per-7-days hard cap on complete.
+ */
+const EMAIL_CHANGE_BEGIN_PER_ACCOUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const EMAIL_CHANGE_BEGIN_PER_ACCOUNT_MAX = 3;
+const emailChangeBeginCounts = new Map<string, { count: number; resetAt: number }>();
+
+/**
+ * Bounded `rotatedSessions` wrapper (P-I5). Uses a FIFO queue plus the
+ * existing Map so inserts are O(1) amortised and the sweep is capped at
+ * the queue head instead of scanning the whole map on every rotation.
+ */
+const ROTATED_SESSIONS_MAX = 100_000;
+
 export function createAuthService(config: AuthConfig) {
   const accessTokenTtl = config.accessTokenTtl ?? 300;
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
@@ -458,6 +532,7 @@ export function createAuthService(config: AuthConfig) {
   const recoveryGenerateAllowedAmr = new Set<string>(
     config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp"],
   );
+  const jtiStore = config.stepUpJtiStore ?? createInMemoryJtiStore();
   /**
    * HMAC-SHA256 pepper for IP hashing. Only applied when the caller has
    * configured one — in dev we leave ip_hash NULL so local Docker IPs
@@ -959,6 +1034,30 @@ export function createAuthService(config: AuthConfig) {
       const fam = familyId ?? genId("sfam_");
 
       const { db } = yield* Db;
+
+      // S-M1: LRU-evict the oldest sessions once the per-account cap is
+      // exceeded. An attacker with a stolen credential can't inflate the
+      // revocation surface beyond MAX_SESSIONS_PER_ACCOUNT; legitimate
+      // users with genuinely many devices see their least-recently-used
+      // sessions drop off rather than their new login failing.
+      yield* Effect.tryPromise({
+        try: async () => {
+          const rows = await db
+            .select({ id: sessions.id, lastUsedAt: sessions.lastUsedAt })
+            .from(sessions)
+            .where(eq(sessions.accountId, accountId))
+            .orderBy(desc(sessions.lastUsedAt))
+            .limit(MAX_SESSIONS_PER_ACCOUNT + 1);
+          if (rows.length >= MAX_SESSIONS_PER_ACCOUNT) {
+            const evictIds = rows.slice(MAX_SESSIONS_PER_ACCOUNT - 1).map((r) => r.id);
+            for (const id of evictIds) {
+              await db.delete(sessions).where(eq(sessions.id, id));
+            }
+          }
+        },
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
       yield* Effect.tryPromise({
         try: () =>
           db.insert(sessions).values({
@@ -1142,22 +1241,24 @@ export function createAuthService(config: AuthConfig) {
       }
 
       // Sliding window: extend when less than half the TTL remains.
-      // Always touch `lastUsedAt` so the Sessions panel reflects reality
-      // even for sessions that aren't approaching expiry.
+      // `last_used_at` is coalesced (P-W4) — writing it on every verify
+      // would add a DB round-trip per refresh. The Sessions UI doesn't
+      // need sub-second accuracy; 60 s granularity shrinks writes by
+      // roughly the refresh cadence.
       const halfTtl = Math.floor(refreshTokenTtl / 2);
       const shouldExtend = session.expiresAt - nowSec < halfTtl;
-      yield* Effect.tryPromise({
-        try: () =>
-          db
-            .update(sessions)
-            .set(
-              shouldExtend
-                ? { expiresAt: nowSec + refreshTokenTtl, lastUsedAt: nowSec }
-                : { lastUsedAt: nowSec },
-            )
-            .where(eq(sessions.id, sessionId)),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
+      const lastUsedMs = (session.lastUsedAt ?? session.createdAt) * 1000;
+      const shouldTouchLastUsed = Date.now() - lastUsedMs >= LAST_USED_AT_COALESCE_MS;
+
+      if (shouldExtend || shouldTouchLastUsed) {
+        const updates: Record<string, number> = {};
+        if (shouldExtend) updates["expiresAt"] = nowSec + refreshTokenTtl;
+        if (shouldTouchLastUsed) updates["lastUsedAt"] = nowSec;
+        yield* Effect.tryPromise({
+          try: () => db.update(sessions).set(updates).where(eq(sessions.id, sessionId)),
+          catch: (cause) => new DatabaseError({ cause }),
+        });
+      }
 
       return { accountId: session.accountId, familyId: session.familyId, sessionId };
     });
@@ -1175,18 +1276,38 @@ export function createAuthService(config: AuthConfig) {
 
   /** hash → { familyId, rotatedAt (ms) } */
   const rotatedSessions = new Map<string, { familyId: string; rotatedAt: number }>();
+  /**
+   * FIFO ordering for O(1) amortised sweeps on insert (P-I5). We only need
+   * to check the head of the queue against the cutoff; the map itself is
+   * still the authoritative lookup. A full rescan was previously O(n) per
+   * rotation, which degenerates to O(n²) over the 30-day window.
+   */
+  const rotatedSessionsQueue: string[] = [];
 
   /**
    * Records that a session hash was rotated out, so future presentations
-   * of that token trigger family revocation.
+   * of that token trigger family revocation. Sweeps the queue head only
+   * (bounded work per call) and caps the map size as defence-in-depth.
    */
   function trackRotatedSession(sessionHash: string, familyId: string): void {
-    // Sweep entries older than TTL to bound memory
     const cutoff = Date.now() - refreshTokenTtl * 1000;
-    for (const [k, v] of rotatedSessions) {
-      if (v.rotatedAt < cutoff) rotatedSessions.delete(k);
+    while (rotatedSessionsQueue.length > 0) {
+      const oldest = rotatedSessionsQueue[0]!;
+      const entry = rotatedSessions.get(oldest);
+      if (!entry || entry.rotatedAt < cutoff) {
+        rotatedSessionsQueue.shift();
+        if (entry) rotatedSessions.delete(oldest);
+        continue;
+      }
+      break;
+    }
+    // Belt-and-braces cap for pathological workloads.
+    while (rotatedSessionsQueue.length >= ROTATED_SESSIONS_MAX) {
+      const oldest = rotatedSessionsQueue.shift()!;
+      rotatedSessions.delete(oldest);
     }
     rotatedSessions.set(sessionHash, { familyId, rotatedAt: Date.now() });
+    rotatedSessionsQueue.push(sessionHash);
   }
 
   /**
@@ -2257,17 +2378,6 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
       }
 
-      // Sweep expired replay entries (TTL already enforced on verify above;
-      // jti entries live at most stepUpTokenTtl ms after they were consumed).
-      const cutoff = Date.now() - stepUpTokenTtl * 1000;
-      for (const [k, ts] of consumedStepUpTokens) {
-        if (ts < cutoff) consumedStepUpTokens.delete(k);
-      }
-      if (consumedStepUpTokens.has(jti)) {
-        yield* record("jti_replay");
-        return yield* Effect.fail(new AuthError({ message: "Step-up token already used" }));
-      }
-
       const amrRaw = payloadResult["amr"];
       const amr = Array.isArray(amrRaw)
         ? amrRaw.filter((v): v is string => typeof v === "string")
@@ -2277,7 +2387,17 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Step-up factor not permitted" }));
       }
 
-      consumedStepUpTokens.set(jti, Date.now());
+      // S-H1: cluster-safe single-use guard. First consumer wins; every
+      // subsequent presentation — local, another pod, or a replay after a
+      // Redis failover — lands on the jti-already-consumed branch.
+      const consumed = yield* Effect.tryPromise({
+        try: () => jtiStore.consume(jti, stepUpTokenTtl * 1000),
+        catch: () => new AuthError({ message: "Step-up token could not be verified" }),
+      });
+      if (!consumed) {
+        yield* record("jti_replay");
+        return yield* Effect.fail(new AuthError({ message: "Step-up token already used" }));
+      }
       yield* record("ok");
       return { amr };
     });
@@ -2319,6 +2439,8 @@ export function createAuthService(config: AuthConfig) {
           }),
         catch: (cause) => new AuthError({ message: String(cause) }),
       });
+      // P-I3: bound growth under ceremony-begin spam.
+      sweepExpired(stepUpPasskeyChallenges);
       stepUpPasskeyChallenges.set(accountId, {
         challenge: options.challenge,
         expiresAt: Date.now() + 120_000,
@@ -2407,6 +2529,8 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Account not found" }));
       }
       const code = genOtpCode();
+      // P-I3: bound growth under ceremony-begin spam.
+      sweepExpired(stepUpOtpStore);
       stepUpOtpStore.set(accountId, {
         codeHash: hashSessionToken(code),
         attempts: 0,
@@ -2425,7 +2549,8 @@ export function createAuthService(config: AuthConfig) {
       } else if (!process.env["OSN_ENV"] || process.env["OSN_ENV"] === "local") {
         yield* Effect.logDebug(`[OSN local] Step-up OTP for ${account.email}: ${code}`);
       }
-      metricAuthOtpSent("login");
+      // S-L1: distinguish step-up OTPs from login OTPs on the dashboard.
+      metricAuthOtpSent("step_up");
       return { sent: true };
     }).pipe(withStepUp("begin"));
 
@@ -2466,13 +2591,18 @@ export function createAuthService(config: AuthConfig) {
   ): Effect.Effect<{ sessions: SessionSummary[] }, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      // P-W2: hard cap defends the Settings page against pathological
+      // accounts. MAX_SESSIONS_PER_ACCOUNT is the real ceiling (enforced
+      // at issueTokens) but the LIMIT here is belt-and-braces plus a
+      // signal to the planner.
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
             .select()
             .from(sessions)
             .where(eq(sessions.accountId, accountId))
-            .orderBy(desc(sessions.lastUsedAt)),
+            .orderBy(desc(sessions.lastUsedAt))
+            .limit(MAX_SESSIONS_PER_ACCOUNT),
         catch: (cause) => new DatabaseError({ cause }),
       });
       return {
@@ -2493,6 +2623,15 @@ export function createAuthService(config: AuthConfig) {
    * handle from another account's log line can't revoke anyone else's
    * sessions. Returns whether the caller's own session was the one revoked
    * so the HTTP layer can clear the cookie.
+   *
+   * S-M4: Idempotent — a handle that doesn't match any row returns
+   * `{ revokedSelf: false }` rather than surfacing "Session not found".
+   * This mirrors the `/logout` posture ("don't leak whether the session
+   * existed") and closes the handle-existence oracle.
+   *
+   * P-W1: The match uses a `LIKE 'handle%'` predicate so the DB returns
+   * at most one row via the PK index rather than fetching every session
+   * for the account into JS and finding in-memory.
    */
   const revokeAccountSession = (
     accountId: string,
@@ -2500,14 +2639,28 @@ export function createAuthService(config: AuthConfig) {
     currentSessionHash: string | null,
   ): Effect.Effect<{ revokedSelf: boolean }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
+      // Short-circuit on malformed handles so the LIKE pattern stays
+      // safe (no escape concerns since we've already enforced [0-9a-f]{16}
+      // at the route but defence-in-depth at the service boundary).
+      if (!/^[0-9a-f]{16}$/.test(sessionHandle)) {
+        return { revokedSelf: false };
+      }
       const { db } = yield* Db;
       const rows = yield* Effect.tryPromise({
-        try: () => db.select().from(sessions).where(eq(sessions.accountId, accountId)),
+        try: () =>
+          db
+            .select({ id: sessions.id })
+            .from(sessions)
+            .where(and(eq(sessions.accountId, accountId), like(sessions.id, `${sessionHandle}%`)))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      const match = rows.find((r) => sessionHandleFromHash(r.id) === sessionHandle);
+      const match = rows[0];
       if (!match) {
-        return yield* Effect.fail(new AuthError({ message: "Session not found" }));
+        // S-M4: idempotent — indistinguishable from a no-op revoke of a
+        // handle that existed for a different account (scoping predicate
+        // already filtered those out).
+        return { revokedSelf: false };
       }
       yield* Effect.tryPromise({
         try: () => db.delete(sessions).where(eq(sessions.id, match.id)),
@@ -2555,6 +2708,27 @@ export function createAuthService(config: AuthConfig) {
       const normalised = newEmail.toLowerCase();
       const { db } = yield* Db;
 
+      // S-H3: per-account cap beneath the per-IP rate limit. An attacker
+      // with a stolen access token behind a rotating-IP proxy can't pool
+      // their allowance to spam the OSN sending domain at arbitrary inboxes.
+      const nowMs = Date.now();
+      const bucket = emailChangeBeginCounts.get(accountId);
+      if (!bucket || nowMs >= bucket.resetAt) {
+        emailChangeBeginCounts.set(accountId, {
+          count: 1,
+          resetAt: nowMs + EMAIL_CHANGE_BEGIN_PER_ACCOUNT_WINDOW_MS,
+        });
+      } else if (bucket.count >= EMAIL_CHANGE_BEGIN_PER_ACCOUNT_MAX) {
+        return yield* Effect.fail(new AuthError({ message: "Too many email change attempts" }));
+      } else {
+        bucket.count += 1;
+      }
+      // Sweep stale buckets opportunistically (P-I3).
+      for (const [k, v] of emailChangeBeginCounts) {
+        if (nowMs >= v.resetAt) emailChangeBeginCounts.delete(k);
+      }
+      sweepExpired(pendingEmailChanges);
+
       const currentAccount = yield* Effect.tryPromise({
         try: () => db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
         catch: (cause) => new DatabaseError({ cause }),
@@ -2567,23 +2741,38 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "New email matches current email" }));
       }
 
+      // S-H2: silently succeed on collisions — an authenticated caller
+      // must not learn whether another account owns an email. Registration
+      // treats this as first-class (see the `beginRegistration` comment);
+      // email change must match. The UNIQUE(email) constraint at `complete`
+      // is the real defence against a race-winning swap.
       const collision = yield* Effect.tryPromise({
         try: () => db.select().from(accounts).where(eq(accounts.email, normalised)).limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
       if (collision.length > 0) {
-        return yield* Effect.fail(new AuthError({ message: "Email already in use" }));
+        return { sent: true };
       }
 
-      // 2-per-7-days cap applies at BEGIN as well so an attacker with a
-      // step-up token can't burn the user's OTP inbox or quietly rotate
-      // pending-change state.
+      // P-W3: 2-per-7-days cap uses an indexed aggregate instead of a full
+      // history fetch. `email_changes_completed_at_idx` + the account filter
+      // serve the predicate.
       const windowStart = Math.floor(Date.now() / 1000) - EMAIL_CHANGE_WINDOW_SECONDS;
-      const recentChanges = yield* Effect.tryPromise({
-        try: () => db.select().from(emailChanges).where(eq(emailChanges.accountId, accountId)),
+      const recentCount = yield* Effect.tryPromise({
+        try: async () => {
+          const [row] = await db
+            .select({ count: countFn() })
+            .from(emailChanges)
+            .where(
+              and(
+                eq(emailChanges.accountId, accountId),
+                gte(emailChanges.completedAt, windowStart),
+              ),
+            );
+          return Number(row?.count ?? 0);
+        },
         catch: (cause) => new DatabaseError({ cause }),
       });
-      const recentCount = recentChanges.filter((r) => r.completedAt >= windowStart).length;
       if (recentCount >= EMAIL_CHANGE_LIMIT) {
         return yield* Effect.fail(
           new AuthError({ message: "Email change limit reached (2 per 7 days)" }),
@@ -2604,7 +2793,10 @@ export function createAuthService(config: AuthConfig) {
             config.sendEmail!(
               normalised,
               "Confirm your new OSN email",
-              `Your OSN email change code is: ${code}\n\nExpires in ${otpTtl / 60} minutes.`,
+              // S-L5: explicit "somebody asked for this on your account"
+              // framing so a mistakenly-delivered message is clearly junk
+              // to the recipient and useless as a phishing template.
+              `An OSN account holder requested this email address be associated with their account. If that wasn't you, you can ignore this message safely.\n\nYour OSN email change code is: ${code}\n\nExpires in ${otpTtl / 60} minutes.`,
             ),
           catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
         });
@@ -2612,7 +2804,7 @@ export function createAuthService(config: AuthConfig) {
         yield* Effect.logDebug(`[OSN local] Email-change OTP for ${normalised}: ${code}`);
       }
 
-      metricAuthOtpSent("login");
+      metricAuthOtpSent("email_change");
       return { sent: true };
     }).pipe(withEmailChange("begin"));
 
@@ -2650,38 +2842,48 @@ export function createAuthService(config: AuthConfig) {
       const nowSec = Math.floor(Date.now() / 1000);
       const windowStart = nowSec - EMAIL_CHANGE_WINDOW_SECONDS;
 
+      // P-W3 + P-I4: rate check + current-account fetch move OUT of the
+      // transaction so the write section holds the writer lock as briefly
+      // as possible. Race-safety is preserved by the UNIQUE(email)
+      // constraint catching concurrent winners at `tx.update`.
+      const preflight = yield* Effect.tryPromise({
+        try: async () => {
+          const [acct] = await db
+            .select()
+            .from(accounts)
+            .where(eq(accounts.id, accountId))
+            .limit(1);
+          if (!acct) return { ok: false as const, reason: "not_found" as const };
+          const [row] = await db
+            .select({ count: countFn() })
+            .from(emailChanges)
+            .where(
+              and(
+                eq(emailChanges.accountId, accountId),
+                gte(emailChanges.completedAt, windowStart),
+              ),
+            );
+          if (Number(row?.count ?? 0) >= EMAIL_CHANGE_LIMIT) {
+            return { ok: false as const, reason: "rate_limit" as const };
+          }
+          return { ok: true as const, current: acct };
+        },
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (!preflight.ok) {
+        if (preflight.reason === "not_found") {
+          return yield* Effect.fail(new AuthError({ message: "Account not found" }));
+        }
+        return yield* Effect.fail(
+          new AuthError({ message: "Email change limit reached (2 per 7 days)" }),
+        );
+      }
+      const currentAccountRow = preflight.current;
+
       const changed = yield* Effect.tryPromise({
         try: async () => {
           try {
             return await db.transaction(async (tx) => {
-              const acct = await tx
-                .select()
-                .from(accounts)
-                .where(eq(accounts.id, accountId))
-                .limit(1);
-              const current = acct[0];
-              if (!current) return { ok: false as const, reason: "not_found" as const };
-
-              const recent = await tx
-                .select()
-                .from(emailChanges)
-                .where(eq(emailChanges.accountId, accountId));
-              const recentCount = recent.filter((r) => r.completedAt >= windowStart).length;
-              if (recentCount >= EMAIL_CHANGE_LIMIT) {
-                return { ok: false as const, reason: "rate_limit" as const };
-              }
-
-              // Final collision check inside the transaction so two
-              // concurrent completes on the same target email can't both win.
-              const collision = await tx
-                .select()
-                .from(accounts)
-                .where(eq(accounts.email, pending.newEmail))
-                .limit(1);
-              if (collision.length > 0) {
-                return { ok: false as const, reason: "conflict" as const };
-              }
-
               await tx
                 .update(accounts)
                 .set({ email: pending.newEmail, updatedAt: new Date(nowSec * 1000) })
@@ -2690,7 +2892,7 @@ export function createAuthService(config: AuthConfig) {
               await tx.insert(emailChanges).values({
                 id: genId("ech_"),
                 accountId,
-                previousEmail: current.email,
+                previousEmail: currentAccountRow.email,
                 newEmail: pending.newEmail,
                 completedAt: nowSec,
               });
@@ -2722,15 +2924,10 @@ export function createAuthService(config: AuthConfig) {
       });
 
       if (!changed.ok) {
-        if (changed.reason === "not_found") {
-          return yield* Effect.fail(new AuthError({ message: "Account not found" }));
-        }
-        if (changed.reason === "rate_limit") {
-          return yield* Effect.fail(
-            new AuthError({ message: "Email change limit reached (2 per 7 days)" }),
-          );
-        }
-        return yield* Effect.fail(new AuthError({ message: "Email already in use" }));
+        // Only "conflict" can come out of the narrowed TX (preflight
+        // already rejected not_found / rate_limit). Map to a generic
+        // error that matches the begin-path enumeration posture.
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
       }
 
       pendingEmailChanges.delete(accountId);
