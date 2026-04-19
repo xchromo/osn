@@ -3,6 +3,7 @@
 "@osn/db": minor
 "@osn/client": minor
 "@osn/ui": minor
+"@osn/social": patch
 "@shared/observability": minor
 ---
 
