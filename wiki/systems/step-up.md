@@ -51,7 +51,7 @@ ES256 JWT signed with the same key as access tokens (reuses `/.well-known/jwks.j
 - **aud** — fixed literal `"osn-step-up"` so the token cannot be cross-used as an access token.
 - **sub** — `accountId` (not profileId). The verifier requires a match against the caller's resolved account.
 - **amr** — RFC 8176 authentication-method-reference array. Verifier intersects with a caller-supplied allow-list.
-- **jti** — single-use replay guard. Tracked in an in-memory `consumedStepUpTokens` map swept opportunistically.
+- **jti** — single-use replay guard. Backed by a `StepUpJtiStore` interface (see `osn/api/src/services/auth.ts`) with two implementations: an in-memory Map for single-process dev/test, and `createRedisJtiStore` (`osn/api/src/lib/step-up-jti-store.ts`) for multi-pod production. The Redis variant fails closed on outage — an unavailable replay guard is equivalent to a ceremony no one completed.
 
 TTL: 5 minutes.
 

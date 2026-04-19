@@ -11,6 +11,8 @@ last-reviewed: 2026-04-19
 
 Per-device session management surface exposed to end users in Settings. Builds on the server-side session store introduced in Copenhagen Book C1/C2/C3.
 
+Per-account hard cap: `MAX_SESSIONS_PER_ACCOUNT = 50`. `issueTokens` LRU-evicts the oldest rows once the cap is reached so an attacker can't inflate the revocation surface. The public revocation handle (first 16 hex of the SHA-256) is collision-safe inside that bounded population.
+
 ## Endpoints
 
 | Route | Purpose |
@@ -32,6 +34,8 @@ Added to the `sessions` table in migration `0005_sessions_metadata_and_email_cha
 | `last_used_at` | Unix seconds | Updated on every successful refresh/verify |
 
 **Why HMAC-peppered, not raw SHA-256 for IPs?** Plain SHA-256 over the v4 address space (2^32) is trivially rainbow-tableable. A server-side secret pepper makes offline correlation impossible without pepper access. Pepper rotation is cheap — only display continuity is affected, not session validity.
+
+**Configuration:** `OSN_SESSION_IP_PEPPER` (≥32 bytes). Startup fails in non-local environments if unset — silent IP-hash degradation would cost users a security signal without anyone noticing.
 
 ## Public revocation handle
 
