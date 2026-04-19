@@ -1578,13 +1578,16 @@ describe("auth routes", () => {
       accessToken: string;
       email: string;
       identifier: string;
+      stepUpToken: string;
     }> {
-      let captured: string | undefined;
+      // Buffer every captured code so we can distinguish register-OTP from
+      // the subsequent step-up OTP emailed after we've already logged in.
+      const captured: string[] = [];
       const verifiedConfig = {
         ...config,
         sendEmail: async (_to: string, _subject: string, body: string) => {
-          const m = body.match(/code is: (\d{6})/);
-          if (m) captured = m[1];
+          const m = body.match(/(?:code is|OSN step-up code is): (\d{6})/);
+          if (m) captured.push(m[1]!);
         },
       };
       const verifiedApp = createAuthRoutes(verifiedConfig, layer);
@@ -1603,21 +1606,48 @@ describe("auth routes", () => {
         new Request("http://localhost/register/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "recovery-user@example.com", code: captured }),
+          body: JSON.stringify({ email: "recovery-user@example.com", code: captured[0]! }),
         }),
       );
       const json = (await completeRes.json()) as {
         session: { access_token: string };
       };
+      const accessToken = json.session.access_token;
+
+      // M-PK1: /recovery/generate requires a step-up token. Drive the OTP
+      // ceremony now so the caller can attach `step_up_token` to its body.
+      await verifiedApp.handle(
+        new Request("http://localhost/step-up/otp/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }),
+      );
+      const stepUpCode = captured[captured.length - 1]!;
+      const stepUpRes = await verifiedApp.handle(
+        new Request("http://localhost/step-up/otp/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ code: stepUpCode }),
+        }),
+      );
+      const stepUpJson = (await stepUpRes.json()) as { step_up_token: string };
+
       return {
-        accessToken: json.session.access_token,
+        accessToken,
         email: "recovery-user@example.com",
         identifier: "recoveryuser",
+        stepUpToken: stepUpJson.step_up_token,
       };
     }
 
     it("POST /recovery/generate returns 10 codes with the expected shape", async () => {
-      const { accessToken } = await registerForRecovery();
+      const { accessToken, stepUpToken } = await registerForRecovery();
       const res = await app.handle(
         new Request("http://localhost/recovery/generate", {
           method: "POST",
@@ -1625,7 +1655,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`,
           },
-          body: "{}",
+          body: JSON.stringify({ step_up_token: stepUpToken }),
         }),
       );
       expect(res.status).toBe(200);
@@ -1647,9 +1677,11 @@ describe("auth routes", () => {
       expect(res.status).toBe(401);
     });
 
-    it("POST /login/recovery/complete returns a session cookie on success", async () => {
-      const { accessToken, email } = await registerForRecovery();
-      const genRes = await app.handle(
+    // M-PK1 gate: authenticated access token alone is no longer enough; a
+    // fresh step-up ceremony must have been completed.
+    it("POST /recovery/generate without a step-up token returns 403", async () => {
+      const { accessToken } = await registerForRecovery();
+      const res = await app.handle(
         new Request("http://localhost/recovery/generate", {
           method: "POST",
           headers: {
@@ -1657,6 +1689,22 @@ describe("auth routes", () => {
             Authorization: `Bearer ${accessToken}`,
           },
           body: "{}",
+        }),
+      );
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toBe("step_up_required");
+    });
+
+    it("POST /login/recovery/complete returns a session cookie on success", async () => {
+      const { accessToken, email, stepUpToken } = await registerForRecovery();
+      const genRes = await app.handle(
+        new Request("http://localhost/recovery/generate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ step_up_token: stepUpToken }),
         }),
       );
       const { recoveryCodes: codes } = (await genRes.json()) as { recoveryCodes: string[] };
@@ -1679,7 +1727,7 @@ describe("auth routes", () => {
     });
 
     it("POST /login/recovery/complete rejects a reused code", async () => {
-      const { accessToken, email } = await registerForRecovery();
+      const { accessToken, email, stepUpToken } = await registerForRecovery();
       const genRes = await app.handle(
         new Request("http://localhost/recovery/generate", {
           method: "POST",
@@ -1687,7 +1735,7 @@ describe("auth routes", () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`,
           },
-          body: "{}",
+          body: JSON.stringify({ step_up_token: stepUpToken }),
         }),
       );
       const { recoveryCodes: codes } = (await genRes.json()) as { recoveryCodes: string[] };

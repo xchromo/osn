@@ -1,6 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-import { accounts, recoveryCodes, sessions, users, passkeys } from "@osn/db/schema";
+import { accounts, emailChanges, recoveryCodes, sessions, users, passkeys } from "@osn/db/schema";
 import type { Profile } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import {
@@ -8,6 +8,7 @@ import {
   hashRecoveryCode,
   RECOVERY_CODE_COUNT,
 } from "@shared/crypto";
+import type { StepUpFactor, StepUpVerifyResult } from "@shared/observability/metrics";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -34,12 +35,17 @@ import {
   metricSessionReuseDetected,
   metricSessionFamilyRevoked,
   metricSessionSecurityInvalidation,
+  metricStepUpIssued,
+  metricStepUpVerified,
   withAuthLogin,
   withAuthRecovery,
   withAuthRegister,
   withAuthTokenRefresh,
+  withEmailChange,
+  withSessionOp,
   withSessionRotation,
   withProfileSwitch,
+  withStepUp,
 } from "../metrics";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +109,26 @@ export interface AuthConfig {
    * empty, all redirect URIs are accepted (development mode only).
    */
   allowedRedirectUris?: string[];
+  /**
+   * Step-up (sudo) token TTL in seconds. Default: 300 (5 min). Short enough
+   * that a stolen step-up JWT grants only a narrow window for sensitive
+   * actions — same ceiling as an access token, same threat model.
+   */
+  stepUpTokenTtl?: number;
+  /**
+   * HMAC pepper used to hash session-issuing IP addresses into
+   * `sessions.ip_hash`. Must be at least 32 bytes of unguessable material
+   * in non-local envs — rotating it invalidates the display "same-subnet"
+   * signal, but has no effect on session validity. When unset, IP hashes
+   * are not recorded (dev mode).
+   */
+  sessionIpPepper?: string;
+  /**
+   * Permitted AMR ("authentication method reference") values for
+   * `/recovery/generate` step-up. The user explicitly wanted both passkey
+   * and OTP flows allowed; set narrower in production if desired.
+   */
+  recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp")[];
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +198,35 @@ const pendingRegistrations = new Map<string, PendingRegistration>();
 // Single-use enrollment tokens that have already been consumed by a passkey
 // register/complete call. Cleared opportunistically by sweepEnrollmentTokens.
 const consumedEnrollmentTokens = new Map<string, number>();
+
+// Step-up passkey challenges — keyed by accountId (caller is already
+// authenticated, so identifier resolution is unnecessary and would risk
+// cross-account step-up abuse if omitted).
+const stepUpPasskeyChallenges = new Map<string, ChallengeEntry>();
+
+// Step-up OTP codes — keyed by accountId. Separate from loginOtp store so
+// a login OTP cannot be replayed to authorise a sensitive action, and vice
+// versa. Structure matches OtpEntry but without profileId (accountId is the key).
+interface StepUpOtpEntry {
+  codeHash: string;
+  attempts: number;
+  expiresAt: number;
+}
+const stepUpOtpStore = new Map<string, StepUpOtpEntry>();
+
+// Pending email-change OTPs — keyed by accountId. The new email sits in the
+// entry rather than the key so the service can reject attempts that belong
+// to a stale "begin" call.
+interface PendingEmailChange {
+  newEmail: string;
+  codeHash: string;
+  attempts: number;
+  expiresAt: number;
+}
+const pendingEmailChanges = new Map<string, PendingEmailChange>();
+
+// Consumed step-up token jtis (replay guard). Swept opportunistically.
+const consumedStepUpTokens = new Map<string, number>();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -266,6 +321,16 @@ function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/**
+ * Public revocation handle for a session — first 16 hex chars of the
+ * SHA-256 hash. 64 bits of collision resistance within a single account's
+ * session list is more than enough; exposing the full hash would let a
+ * log-capturing attacker DELETE sessions by guessing the URL.
+ */
+function sessionHandleFromHash(sessionHash: string): string {
+  return sessionHash.slice(0, 16);
+}
+
 const EmailSchema = Schema.String.pipe(
   Schema.filter((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s), {
     message: () => "Invalid email",
@@ -300,6 +365,32 @@ export interface TokenSet {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+}
+
+/**
+ * Per-session metadata captured at issuance. `uaLabel` is a coarse
+ * "Firefox on macOS"-style string — never the raw User-Agent. `ip` is
+ * the caller's IP; it is immediately hashed via HMAC-peppered SHA-256
+ * before leaving this service, never stored raw.
+ */
+export interface SessionMeta {
+  uaLabel?: string | null;
+  ip?: string | null;
+}
+
+/**
+ * Public shape returned by `listAccountSessions`. The revocation handle
+ * (`id`) is the first 16 hex chars of the session-token SHA-256 — enough
+ * to uniquely identify a row in practice (well below any collision risk
+ * for a single account) without exposing the full token hash.
+ */
+export interface SessionSummary {
+  id: string;
+  uaLabel: string | null;
+  createdAt: number;
+  lastUsedAt: number | null;
+  expiresAt: number;
+  isCurrent: boolean;
 }
 
 /**
@@ -363,6 +454,20 @@ export function createAuthService(config: AuthConfig) {
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
   const otpTtl = config.otpTtl ?? 600;
   const magicTtl = config.magicTtl ?? 600;
+  const stepUpTokenTtl = config.stepUpTokenTtl ?? 300;
+  const recoveryGenerateAllowedAmr = new Set<string>(
+    config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp"],
+  );
+  /**
+   * HMAC-SHA256 pepper for IP hashing. Only applied when the caller has
+   * configured one — in dev we leave ip_hash NULL so local Docker IPs
+   * don't turn into stable "same device" signals by accident.
+   */
+  const hashIp = (ip: string): string | null => {
+    const pepper = config.sessionIpPepper;
+    if (!pepper) return null;
+    return createHmac("sha256", pepper).update(ip).digest("hex");
+  };
 
   // -------------------------------------------------------------------------
   // Redirect URI validation (S-H3)
@@ -669,6 +774,7 @@ export function createAuthService(config: AuthConfig) {
   const completeRegistration = (
     email: string,
     code: string,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<
     {
       profileId: string;
@@ -759,6 +865,8 @@ export function createAuthService(config: AuthConfig) {
         pending.email,
         pending.handle,
         pending.displayName,
+        undefined,
+        sessionMeta,
       );
       const enrollmentToken = yield* issueEnrollmentToken(accountId);
 
@@ -839,6 +947,7 @@ export function createAuthService(config: AuthConfig) {
     handle: string,
     displayName: string | null,
     familyId?: string,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const accessToken = yield* issueAccessToken(profileId, email, handle, displayName);
@@ -858,6 +967,9 @@ export function createAuthService(config: AuthConfig) {
             familyId: fam,
             expiresAt: nowSec + refreshTokenTtl,
             createdAt: nowSec,
+            uaLabel: sessionMeta?.uaLabel ?? null,
+            ipHash: sessionMeta?.ip ? hashIp(sessionMeta.ip) : null,
+            lastUsedAt: nowSec,
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -1029,18 +1141,23 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid or expired session" }));
       }
 
-      // Sliding window: extend when less than half the TTL remains
+      // Sliding window: extend when less than half the TTL remains.
+      // Always touch `lastUsedAt` so the Sessions panel reflects reality
+      // even for sessions that aren't approaching expiry.
       const halfTtl = Math.floor(refreshTokenTtl / 2);
-      if (session.expiresAt - nowSec < halfTtl) {
-        yield* Effect.tryPromise({
-          try: () =>
-            db
-              .update(sessions)
-              .set({ expiresAt: nowSec + refreshTokenTtl })
-              .where(eq(sessions.id, sessionId)),
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-      }
+      const shouldExtend = session.expiresAt - nowSec < halfTtl;
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .update(sessions)
+            .set(
+              shouldExtend
+                ? { expiresAt: nowSec + refreshTokenTtl, lastUsedAt: nowSec }
+                : { lastUsedAt: nowSec },
+            )
+            .where(eq(sessions.id, sessionId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
 
       return { accountId: session.accountId, familyId: session.familyId, sessionId };
     });
@@ -1159,7 +1276,9 @@ export function createAuthService(config: AuthConfig) {
         profile.displayName,
       );
 
-      // Rotate: delete old session, insert new one in the same family
+      // Rotate: delete old session, insert new one in the same family,
+      // preserving the old session's metadata (UA label + IP hash) so the
+      // device keeps its identity across rotations.
       const newSessionToken = generateSessionToken();
       const newSessionId = hashSessionToken(newSessionToken);
       const nowSec = Math.floor(Date.now() / 1000);
@@ -1168,6 +1287,12 @@ export function createAuthService(config: AuthConfig) {
       yield* Effect.tryPromise({
         try: () =>
           db.transaction(async (tx) => {
+            const existing = await tx
+              .select()
+              .from(sessions)
+              .where(eq(sessions.id, oldSessionId))
+              .limit(1);
+            const old = existing[0];
             await tx.delete(sessions).where(eq(sessions.id, oldSessionId));
             await tx.insert(sessions).values({
               id: newSessionId,
@@ -1175,6 +1300,9 @@ export function createAuthService(config: AuthConfig) {
               familyId,
               expiresAt: nowSec + refreshTokenTtl,
               createdAt: nowSec,
+              uaLabel: old?.uaLabel ?? null,
+              ipHash: old?.ipHash ?? null,
+              lastUsedAt: nowSec,
             });
           }),
         catch: (cause) => new DatabaseError({ cause }),
@@ -1497,6 +1625,7 @@ export function createAuthService(config: AuthConfig) {
   const completePasskeyLoginDirect = (
     identifier: string,
     assertion: AuthenticationResponseJSON,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const profile = yield* verifyPasskeyAssertion(identifier, assertion);
@@ -1506,6 +1635,8 @@ export function createAuthService(config: AuthConfig) {
         profile.email,
         profile.handle,
         profile.displayName,
+        undefined,
+        sessionMeta,
       );
       return { session, profile: toPublicProfile(profile, profile.email) };
     }).pipe(withAuthLogin("passkey"));
@@ -1619,6 +1750,7 @@ export function createAuthService(config: AuthConfig) {
   const completeOtpDirect = (
     identifier: string,
     code: string,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const profile = yield* verifyOtpCode(identifier, code);
@@ -1628,6 +1760,8 @@ export function createAuthService(config: AuthConfig) {
         profile.email,
         profile.handle,
         profile.displayName,
+        undefined,
+        sessionMeta,
       );
       return { session, profile: toPublicProfile(profile, profile.email) };
     }).pipe(withAuthLogin("otp"));
@@ -1736,6 +1870,7 @@ export function createAuthService(config: AuthConfig) {
 
   const verifyMagicDirect = (
     token: string,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const profile = yield* consumeMagicToken(token);
@@ -1745,6 +1880,8 @@ export function createAuthService(config: AuthConfig) {
         profile.email,
         profile.handle,
         profile.displayName,
+        undefined,
+        sessionMeta,
       );
       return { session, profile: toPublicProfile(profile, profile.email) };
     }).pipe(withAuthLogin("magic_link"));
@@ -2030,6 +2167,7 @@ export function createAuthService(config: AuthConfig) {
   const completeRecoveryLogin = (
     identifier: string,
     code: string,
+    sessionMeta?: SessionMeta,
   ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const { profile } = yield* consumeRecoveryCode(identifier, code);
@@ -2039,9 +2177,566 @@ export function createAuthService(config: AuthConfig) {
         profile.email,
         profile.handle,
         profile.displayName,
+        undefined,
+        sessionMeta,
       );
       return { session, profile: toPublicProfile(profile, profile.email) };
     }).pipe(withAuthLogin("recovery_code"));
+
+  // -------------------------------------------------------------------------
+  // Step-up (sudo) tokens — M-PK1
+  //
+  // Short-lived ES256 JWTs minted by a fresh authentication ceremony
+  // (passkey or OTP to the account's verified email) and required by the
+  // most sensitive endpoints (recovery-code generation, email change).
+  // Signed with the same ES256 key as access tokens but with a distinct
+  // audience claim (`osn-step-up`) so they cannot be cross-used.
+  //
+  // Replay guard: every token has a unique `jti`. On first successful
+  // consumption the jti is recorded in `consumedStepUpTokens`; subsequent
+  // presentations fail. The map is swept opportunistically on every
+  // verify to bound memory.
+  // -------------------------------------------------------------------------
+
+  const STEP_UP_AUDIENCE = "osn-step-up";
+
+  const issueStepUpToken = (accountId: string, factor: StepUpFactor) =>
+    Effect.gen(function* () {
+      // Map the ceremony factor onto RFC 8176 "amr" values the verifier reads.
+      const amr = factor === "passkey" ? "webauthn" : factor === "otp" ? "otp" : "recovery";
+      const token = yield* Effect.tryPromise({
+        try: () =>
+          signJwt(
+            {
+              sub: accountId,
+              aud: STEP_UP_AUDIENCE,
+              amr: [amr],
+              jti: crypto.randomUUID(),
+            },
+            config.jwtPrivateKey,
+            config.jwtKid,
+            stepUpTokenTtl,
+          ),
+        catch: (cause) => new AuthError({ message: String(cause) }),
+      });
+      metricStepUpIssued(factor);
+      return token;
+    });
+
+  /**
+   * Verifies a step-up token and returns the amr values it carries. Fails
+   * with an AuthError on any signature / audience / expiry / replay issue;
+   * the error message is intentionally generic so the wire doesn't leak
+   * whether it was a wrong sub or a replayed jti.
+   */
+  const verifyStepUpToken = (
+    token: string,
+    expectedAccountId: string,
+    allowedAmr: ReadonlySet<string>,
+  ): Effect.Effect<{ amr: string[] }, AuthError> =>
+    Effect.gen(function* () {
+      const record = (result: StepUpVerifyResult) =>
+        Effect.sync(() => metricStepUpVerified(result));
+
+      const payloadResult = yield* Effect.tryPromise({
+        try: () => verifyJwt(token, config.jwtPublicKey),
+        catch: () => new AuthError({ message: "Invalid step-up token" }),
+      }).pipe(Effect.tapError(() => record("invalid")));
+
+      if (payloadResult["aud"] !== STEP_UP_AUDIENCE) {
+        yield* record("wrong_audience");
+        return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
+      }
+      if (typeof payloadResult["sub"] !== "string" || payloadResult["sub"] !== expectedAccountId) {
+        yield* record("wrong_subject");
+        return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
+      }
+      const jti = payloadResult["jti"];
+      if (typeof jti !== "string") {
+        yield* record("invalid");
+        return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
+      }
+
+      // Sweep expired replay entries (TTL already enforced on verify above;
+      // jti entries live at most stepUpTokenTtl ms after they were consumed).
+      const cutoff = Date.now() - stepUpTokenTtl * 1000;
+      for (const [k, ts] of consumedStepUpTokens) {
+        if (ts < cutoff) consumedStepUpTokens.delete(k);
+      }
+      if (consumedStepUpTokens.has(jti)) {
+        yield* record("jti_replay");
+        return yield* Effect.fail(new AuthError({ message: "Step-up token already used" }));
+      }
+
+      const amrRaw = payloadResult["amr"];
+      const amr = Array.isArray(amrRaw)
+        ? amrRaw.filter((v): v is string => typeof v === "string")
+        : [];
+      if (!amr.some((v) => allowedAmr.has(v))) {
+        yield* record("amr_not_allowed");
+        return yield* Effect.fail(new AuthError({ message: "Step-up factor not permitted" }));
+      }
+
+      consumedStepUpTokens.set(jti, Date.now());
+      yield* record("ok");
+      return { amr };
+    });
+
+  /**
+   * Step-up passkey: begin. Caller is already authenticated; we scope
+   * the challenge to their account so a stolen assertion for a different
+   * credential cannot be replayed.
+   */
+  const beginStepUpPasskey = (
+    accountId: string,
+  ): Effect.Effect<
+    { options: PublicKeyCredentialRequestOptionsJSON },
+    AuthError | DatabaseError,
+    Db
+  > =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const accountPasskeys = yield* Effect.tryPromise({
+        try: () => db.select().from(passkeys).where(eq(passkeys.accountId, accountId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (accountPasskeys.length === 0) {
+        return yield* Effect.fail(
+          new AuthError({ message: "No passkeys registered for this account" }),
+        );
+      }
+      const options = yield* Effect.tryPromise({
+        try: () =>
+          generateAuthenticationOptions({
+            rpID: config.rpId,
+            allowCredentials: accountPasskeys.map((pk) => ({
+              id: pk.credentialId,
+              transports: pk.transports
+                ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
+                : undefined,
+            })),
+            userVerification: "preferred",
+          }),
+        catch: (cause) => new AuthError({ message: String(cause) }),
+      });
+      stepUpPasskeyChallenges.set(accountId, {
+        challenge: options.challenge,
+        expiresAt: Date.now() + 120_000,
+      });
+      return { options };
+    }).pipe(withStepUp("begin"));
+
+  /**
+   * Step-up passkey: complete. Verifies the assertion against the account's
+   * own challenge (not an identifier-keyed one — defence against a stolen
+   * session being used to step up as somebody else) and mints the token.
+   */
+  const completeStepUpPasskey = (
+    accountId: string,
+    assertion: AuthenticationResponseJSON,
+  ): Effect.Effect<{ stepUpToken: string; expiresIn: number }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const entry = stepUpPasskeyChallenges.get(accountId);
+      if (!entry || Date.now() > entry.expiresAt) {
+        return yield* Effect.fail(new AuthError({ message: "Challenge expired or not found" }));
+      }
+      stepUpPasskeyChallenges.delete(accountId);
+
+      const { db } = yield* Db;
+      const pkResult = yield* Effect.tryPromise({
+        try: () =>
+          db.select().from(passkeys).where(eq(passkeys.credentialId, assertion.id)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const pk = pkResult[0];
+      if (!pk || pk.accountId !== accountId) {
+        return yield* Effect.fail(new AuthError({ message: "Passkey not found" }));
+      }
+
+      const verification = yield* Effect.tryPromise({
+        try: () =>
+          verifyAuthenticationResponse({
+            response: assertion,
+            expectedChallenge: entry.challenge,
+            expectedOrigin: config.origin,
+            expectedRPID: config.rpId,
+            credential: {
+              id: pk.credentialId,
+              publicKey: new Uint8Array(Buffer.from(pk.publicKey, "base64")),
+              counter: pk.counter,
+              transports: pk.transports
+                ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
+                : undefined,
+            },
+          }),
+        catch: (cause) => new AuthError({ message: String(cause) }),
+      });
+      if (!verification.verified) {
+        return yield* Effect.fail(new AuthError({ message: "Passkey verification failed" }));
+      }
+
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .update(passkeys)
+            .set({ counter: verification.authenticationInfo.newCounter })
+            .where(eq(passkeys.id, pk.id)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      const stepUpToken = yield* issueStepUpToken(accountId, "passkey");
+      return { stepUpToken, expiresIn: stepUpTokenTtl };
+    }).pipe(withStepUp("complete"));
+
+  /**
+   * Step-up OTP: begin. Emails a fresh 6-digit code to the account's
+   * verified email. Keyed separately from login OTPs so a login code
+   * cannot authorise a sensitive action and vice versa.
+   */
+  const beginStepUpOtp = (
+    accountId: string,
+  ): Effect.Effect<{ sent: boolean }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const accountRow = yield* Effect.tryPromise({
+        try: () => db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const account = accountRow[0];
+      if (!account) {
+        return yield* Effect.fail(new AuthError({ message: "Account not found" }));
+      }
+      const code = genOtpCode();
+      stepUpOtpStore.set(accountId, {
+        codeHash: hashSessionToken(code),
+        attempts: 0,
+        expiresAt: Date.now() + otpTtl * 1000,
+      });
+      if (config.sendEmail) {
+        yield* Effect.tryPromise({
+          try: () =>
+            config.sendEmail!(
+              account.email,
+              "Confirm a sensitive action",
+              `Your OSN step-up code is: ${code}\n\nUse this to confirm a security-sensitive action. Expires in ${otpTtl / 60} minutes.`,
+            ),
+          catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
+        });
+      } else if (!process.env["OSN_ENV"] || process.env["OSN_ENV"] === "local") {
+        yield* Effect.logDebug(`[OSN local] Step-up OTP for ${account.email}: ${code}`);
+      }
+      metricAuthOtpSent("login");
+      return { sent: true };
+    }).pipe(withStepUp("begin"));
+
+  const completeStepUpOtp = (
+    accountId: string,
+    code: string,
+  ): Effect.Effect<{ stepUpToken: string; expiresIn: number }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const entry = stepUpOtpStore.get(accountId);
+      if (!entry || Date.now() > entry.expiresAt) {
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+      if (!timingSafeEqualString(entry.codeHash, hashSessionToken(code))) {
+        entry.attempts++;
+        if (entry.attempts >= MAX_OTP_ATTEMPTS) stepUpOtpStore.delete(accountId);
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+      stepUpOtpStore.delete(accountId);
+      const stepUpToken = yield* issueStepUpToken(accountId, "otp");
+      return { stepUpToken, expiresIn: stepUpTokenTtl };
+    }).pipe(withStepUp("complete"));
+
+  const verifyStepUpForRecoveryGenerate = (
+    accountId: string,
+    stepUpToken: string,
+  ): Effect.Effect<void, AuthError> =>
+    Effect.gen(function* () {
+      yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr);
+    });
+
+  // -------------------------------------------------------------------------
+  // Session introspection + revocation
+  // -------------------------------------------------------------------------
+
+  const listAccountSessions = (
+    accountId: string,
+    currentSessionHash: string | null,
+  ): Effect.Effect<{ sessions: SessionSummary[] }, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select()
+            .from(sessions)
+            .where(eq(sessions.accountId, accountId))
+            .orderBy(desc(sessions.lastUsedAt)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return {
+        sessions: rows.map((row) => ({
+          id: sessionHandleFromHash(row.id),
+          uaLabel: row.uaLabel,
+          createdAt: row.createdAt,
+          lastUsedAt: row.lastUsedAt,
+          expiresAt: row.expiresAt,
+          isCurrent: currentSessionHash !== null && row.id === currentSessionHash,
+        })),
+      };
+    }).pipe(withSessionOp("list"));
+
+  /**
+   * Revokes a single session by its public handle (first 16 hex chars of
+   * the SHA-256). Scopes the DELETE to the caller's accountId so a stolen
+   * handle from another account's log line can't revoke anyone else's
+   * sessions. Returns whether the caller's own session was the one revoked
+   * so the HTTP layer can clear the cookie.
+   */
+  const revokeAccountSession = (
+    accountId: string,
+    sessionHandle: string,
+    currentSessionHash: string | null,
+  ): Effect.Effect<{ revokedSelf: boolean }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () => db.select().from(sessions).where(eq(sessions.accountId, accountId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const match = rows.find((r) => sessionHandleFromHash(r.id) === sessionHandle);
+      if (!match) {
+        return yield* Effect.fail(new AuthError({ message: "Session not found" }));
+      }
+      yield* Effect.tryPromise({
+        try: () => db.delete(sessions).where(eq(sessions.id, match.id)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      metricSessionSecurityInvalidation("session_revoke");
+      return { revokedSelf: currentSessionHash !== null && match.id === currentSessionHash };
+    }).pipe(withSessionOp("revoke"));
+
+  /**
+   * Revokes all sessions for the account except the caller's, for the
+   * "Sign out everywhere else" button in Settings.
+   */
+  const revokeAllOtherAccountSessions = (
+    accountId: string,
+    currentSessionHash: string,
+  ): Effect.Effect<void, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .delete(sessions)
+            .where(and(eq(sessions.accountId, accountId), ne(sessions.id, currentSessionHash))),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      metricSessionSecurityInvalidation("session_revoke_all");
+    }).pipe(withSessionOp("revoke_all"));
+
+  // -------------------------------------------------------------------------
+  // Email change (step-up gated)
+  // -------------------------------------------------------------------------
+
+  const EMAIL_CHANGE_LIMIT = 2;
+  const EMAIL_CHANGE_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+
+  const beginEmailChange = (
+    accountId: string,
+    newEmail: string,
+  ): Effect.Effect<{ sent: boolean }, AuthError | ValidationError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      yield* Schema.decodeUnknown(EmailSchema)(newEmail).pipe(
+        Effect.mapError((cause) => new ValidationError({ cause })),
+      );
+      const normalised = newEmail.toLowerCase();
+      const { db } = yield* Db;
+
+      const currentAccount = yield* Effect.tryPromise({
+        try: () => db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const account = currentAccount[0];
+      if (!account) {
+        return yield* Effect.fail(new AuthError({ message: "Account not found" }));
+      }
+      if (account.email === normalised) {
+        return yield* Effect.fail(new AuthError({ message: "New email matches current email" }));
+      }
+
+      const collision = yield* Effect.tryPromise({
+        try: () => db.select().from(accounts).where(eq(accounts.email, normalised)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (collision.length > 0) {
+        return yield* Effect.fail(new AuthError({ message: "Email already in use" }));
+      }
+
+      // 2-per-7-days cap applies at BEGIN as well so an attacker with a
+      // step-up token can't burn the user's OTP inbox or quietly rotate
+      // pending-change state.
+      const windowStart = Math.floor(Date.now() / 1000) - EMAIL_CHANGE_WINDOW_SECONDS;
+      const recentChanges = yield* Effect.tryPromise({
+        try: () => db.select().from(emailChanges).where(eq(emailChanges.accountId, accountId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const recentCount = recentChanges.filter((r) => r.completedAt >= windowStart).length;
+      if (recentCount >= EMAIL_CHANGE_LIMIT) {
+        return yield* Effect.fail(
+          new AuthError({ message: "Email change limit reached (2 per 7 days)" }),
+        );
+      }
+
+      const code = genOtpCode();
+      pendingEmailChanges.set(accountId, {
+        newEmail: normalised,
+        codeHash: hashSessionToken(code),
+        attempts: 0,
+        expiresAt: Date.now() + otpTtl * 1000,
+      });
+
+      if (config.sendEmail) {
+        yield* Effect.tryPromise({
+          try: () =>
+            config.sendEmail!(
+              normalised,
+              "Confirm your new OSN email",
+              `Your OSN email change code is: ${code}\n\nExpires in ${otpTtl / 60} minutes.`,
+            ),
+          catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
+        });
+      } else if (!process.env["OSN_ENV"] || process.env["OSN_ENV"] === "local") {
+        yield* Effect.logDebug(`[OSN local] Email-change OTP for ${normalised}: ${code}`);
+      }
+
+      metricAuthOtpSent("login");
+      return { sent: true };
+    }).pipe(withEmailChange("begin"));
+
+  /**
+   * Finalises an email change. Requires:
+   *   - A valid step-up token (passkey or OTP amr) for this account.
+   *   - A valid OTP sent to the **new** email address.
+   *   - < 2 completed changes in the last 7 days.
+   *
+   * On success: the accounts row is updated, every OTHER session is
+   * revoked (the caller's stays so they don't get kicked out of the
+   * Settings flow), and an audit row is inserted — all in one transaction
+   * so we cannot leave the system in a half-changed state.
+   */
+  const completeEmailChange = (
+    accountId: string,
+    code: string,
+    stepUpToken: string,
+    currentSessionHash: string | null,
+  ): Effect.Effect<{ email: string }, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      yield* verifyStepUpToken(stepUpToken, accountId, new Set(["webauthn", "otp"]));
+
+      const pending = pendingEmailChanges.get(accountId);
+      if (!pending || Date.now() > pending.expiresAt) {
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+      if (!timingSafeEqualString(pending.codeHash, hashSessionToken(code))) {
+        pending.attempts++;
+        if (pending.attempts >= MAX_OTP_ATTEMPTS) pendingEmailChanges.delete(accountId);
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+      }
+
+      const { db } = yield* Db;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const windowStart = nowSec - EMAIL_CHANGE_WINDOW_SECONDS;
+
+      const changed = yield* Effect.tryPromise({
+        try: async () => {
+          try {
+            return await db.transaction(async (tx) => {
+              const acct = await tx
+                .select()
+                .from(accounts)
+                .where(eq(accounts.id, accountId))
+                .limit(1);
+              const current = acct[0];
+              if (!current) return { ok: false as const, reason: "not_found" as const };
+
+              const recent = await tx
+                .select()
+                .from(emailChanges)
+                .where(eq(emailChanges.accountId, accountId));
+              const recentCount = recent.filter((r) => r.completedAt >= windowStart).length;
+              if (recentCount >= EMAIL_CHANGE_LIMIT) {
+                return { ok: false as const, reason: "rate_limit" as const };
+              }
+
+              // Final collision check inside the transaction so two
+              // concurrent completes on the same target email can't both win.
+              const collision = await tx
+                .select()
+                .from(accounts)
+                .where(eq(accounts.email, pending.newEmail))
+                .limit(1);
+              if (collision.length > 0) {
+                return { ok: false as const, reason: "conflict" as const };
+              }
+
+              await tx
+                .update(accounts)
+                .set({ email: pending.newEmail, updatedAt: new Date(nowSec * 1000) })
+                .where(eq(accounts.id, accountId));
+
+              await tx.insert(emailChanges).values({
+                id: genId("ech_"),
+                accountId,
+                previousEmail: current.email,
+                newEmail: pending.newEmail,
+                completedAt: nowSec,
+              });
+
+              // Kill every other session in the same TX — a half-applied
+              // change would leave a potentially-compromised session alive
+              // with a stale email claim.
+              if (currentSessionHash !== null) {
+                await tx
+                  .delete(sessions)
+                  .where(
+                    and(eq(sessions.accountId, accountId), ne(sessions.id, currentSessionHash)),
+                  );
+              } else {
+                await tx.delete(sessions).where(eq(sessions.accountId, accountId));
+              }
+
+              return { ok: true as const, email: pending.newEmail };
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (/UNIQUE|constraint/i.test(msg)) {
+              return { ok: false as const, reason: "conflict" as const };
+            }
+            throw e;
+          }
+        },
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      if (!changed.ok) {
+        if (changed.reason === "not_found") {
+          return yield* Effect.fail(new AuthError({ message: "Account not found" }));
+        }
+        if (changed.reason === "rate_limit") {
+          return yield* Effect.fail(
+            new AuthError({ message: "Email change limit reached (2 per 7 days)" }),
+          );
+        }
+        return yield* Effect.fail(new AuthError({ message: "Email already in use" }));
+      }
+
+      pendingEmailChanges.delete(accountId);
+      metricSessionSecurityInvalidation("email_change");
+      return { email: changed.email };
+    }).pipe(withEmailChange("complete"));
 
   /** Returns the count of unused recovery codes for the account. */
   const countActiveRecoveryCodes = (
@@ -2095,6 +2790,17 @@ export function createAuthService(config: AuthConfig) {
     consumeRecoveryCode,
     completeRecoveryLogin,
     countActiveRecoveryCodes,
+    beginStepUpPasskey,
+    completeStepUpPasskey,
+    beginStepUpOtp,
+    completeStepUpOtp,
+    verifyStepUpForRecoveryGenerate,
+    listAccountSessions,
+    revokeAccountSession,
+    revokeAllOtherAccountSessions,
+    beginEmailChange,
+    completeEmailChange,
+    hashSessionToken: (token: string) => hashSessionToken(token),
   };
 }
 
