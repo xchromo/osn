@@ -17,7 +17,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [x] Auth Improvements Phase 1: Server-side sessions + refresh token rotation + session invalidation (C1/C2/H1)
 - [x] Auth Improvements Phase 4: Recovery codes (M2) + short access-token TTL (5 min) with client silent-refresh on 401 — see [[recovery-codes]]
 - [x] Auth Improvements Phase 5a: Step-up (sudo) tokens (M-PK1), session introspection/revocation UI, email change flow — see [[step-up]], [[sessions]]
-- [ ] Auth Improvements Phase 5b: ~~Redis-backed rotated-session store~~ (shipped — see [[sessions]]), ~~PKCE cleanup~~ (shipped — deleted `/authorize`, `authorization_code` grant, `pkceStore`, client `pkce.ts` + `startLogin`/`handleCallback`; magic link now routes through frontend origin via POST body, S-M1 body fallback on `/token` removed), ~~passkey management surface~~ (shipped — see [[identity-model]]: list/rename/delete, discoverable-credential login, last-passkey lockout guard), passkey-primary login (demote OTP/magic-link to recovery-only)
+- [x] Auth Improvements Phase 5b: Redis-backed rotated-session store (see [[sessions]]); PKCE cleanup (deleted `/authorize`, `authorization_code` grant, `pkceStore`, client `pkce.ts` + `startLogin`/`handleCallback`; S-M1 body fallback on `/token` removed); passkey management surface (see [[identity-model]]: list/rename/delete, discoverable-credential login, last-passkey lockout guard); **passkey-primary login** — OTP/magic-link primary login deleted, mandatory first-credential enrollment on registration, security keys accepted, WebAuthn-unsupported fallback screen, strict last-passkey guard on delete (see `[[passkey-primary]]`).
 
 ---
 
@@ -272,6 +272,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 
 ### Recovery / passkey-primary (Phase 5 prerequisites)
 - [x] M-PK1b — Out-of-band recovery-code regeneration + consumption notification. `security_events` audit table covers both recovery code kinds; `/account/security-events[/:id/ack | /ack-all]` routes require step-up (S-M1) and the Settings banner uses optimistic local removal (P-I3). **Shipped** — see [[recovery-codes]] and `[[changelog/completed-features]]`
+- [x] **M-PK** — Passkey-primary login (2026-04-22). OTP/magic-link primary login removed (routes, service methods, in-memory `otpStore`/`magicStore`, client SDK methods, UI tabs, `MagicLinkHandler`). `enrollmentToken` JWT machinery deleted — `/passkey/register/*` now authenticates via the normal access token issued by `/register/complete`. Registration is WebAuthn-gated (no flow without a supported browser) and enrollment is mandatory (no "skip" button). WebAuthn registration options loosened to `residentKey: "preferred"` + `userVerification: "preferred"` to accept FIDO2 security keys while keeping identifier-less login strict. `deletePasskey` now refuses **unconditionally** if it would leave 0 passkeys, even if recovery codes exist — the account-level invariant "every live account has ≥1 WebAuthn credential" holds cradle-to-grave. See `[[passkey-primary]]`.
 
 ---
 
@@ -374,7 +375,7 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 ### Phase 5 — Passkey-primary (Next)
 - [x] S-H1 (session): Move in-memory `rotatedSessions` map to Redis so C2 reuse detection survives restart + scales across processes. **Done** — see [[sessions]]
 - [ ] Device/session listing + revocation UI (`GET /sessions`, `DELETE /sessions/:id`). Requires `sessions.user_agent`/`ip_hash` columns. Depends on: nothing.
-- [ ] M-PK: Switch to passkey-primary login, demote OTP/magic-link to recovery-only paths gated behind a recovery code. Depends on: M2 ✅
+- [x] M-PK: Switch to passkey-primary login — see `[[passkey-primary]]`. OTP/magic-link primary login deleted; recovery code remains as the "lost device" escape hatch; security keys accepted in addition to platform passkeys; `deletePasskey` strict last-passkey guard locks in the ≥1-credential invariant.
 
 ---
 

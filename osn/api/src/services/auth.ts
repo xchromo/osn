@@ -46,7 +46,6 @@ import {
 import {
   classifyError,
   metricAuthHandleCheck,
-  metricAuthMagicLinkSent,
   metricAuthOtpSent,
   metricPasskeyLoginDiscoverable,
   metricRecoveryCodeConsumed,
@@ -103,19 +102,7 @@ export interface AuthConfig {
   origin: string;
   /** Issuer URL (JWT issuer) */
   issuerUrl: string;
-  /**
-   * Base URL (frontend origin) emails point magic links at. The token goes
-   * into `?token=…` on this URL; the app's `MagicLinkHandler` reads it from
-   * `window.location`, POSTs to `/login/magic/verify`, and clears the URL.
-   * Defaults to `origin` (the WebAuthn RP origin, which is the frontend) —
-   * callers with split-origin deployments can override.
-   *
-   * Keeping magic tokens OFF the API origin is a security control (S-H1):
-   * pointing the email at the API would render `access_token` JSON in the
-   * browser window and expose it to email-scanner pre-fetchers.
-   */
-  magicLinkBaseUrl?: string;
-  /** ES256 private key for signing access, refresh, and enrollment tokens */
+  /** ES256 private key for signing access and refresh tokens */
   jwtPrivateKey: CryptoKey;
   /** ES256 public key for verifying the above */
   jwtPublicKey: CryptoKey;
@@ -134,11 +121,9 @@ export interface AuthConfig {
   accessTokenTtl?: number;
   /** Refresh token TTL in seconds (default: 2592000 = 30 days) */
   refreshTokenTtl?: number;
-  /** OTP TTL in seconds (default: 600 = 10 min) */
+  /** OTP TTL in seconds (default: 600 = 10 min). Applies to registration, email change, and step-up OTP. */
   otpTtl?: number;
-  /** Magic link TTL in seconds (default: 600) */
-  magicTtl?: number;
-  /** Callback to send email (OTP code or magic link) */
+  /** Callback to send email (registration OTP, step-up OTP, email change OTP, security notifications). */
   sendEmail?: (to: string, subject: string, body: string) => Promise<void>;
   /**
    * Step-up (sudo) token TTL in seconds. Default: 300 (5 min). Short enough
@@ -191,18 +176,6 @@ interface ChallengeEntry {
   expiresAt: number;
 }
 
-interface OtpEntry {
-  codeHash: string;
-  profileId: string;
-  attempts: number;
-  expiresAt: number;
-}
-
-interface MagicEntry {
-  profileId: string;
-  expiresAt: number;
-}
-
 interface PendingRegistration {
   email: string;
   handle: string;
@@ -249,13 +222,8 @@ function checkProfileSwitchLimit(accountId: string): boolean {
 // keyed by accountId for registration, by email for login
 const registrationChallenges = new Map<string, ChallengeEntry>();
 const loginChallenges = new Map<string, ChallengeEntry>();
-const otpStore = new Map<string, OtpEntry>();
-const magicStore = new Map<string, MagicEntry>();
 // Pending email-verification registrations, keyed by lowercased email.
 const pendingRegistrations = new Map<string, PendingRegistration>();
-// Single-use enrollment tokens that have already been consumed by a passkey
-// register/complete call. Cleared opportunistically by sweepEnrollmentTokens.
-const consumedEnrollmentTokens = new Map<string, number>();
 
 // Step-up passkey challenges — keyed by accountId (caller is already
 // authenticated, so identifier resolution is unnecessary and would risk
@@ -633,7 +601,6 @@ export function createAuthService(config: AuthConfig) {
   const accessTokenTtl = config.accessTokenTtl ?? 300;
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
   const otpTtl = config.otpTtl ?? 600;
-  const magicTtl = config.magicTtl ?? 600;
   const stepUpTokenTtl = config.stepUpTokenTtl ?? 300;
   const recoveryGenerateAllowedAmr = new Set<string>(
     config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp"],
@@ -909,23 +876,25 @@ export function createAuthService(config: AuthConfig) {
 
   /**
    * Step 2 of email-verified registration. Verifies the OTP against the
-   * pending registration and, if valid, creates the account + profile rows, then returns a
-   * full Session (access + refresh tokens) AND a short-lived single-use
-   * enrollment token the client can use to add a passkey via the
-   * Authorization-gated `/passkey/register/*` routes.
+   * pending registration and, if valid, creates the account + profile rows
+   * and returns a full session (access + refresh tokens).
+   *
+   * The UI then immediately drives the `/passkey/register/*` flow using
+   * the returned access token to enroll the user's first passkey. Accounts
+   * without a passkey cannot make it past registration because the UI
+   * refuses to dismiss until enrollment succeeds, and `deletePasskey`
+   * refuses to drop below 1 — so every live account always has ≥1 passkey.
    *
    * Security properties:
    *  - Constant-time OTP comparison (S-M4 / `timingSafeEqualString`).
    *  - Per-entry attempt counter; after MAX_OTP_ATTEMPTS the entry is wiped,
-   *    capping brute-force probability at ~5/1_000_000 per registration (S-H1
-   *    partial; full rate-limit fix is tracked in the security backlog).
+   *    capping brute-force probability at ~5/1_000_000 per registration.
    *  - The pending entry is only deleted AFTER a successful insert. A losing
    *    race against another insert (TOCTOU) leaves the pending entry intact
    *    so the user can retry without burning their OTP (S-H4).
    *  - Insert relies on the DB-level UNIQUE constraint on email/handle as
    *    the source of truth, mapping constraint violations to a clean
    *    AuthError instead of leaking driver text (S-H4 / S-H5).
-   *  - Returns access + refresh tokens directly.
    */
   const completeRegistration = (
     email: string,
@@ -940,7 +909,6 @@ export function createAuthService(config: AuthConfig) {
       accessToken: string;
       refreshToken: string;
       expiresIn: number;
-      enrollmentToken: string;
     },
     AuthError | DatabaseError,
     Db
@@ -1024,7 +992,6 @@ export function createAuthService(config: AuthConfig) {
         undefined,
         sessionMeta,
       );
-      const enrollmentToken = yield* issueEnrollmentToken(accountId);
 
       return {
         profileId: id,
@@ -1034,7 +1001,6 @@ export function createAuthService(config: AuthConfig) {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         expiresIn: tokens.expiresIn,
-        enrollmentToken,
       };
     }).pipe(withAuthRegister("complete"));
 
@@ -1155,76 +1121,6 @@ export function createAuthService(config: AuthConfig) {
       });
 
       return { accessToken, refreshToken: sessionToken, expiresIn: accessTokenTtl };
-    });
-
-  // -------------------------------------------------------------------------
-  // Enrollment tokens
-  //
-  // Short-lived (5 min) single-use bearer tokens minted by completeRegistration
-  // (and only by completeRegistration) so that the new user can prove the
-  // server-side identity it just received over the same channel when it calls
-  // /passkey/register/{begin,complete}. The token's `sub` is the accountId of the
-  // account being enrolled. Calls to /passkey/register/* compare the token's sub
-  // against the request body's accountId; a mismatch is rejected.
-  //
-  // The "consumed" set tracks the JWT IDs (`jti`) of tokens that have already
-  // been used by /passkey/register/complete. /passkey/register/begin does NOT
-  // consume the token (the user may need to retry the WebAuthn ceremony).
-  // -------------------------------------------------------------------------
-
-  const enrollmentTokenTtl = 5 * 60; // seconds
-
-  const issueEnrollmentToken = (accountId: string) =>
-    Effect.tryPromise({
-      try: () => {
-        const jti = crypto.randomUUID();
-        return signJwt(
-          { sub: accountId, type: "passkey-enroll", jti },
-          config.jwtPrivateKey,
-          config.jwtKid,
-          enrollmentTokenTtl,
-        );
-      },
-      catch: (cause) => new AuthError({ message: String(cause) }),
-    });
-
-  /**
-   * Verifies an enrollment token. Returns the accountId on success.
-   * If `consume` is true (used by /passkey/register/complete) the token's jti
-   * is recorded in `consumedEnrollmentTokens` and any subsequent verification
-   * with the same jti will fail.
-   */
-  const verifyEnrollmentToken = (
-    token: string,
-    options: { consume: boolean } = { consume: false },
-  ): Effect.Effect<{ accountId: string }, AuthError> =>
-    Effect.gen(function* () {
-      const payload = yield* Effect.tryPromise({
-        try: () => verifyJwt(token, config.jwtPublicKey),
-        catch: () => new AuthError({ message: "Invalid or expired enrollment token" }),
-      });
-      if (
-        payload["type"] !== "passkey-enroll" ||
-        typeof payload["sub"] !== "string" ||
-        typeof payload["jti"] !== "string"
-      ) {
-        return yield* Effect.fail(new AuthError({ message: "Invalid enrollment token" }));
-      }
-
-      // Sweep consumed tokens whose original TTL has elapsed (Date.now() ms).
-      const cutoff = Date.now() - enrollmentTokenTtl * 1000;
-      for (const [jti, ts] of consumedEnrollmentTokens) {
-        if (ts < cutoff) consumedEnrollmentTokens.delete(jti);
-      }
-
-      const jti = payload["jti"] as string;
-      if (consumedEnrollmentTokens.has(jti)) {
-        return yield* Effect.fail(new AuthError({ message: "Enrollment token already used" }));
-      }
-      if (options.consume) {
-        consumedEnrollmentTokens.set(jti, Date.now());
-      }
-      return { accountId: payload["sub"] as string };
     });
 
   // -------------------------------------------------------------------------
@@ -1646,12 +1542,18 @@ export function createAuthService(config: AuthConfig) {
                 ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
                 : undefined,
             })),
-            // M-PK: discoverable-credential login requires a resident key.
-            // `userVerification: required` forces a biometric or PIN, which
-            // is the Copenhagen Book requirement for passkey-primary auth.
+            // "preferred" on both so roaming security keys register too:
+            // modern platform passkeys deliver a discoverable credential with
+            // UV (the Copenhagen Book path); FIDO2 security keys without a
+            // resident-key slot fall through to non-discoverable (they work
+            // for identified login but not the identifier-less flow); older
+            // UP-only keys register without user verification. The identifier-
+            // less login path still enforces `userVerification: "required"`,
+            // so the identifier-less ceremony's correctness does not depend
+            // on the registration ceremony here.
             authenticatorSelection: {
-              residentKey: "required",
-              userVerification: "required",
+              residentKey: "preferred",
+              userVerification: "preferred",
             },
           }),
         catch: (cause) => new AuthError({ message: String(cause) }),
@@ -1857,7 +1759,11 @@ export function createAuthService(config: AuthConfig) {
                 ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
                 : undefined,
             })),
-            userVerification: "required",
+            // Identified flow: "preferred" so UP-only security keys still
+            // work. The identifier binds the ceremony to a single account,
+            // so UV is a belt, not the braces. The identifier-less flow
+            // above still hard-requires UV.
+            userVerification: "preferred",
           }),
         catch: (cause) => new AuthError({ message: String(cause) }),
       });
@@ -2055,221 +1961,6 @@ export function createAuthService(config: AuthConfig) {
       );
       return { session, profile: toPublicProfile(profile, profile.email) };
     }).pipe(withAuthLogin("passkey"));
-
-  // -------------------------------------------------------------------------
-  // OTP: begin (login only — user must already be registered)
-  // -------------------------------------------------------------------------
-
-  const beginOtp = (
-    identifier: string,
-  ): Effect.Effect<{ sent: boolean }, AuthError | ValidationError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const normalised = normaliseIdentifier(identifier);
-      if (looksLikeEmail(normalised)) {
-        yield* Schema.decodeUnknown(EmailSchema)(normalised).pipe(
-          Effect.mapError((cause) => new ValidationError({ cause })),
-        );
-      } else {
-        yield* Schema.decodeUnknown(HandleSchema)(normalised).pipe(
-          Effect.mapError((cause) => new ValidationError({ cause })),
-        );
-      }
-
-      const profile = yield* resolveIdentifier(normalised);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
-      }
-
-      const code = genOtpCode();
-
-      // Key by normalised identifier so completeOtpDirect can check in-memory first.
-      otpStore.set(normalised, {
-        codeHash: hashSessionToken(code),
-        profileId: profile.id,
-        attempts: 0,
-        expiresAt: Date.now() + otpTtl * 1000,
-      });
-
-      if (config.sendEmail) {
-        yield* Effect.tryPromise({
-          try: () =>
-            config.sendEmail!(
-              profile.email,
-              "Your OSN sign-in code",
-              `Your one-time sign-in code is: ${code}\n\nThis code expires in ${otpTtl / 60} minutes.`,
-            ),
-          catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
-        });
-      } else if (!process.env["OSN_ENV"] || process.env["OSN_ENV"] === "local") {
-        // Local-only fallback when no email sender is configured. Guard uses
-        // OSN_ENV (not NODE_ENV) so dev/staging/prod are excluded (S-L2). See
-        // the matching block in beginRegistration for the interpolation rationale.
-        yield* Effect.logDebug(`[OSN local] OTP for ${profile.email}: ${code}`);
-      }
-
-      metricAuthOtpSent("login");
-      return { sent: true };
-    }).pipe(Effect.withSpan("auth.otp.begin"));
-
-  // -------------------------------------------------------------------------
-  // OTP: verify code (extracted). Returns the full profile row so both the
-  // code-issuing and direct-session completion paths can read email/handle/
-  // displayName off it.
-  // -------------------------------------------------------------------------
-
-  const verifyOtpCode = (
-    identifier: string,
-    code: string,
-  ): Effect.Effect<ProfileWithEmail, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      // Check in-memory store first — no DB hit on expired/invalid attempts.
-      const normalised = normaliseIdentifier(identifier);
-      const entry = otpStore.get(normalised);
-      if (!entry || Date.now() > entry.expiresAt) {
-        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
-      }
-      if (!timingSafeEqualString(entry.codeHash, hashSessionToken(code))) {
-        entry.attempts++;
-        if (entry.attempts >= MAX_OTP_ATTEMPTS) {
-          otpStore.delete(normalised);
-        }
-        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
-      }
-      otpStore.delete(normalised);
-
-      const profile = yield* findProfileById(entry.profileId);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
-      }
-      return profile;
-    });
-
-  // -------------------------------------------------------------------------
-  // OTP: complete — returns a Session + PublicProfile directly.
-  // -------------------------------------------------------------------------
-
-  const completeOtpDirect = (
-    identifier: string,
-    code: string,
-    sessionMeta?: SessionMeta,
-  ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const profile = yield* verifyOtpCode(identifier, code);
-      const session = yield* issueTokens(
-        profile.id,
-        profile.accountId,
-        profile.email,
-        profile.handle,
-        profile.displayName,
-        undefined,
-        sessionMeta,
-      );
-      return { session, profile: toPublicProfile(profile, profile.email) };
-    }).pipe(withAuthLogin("otp"));
-
-  // -------------------------------------------------------------------------
-  // Magic link: begin (login only — user must already be registered)
-  // -------------------------------------------------------------------------
-
-  const beginMagic = (
-    identifier: string,
-  ): Effect.Effect<{ sent: boolean }, AuthError | ValidationError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const normalised = normaliseIdentifier(identifier);
-      if (looksLikeEmail(normalised)) {
-        yield* Schema.decodeUnknown(EmailSchema)(normalised).pipe(
-          Effect.mapError((cause) => new ValidationError({ cause })),
-        );
-      } else {
-        yield* Schema.decodeUnknown(HandleSchema)(normalised).pipe(
-          Effect.mapError((cause) => new ValidationError({ cause })),
-        );
-      }
-
-      const profile = yield* resolveIdentifier(normalised);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
-      }
-
-      const token = genId("mlnk_") + crypto.randomUUID().replace(/-/g, "");
-      const hashedToken = hashSessionToken(token);
-
-      magicStore.set(hashedToken, {
-        profileId: profile.id,
-        expiresAt: Date.now() + magicTtl * 1000,
-      });
-
-      // S-H1: point at the frontend origin, NOT the API — the app's
-      // MagicLinkHandler consumes the token and POSTs it to /login/magic/verify.
-      // Landing on the API would render `access_token` JSON in the browser
-      // window and burn the token to any email-client pre-fetcher.
-      const magicUrl = `${config.magicLinkBaseUrl ?? config.origin}/?token=${token}`;
-
-      if (config.sendEmail) {
-        yield* Effect.tryPromise({
-          try: () =>
-            config.sendEmail!(
-              profile.email,
-              "Your OSN magic sign-in link",
-              `Click this link to sign in: ${magicUrl}\n\nThis link expires in ${magicTtl / 60} minutes.`,
-            ),
-          catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
-        });
-      } else if (!process.env["OSN_ENV"] || process.env["OSN_ENV"] === "local") {
-        // Local-only fallback when no email sender is configured. Guard uses
-        // OSN_ENV (not NODE_ENV) so dev/staging/prod are excluded (S-L2). See
-        // the matching block in beginRegistration for the interpolation rationale.
-        yield* Effect.logDebug(`[OSN local] Magic link for ${profile.email}: ${magicUrl}`);
-      }
-
-      metricAuthMagicLinkSent("ok");
-      return { sent: true };
-    }).pipe(Effect.withSpan("auth.magic_link.begin"));
-
-  // -------------------------------------------------------------------------
-  // Magic link: consume token. Atomically removes the entry and returns the
-  // profile.
-  // -------------------------------------------------------------------------
-
-  const consumeMagicToken = (
-    token: string,
-  ): Effect.Effect<ProfileWithEmail, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const hashedToken = hashSessionToken(token);
-      const entry = magicStore.get(hashedToken);
-      if (!entry || Date.now() > entry.expiresAt) {
-        return yield* Effect.fail(new AuthError({ message: "Magic link expired or not found" }));
-      }
-      magicStore.delete(hashedToken);
-
-      const profile = yield* findProfileById(entry.profileId);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
-      }
-      return profile;
-    }).pipe(Effect.withSpan("auth.magic_link.verify"));
-
-  // -------------------------------------------------------------------------
-  // Magic link: verify — returns a Session + PublicProfile directly.
-  // -------------------------------------------------------------------------
-
-  const verifyMagicDirect = (
-    token: string,
-    sessionMeta?: SessionMeta,
-  ): Effect.Effect<{ session: TokenSet; profile: PublicProfile }, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const profile = yield* consumeMagicToken(token);
-      const session = yield* issueTokens(
-        profile.id,
-        profile.accountId,
-        profile.email,
-        profile.handle,
-        profile.displayName,
-        undefined,
-        sessionMeta,
-      );
-      return { session, profile: toPublicProfile(profile, profile.email) };
-    }).pipe(withAuthLogin("magic_link"));
 
   // -------------------------------------------------------------------------
   // Profile switching (P2 — multi-account)
@@ -3618,10 +3309,12 @@ export function createAuthService(config: AuthConfig) {
    * a stale access token to keep working after the legitimate user
    * remediates.
    *
-   * Last-passkey guard: if this is the account's final passkey AND they
-   * have zero active recovery codes, we refuse. The alternative is a
-   * locked-out account — the user must generate recovery codes first, or
-   * add another passkey, before we let them delete.
+   * Last-passkey guard: refuses unconditionally if this would leave the
+   * account with zero passkeys. The account-level invariant is "every
+   * account always has ≥1 WebAuthn credential"; recovery codes are the
+   * "my device is gone" escape hatch, not a substitute credential. Users
+   * who want to rotate a compromised passkey enroll the replacement
+   * first, then delete the old one.
    */
   const deletePasskey = (
     accountId: string,
@@ -3647,12 +3340,7 @@ export function createAuthService(config: AuthConfig) {
       };
 
       // S-M1 / P-W1: gate-then-delete inside one transaction so two concurrent
-      // DELETEs cannot race past the last-passkey guard. P-I1: collapse the
-      // earlier 3-way SELECT into one passkey scan + one recovery-code scan.
-      // The guard refuses the delete when this is the last passkey AND there
-      // are no active recovery codes — the user must generate codes first.
-      // The transaction body returns a tagged result so Effect can fail with
-      // the right error class outside the tx.
+      // DELETEs cannot race past the last-passkey guard.
       type TxResult =
         | { ok: true; remaining: number }
         | { ok: false; reason: "not_found" | "lockout" };
@@ -3668,13 +3356,7 @@ export function createAuthService(config: AuthConfig) {
               return { ok: false, reason: "not_found" } as const;
             }
             if (accountPasskeys.length <= 1) {
-              const activeCodes = await tx
-                .select({ id: recoveryCodes.id })
-                .from(recoveryCodes)
-                .where(and(eq(recoveryCodes.accountId, accountId), isNull(recoveryCodes.usedAt)));
-              if (activeCodes.length === 0) {
-                return { ok: false, reason: "lockout" } as const;
-              }
+              return { ok: false, reason: "lockout" } as const;
             }
             await tx
               .delete(passkeys)
@@ -3691,8 +3373,7 @@ export function createAuthService(config: AuthConfig) {
         }
         return yield* Effect.fail(
           new AuthError({
-            message:
-              "Refusing to delete the last passkey without recovery codes — generate recovery codes first",
+            message: "Enroll another passkey before removing this one",
           }),
         );
       }
@@ -3803,8 +3484,6 @@ export function createAuthService(config: AuthConfig) {
     registerProfile,
     beginRegistration,
     completeRegistration,
-    issueEnrollmentToken,
-    verifyEnrollmentToken,
     checkHandle,
     issueTokens,
     refreshTokens,
@@ -3819,10 +3498,6 @@ export function createAuthService(config: AuthConfig) {
     listPasskeys,
     renamePasskey,
     deletePasskey,
-    beginOtp,
-    completeOtpDirect,
-    beginMagic,
-    verifyMagicDirect,
     invalidateSession,
     invalidateAccountSessions,
     invalidateOtherAccountSessions,

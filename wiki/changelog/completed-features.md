@@ -15,6 +15,15 @@ last-reviewed: 2026-04-22
 
 Archived completed feature work from [[TODO]]. For open work see [[TODO]].
 
+## Auth improvements — Phase 5b (passkey-primary, M-PK, 2026-04-22)
+
+- **Passkey-primary login.** WebAuthn (passkey or security key) is the only primary login factor. `POST /login/otp/{begin,complete}` and `POST /login/magic/{begin,verify}` removed. `AuthMethod` union narrowed to `"passkey" | "recovery_code" | "refresh"`; `AuthRateLimitedEndpoint` dropped `otp_begin`/`otp_complete`/`magic_begin`; `osn.auth.magic_link.sent` counter deleted. — see `[[passkey-primary]]`.
+- **Mandatory first-credential enrollment.** `Register.tsx` is gated at the start on `browserSupportsWebAuthn()` (no fallback form), and the flow cannot be dismissed until `/passkey/register/complete` succeeds. The old "Skip for now" button was removed.
+- **`enrollmentToken` JWT machinery deleted.** `/register/complete` no longer mints a single-use enrollment token; `/passkey/register/{begin,complete}` now authenticates via the normal access token issued by `/register/complete`. Dropped: `AuthService.issueEnrollmentToken` / `verifyEnrollmentToken`, `consumedEnrollmentTokens` Map, `CompleteRegistrationResult.enrollmentToken` in `@osn/client`, the `enrollmentToken` plumbing in `passkeyRegisterBegin`/`Complete` (now takes `accessToken`).
+- **Security keys accepted.** `generateRegistrationOptions` loosened to `residentKey: "preferred"` + `userVerification: "preferred"` so FIDO2 roaming keys register. Identified login uses `userVerification: "preferred"`; identifier-less (discoverable) login keeps `userVerification: "required"` so that ceremony's correctness doesn't depend on registration.
+- **Strict last-passkey guard.** `deletePasskey` refuses unconditionally when the delete would leave 0 passkeys — recovery codes are no longer a substitute credential. Combined with mandatory enrollment on registration this gives the account-level invariant "every live account has ≥1 WebAuthn credential" cradle-to-grave.
+- **WebAuthn-unsupported fallback.** `SignIn.tsx` detects missing WebAuthn and shows an informational screen with a "use a recovery code" path; `<MagicLinkHandler>` deleted (no longer has any reason to exist).
+
 ## Auth improvements — Phase 5b (PKCE cleanup)
 
 - **Removed legacy OAuth authorization-code / PKCE flow**: deleted `GET /authorize`, the `authorization_code` branch of `POST /token`, the hosted HTML login page (`buildAuthorizeHtml`), and the duplicate hosted-form routes `/passkey/login/*`, `/otp/*`, `/magic/*`. The first-party `/login/*` endpoints (Session + PublicProfile returned inline) are now the only sign-in surface.

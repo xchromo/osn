@@ -14,7 +14,7 @@ import { createTestLayer } from "../helpers/db";
  *   • list returns a public-safe shape (no publicKey / counter).
  *   • rename enforces label validation + scoping.
  *   • delete emits a security event, revokes other sessions, and refuses
- *     to delete the last passkey unless recovery codes are available.
+ *     to drop the account below one passkey under any circumstance.
  */
 
 let config: Awaited<ReturnType<typeof makeTestAuthConfig>>;
@@ -172,14 +172,14 @@ describe("deletePasskey", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("refuses to delete the last passkey when there are no recovery codes", () =>
+  it.effect("refuses to delete the last passkey unconditionally", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("pk-last@example.com", "pklast");
       const only = yield* seedPasskey(alice.accountId);
 
       const err = yield* Effect.flip(auth.deletePasskey(alice.accountId, only, null));
       expect(err._tag).toBe("AuthError");
-      expect((err as { message: string }).message).toMatch(/recovery codes/i);
+      expect((err as { message: string }).message).toMatch(/another passkey/i);
 
       // Row still there.
       const { passkeys: rows } = yield* auth.listPasskeys(alice.accountId);
@@ -187,14 +187,32 @@ describe("deletePasskey", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("allows deleting the last passkey once recovery codes exist", () =>
+  it.effect("still refuses the last-passkey delete even when recovery codes exist", () =>
     Effect.gen(function* () {
-      const alice = yield* auth.registerProfile("pk-last-ok@example.com", "pklastok");
+      const alice = yield* auth.registerProfile("pk-last-rc@example.com", "pklastrc");
       const only = yield* seedPasskey(alice.accountId);
 
+      // Recovery codes are the "device lost" escape hatch, not a substitute
+      // credential. The invariant "every account has ≥1 passkey" holds
+      // cradle-to-grave.
       yield* auth.generateRecoveryCodesForAccount(alice.accountId);
-      const result = yield* auth.deletePasskey(alice.accountId, only, null);
-      expect(result.remaining).toBe(0);
+      const err = yield* Effect.flip(auth.deletePasskey(alice.accountId, only, null));
+      expect(err._tag).toBe("AuthError");
+      expect((err as { message: string }).message).toMatch(/another passkey/i);
+
+      const { passkeys: rows } = yield* auth.listPasskeys(alice.accountId);
+      expect(rows).toHaveLength(1);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("allows deleting a passkey when another one remains", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-two@example.com", "pktwo");
+      const first = yield* seedPasskey(alice.accountId);
+      yield* seedPasskey(alice.accountId);
+
+      const result = yield* auth.deletePasskey(alice.accountId, first, null);
+      expect(result.remaining).toBe(1);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
