@@ -426,13 +426,13 @@ const HandleSchema = Schema.String.pipe(
 
 /**
  * User-chosen free-text nickname for a passkey. Trimmed client-side and here;
- * upper-bounded at MAX_PASSKEY_LABEL_LENGTH so a stored label fits inside any
- * reasonable settings-row display without having to `LIKE …%` truncate at read
- * time. Empty strings aren't valid — the caller should PATCH `null` to clear.
+ * upper-bounded at 64 chars so a stored label fits inside any reasonable
+ * settings-row display without having to `LIKE …%` truncate at read time.
+ * Empty strings aren't valid — the caller should PATCH `null` to clear.
  */
 const PasskeyLabelSchema = Schema.String.pipe(
   Schema.filter((s) => s.trim().length > 0 && s.length <= 64, {
-    message: () => `Passkey label must be 1–${64} characters`,
+    message: () => "Passkey label must be 1–64 characters",
   }),
 );
 
@@ -590,8 +590,6 @@ const MAX_SESSIONS_PER_ACCOUNT = 50;
  * passkey per device for a typical user.
  */
 const MAX_PASSKEYS_PER_ACCOUNT = 10;
-/** Max characters for a user-editable passkey label. */
-const MAX_PASSKEY_LABEL_LENGTH = 64;
 /**
  * Coalesce window for `passkeys.last_used_at` writes (mirrors
  * LAST_USED_AT_COALESCE_MS for sessions). Sub-minute accuracy on the
