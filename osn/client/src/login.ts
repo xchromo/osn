@@ -1,13 +1,9 @@
 import { parseTokenResponse, type Session } from "./tokens";
 
 /**
- * Plain-fetch helpers for the first-party sign-in flow. Mirrors
- * `createRegistrationClient`: no Effect, no PKCE state, no authorization
- * code round-trip. The server's `/login/*` endpoints return a session
- * directly, which the UI layer can hand straight to `AuthProvider.adoptSession`.
- *
- * Third-party apps that still want the PKCE redirect flow can continue to
- * drive `OsnAuthService.startLogin` / `handleCallback` in `./service`.
+ * Plain-fetch helpers for the sign-in flow. Mirrors `createRegistrationClient`:
+ * no Effect. The server's `/login/*` endpoints return a session directly,
+ * which the UI layer can hand straight to `AuthProvider.adoptSession`.
  *
  * The WebAuthn browser ceremony (`startAuthentication`) is intentionally
  * performed by the caller — keeping it caller-side avoids pulling

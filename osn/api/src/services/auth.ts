@@ -99,7 +99,7 @@ export interface AuthConfig {
   origin: string;
   /** Issuer URL (used as JWT issuer + magic link base) */
   issuerUrl: string;
-  /** ES256 private key for signing access, refresh, enrollment, and code tokens */
+  /** ES256 private key for signing access, refresh, and enrollment tokens */
   jwtPrivateKey: CryptoKey;
   /** ES256 public key for verifying the above */
   jwtPublicKey: CryptoKey;
@@ -124,13 +124,6 @@ export interface AuthConfig {
   magicTtl?: number;
   /** Callback to send email (OTP code or magic link) */
   sendEmail?: (to: string, subject: string, body: string) => Promise<void>;
-  /**
-   * Allowed redirect URI origins for OAuth flows (validated at /authorize,
-   * /magic/verify, and /token). When set, the origin of any caller-supplied
-   * redirect_uri must match one of these entries exactly. When omitted or
-   * empty, all redirect URIs are accepted (development mode only).
-   */
-  allowedRedirectUris?: string[];
   /**
    * Step-up (sudo) token TTL in seconds. Default: 300 (5 min). Short enough
    * that a stolen step-up JWT grants only a narrow window for sensitive
@@ -583,32 +576,6 @@ export function createAuthService(config: AuthConfig) {
   };
 
   // -------------------------------------------------------------------------
-  // Redirect URI validation (S-H3)
-  // Pre-computed origin set avoids re-parsing the static allowlist per request (P-W17).
-  // -------------------------------------------------------------------------
-
-  const allowedOrigins = new Set(
-    (config.allowedRedirectUris ?? [])
-      .map((u) => URL.parse(u)?.origin)
-      .filter((o): o is string => o != null),
-  );
-
-  const validateRedirectUri = (uri: string): Effect.Effect<void, AuthError> => {
-    if (allowedOrigins.size === 0) {
-      // No allowlist configured — allow all (development mode).
-      return Effect.void;
-    }
-    const parsed = URL.parse(uri);
-    if (!parsed) {
-      return Effect.fail(new AuthError({ message: "Invalid redirect_uri" }));
-    }
-    if (!allowedOrigins.has(parsed.origin)) {
-      return Effect.fail(new AuthError({ message: "redirect_uri not allowed" }));
-    }
-    return Effect.void;
-  };
-
-  // -------------------------------------------------------------------------
   // Profile helpers
   // -------------------------------------------------------------------------
 
@@ -880,9 +847,7 @@ export function createAuthService(config: AuthConfig) {
    *  - Insert relies on the DB-level UNIQUE constraint on email/handle as
    *    the source of truth, mapping constraint violations to a clean
    *    AuthError instead of leaking driver text (S-H4 / S-H5).
-   *  - Returns access + refresh tokens directly. The legacy `/token` PKCE
-   *    bypass (tracked separately as a security-backlog item) is therefore
-   *    not on the registration code path at all.
+   *  - Returns access + refresh tokens directly.
    */
   const completeRegistration = (
     email: string,
@@ -1115,17 +1080,6 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // Authorization code (short-lived JWT sub=profileId, used for PKCE exchange)
-  // -------------------------------------------------------------------------
-
-  const issueCode = (profileId: string) =>
-    Effect.tryPromise({
-      try: () =>
-        signJwt({ sub: profileId, type: "code" }, config.jwtPrivateKey, config.jwtKid, 120),
-      catch: (cause) => new AuthError({ message: String(cause) }),
-    });
-
-  // -------------------------------------------------------------------------
   // Enrollment tokens
   //
   // Short-lived (5 min) single-use bearer tokens minted by completeRegistration
@@ -1193,39 +1147,6 @@ export function createAuthService(config: AuthConfig) {
         consumedEnrollmentTokens.set(jti, Date.now());
       }
       return { accountId: payload["sub"] as string };
-    });
-
-  // -------------------------------------------------------------------------
-  // Token endpoint: exchange code for tokens
-  // -------------------------------------------------------------------------
-
-  const exchangeCode = (
-    code: string,
-  ): Effect.Effect<
-    { accessToken: string; refreshToken: string; expiresIn: number },
-    AuthError | DatabaseError,
-    Db
-  > =>
-    Effect.gen(function* () {
-      const payload = yield* Effect.tryPromise({
-        try: () => verifyJwt(code, config.jwtPublicKey),
-        catch: () => new AuthError({ message: "Invalid or expired code" }),
-      });
-      if (payload["type"] !== "code" || typeof payload["sub"] !== "string") {
-        return yield* Effect.fail(new AuthError({ message: "Invalid code type" }));
-      }
-      const profileId = payload["sub"];
-      const profile = yield* findProfileById(profileId);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
-      }
-      return yield* issueTokens(
-        profileId,
-        profile.accountId,
-        profile.email,
-        profile.handle,
-        profile.displayName,
-      );
     });
 
   // -------------------------------------------------------------------------
@@ -1764,8 +1685,8 @@ export function createAuthService(config: AuthConfig) {
         catch: (cause) => new AuthError({ message: String(cause) }),
       });
 
-      // Key challenge by normalised identifier so completePasskeyLogin can
-      // check the in-memory guard before touching the DB.
+      // Key challenge by normalised identifier so completePasskeyLoginDirect
+      // can check the in-memory guard before touching the DB.
       loginChallenges.set(normalised, {
         challenge: options.challenge,
         expiresAt: Date.now() + 120_000,
@@ -1845,23 +1766,7 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // Passkey: complete login (PKCE — returns an authorization code, exchanged
-  // at /token). Kept for the hosted HTML third-party flow.
-  // -------------------------------------------------------------------------
-
-  const completePasskeyLogin = (
-    identifier: string,
-    assertion: AuthenticationResponseJSON,
-  ): Effect.Effect<{ code: string; profileId: string }, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const profile = yield* verifyPasskeyAssertion(identifier, assertion);
-      const code = yield* issueCode(profile.id);
-      return { code, profileId: profile.id };
-    }).pipe(withAuthLogin("passkey"));
-
-  // -------------------------------------------------------------------------
-  // Passkey: complete login — direct session (first-party path, bypasses
-  // PKCE and returns a Session + PublicProfile directly).
+  // Passkey: complete login — returns a Session + PublicProfile directly.
   // -------------------------------------------------------------------------
 
   const completePasskeyLoginDirect = (
@@ -1909,7 +1814,7 @@ export function createAuthService(config: AuthConfig) {
 
       const code = genOtpCode();
 
-      // Key by normalised identifier so completeOtp can check in-memory first.
+      // Key by normalised identifier so completeOtpDirect can check in-memory first.
       otpStore.set(normalised, {
         codeHash: hashSessionToken(code),
         profileId: profile.id,
@@ -1972,21 +1877,7 @@ export function createAuthService(config: AuthConfig) {
     });
 
   // -------------------------------------------------------------------------
-  // OTP: complete (PKCE — returns an authorization code)
-  // -------------------------------------------------------------------------
-
-  const completeOtp = (
-    identifier: string,
-    code: string,
-  ): Effect.Effect<{ code: string; profileId: string }, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      const profile = yield* verifyOtpCode(identifier, code);
-      const authCode = yield* issueCode(profile.id);
-      return { code: authCode, profileId: profile.id };
-    }).pipe(withAuthLogin("otp"));
-
-  // -------------------------------------------------------------------------
-  // OTP: complete direct (first-party — returns a Session + PublicProfile)
+  // OTP: complete — returns a Session + PublicProfile directly.
   // -------------------------------------------------------------------------
 
   const completeOtpDirect = (
@@ -2040,7 +1931,7 @@ export function createAuthService(config: AuthConfig) {
         expiresAt: Date.now() + magicTtl * 1000,
       });
 
-      const magicUrl = `${config.issuerUrl}/magic/verify?token=${token}`;
+      const magicUrl = `${config.issuerUrl}/login/magic/verify?token=${token}`;
 
       if (config.sendEmail) {
         yield* Effect.tryPromise({
@@ -2064,9 +1955,8 @@ export function createAuthService(config: AuthConfig) {
     }).pipe(Effect.withSpan("auth.magic_link.begin"));
 
   // -------------------------------------------------------------------------
-  // Magic link: consume token (extracted). Atomically removes the entry and
-  // returns the profile. Shared by both the PKCE redirect path and the first-
-  // party direct-session path.
+  // Magic link: consume token. Atomically removes the entry and returns the
+  // profile.
   // -------------------------------------------------------------------------
 
   const consumeMagicToken = (
@@ -2088,26 +1978,7 @@ export function createAuthService(config: AuthConfig) {
     }).pipe(Effect.withSpan("auth.magic_link.verify"));
 
   // -------------------------------------------------------------------------
-  // Magic link: verify (PKCE — returns a redirectUrl with an auth code)
-  // -------------------------------------------------------------------------
-
-  const verifyMagic = (
-    token: string,
-    redirectUri: string,
-    state: string,
-  ): Effect.Effect<{ redirectUrl: string }, AuthError | DatabaseError, Db> =>
-    Effect.gen(function* () {
-      yield* validateRedirectUri(redirectUri);
-      const profile = yield* consumeMagicToken(token);
-      const code = yield* issueCode(profile.id);
-      const url = new URL(redirectUri);
-      url.searchParams.set("code", code);
-      url.searchParams.set("state", state);
-      return { redirectUrl: url.toString() };
-    }).pipe(withAuthLogin("magic_link"));
-
-  // -------------------------------------------------------------------------
-  // Magic link: verify direct (first-party — returns a Session + PublicProfile)
+  // Magic link: verify — returns a Session + PublicProfile directly.
   // -------------------------------------------------------------------------
 
   const verifyMagicDirect = (
@@ -3381,7 +3252,6 @@ export function createAuthService(config: AuthConfig) {
     verifyEnrollmentToken,
     checkHandle,
     issueTokens,
-    exchangeCode,
     refreshTokens,
     verifyRefreshToken,
     verifyAccessToken,
@@ -3390,15 +3260,11 @@ export function createAuthService(config: AuthConfig) {
     beginPasskeyRegistration,
     completePasskeyRegistration,
     beginPasskeyLogin,
-    completePasskeyLogin,
     completePasskeyLoginDirect,
     beginOtp,
-    completeOtp,
     completeOtpDirect,
     beginMagic,
-    verifyMagic,
     verifyMagicDirect,
-    validateRedirectUri,
     invalidateSession,
     invalidateAccountSessions,
     invalidateOtherAccountSessions,
