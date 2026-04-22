@@ -115,7 +115,7 @@ export function createTestLayer() {
     )
   `);
   sqlite.run(
-    `CREATE INDEX security_events_account_ack_idx ON security_events (account_id, acknowledged_at)`,
+    `CREATE INDEX security_events_unacked_idx ON security_events (account_id, created_at) WHERE acknowledged_at IS NULL`,
   );
   sqlite.run(`
     CREATE TABLE recovery_codes (

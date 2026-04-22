@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, index, unique } from "drizzle-orm/sqlite-core";
 
 // ---------------------------------------------------------------------------
@@ -337,9 +338,15 @@ export const securityEvents = sqliteTable(
     uaLabel: text("ua_label"),
   },
   (t) => [
-    // Serves the "unacknowledged events for account" query from
-    // listUnacknowledgedSecurityEvents without a table scan.
-    index("security_events_account_ack_idx").on(t.accountId, t.acknowledgedAt),
+    // P-W1: partial index over the hot "unacknowledged" slice. Acked rows
+    // are kept for audit but grow unbounded over time; the Settings banner
+    // only reads unacked rows, so excluding acked rows from the index keeps
+    // it tiny regardless of history. Column order (account_id, created_at DESC)
+    // also satisfies the `ORDER BY created_at DESC` on the list query so
+    // SQLite serves the sort from the index instead of materialising it.
+    index("security_events_unacked_idx")
+      .on(t.accountId, t.createdAt)
+      .where(sql`${t.acknowledgedAt} IS NULL`),
   ],
 );
 

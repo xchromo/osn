@@ -126,7 +126,7 @@ export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
  * service layer, otherwise the counter attribute will fall outside the
  * bounded union.
  */
-export type SecurityEventKind = "recovery_code_generate";
+export type SecurityEventKind = "recovery_code_generate" | "recovery_code_consume";
 
 /** Result of an attempted security-event email notification. */
 export type SecurityEventNotifyResult = "sent" | "failed" | "skipped";

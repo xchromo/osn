@@ -20,7 +20,7 @@ export class SecurityEventsError extends Error {
 }
 
 /** Keep in sync with SecurityEventKind in @shared/observability/metrics. */
-export type SecurityEventKind = "recovery_code_generate";
+export type SecurityEventKind = "recovery_code_generate" | "recovery_code_consume";
 
 export interface SecurityEventSummary {
   id: string;
@@ -33,7 +33,25 @@ export interface SecurityEventSummary {
 
 export interface SecurityEventsClient {
   list(input: { accessToken: string }): Promise<{ events: SecurityEventSummary[] }>;
-  acknowledge(input: { accessToken: string; id: string }): Promise<{ acknowledged: boolean }>;
+  /**
+   * Acknowledges a single security event. Requires a fresh step-up token
+   * (S-M1) — the banner is the defence against a compromised access token,
+   * so the access token alone cannot dismiss it.
+   */
+  acknowledge(input: {
+    accessToken: string;
+    id: string;
+    stepUpToken: string;
+  }): Promise<{ acknowledged: boolean }>;
+  /**
+   * Dismisses every unacknowledged event in a single call. One step-up
+   * ceremony → the entire banner clears. Matches the UX pattern used by
+   * `POST /sessions/revoke-all-other`.
+   */
+  acknowledgeAll(input: {
+    accessToken: string;
+    stepUpToken: string;
+  }): Promise<{ acknowledged: number }>;
 }
 
 export function createSecurityEventsClient(
@@ -66,7 +84,7 @@ export function createSecurityEventsClient(
         {
           ...withAuth(input.accessToken),
           method: "POST",
-          body: "{}",
+          body: JSON.stringify({ step_up_token: input.stepUpToken }),
         },
       );
       const json = (await res.json()) as { acknowledged?: boolean; error?: string };
@@ -74,6 +92,18 @@ export function createSecurityEventsClient(
         throw new SecurityEventsError(json.error ?? `Request failed: ${res.status}`);
       }
       return { acknowledged: json.acknowledged === true };
+    },
+    acknowledgeAll: async (input) => {
+      const res = await fetch(`${base}/account/security-events/ack-all`, {
+        ...withAuth(input.accessToken),
+        method: "POST",
+        body: JSON.stringify({ step_up_token: input.stepUpToken }),
+      });
+      const json = (await res.json()) as { acknowledged?: number; error?: string };
+      if (!res.ok || typeof json.acknowledged !== "number") {
+        throw new SecurityEventsError(json.error ?? `Request failed: ${res.status}`);
+      }
+      return { acknowledged: json.acknowledged };
     },
   };
 }

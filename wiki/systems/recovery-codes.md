@@ -79,13 +79,16 @@ All failure modes — unknown identifier, bad code, used code — surface as `{ 
 - `listUnacknowledgedSecurityEvents(accountId) → { events }` — drives the Settings banner.
 - `acknowledgeSecurityEvent(accountId, id) → { acknowledged }` — idempotent, scoped to the owning account.
 
-## Regeneration notification (M-PK1b)
+## Regeneration + consumption notification (M-PK1b)
 
-Step-up gates `/recovery/generate`, but a compromised session with inbox access can still mint a step-up token and burn the user's codes. The audit trail is the last-mile defence:
+Step-up gates `/recovery/generate`, but a compromised session with inbox access could still mint a step-up token and burn the user's codes; the actual takeover step is `/login/recovery/complete`. The audit trail is the last-mile defence on both halves:
 
-1. **Audit row** — every `generateRecoveryCodesForAccount` call inserts a `security_events` row in the same transaction as the code swap. If the audit write fails, the codes don't commit either. Schema lives in `osn/db/src/schema/index.ts` → `securityEvents`. Columns: `id` (`sev_` + 12 hex), `account_id`, `kind` (bounded — `"recovery_code_generate"` today), `created_at`, `acknowledged_at`, `ip_hash`, `ua_label`.
-2. **Email notification** — a confirmation email (S-L5 framed, codes never included) is fired post-commit. Failure is logged and reported via `osn.auth.security_event.notified{result=failed}`; it does not roll back the codes.
-3. **Settings banner** — `GET /account/security-events` + `POST /account/security-events/:id/ack` surface still-unacknowledged rows (newest first). Ack is idempotent; acking a row owned by another account is a silent no-op. UI lives in `@osn/ui/auth/SecurityEventsBanner`; SDK in `@osn/client/security-events.ts`.
+1. **Audit row — generate.** Every `generateRecoveryCodesForAccount` call inserts a `security_events` row (kind `"recovery_code_generate"`) in the same transaction as the code swap. If the audit write fails, the codes don't commit either.
+2. **Audit row — consume (S-H1).** Every successful `consumeRecoveryCode` inserts a `security_events` row (kind `"recovery_code_consume"`) in the same transaction as the sessions wipe. Failed consume attempts (wrong code, unknown identifier) do NOT record — only genuine takeovers.
+3. **Email notification.** Both kinds fire a best-effort email (S-L5 framed, codes never included). Dispatch runs under `Effect.forkDaemon` with a 10 s `Effect.timeout` so the user-visible request latency is decoupled from mailer health (P-W2). Failure is reported via `osn.auth.security_event.notified{result=failed}` and never rolls back the primary action.
+4. **Settings banner.** `GET /account/security-events` surfaces still-unacknowledged rows (newest first, `limit 50`, backed by a partial index over `WHERE acknowledged_at IS NULL` — P-W1). Dismissal happens via `POST /account/security-events/:id/ack` or the bulk `POST /account/security-events/ack-all`, **both gated by a fresh step-up token (S-M1)** — an XSS-captured access token cannot silently clear the banner because the banner exists precisely to warn about that compromise. Ack is idempotent; ack-all returns the number of rows dismissed. UI in `@osn/ui/auth/SecurityEventsBanner` (opens `StepUpDialog` on "Acknowledge", then POSTs to `ack-all`); SDK in `@osn/client/security-events.ts`.
+
+Schema lives in `osn/db/src/schema/index.ts` → `securityEvents`. Columns: `id` (`sev_` + 12 hex), `account_id`, `kind` (bounded string literal enforced at service boundary, not the column), `created_at`, `acknowledged_at`, `ip_hash`, `ua_label`. Index: `security_events_unacked_idx (account_id, created_at) WHERE acknowledged_at IS NULL`.
 
 Migration: `osn/db/drizzle/0006_security_events.sql`.
 
