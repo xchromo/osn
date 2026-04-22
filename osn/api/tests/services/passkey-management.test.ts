@@ -241,6 +241,58 @@ describe("listPasskeys hides secret columns", () => {
   );
 });
 
+// T-U3: positively lock the PasskeySummary key set so a silent drop in the
+// explicit projection (e.g. backupEligible going missing) fails loudly.
+describe("listPasskeys public shape", () => {
+  it.effect("exposes exactly the PasskeySummary field set", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-shape@example.com", "pkshape");
+      yield* seedPasskey(alice.accountId, { lastUsedAt: 100 });
+      const { passkeys: rows } = yield* auth.listPasskeys(alice.accountId);
+      expect(rows).toHaveLength(1);
+      const expectedKeys = [
+        "aaguid",
+        "backupEligible",
+        "backupState",
+        "createdAt",
+        "credentialId",
+        "id",
+        "label",
+        "lastUsedAt",
+        "transports",
+      ];
+      expect(Object.keys(rows[0]!).toSorted()).toEqual(expectedKeys);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+// T-U2: MAX_PASSKEYS_PER_ACCOUNT cap enforcement — begin refuses past the
+// limit; complete's race-guard refuses even if begin was passed concurrently.
+describe("passkey count cap (MAX_PASSKEYS_PER_ACCOUNT)", () => {
+  it.effect("beginPasskeyRegistration rejects once the account has 10 passkeys", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-cap@example.com", "pkcap");
+      for (let i = 0; i < 10; i++) {
+        yield* seedPasskey(alice.accountId);
+      }
+      const err = yield* Effect.flip(auth.beginPasskeyRegistration(alice.accountId));
+      expect(err._tag).toBe("AuthError");
+      expect((err as { message: string }).message).toMatch(/limit reached/i);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("still allows begin at count = 9", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-cap9@example.com", "pkcap9");
+      for (let i = 0; i < 9; i++) {
+        yield* seedPasskey(alice.accountId);
+      }
+      const result = yield* auth.beginPasskeyRegistration(alice.accountId);
+      expect(result.options.challenge).toBeTruthy();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
 // Guard against silent drift: deleting a passkey must leave recovery codes
 // intact (they share the account scope but are independent).
 describe("deletePasskey does not touch recovery codes", () => {

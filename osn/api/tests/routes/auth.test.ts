@@ -721,6 +721,58 @@ describe("auth routes", () => {
       );
       expect(res.status).toBe(400);
     });
+
+    // T-R1: identifier ⊕ challengeId — exactly one must be present.
+    it("returns 400 invalid_request when both identifier and challengeId are present", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: "whoever@example.com",
+            challengeId: "00000000-0000-0000-0000-000000000000",
+            assertion: { id: "x", rawId: "x", response: {}, type: "public-key" },
+          }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: string };
+      expect(json.error).toBe("invalid_request");
+    });
+
+    it("returns 400 invalid_request when neither identifier nor challengeId is present", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            assertion: { id: "x", rawId: "x", response: {}, type: "public-key" },
+          }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: string };
+      expect(json.error).toBe("invalid_request");
+    });
+  });
+
+  // T-R2: identifier-less (discoverable) /login/passkey/begin — emits a
+  // challengeId the client must round-trip to /login/passkey/complete.
+  describe("POST /login/passkey/begin (discoverable)", () => {
+    it("returns { options, challengeId } with no identifier in the body", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { options?: { challenge?: string }; challengeId?: string };
+      expect(json.options?.challenge).toBeTruthy();
+      expect(typeof json.challengeId).toBe("string");
+      expect(json.challengeId!.length).toBeGreaterThan(0);
+    });
   });
 
   // -------------------------------------------------------------------------

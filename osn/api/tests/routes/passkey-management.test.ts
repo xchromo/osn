@@ -165,5 +165,89 @@ describe("passkey management routes", () => {
       const json = (await res.json()) as { error?: string };
       expect(json.error).toBe("step_up_required");
     });
+
+    // T-S2: end-to-end happy path. The route layer is the only place that
+    // wires the X-Step-Up-Token header into the service call — exercise it
+    // with a real minted token so a regression in that wiring fails here.
+    it("succeeds with a valid step-up token and returns { remaining }", async () => {
+      // Mailer spy so we can pull the OTP back out for the step-up ceremony.
+      const captured: string[] = [];
+      const sendEmail = async (_to: string, _subject: string, body: string) => {
+        const m = body.match(/\b(\d{6})\b/);
+        if (m) captured.push(m[1]!);
+      };
+      const verifiedApp = createAuthRoutes({ ...config, sendEmail }, layer);
+
+      const { tokens, profile } = await seedAccount();
+      const pk = await seedPasskey(profile.accountId);
+      await seedPasskey(profile.accountId);
+
+      // Drive the OTP step-up ceremony.
+      await verifiedApp.handle(
+        new Request("http://localhost/step-up/otp/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${tokens.accessToken}`,
+          },
+        }),
+      );
+      const stepUpCode = captured[captured.length - 1]!;
+      const stepUpRes = await verifiedApp.handle(
+        new Request("http://localhost/step-up/otp/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${tokens.accessToken}`,
+          },
+          body: JSON.stringify({ code: stepUpCode }),
+        }),
+      );
+      const stepUpJson = (await stepUpRes.json()) as { step_up_token: string };
+
+      const res = await verifiedApp.handle(
+        new Request(`http://localhost/passkeys/${pk}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${tokens.accessToken}`,
+            "X-Step-Up-Token": stepUpJson.step_up_token,
+          },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { success?: boolean; remaining?: number };
+      expect(json.success).toBe(true);
+      expect(json.remaining).toBe(1);
+    });
+  });
+
+  // T-S1: route-level cross-account guard. The service rejects with
+  // AuthError; this confirms `handleError` doesn't downgrade that into a
+  // 500 (or surface a useful "is this id real?" oracle).
+  describe("PATCH /passkeys/:id (cross-account)", () => {
+    it("rejects renaming another account's passkey at the HTTP layer", async () => {
+      const alice = await seedAccount();
+      // Spin up a separate account for Bob and seed a passkey he owns.
+      const bobProfile = await Effect.runPromise(
+        svc.registerProfile("pk-mgmt-bob@example.com", "pkmgmtbob").pipe(Effect.provide(layer)),
+      );
+      const bobPk = await seedPasskey(bobProfile.accountId);
+
+      const res = await app.handle(
+        new Request(`http://localhost/passkeys/${bobPk}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${alice.tokens.accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ label: "stolen" }),
+        }),
+      );
+      // The exact code is whatever publicError(AuthError) maps to — accept
+      // any 4xx that isn't 401 (since Alice is authenticated).
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      expect(res.status).not.toBe(401);
+    });
   });
 });
