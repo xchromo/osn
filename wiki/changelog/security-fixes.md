@@ -7,12 +7,16 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-04-19
+last-reviewed: 2026-04-22
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## Auth Phase 5b (2026-04-22)
+
+- **S-H1 (session)** — The C2 reuse-detection map (`rotatedSessions`) was a single-process in-memory `Map`; in a multi-pod deployment a rotation recorded on pod A was invisible to pod B, so a replayed rotated-out token hitting B passed without triggering family revocation. Fixed: extracted `RotatedSessionStore` interface (`osn/api/src/lib/rotated-session-store.ts`) with in-memory + Redis-backed impls, wired from `osn/api/src/index.ts`. Fail-open on Redis error — an outage must not manufacture false-positive family revocations that log legitimate users out — with structured warning logs and a `{backend, action, result}` counter so ops dashboards surface degradation. — see [[sessions]]
 
 ## Auth Phase 5a (2026-04-19)
 

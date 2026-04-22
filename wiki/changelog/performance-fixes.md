@@ -6,12 +6,16 @@ related:
   - "[[redis]]"
   - "[[arc-tokens]]"
   - "[[component-library]]"
-last-reviewed: 2026-04-19
+last-reviewed: 2026-04-22
 ---
 
 # Performance Fixes — Completed
 
 Archived completed performance findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Performance Backlog in [[TODO]].
+
+## Auth Phase 5b (2026-04-22)
+
+- **P-W1 (session)** — `trackRotatedSession` performed a JS-side map sweep on every `/token` refresh (O(n) amortised via FIFO). Fixed: the Redis-backed store delegates expiry to Redis's native per-key PX TTL; the in-memory fallback keeps the existing bounded FIFO sweep for single-process deployments. Per-call Redis work is O(1) for `track`/`check` and O(k) for `revokeFamily` where k is the number of rotated hashes in the revoked family. — see [[sessions]]
 
 ## Auth Phase 5a (2026-04-19)
 

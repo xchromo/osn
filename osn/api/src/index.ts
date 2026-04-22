@@ -14,6 +14,7 @@ import {
   createRedisProfileRateLimiters,
   createRedisRecommendationRateLimiter,
 } from "./lib/redis-rate-limiters";
+import { createRedisRotatedSessionStore } from "./lib/rotated-session-store";
 import { createRedisJtiStore } from "./lib/step-up-jti-store";
 import { initRedisClient } from "./redis";
 import { createAuthRoutes } from "./routes/auth";
@@ -127,6 +128,20 @@ const redisClient = await initRedisClient({
 // check rather than an in-process Map.
 const stepUpJtiStore = createRedisJtiStore(redisClient);
 
+// S-H1 (session): cluster-safe record of rotated-out session hashes so
+// C2 reuse detection works across pods. Errors are logged via the Effect
+// logger layer so a Redis blip surfaces in ops dashboards.
+const rotatedSessionStore = createRedisRotatedSessionStore(redisClient, {
+  onError: (action, cause) => {
+    void Effect.runPromise(
+      Effect.logWarning("Rotated-session store Redis error").pipe(
+        Effect.annotateLogs({ action, error: String(cause) }),
+        Effect.provide(observabilityLayer),
+      ),
+    );
+  },
+});
+
 const authRateLimiters = createRedisAuthRateLimiters(redisClient);
 const graphRateLimiter = createRedisGraphRateLimiter(redisClient);
 const orgRateLimiter = createRedisOrgRateLimiter(redisClient);
@@ -164,7 +179,7 @@ const app = new Elysia()
   .get("/", () => ({ status: "ok", service: "osn-auth" }))
   .use(
     createAuthRoutes(
-      { ...authConfig, stepUpJtiStore },
+      { ...authConfig, stepUpJtiStore, rotatedSessionStore },
       DbLive,
       observabilityLayer,
       authRateLimiters,
