@@ -523,6 +523,35 @@ describe("passkey registration", () => {
   );
 });
 
+describe("passkey login", () => {
+  // Single-use challenge invariant: verifyPasskeyAssertion gates on the
+  // in-memory `loginChallenges` entry BEFORE any DB work. Without a fresh
+  // beginPasskeyLogin to populate it, complete must fail — which is the
+  // same guard that prevents a captured assertion from being replayed
+  // after the legitimate call has consumed its challenge.
+  it.effect("completePasskeyLoginDirect rejects when no login challenge is live", () =>
+    Effect.gen(function* () {
+      yield* auth.registerProfile("pk-replay@example.com", "pkreplay");
+
+      const bogusAssertion = {
+        id: "x",
+        rawId: "x",
+        response: {},
+        type: "public-key",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test shim; real AuthenticationResponseJSON is exhaustive
+      } as any;
+
+      // No beginPasskeyLogin call — the challenge guard must be the first
+      // failure point, not the passkey DB lookup.
+      const error = yield* Effect.flip(
+        auth.completePasskeyLoginDirect("pk-replay@example.com", bogusAssertion),
+      );
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Challenge");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
 describe("magic link flow", () => {
   it.effect("beginMagic + verifyMagicDirect via email returns a session", () =>
     Effect.gen(function* () {
@@ -572,6 +601,31 @@ describe("magic link flow", () => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(auth.verifyMagicDirect("bad-token"));
       expect(error._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Single-use invariant: consumeMagicToken deletes the entry before the
+  // profile lookup, so a second call with the same token must fail.
+  it.effect("verifyMagicDirect is single-use: a replayed token fails", () =>
+    Effect.gen(function* () {
+      yield* auth.registerProfile("replay-magic@example.com", "replaymagic");
+      let capturedToken: string | undefined;
+      const svc = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const match = body.match(/token=([^\s]+)/);
+          if (match) capturedToken = match[1];
+        },
+      });
+
+      yield* svc.beginMagic("replay-magic@example.com");
+      expect(capturedToken).toBeTruthy();
+
+      const first = yield* svc.verifyMagicDirect(capturedToken!);
+      expect(first.session.accessToken).toBeTruthy();
+
+      const second = yield* Effect.flip(svc.verifyMagicDirect(capturedToken!));
+      expect(second._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });

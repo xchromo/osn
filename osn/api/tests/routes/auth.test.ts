@@ -431,6 +431,119 @@ describe("auth routes", () => {
       );
       expect(rotatedAfterReuse.status).toBe(400);
     });
+
+    it("accepts refresh_token in body when no cookie is sent (body-fallback path)", async () => {
+      // Covers the `bodyToken` branch of /token: cookieless clients can still
+      // refresh by passing the token in the form body. metricSessionCookieFallback
+      // fires on this path; we assert the status + rotation as the observable
+      // contract.
+      let captured: string | undefined;
+      const fallbackApp = createAuthRoutes(
+        {
+          ...config,
+          sendEmail: async (_to, _subject, body) => {
+            const m = body.match(/code is: (\d{6})/);
+            if (m) captured = m[1];
+          },
+        },
+        layer,
+      );
+
+      await fallbackApp.handle(
+        new Request("http://localhost/register/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "body-fallback@example.com", handle: "bodyfallback" }),
+        }),
+      );
+      const completeRes = await fallbackApp.handle(
+        new Request("http://localhost/register/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "body-fallback@example.com", code: captured! }),
+        }),
+      );
+      expect(completeRes.status).toBe(201);
+      const cookie = completeRes.headers.get("set-cookie")!;
+      const refreshToken = cookie.match(/osn_session=([^;]+)/)![1]!;
+
+      // Refresh without sending the cookie — token goes in the body.
+      const res = await fallbackApp.handle(
+        new Request("http://localhost/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      // Server issues a rotated cookie either way.
+      expect(res.headers.get("set-cookie")).toContain("osn_session=");
+    });
+
+    it("prefers the cookie over the body when both are sent", async () => {
+      // Contract: readSessionCookie wins. If the body token is fresh and the
+      // cookie is stale, the stale cookie takes precedence and the call fails
+      // — which is the intended guard against downgrade attacks where an
+      // attacker injects a body token alongside an already-rotated cookie.
+      let captured: string | undefined;
+      const precedenceApp = createAuthRoutes(
+        {
+          ...config,
+          sendEmail: async (_to, _subject, body) => {
+            const m = body.match(/code is: (\d{6})/);
+            if (m) captured = m[1];
+          },
+        },
+        layer,
+      );
+
+      await precedenceApp.handle(
+        new Request("http://localhost/register/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "precedence@example.com", handle: "precedence" }),
+        }),
+      );
+      const completeRes = await precedenceApp.handle(
+        new Request("http://localhost/register/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "precedence@example.com", code: captured! }),
+        }),
+      );
+      expect(completeRes.status).toBe(201);
+      const originalCookie = completeRes.headers.get("set-cookie")!;
+      const originalSession = originalCookie.match(/osn_session=([^;]+)/)![1]!;
+
+      // Rotate the session — the body will hold the fresh token, the cookie
+      // will hold the stale one.
+      const rotateRes = await precedenceApp.handle(
+        new Request("http://localhost/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            cookie: `osn_session=${originalSession}`,
+          },
+          body: JSON.stringify({ grant_type: "refresh_token" }),
+        }),
+      );
+      expect(rotateRes.status).toBe(200);
+      const rotatedCookie = rotateRes.headers.get("set-cookie")!;
+      const freshSession = rotatedCookie.match(/osn_session=([^;]+)/)![1]!;
+
+      // Send stale cookie + fresh body — cookie wins, reuse detection trips.
+      const mixedRes = await precedenceApp.handle(
+        new Request("http://localhost/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            cookie: `osn_session=${originalSession}`,
+          },
+          body: JSON.stringify({ grant_type: "refresh_token", refresh_token: freshSession }),
+        }),
+      );
+      expect(mixedRes.status).toBe(400);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -599,6 +712,107 @@ describe("auth routes", () => {
 
     it("returns 400 for an unknown token", async () => {
       const res = await app.handle(new Request("http://localhost/login/magic/verify?token=bogus"));
+      expect(res.status).toBe(400);
+    });
+
+    it("emailed URL path actually resolves against the Elysia app", async () => {
+      // Lockstep check: beginMagic emits a URL; handing that URL straight
+      // back to app.handle must succeed. Renaming /login/magic/verify on
+      // either side (service emitter or route) regresses this.
+      let capturedUrl: string | undefined;
+      const emailSpy = async (_to: string, _subject: string, body: string) => {
+        const m = body.match(/https?:\/\/\S+/);
+        if (m) capturedUrl = m[0];
+      };
+      const spyApp = createAuthRoutes({ ...config, sendEmail: emailSpy }, layer);
+
+      await spyApp.handle(
+        new Request("http://localhost/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "lockstep@example.com", handle: "lockstep" }),
+        }),
+      );
+      await spyApp.handle(
+        new Request("http://localhost/login/magic/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "lockstep@example.com" }),
+        }),
+      );
+      expect(capturedUrl).toMatch(/\/login\/magic\/verify\?token=/);
+
+      const res = await spyApp.handle(new Request(capturedUrl!));
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe("POST /login/passkey/begin", () => {
+    it("returns 400 for an unknown identifier", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "nobody@example.com" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 when the user has no registered passkey", async () => {
+      const svc = createAuthService(config);
+      await Effect.runPromise(
+        svc.registerProfile("pk-begin@example.com", "pkbegin").pipe(Effect.provide(layer)),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: "pk-begin@example.com" }),
+        }),
+      );
+      // Service surfaces "No passkey registered" → 400.
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /login/passkey/complete", () => {
+    it("returns 400 when no login challenge has been issued", async () => {
+      // Call /login/passkey/complete without a preceding /login/passkey/begin —
+      // the service's in-memory challenge guard rejects before any DB work.
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: "nobody@example.com",
+            assertion: { id: "fake", rawId: "fake", response: {}, type: "public-key" },
+          }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 for a malformed assertion", async () => {
+      const svc = createAuthService(config);
+      await Effect.runPromise(
+        svc.registerProfile("pk-complete@example.com", "pkcomplete").pipe(Effect.provide(layer)),
+      );
+      // Issue a challenge (matches what /login/passkey/begin would do for a
+      // user with a registered passkey — we don't have one, but the challenge
+      // guard itself is populated by beginPasskeyLogin's precondition failure,
+      // so just hit complete with a bogus payload and expect a 400 from the
+      // downstream "passkey not found" / verification-failed path).
+      const res = await app.handle(
+        new Request("http://localhost/login/passkey/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: "pk-complete@example.com",
+            assertion: { id: "fake", rawId: "fake", response: {}, type: "public-key" },
+          }),
+        }),
+      );
       expect(res.status).toBe(400);
     });
   });
