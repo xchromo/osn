@@ -20,9 +20,13 @@
  *   - `check` fail-open (returns `null`): a Redis outage must not
  *     manufacture false-positive family revocations that log legitimate
  *     users out. Detection is weakened; active sessions are preserved.
- *   - `revokeFamily` fail-open: the primary DB-level family delete has
- *     already run by the time we get here. Leaving stale hash keys in
- *     Redis is harmless — they expire with the refresh-token TTL anyway.
+ *   - `revokeFamily` is a no-op on the Redis backend. The DB-level
+ *     `DELETE FROM sessions WHERE family_id = ?` in `detectReuse` is the
+ *     authoritative revocation; leaving stale `hash:*` keys in Redis is
+ *     harmless because (a) they expire under their own PX TTL and (b) a
+ *     repeat replay just triggers another idempotent DB delete and another
+ *     `reuse_detected` metric increment — a more informative signal than
+ *     silently deduping the replay.
  */
 
 import type { RedisClient } from "@shared/redis";
@@ -62,7 +66,7 @@ interface MemoryEntry {
  */
 export function createInMemoryRotatedSessionStore(): RotatedSessionStore {
   const entries = new Map<string, MemoryEntry>();
-  const order: string[] = [];
+  let order: string[] = [];
 
   function sweep(ttlMs: number): void {
     const cutoff = Date.now() - ttlMs;
@@ -94,9 +98,13 @@ export function createInMemoryRotatedSessionStore(): RotatedSessionStore {
       return entry ? entry.familyId : null;
     },
     async revokeFamily(familyId) {
+      // P-I1: keep the `order` queue consistent with `entries` so the cap
+      // check in `sweep` can't over-evict still-valid hashes after a
+      // revocation cluster. One pass per call; revocations are rare.
       for (const [k, v] of entries) {
         if (v.familyId === familyId) entries.delete(k);
       }
+      order = order.filter((k) => entries.has(k));
     },
   };
 }
@@ -116,24 +124,19 @@ function hashKey(namespace: string, sessionHash: string): string {
   return `${namespace}:hash:${sessionHash}`;
 }
 
-function familyKey(namespace: string, familyId: string): string {
-  return `${namespace}:fam:${familyId}`;
-}
-
 /**
- * Redis-backed store. Uses two key families:
+ * Redis-backed store. Uses a single key family:
  *
- *   - `{ns}:hash:{sessionHash}` → familyId, PX = ttlMs (the authoritative
- *     lookup used by `check`).
- *   - `{ns}:fam:{familyId}` → JSON array of tracked hashes, PX = ttlMs
- *     (used only by `revokeFamily` to clean up hash keys proactively; TTL
- *     is a safety net in case revocation is never called).
+ *   `{ns}:hash:{sessionHash}` → familyId, PX = ttlMs
  *
- * `track` performs two writes (hash + family set) without a Lua atomic.
- * In practice a given family only rotates one token at a time (the
- * refresh chain is linear), so the theoretical concurrent-append race
- * cannot occur under legitimate traffic; and even if it did, the hash key
- * — the one `check` actually reads — is written atomically on its own.
+ * This is the authoritative lookup used by `check`. Cleanup is delegated
+ * to Redis's native per-key PX expiry, so `track` is a single round-trip
+ * and `revokeFamily` is a no-op — the DB-level `DELETE FROM sessions
+ * WHERE family_id = ?` already performed by `detectReuse` is what actually
+ * revokes the sessions. Letting a stale `hash:*` key linger until TTL is
+ * harmless: a further replay just re-triggers the same idempotent DB
+ * delete plus another metric increment, which is a more informative
+ * observability signal than silently deduping the attempt.
  */
 export function createRedisRotatedSessionStore(
   client: RedisClient,
@@ -163,11 +166,6 @@ export function createRedisRotatedSessionStore(
     async track(sessionHash, familyId, ttlMs) {
       try {
         await client.set(hashKey(namespace, sessionHash), familyId, ttlMs);
-        const famKey = familyKey(namespace, familyId);
-        const existing = await client.get(famKey);
-        const arr: string[] = existing ? (JSON.parse(existing) as string[]) : [];
-        if (!arr.includes(sessionHash)) arr.push(sessionHash);
-        await client.set(famKey, JSON.stringify(arr), ttlMs);
       } catch (cause) {
         onError?.("track", cause);
       }
@@ -180,17 +178,11 @@ export function createRedisRotatedSessionStore(
         return null;
       }
     },
-    async revokeFamily(familyId) {
-      try {
-        const famKey = familyKey(namespace, familyId);
-        const json = await client.get(famKey);
-        const members: string[] = json ? (JSON.parse(json) as string[]) : [];
-        const keys = members.map((h) => hashKey(namespace, h));
-        keys.push(famKey);
-        if (keys.length > 0) await client.del(...keys);
-      } catch (cause) {
-        onError?.("revoke_family", cause);
-      }
+    async revokeFamily(_familyId) {
+      // No-op on the Redis backend — see the module docstring. The DB
+      // already revoked every session in the family, and the `hash:*` keys
+      // expire under their own PX TTL. Kept on the interface so the
+      // in-memory backend still has a place to reclaim bounded storage.
     },
   };
 }

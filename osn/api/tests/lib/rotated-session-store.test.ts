@@ -58,6 +58,33 @@ describe("createInMemoryRotatedSessionStore", () => {
     expect(await store.check("h3")).toBe("famB");
   });
 
+  it("revokeFamily keeps the FIFO queue aligned with live entries (P-I1)", async () => {
+    // Regression guard: prior to P-I1 the `order` queue retained revoked
+    // keys, so after enough revocations the cap check could evict still-live
+    // entries prematurely. Exercise the alignment by revoking half, then
+    // filling to just past the cap — the retained entries must survive.
+    const store = createInMemoryRotatedSessionStore();
+    for (let i = 0; i < 10; i++) {
+      // eslint-disable-next-line no-await-in-loop -- sequential tracking
+      await store.track(`keep${i}`, "famKeep", 60_000);
+    }
+    for (let i = 0; i < 10; i++) {
+      // eslint-disable-next-line no-await-in-loop -- sequential tracking
+      await store.track(`drop${i}`, "famDrop", 60_000);
+    }
+    await store.revokeFamily("famDrop");
+
+    // Force a sweep at the cap; if revoked keys were still in `order`, the
+    // cap-driven eviction would pop them (harmless) or pop live keys (bad).
+    for (let i = 0; i < 10; i++) {
+      // eslint-disable-next-line no-await-in-loop -- sequential tracking
+      await store.track(`new${i}`, "famNew", 60_000);
+    }
+    for (let i = 0; i < 10; i++) {
+      expect(await store.check(`keep${i}`)).toBe("famKeep");
+    }
+  });
+
   it("bounds the map to ROTATED_SESSIONS_MAX entries", async () => {
     const store = createInMemoryRotatedSessionStore();
     // Use a TTL well longer than the test takes so sweeps are bound-driven,
@@ -76,7 +103,7 @@ describe("createRedisRotatedSessionStore (memory-backed RedisClient)", () => {
   let client: RedisClient;
   beforeEach(() => {
     // The shared memory client supports get/set/del which is all this store
-    // uses — no Lua scripts. That lets us exercise the real Redis impl here.
+    // needs — no Lua scripts. That lets us exercise the real Redis impl here.
     client = createMemoryClient();
   });
 
@@ -96,23 +123,17 @@ describe("createRedisRotatedSessionStore (memory-backed RedisClient)", () => {
     expect(await store.check("ghost")).toBe(null);
   });
 
-  it("revokeFamily deletes every tracked hash plus the family set", async () => {
+  it("revokeFamily is a no-op (TTL drives eviction on the Redis backend)", async () => {
+    // Deliberate design: the DB-level DELETE FROM sessions is the
+    // authoritative family revocation. Redis hash keys expire under their
+    // own PX TTL; skipping proactive cleanup keeps `track` single-round-trip
+    // and removes the S-L1/S-L3/P-W1/P-W2 concerns raised against the
+    // prior family-set design. A repeat replay post-revocation just
+    // re-fires the metric, which is informative rather than harmful.
     const store = createRedisRotatedSessionStore(client);
     await store.track("h1", "famA", 60_000);
-    await store.track("h2", "famA", 60_000);
-    await store.track("h3", "famB", 60_000);
-
     await store.revokeFamily("famA");
-
-    expect(await store.check("h1")).toBe(null);
-    expect(await store.check("h2")).toBe(null);
-    // Unrelated family must survive.
-    expect(await store.check("h3")).toBe("famB");
-  });
-
-  it("revokeFamily is a no-op for unknown families", async () => {
-    const store = createRedisRotatedSessionStore(client);
-    await expect(store.revokeFamily("ghost-family")).resolves.toBeUndefined();
+    expect(await store.check("h1")).toBe("famA");
   });
 
   it("isolates namespaces between stores", async () => {
@@ -123,18 +144,6 @@ describe("createRedisRotatedSessionStore (memory-backed RedisClient)", () => {
     expect(await a.check("hash")).toBe("famA");
     // Same hash key, different namespace → miss.
     expect(await b.check("hash")).toBe(null);
-  });
-
-  it("does not clobber an unrelated family when tracking a duplicate hash", async () => {
-    const store = createRedisRotatedSessionStore(client);
-    // Duplicate tracks of the same hash under the same family must be
-    // deduplicated inside the family set (otherwise revokeFamily would
-    // try to DEL the same key twice — harmless but wasteful).
-    await store.track("h", "famA", 60_000);
-    await store.track("h", "famA", 60_000);
-
-    await store.revokeFamily("famA");
-    expect(await store.check("h")).toBe(null);
   });
 });
 
@@ -176,94 +185,23 @@ describe("createRedisRotatedSessionStore fail-open behaviour", () => {
     expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
   });
 
-  it("revokeFamily swallows Redis errors and reports via onError", async () => {
+  it("revokeFamily is a no-op and touches no Redis calls (cannot fail)", async () => {
+    // Because Redis revokeFamily is a deliberate no-op, a uniformly-failing
+    // client must never invoke onError — there are no Redis operations to
+    // fail in the first place.
     const onError = vi.fn();
     const store = createRedisRotatedSessionStore(makeFailingClient(), { onError });
 
     await expect(store.revokeFamily("f")).resolves.toBeUndefined();
-    expect(onError).toHaveBeenCalledWith("revoke_family", expect.any(Error));
+    expect(onError).not.toHaveBeenCalled();
   });
 });
-
-/**
- * Wraps the memory client so specific call sites can be forced to throw.
- * Lets us hit the partial-failure modes inside `track` without
- * reimplementing the store contract in a fake.
- */
-const makeGatedClient = (
-  base: RedisClient,
-  gates: { throwOnSetCall?: number; throwOnGetCall?: number },
-): RedisClient => {
-  let setCalls = 0;
-  let getCalls = 0;
-  return {
-    ...base,
-    async set(key, value, pxMs) {
-      setCalls += 1;
-      if (gates.throwOnSetCall === setCalls) throw new Error("redis timeout");
-      await base.set(key, value, pxMs);
-    },
-    async get(key) {
-      getCalls += 1;
-      if (gates.throwOnGetCall === getCalls) throw new Error("redis timeout");
-      return base.get(key);
-    },
-  };
-};
 
 const throwingOnError = (): void => {
   throw new Error("logger exploded");
 };
 
-describe("createRedisRotatedSessionStore partial-failure behaviour", () => {
-  it("track: hash SET succeeds but family-set write fails — check still returns familyId", async () => {
-    // Documented invariant (see the track impl comment): the hash key is
-    // the one `check` actually reads, and it is written first in isolation.
-    // A failure on the subsequent family-set write must not erase that.
-    const base = createMemoryClient();
-    const onError = vi.fn();
-    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnSetCall: 2 }), {
-      onError,
-    });
-
-    await store.track("h", "famP", 60_000);
-    expect(await store.check("h")).toBe("famP");
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
-  });
-
-  it("track: hash SET fails — check misses (the accepted fail-open trade-off)", async () => {
-    // The inverse scenario. If the very first write throws, the store has
-    // no record of the rotated hash. `check` will miss on replay — this is
-    // the documented fail-open posture, accepted because aborting the
-    // rotation itself would be worse UX than a momentary reuse-detection gap.
-    const base = createMemoryClient();
-    const onError = vi.fn();
-    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnSetCall: 1 }), {
-      onError,
-    });
-
-    await store.track("h", "famQ", 60_000);
-    expect(await store.check("h")).toBe(null);
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
-  });
-
-  it("track: family-set read throws — hash SET already committed, check still works", async () => {
-    // Third mode: the GET used to merge the family set fails. Like the
-    // "second SET fails" case, the first SET has already committed, so
-    // `check` must still return the familyId.
-    const base = createMemoryClient();
-    const onError = vi.fn();
-    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnGetCall: 1 }), {
-      onError,
-    });
-
-    await store.track("h", "famR", 60_000);
-    expect(await store.check("h")).toBe("famR");
-    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
-  });
-
+describe("createRedisRotatedSessionStore misbehaving-callback resilience", () => {
   it("onError callbacks that throw do not break the store contract", async () => {
     // `index.ts` wires onError to an Effect.runPromise/logger call that
     // could itself throw if the observability layer is misconfigured. The

@@ -2,6 +2,7 @@ import { cors } from "@elysiajs/cors";
 import { DbLive } from "@osn/db/service";
 import { generateArcKeyPair, importKeyFromJwk, thumbprintKid } from "@shared/crypto";
 import { healthRoutes, initObservability, observabilityPlugin } from "@shared/observability";
+import { sanitizeCause } from "@shared/redis";
 import { Effect, Logger } from "effect";
 import { Elysia } from "elysia";
 
@@ -130,12 +131,14 @@ const stepUpJtiStore = createRedisJtiStore(redisClient);
 
 // S-H1 (session): cluster-safe record of rotated-out session hashes so
 // C2 reuse detection works across pods. Errors are logged via the Effect
-// logger layer so a Redis blip surfaces in ops dashboards.
+// logger layer so a Redis blip surfaces in ops dashboards. S-M1 —
+// `sanitizeCause` strips any credentialed URL (redis://user:pass@…) that
+// ioredis may embed in connection-level error strings.
 const rotatedSessionStore = createRedisRotatedSessionStore(redisClient, {
   onError: (action, cause) => {
     void Effect.runPromise(
       Effect.logWarning("Rotated-session store Redis error").pipe(
-        Effect.annotateLogs({ action, error: String(cause) }),
+        Effect.annotateLogs({ action, error: sanitizeCause(cause) }),
         Effect.provide(observabilityLayer),
       ),
     );
