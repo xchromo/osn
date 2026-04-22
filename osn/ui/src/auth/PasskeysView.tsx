@@ -11,13 +11,15 @@ import { StepUpDialog } from "./StepUpDialog";
  *
  * Design notes
  * ------------
- * - The `credentialId` column is never shown to users. It's included in
- *   the list response for client-side device matching ("this device") but
- *   is long, opaque, and unhelpful on screen.
- * - Delete triggers the shared `StepUpDialog` before calling the API so
- *   we fail the ceremony early if the user can't pass the sudo gate.
- * - Rename is inline and does not require step-up — the label is a UX
- *   nicety, not a security control.
+ * - The list response intentionally omits `credentialId` (S-L2) — the
+ *   only handle the UI needs is the opaque `pk_<hex>` `id`.
+ * - Both rename and delete are step-up gated. Rename is gated (S-M2)
+ *   because relabelling is a precondition-inflation attack on the very
+ *   confirmation prompt the user uses to choose which credential to
+ *   delete.
+ * - Once a step-up is in flight, every Rename / Delete button on the
+ *   page is disabled (S-L1) so a rapid double-click can't mutate a
+ *   different credential than the one the user just confirmed.
  */
 
 export interface PasskeysViewProps {
@@ -42,6 +44,8 @@ function friendlyLabel(p: PasskeySummary): string {
   return "Device passkey";
 }
 
+type PendingAction = { kind: "rename"; id: string; label: string } | { kind: "delete"; id: string };
+
 export function PasskeysView(props: PasskeysViewProps) {
   const [reloadKey, setReloadKey] = createSignal(0);
   const [passkeys] = createResource(reloadKey, async () => {
@@ -52,8 +56,7 @@ export function PasskeysView(props: PasskeysViewProps) {
   const [busy, setBusy] = createSignal(false);
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [draftLabel, setDraftLabel] = createSignal("");
-  const [stepUpOpen, setStepUpOpen] = createSignal(false);
-  const [pendingDelete, setPendingDelete] = createSignal<string | null>(null);
+  const [pending, setPending] = createSignal<PendingAction | null>(null);
 
   function startEdit(p: PasskeySummary) {
     setEditingId(p.id);
@@ -65,54 +68,63 @@ export function PasskeysView(props: PasskeysViewProps) {
     setDraftLabel("");
   }
 
-  async function saveLabel(id: string) {
+  // S-L1: while a step-up ceremony is in flight, freeze every destructive
+  // button on the page. Otherwise a rapid double-click could open the
+  // dialog with a different `pending` than the one the user thought they
+  // confirmed (the `confirm`/dialog is async; the second click overwrites).
+  const locked = () => busy() || pending() !== null;
+
+  function requestRename(id: string) {
+    if (locked()) return;
     const label = draftLabel().trim();
     if (label.length === 0) return;
-    setBusy(true);
     setError(null);
-    try {
-      await props.client.rename({ accessToken: props.accessToken, id, label });
-      cancelEdit();
-      setReloadKey((k) => k + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't rename passkey");
-    } finally {
-      setBusy(false);
-    }
+    setPending({ kind: "rename", id, label });
   }
 
   function requestDelete(id: string) {
+    if (locked()) return;
     if (!window.confirm("Remove this passkey? You'll need another credential to sign in.")) {
       return;
     }
-    setPendingDelete(id);
-    setStepUpOpen(true);
+    setError(null);
+    setPending({ kind: "delete", id });
   }
 
   async function handleStepUp(token: StepUpToken) {
-    const id = pendingDelete();
-    if (!id) return;
+    const action = pending();
+    if (!action) return;
     setBusy(true);
     setError(null);
     try {
-      await props.client.delete({
-        accessToken: props.accessToken,
-        id,
-        stepUpToken: token.token,
-      });
+      if (action.kind === "rename") {
+        await props.client.rename({
+          accessToken: props.accessToken,
+          id: action.id,
+          label: action.label,
+          stepUpToken: token.token,
+        });
+        cancelEdit();
+      } else {
+        await props.client.delete({
+          accessToken: props.accessToken,
+          id: action.id,
+          stepUpToken: token.token,
+        });
+      }
       setReloadKey((k) => k + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't delete passkey");
+      const fallback =
+        action.kind === "rename" ? "Couldn't rename passkey" : "Couldn't delete passkey";
+      setError(e instanceof Error ? e.message : fallback);
     } finally {
       setBusy(false);
-      setPendingDelete(null);
-      setStepUpOpen(false);
+      setPending(null);
     }
   }
 
   function cancelStepUp() {
-    setStepUpOpen(false);
-    setPendingDelete(null);
+    setPending(null);
   }
 
   return (
@@ -152,12 +164,12 @@ export function PasskeysView(props: PasskeysViewProps) {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => saveLabel(p.id)}
-                          disabled={busy() || draftLabel().trim().length === 0}
+                          onClick={() => requestRename(p.id)}
+                          disabled={locked() || draftLabel().trim().length === 0}
                         >
                           Save
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={cancelEdit}>
+                        <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={busy()}>
                           Cancel
                         </Button>
                       </div>
@@ -168,14 +180,19 @@ export function PasskeysView(props: PasskeysViewProps) {
                   </div>
                   <Show when={editingId() !== p.id}>
                     <div class="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => startEdit(p)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => startEdit(p)}
+                        disabled={locked()}
+                      >
                         Rename
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => requestDelete(p.id)}
-                        disabled={busy()}
+                        disabled={locked()}
                       >
                         Delete
                       </Button>
@@ -187,7 +204,7 @@ export function PasskeysView(props: PasskeysViewProps) {
           </ul>
         )}
       </Show>
-      <Show when={stepUpOpen()}>
+      <Show when={pending()}>
         <StepUpDialog
           client={props.stepUpClient}
           accessToken={props.accessToken}

@@ -250,12 +250,12 @@ describe("listPasskeys public shape", () => {
       yield* seedPasskey(alice.accountId, { lastUsedAt: 100 });
       const { passkeys: rows } = yield* auth.listPasskeys(alice.accountId);
       expect(rows).toHaveLength(1);
+      // S-L2: credentialId is intentionally excluded from the public shape.
       const expectedKeys = [
         "aaguid",
         "backupEligible",
         "backupState",
         "createdAt",
-        "credentialId",
         "id",
         "label",
         "lastUsedAt",

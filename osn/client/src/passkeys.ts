@@ -19,7 +19,6 @@ export class PasskeysError extends Error {
 
 export interface PasskeySummary {
   id: string;
-  credentialId: string;
   label: string | null;
   aaguid: string | null;
   transports: string[] | null;
@@ -33,7 +32,16 @@ export interface PasskeySummary {
 
 export interface PasskeysClient {
   list(input: { accessToken: string }): Promise<{ passkeys: PasskeySummary[] }>;
-  rename(input: { accessToken: string; id: string; label: string }): Promise<{ success: true }>;
+  /**
+   * Rename a passkey. Step-up gated (S-M2) so an XSS-captured access
+   * token cannot reshape labels to mislead the user before a delete.
+   */
+  rename(input: {
+    accessToken: string;
+    id: string;
+    label: string;
+    stepUpToken: string;
+  }): Promise<{ success: true }>;
   delete(input: {
     accessToken: string;
     id: string;
@@ -65,7 +73,10 @@ export function createPasskeysClient(config: PasskeysClientConfig): PasskeysClie
       const res = await fetch(`${base}/passkeys/${encodeURIComponent(input.id)}`, {
         method: "PATCH",
         credentials: "include",
-        headers: authHeaders(input.accessToken),
+        headers: {
+          ...authHeaders(input.accessToken),
+          "X-Step-Up-Token": input.stepUpToken,
+        },
         body: JSON.stringify({ label: input.label }),
       });
       const json = (await res.json()) as { success?: boolean; error?: string };

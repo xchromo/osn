@@ -47,7 +47,6 @@ const stepUpToken: StepUpToken = { token: "stpup_xxx", expiresIn: 300 };
 const passkeyRows = [
   {
     id: "pk_aaaaaaaaaaaa",
-    credentialId: "cred-1",
     label: "Work laptop",
     aaguid: null,
     transports: null,
@@ -58,7 +57,6 @@ const passkeyRows = [
   },
   {
     id: "pk_bbbbbbbbbbbb",
-    credentialId: "cred-2",
     label: null,
     aaguid: null,
     transports: null,
@@ -97,12 +95,14 @@ describe("PasskeysView", () => {
     });
   });
 
-  it("renames a passkey via inline editor, trims whitespace, and reloads", async () => {
+  it("renames via step-up: editor → save → step-up dialog → client.rename with stepUpToken", async () => {
     pk.list.mockResolvedValueOnce({ passkeys: passkeyRows });
     pk.list.mockResolvedValueOnce({
       passkeys: [{ ...passkeyRows[0]!, label: "Primary" }, passkeyRows[1]!],
     });
     pk.rename.mockResolvedValue({ success: true });
+    su.otpBegin.mockResolvedValue({ sent: true });
+    su.otpComplete.mockResolvedValue(stepUpToken);
 
     render(() => (
       <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
@@ -110,20 +110,25 @@ describe("PasskeysView", () => {
 
     await waitFor(() => screen.getAllByRole("button", { name: /^Rename$/ }));
     fireEvent.click(screen.getAllByRole("button", { name: /^Rename$/ })[0]!);
-
-    // Inline editor appears; type a new value.
     const input = screen.getByDisplayValue("Work laptop") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "  Primary  " } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    // Step-up dialog opens (S-M2). Use the OTP factor.
+    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
+    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
+    fireEvent.input(codeInput, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
 
     await waitFor(() =>
       expect(pk.rename).toHaveBeenCalledWith({
         accessToken: "acc",
         id: "pk_aaaaaaaaaaaa",
         label: "Primary",
+        stepUpToken: stepUpToken.token,
       }),
     );
-    // Reload after save.
     expect(pk.list).toHaveBeenCalledTimes(2);
   });
 
@@ -194,6 +199,9 @@ describe("PasskeysView", () => {
   it("surfaces rename errors in a destructive banner", async () => {
     pk.list.mockResolvedValue({ passkeys: passkeyRows });
     pk.rename.mockRejectedValue(new Error("Passkey not found"));
+    su.otpBegin.mockResolvedValue({ sent: true });
+    su.otpComplete.mockResolvedValue(stepUpToken);
+
     render(() => (
       <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
     ));
@@ -203,7 +211,35 @@ describe("PasskeysView", () => {
     const input = screen.getByDisplayValue("Work laptop") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "New label" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    // Drive the step-up to actually fire the rename call.
+    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
+    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
+    fireEvent.input(codeInput, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
 
     await waitFor(() => expect(screen.getByText(/Passkey not found/)).toBeTruthy());
+  });
+
+  // S-L1: while a step-up is in flight, every Rename / Delete button on the
+  // page is disabled to prevent a rapid double-click swapping the pending id.
+  it("locks every Rename/Delete button while a step-up is in flight (S-L1)", async () => {
+    pk.list.mockResolvedValue({ passkeys: passkeyRows });
+    su.otpBegin.mockResolvedValue({ sent: true });
+
+    render(() => (
+      <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
+    ));
+
+    await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
+    // Step-up dialog open — every Rename + Delete button on the list rows
+    // must be disabled.
+    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    const renameButtons = screen.getAllByRole("button", { name: /^Rename$/ });
+    const deleteButtons = screen.getAllByRole("button", { name: /^Delete$/ });
+    for (const b of [...renameButtons, ...deleteButtons]) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 });

@@ -1350,6 +1350,17 @@ export function createAuthRoutes(
               set.status = 401;
               return { error: "unauthorized" };
             }
+            // S-M2: rename is gated by step-up too. Otherwise an XSS-captured
+            // access token could swap labels to mislead the user about which
+            // credential they're confirming a delete on. Same AMR set as
+            // delete (defaults to passkey-only via passkeyDeleteAllowedAmr).
+            const headerToken = headers["x-step-up-token"];
+            const stepUpToken = body.step_up_token ?? headerToken;
+            if (!stepUpToken) {
+              set.status = 403;
+              return { error: "step_up_required" };
+            }
+            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
             await run(auth.renamePasskey(profile.accountId, params.id, body.label));
             return { success: true };
           } catch (e) {
@@ -1360,7 +1371,7 @@ export function createAuthRoutes(
         },
         {
           params: t.Object({ id: t.String({ pattern: "^pk_[a-f0-9]{12}$" }) }),
-          body: t.Object({ label: t.String() }),
+          body: t.Object({ label: t.String(), step_up_token: t.Optional(t.String()) }),
         },
       )
       .delete(
@@ -1388,7 +1399,11 @@ export function createAuthRoutes(
               set.status = 403;
               return { error: "step_up_required" };
             }
-            await run(auth.verifyStepUpForRecoveryGenerate(profile.accountId, stepUpToken));
+            // S-L4: passkey-delete uses its own AMR set (defaults to
+            // passkey-only). The caller necessarily has a passkey by
+            // construction (last-passkey guard), so requiring one for
+            // deletion is the strongest available signal.
+            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
             const cookieToken = readSessionCookie(headers.cookie, cookieConfig);
             const currentHash = cookieToken ? auth.hashSessionToken(cookieToken) : null;
             const result = await run(

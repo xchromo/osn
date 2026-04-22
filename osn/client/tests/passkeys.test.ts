@@ -59,7 +59,6 @@ function headerMap(init?: RequestInit): Record<string, string> {
 
 const samplePasskey = {
   id: "pk_aaaaaaaaaaaa",
-  credentialId: "cred-1",
   label: "Work laptop",
   aaguid: null,
   transports: null,
@@ -104,28 +103,39 @@ describe("createPasskeysClient", () => {
   });
 
   describe("rename", () => {
-    it("PATCHes /passkeys/:id with JSON body { label }", async () => {
+    it("PATCHes /passkeys/:id with Authorization + X-Step-Up-Token + body { label }", async () => {
       const { calls } = stubFetch(() => jsonResponse({ success: true }));
-      await client.rename({ accessToken: "acc_abc", id: "pk_aaaaaaaaaaaa", label: "Primary" });
+      await client.rename({
+        accessToken: "acc_abc",
+        id: "pk_aaaaaaaaaaaa",
+        label: "Primary",
+        stepUpToken: "stpup_xyz",
+      });
       expect(calls[0]!.url).toBe("https://osn.example.com/passkeys/pk_aaaaaaaaaaaa");
       expect(calls[0]!.init?.method).toBe("PATCH");
       const h = headerMap(calls[0]!.init);
       expect(h["authorization"]).toBe("Bearer acc_abc");
       expect(h["content-type"]).toBe("application/json");
+      expect(h["x-step-up-token"]).toBe("stpup_xyz");
       expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ label: "Primary" });
       expect(calls[0]!.init?.credentials).toBe("include");
     });
 
     it("encodes :id path segment", async () => {
       const { calls } = stubFetch(() => jsonResponse({ success: true }));
-      await client.rename({ accessToken: "t", id: "pk_ab+cd ef", label: "x" });
+      await client.rename({
+        accessToken: "t",
+        id: "pk_ab+cd ef",
+        label: "x",
+        stepUpToken: "s",
+      });
       expect(calls[0]!.url).toBe("https://osn.example.com/passkeys/pk_ab%2Bcd%20ef");
     });
 
     it("throws PasskeysError if the body does not confirm success", async () => {
       stubFetch(() => jsonResponse({ success: false, error: "Passkey not found" }));
       await expect(
-        client.rename({ accessToken: "t", id: "pk_x", label: "y" }),
+        client.rename({ accessToken: "t", id: "pk_x", label: "y", stepUpToken: "s" }),
       ).rejects.toBeInstanceOf(PasskeysError);
     });
   });

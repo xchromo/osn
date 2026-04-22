@@ -50,6 +50,54 @@ describe("passkey management routes", () => {
     return { profile, tokens };
   }
 
+  /**
+   * Build a route app that allows OTP step-up for rename + delete (the
+   * default is passkey-only — S-L4 — but driving a real WebAuthn ceremony
+   * in tests isn't practical, so we widen the allow-list explicitly).
+   * Returns the app, an access token, and a helper that drives the OTP
+   * step-up ceremony and hands back a fresh step-up token each call.
+   */
+  async function setupStepUp() {
+    const captured: string[] = [];
+    const sendEmail = async (_to: string, _subject: string, body: string) => {
+      const m = body.match(/\b(\d{6})\b/);
+      if (m) captured.push(m[1]!);
+    };
+    const appWithOtp = createAuthRoutes(
+      { ...config, sendEmail, passkeyDeleteAllowedAmr: ["webauthn", "otp"] },
+      layer,
+    );
+    const { profile, tokens } = await seedAccount();
+    const accessToken = tokens.accessToken;
+
+    const mintOtpStepUp = async (): Promise<string> => {
+      await appWithOtp.handle(
+        new Request("http://localhost/step-up/otp/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }),
+      );
+      const code = captured[captured.length - 1]!;
+      const stepUpRes = await appWithOtp.handle(
+        new Request("http://localhost/step-up/otp/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ code }),
+        }),
+      );
+      const { step_up_token } = (await stepUpRes.json()) as { step_up_token: string };
+      return step_up_token;
+    };
+
+    return { app: appWithOtp, accessToken, profile, mintOtpStepUp };
+  }
+
   async function seedPasskey(accountId: string, label: string | null = null) {
     const id = `pk_${Math.random().toString(16).slice(2, 14).padEnd(12, "0")}`;
     await Effect.runPromise(
@@ -110,7 +158,7 @@ describe("passkey management routes", () => {
       expect(res.status).toBe(401);
     });
 
-    it("renames a passkey", async () => {
+    it("returns 403 without step-up token (S-M2)", async () => {
       const { tokens, profile } = await seedAccount();
       const pk = await seedPasskey(profile.accountId);
       const res = await app.handle(
@@ -119,6 +167,27 @@ describe("passkey management routes", () => {
           headers: {
             Authorization: `Bearer ${tokens.accessToken}`,
             "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ label: "Renamed" }),
+        }),
+      );
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as { error?: string };
+      expect(json.error).toBe("step_up_required");
+    });
+
+    it("renames a passkey with a valid step-up token", async () => {
+      const { app: verifiedApp, accessToken, profile, mintOtpStepUp } = await setupStepUp();
+      const pk = await seedPasskey(profile.accountId);
+      const stepUp = await mintOtpStepUp();
+
+      const res = await verifiedApp.handle(
+        new Request(`http://localhost/passkeys/${pk}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            "X-Step-Up-Token": stepUp,
           },
           body: JSON.stringify({ label: "Renamed" }),
         }),
@@ -170,20 +239,40 @@ describe("passkey management routes", () => {
     // wires the X-Step-Up-Token header into the service call — exercise it
     // with a real minted token so a regression in that wiring fails here.
     it("succeeds with a valid step-up token and returns { remaining }", async () => {
-      // Mailer spy so we can pull the OTP back out for the step-up ceremony.
+      const { app: verifiedApp, accessToken, profile, mintOtpStepUp } = await setupStepUp();
+      const pk = await seedPasskey(profile.accountId);
+      await seedPasskey(profile.accountId);
+      const stepUp = await mintOtpStepUp();
+
+      const res = await verifiedApp.handle(
+        new Request(`http://localhost/passkeys/${pk}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "X-Step-Up-Token": stepUp,
+          },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { success?: boolean; remaining?: number };
+      expect(json.success).toBe(true);
+      expect(json.remaining).toBe(1);
+    });
+
+    // S-L4: default config rejects OTP step-up for delete. The dedicated
+    // passkey-only AMR config knob is the intended production posture.
+    it("rejects OTP step-up when passkeyDeleteAllowedAmr omits it", async () => {
       const captured: string[] = [];
       const sendEmail = async (_to: string, _subject: string, body: string) => {
         const m = body.match(/\b(\d{6})\b/);
         if (m) captured.push(m[1]!);
       };
-      const verifiedApp = createAuthRoutes({ ...config, sendEmail }, layer);
-
+      const strictApp = createAuthRoutes({ ...config, sendEmail }, layer);
       const { tokens, profile } = await seedAccount();
       const pk = await seedPasskey(profile.accountId);
       await seedPasskey(profile.accountId);
 
-      // Drive the OTP step-up ceremony.
-      await verifiedApp.handle(
+      await strictApp.handle(
         new Request("http://localhost/step-up/otp/begin", {
           method: "POST",
           headers: {
@@ -192,32 +281,31 @@ describe("passkey management routes", () => {
           },
         }),
       );
-      const stepUpCode = captured[captured.length - 1]!;
-      const stepUpRes = await verifiedApp.handle(
+      const code = captured[captured.length - 1]!;
+      const stepUpRes = await strictApp.handle(
         new Request("http://localhost/step-up/otp/complete", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${tokens.accessToken}`,
           },
-          body: JSON.stringify({ code: stepUpCode }),
+          body: JSON.stringify({ code }),
         }),
       );
-      const stepUpJson = (await stepUpRes.json()) as { step_up_token: string };
+      const { step_up_token } = (await stepUpRes.json()) as { step_up_token: string };
 
-      const res = await verifiedApp.handle(
+      const res = await strictApp.handle(
         new Request(`http://localhost/passkeys/${pk}`, {
           method: "DELETE",
           headers: {
             Authorization: `Bearer ${tokens.accessToken}`,
-            "X-Step-Up-Token": stepUpJson.step_up_token,
+            "X-Step-Up-Token": step_up_token,
           },
         }),
       );
-      expect(res.status).toBe(200);
-      const json = (await res.json()) as { success?: boolean; remaining?: number };
-      expect(json.success).toBe(true);
-      expect(json.remaining).toBe(1);
+      // Verifier rejects with AuthError → handleError maps to 4xx.
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
     });
   });
 
