@@ -80,9 +80,10 @@ describe("createInMemoryRotatedSessionStore", () => {
       // eslint-disable-next-line no-await-in-loop -- sequential tracking
       await store.track(`new${i}`, "famNew", 60_000);
     }
-    for (let i = 0; i < 10; i++) {
-      expect(await store.check(`keep${i}`)).toBe("famKeep");
-    }
+    const keepChecks = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => store.check(`keep${i}`)),
+    );
+    for (const result of keepChecks) expect(result).toBe("famKeep");
   });
 
   it("bounds the map to ROTATED_SESSIONS_MAX entries", async () => {
