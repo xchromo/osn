@@ -143,6 +143,65 @@ describe("listUnacknowledgedSecurityEvents", () => {
       expect(listA.events[0]!.id).toMatch(/^sev_/);
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // T-S1: the service caps results at .limit(50). A regression that drops
+  // the cap (or the isNull filter) would silently leak unbounded data into
+  // the Settings banner.
+  it.effect("caps results at 50 even when more unacked rows exist", () =>
+    Effect.gen(function* () {
+      const auth = createAuthService(baseConfig);
+      const profile = yield* registered(auth, "sev-cap@example.com", "sevcap");
+      for (let i = 0; i < 55; i++) {
+        yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      }
+      const { events } = yield* auth.listUnacknowledgedSecurityEvents(profile.accountId);
+      expect(events).toHaveLength(50);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // T-S1: ack + list mixed state — only unacked rows survive the filter.
+  it.effect("excludes acknowledged rows when mixed with unacked rows", () =>
+    Effect.gen(function* () {
+      const auth = createAuthService(baseConfig);
+      const profile = yield* registered(auth, "sev-mix@example.com", "sevmix");
+
+      yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+      yield* auth.generateRecoveryCodesForAccount(profile.accountId);
+
+      const beforeAck = yield* auth.listUnacknowledgedSecurityEvents(profile.accountId);
+      expect(beforeAck.events).toHaveLength(3);
+
+      // Ack the newest row; the other two must still surface.
+      yield* auth.acknowledgeSecurityEvent(profile.accountId, beforeAck.events[0]!.id);
+      const afterAck = yield* auth.listUnacknowledgedSecurityEvents(profile.accountId);
+      expect(afterAck.events).toHaveLength(2);
+      const ids = new Set(afterAck.events.map((e) => e.id));
+      expect(ids.has(beforeAck.events[0]!.id)).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+// T-S2: the defensive "account row missing" branch in notifyRecoveryRegeneration
+// is unreachable in production (FK + step-up guarantee an account exists), but
+// a silent drift that removes the null-check could leak a "sent" metric for a
+// notification that never actually dispatched. Pin it.
+describe("notifyRecoveryRegeneration (defensive branches)", () => {
+  it.effect("resolves without error when the account row is missing", () =>
+    Effect.gen(function* () {
+      const auth = createAuthService(baseConfig);
+      // No account created — the lookup short-circuits on `account === undefined`.
+      yield* auth.notifyRecoveryRegeneration("acc_doesnotexist00");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("resolves without error when sendEmail is not configured (local-dev branch)", () =>
+    Effect.gen(function* () {
+      const auth = createAuthService(baseConfig); // no sendEmail
+      const profile = yield* registered(auth, "sev-nolocal@example.com", "sevnolocal");
+      yield* auth.notifyRecoveryRegeneration(profile.accountId);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("acknowledgeSecurityEvent", () => {

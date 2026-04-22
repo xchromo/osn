@@ -3291,6 +3291,9 @@ export function createAuthService(config: AuthConfig) {
     countActiveRecoveryCodes,
     listUnacknowledgedSecurityEvents,
     acknowledgeSecurityEvent,
+    // Exposed so tests can pin the "account row missing" defensive branch;
+    // in production this is only invoked internally by generateRecoveryCodesForAccount.
+    notifyRecoveryRegeneration,
     beginStepUpPasskey,
     completeStepUpPasskey,
     beginStepUpOtp,
