@@ -140,7 +140,23 @@ export function createRedisRotatedSessionStore(
   config: RedisRotatedSessionStoreConfig = {},
 ): RotatedSessionStore {
   const namespace = config.namespace ?? "osn:rot-session";
-  const onError = config.onError;
+  const userOnError = config.onError;
+
+  // Shield the store contract from a misbehaving callback: the composition
+  // root wires `onError` to `Effect.runPromise(logger)` which could itself
+  // throw under logger misconfiguration. A throw there must not cascade
+  // into a rejected track/check/revokeFamily — that would silently hard-fail
+  // reuse detection on observability outages, which is strictly worse than
+  // the documented fail-open contract.
+  const onError = userOnError
+    ? (action: "track" | "check" | "revoke_family", cause: unknown) => {
+        try {
+          userOnError(action, cause);
+        } catch {
+          /* swallowed — contract above */
+        }
+      }
+    : undefined;
 
   return {
     backend: "redis",

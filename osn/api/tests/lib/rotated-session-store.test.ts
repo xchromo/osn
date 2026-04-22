@@ -184,3 +184,98 @@ describe("createRedisRotatedSessionStore fail-open behaviour", () => {
     expect(onError).toHaveBeenCalledWith("revoke_family", expect.any(Error));
   });
 });
+
+/**
+ * Wraps the memory client so specific call sites can be forced to throw.
+ * Lets us hit the partial-failure modes inside `track` without
+ * reimplementing the store contract in a fake.
+ */
+const makeGatedClient = (
+  base: RedisClient,
+  gates: { throwOnSetCall?: number; throwOnGetCall?: number },
+): RedisClient => {
+  let setCalls = 0;
+  let getCalls = 0;
+  return {
+    ...base,
+    async set(key, value, pxMs) {
+      setCalls += 1;
+      if (gates.throwOnSetCall === setCalls) throw new Error("redis timeout");
+      await base.set(key, value, pxMs);
+    },
+    async get(key) {
+      getCalls += 1;
+      if (gates.throwOnGetCall === getCalls) throw new Error("redis timeout");
+      return base.get(key);
+    },
+  };
+};
+
+const throwingOnError = (): void => {
+  throw new Error("logger exploded");
+};
+
+describe("createRedisRotatedSessionStore partial-failure behaviour", () => {
+  it("track: hash SET succeeds but family-set write fails — check still returns familyId", async () => {
+    // Documented invariant (see the track impl comment): the hash key is
+    // the one `check` actually reads, and it is written first in isolation.
+    // A failure on the subsequent family-set write must not erase that.
+    const base = createMemoryClient();
+    const onError = vi.fn();
+    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnSetCall: 2 }), {
+      onError,
+    });
+
+    await store.track("h", "famP", 60_000);
+    expect(await store.check("h")).toBe("famP");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
+  });
+
+  it("track: hash SET fails — check misses (the accepted fail-open trade-off)", async () => {
+    // The inverse scenario. If the very first write throws, the store has
+    // no record of the rotated hash. `check` will miss on replay — this is
+    // the documented fail-open posture, accepted because aborting the
+    // rotation itself would be worse UX than a momentary reuse-detection gap.
+    const base = createMemoryClient();
+    const onError = vi.fn();
+    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnSetCall: 1 }), {
+      onError,
+    });
+
+    await store.track("h", "famQ", 60_000);
+    expect(await store.check("h")).toBe(null);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
+  });
+
+  it("track: family-set read throws — hash SET already committed, check still works", async () => {
+    // Third mode: the GET used to merge the family set fails. Like the
+    // "second SET fails" case, the first SET has already committed, so
+    // `check` must still return the familyId.
+    const base = createMemoryClient();
+    const onError = vi.fn();
+    const store = createRedisRotatedSessionStore(makeGatedClient(base, { throwOnGetCall: 1 }), {
+      onError,
+    });
+
+    await store.track("h", "famR", 60_000);
+    expect(await store.check("h")).toBe("famR");
+    expect(onError).toHaveBeenCalledWith("track", expect.any(Error));
+  });
+
+  it("onError callbacks that throw do not break the store contract", async () => {
+    // `index.ts` wires onError to an Effect.runPromise/logger call that
+    // could itself throw if the observability layer is misconfigured. The
+    // store contract must be robust to that: a crashing callback cannot
+    // cascade into a thrown rejection from track/check/revokeFamily, or
+    // reuse detection would silently hard-fail on logger misconfiguration.
+    const store = createRedisRotatedSessionStore(makeFailingClient(), {
+      onError: throwingOnError,
+    });
+
+    await expect(store.track("h", "f", 60_000)).resolves.toBeUndefined();
+    await expect(store.check("h")).resolves.toBe(null);
+    await expect(store.revokeFamily("f")).resolves.toBeUndefined();
+  });
+});
