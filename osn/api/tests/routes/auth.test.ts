@@ -432,13 +432,12 @@ describe("auth routes", () => {
       expect(rotatedAfterReuse.status).toBe(400);
     });
 
-    it("accepts refresh_token in body when no cookie is sent (body-fallback path)", async () => {
-      // Covers the `bodyToken` branch of /token: cookieless clients can still
-      // refresh by passing the token in the form body. metricSessionCookieFallback
-      // fires on this path; we assert the status + rotation as the observable
-      // contract.
+    it("rejects refresh_token supplied in the body (cookie-only contract, S-M1)", async () => {
+      // The body fallback was removed: any refresh_token submitted outside
+      // the HttpOnly cookie must fail with invalid_request, independent of
+      // whether the token itself would be valid.
       let captured: string | undefined;
-      const fallbackApp = createAuthRoutes(
+      const cookieOnlyApp = createAuthRoutes(
         {
           ...config,
           sendEmail: async (_to, _subject, body) => {
@@ -449,100 +448,35 @@ describe("auth routes", () => {
         layer,
       );
 
-      await fallbackApp.handle(
+      await cookieOnlyApp.handle(
         new Request("http://localhost/register/begin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "body-fallback@example.com", handle: "bodyfallback" }),
+          body: JSON.stringify({ email: "cookie-only@example.com", handle: "cookieonly" }),
         }),
       );
-      const completeRes = await fallbackApp.handle(
+      const completeRes = await cookieOnlyApp.handle(
         new Request("http://localhost/register/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "body-fallback@example.com", code: captured! }),
+          body: JSON.stringify({ email: "cookie-only@example.com", code: captured! }),
         }),
       );
       expect(completeRes.status).toBe(201);
       const cookie = completeRes.headers.get("set-cookie")!;
       const refreshToken = cookie.match(/osn_session=([^;]+)/)![1]!;
 
-      // Refresh without sending the cookie — token goes in the body.
-      const res = await fallbackApp.handle(
+      // No cookie, token in body — must 400 with invalid_request.
+      const res = await cookieOnlyApp.handle(
         new Request("http://localhost/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken }),
         }),
       );
-      expect(res.status).toBe(200);
-      // Server issues a rotated cookie either way.
-      expect(res.headers.get("set-cookie")).toContain("osn_session=");
-    });
-
-    it("prefers the cookie over the body when both are sent", async () => {
-      // Contract: readSessionCookie wins. If the body token is fresh and the
-      // cookie is stale, the stale cookie takes precedence and the call fails
-      // — which is the intended guard against downgrade attacks where an
-      // attacker injects a body token alongside an already-rotated cookie.
-      let captured: string | undefined;
-      const precedenceApp = createAuthRoutes(
-        {
-          ...config,
-          sendEmail: async (_to, _subject, body) => {
-            const m = body.match(/code is: (\d{6})/);
-            if (m) captured = m[1];
-          },
-        },
-        layer,
-      );
-
-      await precedenceApp.handle(
-        new Request("http://localhost/register/begin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "precedence@example.com", handle: "precedence" }),
-        }),
-      );
-      const completeRes = await precedenceApp.handle(
-        new Request("http://localhost/register/complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "precedence@example.com", code: captured! }),
-        }),
-      );
-      expect(completeRes.status).toBe(201);
-      const originalCookie = completeRes.headers.get("set-cookie")!;
-      const originalSession = originalCookie.match(/osn_session=([^;]+)/)![1]!;
-
-      // Rotate the session — the body will hold the fresh token, the cookie
-      // will hold the stale one.
-      const rotateRes = await precedenceApp.handle(
-        new Request("http://localhost/token", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            cookie: `osn_session=${originalSession}`,
-          },
-          body: JSON.stringify({ grant_type: "refresh_token" }),
-        }),
-      );
-      expect(rotateRes.status).toBe(200);
-      const rotatedCookie = rotateRes.headers.get("set-cookie")!;
-      const freshSession = rotatedCookie.match(/osn_session=([^;]+)/)![1]!;
-
-      // Send stale cookie + fresh body — cookie wins, reuse detection trips.
-      const mixedRes = await precedenceApp.handle(
-        new Request("http://localhost/token", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            cookie: `osn_session=${originalSession}`,
-          },
-          body: JSON.stringify({ grant_type: "refresh_token", refresh_token: freshSession }),
-        }),
-      );
-      expect(mixedRes.status).toBe(400);
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error: string };
+      expect(json.error).toBe("invalid_request");
     });
   });
 
@@ -679,7 +613,7 @@ describe("auth routes", () => {
     });
   });
 
-  describe("GET /login/magic/verify", () => {
+  describe("POST /login/magic/verify", () => {
     it("returns a session + public user for a valid magic token", async () => {
       let capturedToken: string | undefined;
       const authHelper = createAuthService({
@@ -699,7 +633,11 @@ describe("auth routes", () => {
       );
 
       const res = await app.handle(
-        new Request(`http://localhost/login/magic/verify?token=${capturedToken}`),
+        new Request("http://localhost/login/magic/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: capturedToken }),
+        }),
       );
       expect(res.status).toBe(200);
       const json = (await res.json()) as {
@@ -711,14 +649,21 @@ describe("auth routes", () => {
     });
 
     it("returns 400 for an unknown token", async () => {
-      const res = await app.handle(new Request("http://localhost/login/magic/verify?token=bogus"));
+      const res = await app.handle(
+        new Request("http://localhost/login/magic/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: "bogus" }),
+        }),
+      );
       expect(res.status).toBe(400);
     });
 
-    it("emailed URL path actually resolves against the Elysia app", async () => {
-      // Lockstep check: beginMagic emits a URL; handing that URL straight
-      // back to app.handle must succeed. Renaming /login/magic/verify on
-      // either side (service emitter or route) regresses this.
+    it("S-H1: emailed URL points at the frontend origin, not the API", async () => {
+      // Lockstep check: beginMagic emits a URL whose origin must be
+      // `config.origin` (the frontend RP origin) — putting the access token
+      // on the API domain would render it in the browser window and burn it
+      // to email-scanner pre-fetchers.
       let capturedUrl: string | undefined;
       const emailSpy = async (_to: string, _subject: string, body: string) => {
         const m = body.match(/https?:\/\/\S+/);
@@ -740,10 +685,24 @@ describe("auth routes", () => {
           body: JSON.stringify({ identifier: "lockstep@example.com" }),
         }),
       );
-      expect(capturedUrl).toMatch(/\/login\/magic\/verify\?token=/);
+      expect(capturedUrl).toBeTruthy();
+      const parsed = new URL(capturedUrl!);
+      // Frontend origin (config.origin), NOT the API (config.issuerUrl).
+      expect(parsed.origin).toBe(config.origin);
+      expect(parsed.origin).not.toBe(config.issuerUrl);
+      expect(parsed.searchParams.get("token")).toBeTruthy();
 
-      const res = await spyApp.handle(new Request(capturedUrl!));
-      expect(res.status).toBe(200);
+      // The token extracted from the emitted URL must verify successfully
+      // when POSTed to the API — that's the path MagicLinkHandler drives.
+      const token = parsed.searchParams.get("token")!;
+      const verifyRes = await spyApp.handle(
+        new Request("http://localhost/login/magic/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        }),
+      );
+      expect(verifyRes.status).toBe(200);
     });
   });
 

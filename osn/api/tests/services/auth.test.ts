@@ -776,7 +776,8 @@ describe("local-mode Effect.logDebug fallback", () => {
 
       expect(captured.length).toBe(1);
       expect(captured[0]).toContain("Magic link for dev-magic@example.com:");
-      expect(captured[0]).toContain(`${config.issuerUrl}/login/magic/verify?token=`);
+      // S-H1: URL points at the frontend origin (`config.origin`), not the API.
+      expect(captured[0]).toContain(`${config.origin}/?token=`);
       expect(captured[0]).not.toContain("[REDACTED]");
     }).pipe(Effect.provide(createTestLayer())),
   );

@@ -13,11 +13,7 @@ import {
 } from "../lib/cookie-session";
 import { publicError } from "../lib/public-error";
 import { deriveUaLabel } from "../lib/ua-label";
-import {
-  metricAuthJwksServed,
-  metricAuthRateLimited,
-  metricSessionCookieFallback,
-} from "../metrics";
+import { metricAuthJwksServed, metricAuthRateLimited } from "../metrics";
 import { createAuthService, type AuthConfig } from "../services/auth";
 
 /**
@@ -422,11 +418,11 @@ export function createAuthRoutes(
             return { error: "unsupported_grant_type" };
           }
 
-          // C3: prefer session token from HttpOnly cookie; fall back to body
-          const cookieToken = readSessionCookie(headers.cookie, cookieConfig);
-          const bodyToken = (body as { refresh_token?: string }).refresh_token;
-          const refresh_token = cookieToken ?? bodyToken;
-          if (bodyToken && !cookieToken) metricSessionCookieFallback();
+          // C3: session token lives exclusively in the HttpOnly cookie —
+          // body fallback was a defence-in-depth trap (rotated token never
+          // returned in body, so cookieless clients broke on second refresh)
+          // and was removed to reduce the log-leak surface (S-M1).
+          const refresh_token = readSessionCookie(headers.cookie, cookieConfig);
           if (!refresh_token) {
             set.status = 400;
             return { error: "invalid_request" };
@@ -443,7 +439,6 @@ export function createAuthRoutes(
         {
           body: t.Object({
             grant_type: t.String(),
-            refresh_token: t.Optional(t.String()),
           }),
         },
       )
@@ -672,11 +667,15 @@ export function createAuthRoutes(
           body: t.Object({ identifier: t.String() }),
         },
       )
-      .get(
+      // S-H1: POST-only. Token arrives in the request body via the frontend's
+      // MagicLinkHandler — never in a URL the browser navigates to top-level.
+      // Closes three issues: access-token JSON rendered in browser window,
+      // email-scanner pre-fetch burning the token, and token-in-URL logging.
+      .post(
         "/login/magic/verify",
-        async ({ query, headers, set }) => {
+        async ({ body, headers, set }) => {
           try {
-            const result = await run(auth.verifyMagicDirect(query.token, sessionMetaFrom(headers)));
+            const result = await run(auth.verifyMagicDirect(body.token, sessionMetaFrom(headers)));
             set.headers["set-cookie"] = buildSessionCookie(
               result.session.refreshToken,
               cookieConfig,
@@ -691,7 +690,7 @@ export function createAuthRoutes(
           }
         },
         {
-          query: t.Object({ token: t.String() }),
+          body: t.Object({ token: t.String() }),
         },
       )
       // -------------------------------------------------------------------------

@@ -97,8 +97,20 @@ export interface AuthConfig {
   rpName: string;
   /** Origin for WebAuthn (e.g. "http://localhost:5173") */
   origin: string;
-  /** Issuer URL (used as JWT issuer + magic link base) */
+  /** Issuer URL (JWT issuer) */
   issuerUrl: string;
+  /**
+   * Base URL (frontend origin) emails point magic links at. The token goes
+   * into `?token=…` on this URL; the app's `MagicLinkHandler` reads it from
+   * `window.location`, POSTs to `/login/magic/verify`, and clears the URL.
+   * Defaults to `origin` (the WebAuthn RP origin, which is the frontend) —
+   * callers with split-origin deployments can override.
+   *
+   * Keeping magic tokens OFF the API origin is a security control (S-H1):
+   * pointing the email at the API would render `access_token` JSON in the
+   * browser window and expose it to email-scanner pre-fetchers.
+   */
+  magicLinkBaseUrl?: string;
   /** ES256 private key for signing access, refresh, and enrollment tokens */
   jwtPrivateKey: CryptoKey;
   /** ES256 public key for verifying the above */
@@ -1931,7 +1943,11 @@ export function createAuthService(config: AuthConfig) {
         expiresAt: Date.now() + magicTtl * 1000,
       });
 
-      const magicUrl = `${config.issuerUrl}/login/magic/verify?token=${token}`;
+      // S-H1: point at the frontend origin, NOT the API — the app's
+      // MagicLinkHandler consumes the token and POSTs it to /login/magic/verify.
+      // Landing on the API would render `access_token` JSON in the browser
+      // window and burn the token to any email-client pre-fetcher.
+      const magicUrl = `${config.magicLinkBaseUrl ?? config.origin}/?token=${token}`;
 
       if (config.sendEmail) {
         yield* Effect.tryPromise({

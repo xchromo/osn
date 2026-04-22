@@ -53,15 +53,6 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return json;
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: "include" });
-  const json = (await res.json()) as T & { error?: string };
-  if (!res.ok) {
-    throw new LoginError(json.error ?? `Request failed: ${res.status}`);
-  }
-  return json;
-}
-
 export interface LoginClient {
   /** Begin passkey login — returns the WebAuthn assertion challenge options. */
   passkeyBegin(identifier: string): Promise<{ options: unknown }>;
@@ -111,8 +102,10 @@ export function createLoginClient(config: LoginClientConfig): LoginClient {
       postJson<{ sent: true }>(`${base}/login/magic/begin`, { identifier }),
 
     magicVerify: async (token) => {
-      const raw = await getJson<{ session: unknown; profile: LoginProfile }>(
-        `${base}/login/magic/verify?token=${encodeURIComponent(token)}`,
+      // S-H1: token goes in the body, never in the URL.
+      const raw = await postJson<{ session: unknown; profile: LoginProfile }>(
+        `${base}/login/magic/verify`,
+        { token },
       );
       return toLoginResult(raw);
     },
