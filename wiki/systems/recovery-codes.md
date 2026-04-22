@@ -10,8 +10,8 @@ packages:
   - "@osn/api"
   - "@osn/client"
   - "@osn/ui"
-last-reviewed: 2026-04-18
-updated: 2026-04-18
+last-reviewed: 2026-04-22
+updated: 2026-04-22
 ---
 
 # Recovery Codes
@@ -72,10 +72,22 @@ All failure modes — unknown identifier, bad code, used code — surface as `{ 
 
 `createAuthService` exposes:
 
-- `generateRecoveryCodesForAccount(accountId) → { codes: string[] }` — transactional replace + insert.
+- `generateRecoveryCodesForAccount(accountId, eventMeta?) → { recoveryCodes: string[] }` — transactional replace + insert. The optional `eventMeta` (UA label + IP) is persisted on the paired `security_events` audit row (see **Regeneration notification** below).
 - `consumeRecoveryCode(identifier, code) → { profile }` — verify, mark used, revoke sessions, return profile.
 - `completeRecoveryLogin(identifier, code) → { session, profile }` — `consumeRecoveryCode` + `issueTokens`, wrapped with the standard `withAuthLogin("recovery_code")` metric span.
 - `countActiveRecoveryCodes(accountId)` — helpers for a "codes remaining" UI badge.
+- `listUnacknowledgedSecurityEvents(accountId) → { events }` — drives the Settings banner.
+- `acknowledgeSecurityEvent(accountId, id) → { acknowledged }` — idempotent, scoped to the owning account.
+
+## Regeneration notification (M-PK1b)
+
+Step-up gates `/recovery/generate`, but a compromised session with inbox access can still mint a step-up token and burn the user's codes. The audit trail is the last-mile defence:
+
+1. **Audit row** — every `generateRecoveryCodesForAccount` call inserts a `security_events` row in the same transaction as the code swap. If the audit write fails, the codes don't commit either. Schema lives in `osn/db/src/schema/index.ts` → `securityEvents`. Columns: `id` (`sev_` + 12 hex), `account_id`, `kind` (bounded — `"recovery_code_generate"` today), `created_at`, `acknowledged_at`, `ip_hash`, `ua_label`.
+2. **Email notification** — a confirmation email (S-L5 framed, codes never included) is fired post-commit. Failure is logged and reported via `osn.auth.security_event.notified{result=failed}`; it does not roll back the codes.
+3. **Settings banner** — `GET /account/security-events` + `POST /account/security-events/:id/ack` surface still-unacknowledged rows (newest first). Ack is idempotent; acking a row owned by another account is a silent no-op. UI lives in `@osn/ui/auth/SecurityEventsBanner`; SDK in `@osn/client/security-events.ts`.
+
+Migration: `osn/db/drizzle/0006_security_events.sql`.
 
 ## Client
 
@@ -96,10 +108,14 @@ UI: `RecoveryCodesView` (settings panel, show-once with copy + download) and `Re
 | `osn.auth.recovery.code_consumed` | `result: success \| invalid \| used` | Every consume attempt |
 | `osn.auth.recovery.duration` | `step: generate \| consume, result: ok \| error` | Histogram, per step |
 | `osn.auth.login.*` | `method: recovery_code` | Inherited from the normal login wrapper on `completeRecoveryLogin` |
+| `osn.auth.security_event.recorded` | `kind: recovery_code_generate` | Every audit-row insert |
+| `osn.auth.security_event.notified` | `kind, result: sent \| failed \| skipped` | Every email dispatch attempt |
+| `osn.auth.security_event.acknowledged` | `kind` | Every successful ack |
+| `osn.auth.security_event.notify.duration` | `result: ok \| error` | Histogram, per dispatch |
 
-Spans: `auth.recovery.generate`, `auth.recovery.consume`, `auth.login.recovery_code`.
+Spans: `auth.recovery.generate`, `auth.recovery.consume`, `auth.login.recovery_code`, `auth.security_event.{list,ack,notify_recovery_regeneration}`.
 
-Redaction deny-list adds `recoveryCode`, `recovery_code`, `recoveryCodes`, `recovery_codes`, `codeHash`, `code_hash` — see `shared/observability/src/logger/redact.ts`.
+Redaction deny-list adds `recoveryCode`, `recovery_code`, `recoveryCodes`, `recovery_codes`, `codeHash`, `code_hash`, `securityEventId`, `security_event_id` — see `shared/observability/src/logger/redact.ts`.
 
 ## Threat model
 

@@ -8,7 +8,7 @@ related:
   - "[[zap]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-04-19
+last-reviewed: 2026-04-22
 ---
 
 # Completed Features
@@ -22,6 +22,14 @@ Archived completed feature work from [[TODO]]. For open work see [[TODO]].
 - **Email change**: step-up gated `POST /account/email/{begin,complete}`. Begin sends OTP to the NEW email. Complete verifies OTP + step-up token and atomically swaps `accounts.email`, revokes every other session, and inserts an `email_changes` audit row. Hard cap of 2 changes per trailing 7 days.
 - **Client SDK cleanup (breaking)**: `Session` and `AccountSession` no longer carry `refreshToken` — cookie-only C3. `AccountSession.hasSession: boolean` replaces the stored token. `/logout` body `refresh_token` parameter removed.
 - **Observability**: new `osn.auth.step_up.{issued,verified}`, `osn.auth.session.operations`, `osn.auth.account.email_change.{attempts,duration}` metrics; `SecurityInvalidationTrigger` extended with `session_revoke`, `session_revoke_all`; redaction deny-list extended with `stepUpToken`, `ipHash`, `uaLabel` (both camel + snake spellings).
+
+## Auth improvements — M-PK1b (out-of-band recovery-code regeneration notification)
+
+- **Security events audit trail**: new `security_events` table inserted in the same transaction as recovery-code regeneration. Captures the coarse UA label + HMAC-peppered IP hash so the UI can render "was this you?" without exposing raw signals.
+- **Out-of-band email notification**: `sendEmail` is invoked after `/recovery/generate` succeeds with S-L5 framing; the codes themselves are never included in the message. Failure is logged and surfaced via `osn.auth.security_event.notified{result=failed}` but never rolls back the outer call — the audit row is the primary signal.
+- **Client surface**: `GET /account/security-events` + `POST /account/security-events/:id/ack` (Bearer-auth, rate-limited). Ack is idempotent and scoped to the owning account. New `createSecurityEventsClient` in `@osn/client` and `SecurityEventsBanner` in `@osn/ui/auth` for the Settings surface.
+- **Observability**: new `osn.auth.security_event.{recorded,notified,acknowledged}` counters + `osn.auth.security_event.notify.duration` histogram. `SecurityEventKind` + `SecurityEventNotifyResult` added to `@shared/observability/metrics` with bounded string-literal unions. Redaction deny-list now includes `securityEventId` / `security_event_id`.
+- Unblocks the Phase-5 passkey-primary migration: a stolen access token + inbox hijack can no longer silently burn the account's recovery codes. — see [[recovery-codes]]
 
 ## Multi-account
 

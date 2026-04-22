@@ -298,6 +298,55 @@ export type EmailChange = typeof emailChanges.$inferSelect;
 export type NewEmailChange = typeof emailChanges.$inferInsert;
 
 // ---------------------------------------------------------------------------
+// Security events (M-PK1b)
+//
+// Out-of-band audit trail for account-level security actions. Every row is
+// created alongside the primary action (e.g. recovery-code regeneration) so
+// a UI banner can surface "did you do this?" to the account holder even if
+// the attacker suppressed the confirmation email.
+//
+// `kind` is a bounded string enum — see SecurityEventKind in
+// @shared/observability/metrics. New kinds get added there first so the
+// metric attribute union stays in sync with the schema column.
+//
+// Rows are created per-event; `acknowledged_at` goes from NULL → unix seconds
+// when the user dismisses the banner. We keep acknowledged rows for audit
+// (the banner just stops surfacing them).
+// ---------------------------------------------------------------------------
+
+export const securityEvents = sqliteTable(
+  "security_events",
+  {
+    id: text("id").primaryKey(), // "sev_" prefix
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    /**
+     * Bounded kind enum — see SecurityEventKind in @shared/observability.
+     * Enforced at the service boundary, not the column level, so adding
+     * a new kind doesn't require a schema migration.
+     */
+    kind: text("kind").notNull(),
+    /** Unix seconds */
+    createdAt: integer("created_at").notNull(),
+    /** Unix seconds — NULL while the banner is still surfacing. */
+    acknowledgedAt: integer("acknowledged_at"),
+    /** HMAC-peppered IP hash of the request that triggered the event (optional). */
+    ipHash: text("ip_hash"),
+    /** Coarse UA label captured at event time ("Firefox on macOS"). */
+    uaLabel: text("ua_label"),
+  },
+  (t) => [
+    // Serves the "unacknowledged events for account" query from
+    // listUnacknowledgedSecurityEvents without a table scan.
+    index("security_events_account_ack_idx").on(t.accountId, t.acknowledgedAt),
+  ],
+);
+
+export type SecurityEvent = typeof securityEvents.$inferSelect;
+export type NewSecurityEvent = typeof securityEvents.$inferInsert;
+
+// ---------------------------------------------------------------------------
 // Organisations
 // ---------------------------------------------------------------------------
 

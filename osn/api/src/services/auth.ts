@@ -1,6 +1,14 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-import { accounts, emailChanges, recoveryCodes, sessions, users, passkeys } from "@osn/db/schema";
+import {
+  accounts,
+  emailChanges,
+  recoveryCodes,
+  securityEvents,
+  sessions,
+  users,
+  passkeys,
+} from "@osn/db/schema";
 import type { Profile } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import {
@@ -8,7 +16,11 @@ import {
   hashRecoveryCode,
   RECOVERY_CODE_COUNT,
 } from "@shared/crypto";
-import type { StepUpFactor, StepUpVerifyResult } from "@shared/observability/metrics";
+import type {
+  SecurityEventKind,
+  StepUpFactor,
+  StepUpVerifyResult,
+} from "@shared/observability/metrics";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -22,7 +34,7 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
-import { and, count as countFn, desc, eq, gte, like, ne } from "drizzle-orm";
+import { and, count as countFn, desc, eq, gte, isNull, like, ne } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { SignJWT, jwtVerify } from "jose";
 
@@ -38,6 +50,10 @@ import {
   metricRecoveryCodesGenerated,
   metricRotatedStoreDuration,
   metricRotatedStoreOp,
+  metricSecurityEventAcknowledged,
+  metricSecurityEventNotified,
+  metricSecurityEventNotifyDuration,
+  metricSecurityEventRecorded,
   metricSessionReuseDetected,
   metricSessionFamilyRevoked,
   metricSessionSecurityInvalidation,
@@ -447,6 +463,20 @@ export interface SessionSummary {
   lastUsedAt: number | null;
   expiresAt: number;
   isCurrent: boolean;
+}
+
+/**
+ * Public shape returned by `listUnacknowledgedSecurityEvents`. Surfaces the
+ * kind, when it happened, and the coarse device context so the client banner
+ * can render "your recovery codes were regenerated on Firefox on macOS —
+ * was this you?" without ever exposing the raw IP or User-Agent.
+ */
+export interface SecurityEventSummary {
+  id: string;
+  kind: SecurityEventKind;
+  createdAt: number;
+  uaLabel: string | null;
+  ipHash: string | null;
 }
 
 /**
@@ -2243,6 +2273,7 @@ export function createAuthService(config: AuthConfig) {
 
   const generateRecoveryCodesForAccount = (
     accountId: string,
+    eventMeta?: SessionMeta,
   ): Effect.Effect<{ recoveryCodes: string[] }, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
@@ -2256,11 +2287,26 @@ export function createAuthService(config: AuthConfig) {
         createdAt: nowSec,
       }));
 
+      // M-PK1b: the recovery-code swap and the matching security_events row
+      // commit together. If the audit write fails, the code swap rolls back
+      // too — we never want codes in the DB that the account holder can't
+      // see in their security banner.
+      const securityEventRow: typeof securityEvents.$inferInsert = {
+        id: genId("sev_"),
+        accountId,
+        kind: "recovery_code_generate",
+        createdAt: nowSec,
+        acknowledgedAt: null,
+        ipHash: eventMeta?.ip ? hashIp(eventMeta.ip) : null,
+        uaLabel: eventMeta?.uaLabel ?? null,
+      };
+
       yield* Effect.tryPromise({
         try: () =>
           db.transaction(async (tx) => {
             await tx.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId));
             await tx.insert(recoveryCodes).values(rows);
+            await tx.insert(securityEvents).values(securityEventRow);
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -2272,8 +2318,173 @@ export function createAuthService(config: AuthConfig) {
       // — an out-of-band regen (XSS-triggered, S-M1) is exactly the pattern
       // we want to notice.
       metricSessionSecurityInvalidation("recovery_code_generate");
+      metricSecurityEventRecorded("recovery_code_generate");
+
+      // M-PK1b: fire the out-of-band email notification. Failure is logged
+      // but does NOT fail the outer call — the codes are already committed
+      // and surfacing a 500 here would just make the caller retry and burn
+      // another set. The audit row is the primary signal; email is defence
+      // in depth for when the attacker has suppressed the inbox.
+      yield* notifyRecoveryRegeneration(accountId).pipe(
+        Effect.catchAll((err) =>
+          Effect.logError("recovery regeneration notification failed", {
+            accountId,
+            _tag: (err as { _tag?: string })._tag,
+            message: (err as { message?: string }).message,
+          }),
+        ),
+      );
+
       return { recoveryCodes: codes };
     }).pipe(withAuthRecovery("generate"));
+
+  /**
+   * Sends the out-of-band "your recovery codes were regenerated" email.
+   * S-L5 framing ("somebody asked for this on your account") mirrors the
+   * email-change ceremony so a misdirected message is clearly junk to the
+   * recipient and useless as a phishing template.
+   *
+   * Never includes the codes themselves — the audit row is the signal, the
+   * email is the confirmation.
+   */
+  const notifyRecoveryRegeneration = (
+    accountId: string,
+  ): Effect.Effect<void, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () => db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const account = rows[0];
+      if (!account) {
+        // Shouldn't happen — the caller has already authenticated — but
+        // skip the metric branch so we don't report a "sent" that wasn't.
+        metricSecurityEventNotified("recovery_code_generate", "skipped");
+        return;
+      }
+
+      if (!config.sendEmail) {
+        // Local dev with no configured mailer — log the notification for
+        // parity with the OTP dev-log path.
+        yield* Effect.logDebug(
+          `[OSN local] Recovery-regeneration notice for ${account.email}: audit row written`,
+        );
+        metricSecurityEventNotified("recovery_code_generate", "skipped");
+        return;
+      }
+
+      const start = Date.now();
+      yield* Effect.tryPromise({
+        try: () =>
+          config.sendEmail!(
+            account.email,
+            "Your OSN recovery codes were regenerated",
+            // S-L5: explicit "somebody asked for this" framing so a
+            // misdirected message is clearly junk. Codes themselves are
+            // never in the email — this is purely a confirmation that
+            // the regeneration happened.
+            `Somebody generated a new set of OSN account recovery codes on your account. If that was you, no further action is needed — your previous codes are no longer valid.\n\nIf this wasn't you: sign in and review your active sessions at the Sessions tab, then acknowledge the alert.`,
+          ),
+        catch: (cause) => new AuthError({ message: `Failed to send email: ${String(cause)}` }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            metricSecurityEventNotifyDuration((Date.now() - start) / 1000, "ok");
+            metricSecurityEventNotified("recovery_code_generate", "sent");
+          }),
+        ),
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            metricSecurityEventNotifyDuration((Date.now() - start) / 1000, "error");
+            metricSecurityEventNotified("recovery_code_generate", "failed");
+          }),
+        ),
+      );
+    }).pipe(Effect.withSpan("auth.security_event.notify_recovery_regeneration"));
+
+  /**
+   * Lists still-unacknowledged security events for an account, newest first.
+   * Intended for the Settings banner — acknowledged rows are kept for audit
+   * but are filtered out of the surface.
+   */
+  const listUnacknowledgedSecurityEvents = (
+    accountId: string,
+  ): Effect.Effect<{ events: SecurityEventSummary[] }, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select()
+            .from(securityEvents)
+            .where(
+              and(eq(securityEvents.accountId, accountId), isNull(securityEvents.acknowledgedAt)),
+            )
+            .orderBy(desc(securityEvents.createdAt))
+            .limit(50),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return {
+        events: rows.map((row) => ({
+          id: row.id,
+          // Service boundary re-asserts the bounded kind union so a hand-
+          // written INSERT (or a downgrade that widens the column) can't
+          // leak an unbounded string into the metric attribute.
+          kind: row.kind as SecurityEventKind,
+          createdAt: row.createdAt,
+          uaLabel: row.uaLabel,
+          ipHash: row.ipHash,
+        })),
+      };
+    }).pipe(Effect.withSpan("auth.security_event.list"));
+
+  /**
+   * Marks a single security event as acknowledged. Idempotent — acking a
+   * row that's already acknowledged, or a row that doesn't exist on the
+   * caller's account, returns `{ acknowledged: false }` rather than
+   * surfacing "not found" (same posture as `/logout` and `/sessions/:id`).
+   */
+  const acknowledgeSecurityEvent = (
+    accountId: string,
+    eventId: string,
+  ): Effect.Effect<{ acknowledged: boolean }, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      if (!/^sev_[a-f0-9]{12}$/.test(eventId)) {
+        return { acknowledged: false };
+      }
+      const { db } = yield* Db;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const existing = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ id: securityEvents.id, kind: securityEvents.kind })
+            .from(securityEvents)
+            .where(
+              and(
+                eq(securityEvents.id, eventId),
+                eq(securityEvents.accountId, accountId),
+                isNull(securityEvents.acknowledgedAt),
+              ),
+            )
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const match = existing[0];
+      if (!match) {
+        return { acknowledged: false };
+      }
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .update(securityEvents)
+            .set({ acknowledgedAt: nowSec })
+            .where(eq(securityEvents.id, match.id)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      metricSecurityEventAcknowledged(match.kind as SecurityEventKind);
+      return { acknowledged: true };
+    }).pipe(Effect.withSpan("auth.security_event.ack"));
 
   /**
    * Consumes a recovery code — returns the profile to establish a fresh
@@ -3078,6 +3289,8 @@ export function createAuthService(config: AuthConfig) {
     consumeRecoveryCode,
     completeRecoveryLogin,
     countActiveRecoveryCodes,
+    listUnacknowledgedSecurityEvents,
+    acknowledgeSecurityEvent,
     beginStepUpPasskey,
     completeStepUpPasskey,
     beginStepUpOtp,

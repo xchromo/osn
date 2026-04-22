@@ -261,7 +261,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L1 (auth-fetch) — `OsnAuthService.authFetch` attaches `Authorization: Bearer` + `credentials: include` to any URL; no origin allowlist. Add `allowedOrigins` to `OsnAuthConfig` and skip header attachment off-list (defence-in-depth against mis-routed fetches / injected URLs) — see [[identity-model]]
 
 ### Recovery / passkey-primary (Phase 5 prerequisites)
-- [ ] M-PK1b — Out-of-band recovery-code regeneration notification. Step-up is now required for `/recovery/generate` (M-PK1 ✅), but users should still receive an email + in-app banner when their code set is regenerated so a successful XSS + OTP-inbox-access chain doesn't go silent — see [[recovery-codes]]
+- [x] M-PK1b — Out-of-band recovery-code regeneration notification. `security_events` audit table + best-effort email on `/recovery/generate`; `GET/POST /account/security-events[/:id/ack]` surfaces an acknowledgeable Settings banner. **Shipped** — see [[recovery-codes]] and `[[changelog/completed-features]]`
 
 ---
 
