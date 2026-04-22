@@ -17,7 +17,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [x] Auth Improvements Phase 1: Server-side sessions + refresh token rotation + session invalidation (C1/C2/H1)
 - [x] Auth Improvements Phase 4: Recovery codes (M2) + short access-token TTL (5 min) with client silent-refresh on 401 — see [[recovery-codes]]
 - [x] Auth Improvements Phase 5a: Step-up (sudo) tokens (M-PK1), session introspection/revocation UI, email change flow — see [[step-up]], [[sessions]]
-- [ ] Auth Improvements Phase 5b: ~~Redis-backed rotated-session store~~ (shipped — see [[sessions]]), ~~PKCE cleanup~~ (shipped — deleted `/authorize`, `authorization_code` grant, `pkceStore`, client `pkce.ts` + `startLogin`/`handleCallback`; magic link now routes through frontend origin via POST body, S-M1 body fallback on `/token` removed), passkey-primary login
+- [ ] Auth Improvements Phase 5b: ~~Redis-backed rotated-session store~~ (shipped — see [[sessions]]), ~~PKCE cleanup~~ (shipped — deleted `/authorize`, `authorization_code` grant, `pkceStore`, client `pkce.ts` + `startLogin`/`handleCallback`; magic link now routes through frontend origin via POST body, S-M1 body fallback on `/token` removed), ~~passkey management surface~~ (shipped — see [[identity-model]]: list/rename/delete, discoverable-credential login, last-passkey lockout guard), passkey-primary login (demote OTP/magic-link to recovery-only)
 
 ---
 
@@ -323,7 +323,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I2 (security-events) — `listUnacknowledgedSecurityEvents` returns up to 50 rows with no pagination token. Fine for today's single-kind taxonomy, but silently drops older rows if the list grows past the cap. Add `?before=<createdAt>` + `{ events, hasMore }` once another kind is introduced — see [[recovery-codes]]
 - [ ] P-I4 (security-events) — `GET /account/security-events` has no `Cache-Control` header. Low-impact today (the query is cheap and the banner fetches once per mount); add `Cache-Control: private, no-store` + a weak ETag on `MAX(created_at)` once the banner starts polling or is embedded outside Settings — see [[recovery-codes]]
 - [ ] P-I5b — `completePasskeyLogin` calls `findProfileByEmail` redundantly — `pk.userId` already on passkey row
-- [ ] P-I10 — `beginPasskeyRegistration` fetches all passkeys without `LIMIT` — add `maxPasskeys` cap at registration time — see [[identity-model]]
+- [x] P-I10 — `beginPasskeyRegistration` fetches all passkeys without `LIMIT` — `MAX_PASSKEYS_PER_ACCOUNT = 10` enforced at begin and race-safely re-checked at complete — see [[identity-model]]
 - [ ] P-I6 — Duplicate index on `users.email` — `unique()` already creates one implicitly in SQLite
 - [ ] P-I7 — Eliminate extra `getEvent` round-trip in `createEvent` via `RETURNING *`
 - [ ] P-I8 — `resolveHandle` re-fetches user from DB when handler already has the User row

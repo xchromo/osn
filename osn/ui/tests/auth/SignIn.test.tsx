@@ -104,7 +104,10 @@ describe("SignIn component", () => {
       expect(hoisted.startAuthentication).toHaveBeenCalledWith({
         optionsJSON: { challenge: "ch" },
       });
-      expect(stub.passkeyComplete).toHaveBeenCalledWith("alice", { id: "cred", rawId: "raw" });
+      expect(stub.passkeyComplete).toHaveBeenCalledWith({
+        identifier: "alice",
+        assertion: { id: "cred", rawId: "raw" },
+      });
     });
 
     it("surfaces errors from passkeyComplete and doesn't adopt a session", async () => {

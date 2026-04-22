@@ -544,7 +544,10 @@ describe("passkey login", () => {
       // No beginPasskeyLogin call — the challenge guard must be the first
       // failure point, not the passkey DB lookup.
       const error = yield* Effect.flip(
-        auth.completePasskeyLoginDirect("pk-replay@example.com", bogusAssertion),
+        auth.completePasskeyLoginDirect({
+          identifier: "pk-replay@example.com",
+          assertion: bogusAssertion,
+        }),
       );
       expect(error._tag).toBe("AuthError");
       expect(error.message).toContain("Challenge");
