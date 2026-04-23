@@ -2,7 +2,10 @@
 "@osn/api": minor
 "@osn/client": patch
 "@osn/db": patch
+"@osn/social": patch
+"@osn/ui": patch
 "@pulse/api": minor
+"@pulse/app": patch
 "@pulse/db": patch
 "@shared/crypto": patch
 "@shared/db-utils": patch
