@@ -1,5 +1,6 @@
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect, Layer } from "effect";
+import { SignJWT } from "jose";
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
 import { createAuthRoutes, createDefaultAuthRateLimiters } from "../../src/routes/auth";
@@ -688,6 +689,41 @@ describe("auth routes", () => {
         new Request("http://localhost/passkey/register/begin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profileId: profile.id }),
+        }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    // Regression pin: the enrollmentToken JWT machinery was deleted, but
+    // the test config still signs with a real ES256 key. If a future change
+    // relaxes `verifyAccessToken`'s claim check, a legacy `type:"passkey-
+    // enroll"` token would silently regain access. This test forges one and
+    // asserts the route rejects it — independent of the implementation
+    // accident that currently does the rejecting.
+    it("rejects a legacy passkey-enrollment JWT (type: 'passkey-enroll')", async () => {
+      const svc = createAuthService(config);
+      const profile = await Effect.runPromise(
+        svc.registerProfile("tess@example.com", "tess").pipe(Effect.provide(layer)),
+      );
+
+      const forged = await new SignJWT({
+        sub: profile.accountId,
+        type: "passkey-enroll",
+        jti: crypto.randomUUID(),
+      })
+        .setProtectedHeader({ alg: "ES256", kid: config.jwtKid })
+        .setIssuedAt()
+        .setExpirationTime(Math.floor(Date.now() / 1000) + 300)
+        .sign(config.jwtPrivateKey);
+
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${forged}`,
+          },
           body: JSON.stringify({ profileId: profile.id }),
         }),
       );

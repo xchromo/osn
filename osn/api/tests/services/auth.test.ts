@@ -1,4 +1,6 @@
 import { it, expect, describe } from "@effect/vitest";
+import { passkeys } from "@osn/db/schema";
+import { Db } from "@osn/db/service";
 import { Effect, Logger, LogLevel } from "effect";
 import { beforeAll } from "vitest";
 
@@ -370,6 +372,24 @@ describe("passkey registration", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // Pins the security-key-friendly registration posture (M-PK). Tightening
+  // either of these back to "required" would silently lock out FIDO2 roaming
+  // keys that lack a resident-key slot or UV; the change is invisible to
+  // other tests, so this is the only place that notices a regression.
+  it.effect("beginPasskeyRegistration uses residentKey + userVerification 'preferred'", () =>
+    Effect.gen(function* () {
+      const profile = yield* auth.registerProfile("pk-opts@example.com", "pkopts");
+      const result = yield* auth.beginPasskeyRegistration(profile.accountId);
+      // toMatchObject: @simplewebauthn/server adds a derived
+      // `requireResidentKey` field alongside our two explicit ones; we only
+      // want to pin the policy values we set.
+      expect(result.options.authenticatorSelection).toMatchObject({
+        residentKey: "preferred",
+        userVerification: "preferred",
+      });
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("beginPasskeyRegistration fails for an unknown accountId", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(auth.beginPasskeyRegistration("acc_nonexistent"));
@@ -421,6 +441,46 @@ describe("passkey login", () => {
       expect(result.challengeId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
       );
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Pins the asymmetry the service comments rely on: identifier-less login
+  // enforces UV (the whole ceremony's correctness depends on it without a
+  // claimed identity), identified login accepts UP-only (FIDO2 keys without
+  // a PIN still work because the identifier binds the assertion).
+  it.effect("beginPasskeyLogin(null) keeps userVerification 'required'", () =>
+    Effect.gen(function* () {
+      const result = yield* auth.beginPasskeyLogin(null);
+      expect(result.options.userVerification).toBe("required");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("beginPasskeyLogin(identifier) uses userVerification 'preferred'", () =>
+    Effect.gen(function* () {
+      const profile = yield* auth.registerProfile("pk-login-opts@example.com", "pkloginopts");
+      // The identified branch needs at least one passkey row to generate
+      // options; seed a minimal one. The real WebAuthn ceremony is out of
+      // scope — we're pinning the option-generation policy.
+      const { db } = yield* Db;
+      yield* Effect.tryPromise(() =>
+        db.insert(passkeys).values({
+          id: "pk_aaaaaaaaaaaa",
+          accountId: profile.accountId,
+          credentialId: "cred-login-opts",
+          publicKey: "AAAA",
+          counter: 0,
+          transports: null,
+          createdAt: new Date(),
+          label: null,
+          lastUsedAt: null,
+          aaguid: null,
+          backupEligible: false,
+          backupState: false,
+          updatedAt: null,
+        }),
+      );
+      const result = yield* auth.beginPasskeyLogin("pk-login-opts@example.com");
+      expect(result.options.userVerification).toBe("preferred");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

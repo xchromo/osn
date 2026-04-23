@@ -189,6 +189,11 @@ describe("deletePasskey", () => {
 
   it.effect("still refuses the last-passkey delete even when recovery codes exist", () =>
     Effect.gen(function* () {
+      // Regression guard: the prior version of this method allowed dropping
+      // the last passkey IF active recovery codes existed. That escape hatch
+      // was removed — recovery codes are for "lost device", not a substitute
+      // credential. This test pins the stricter contract so a future refactor
+      // can't quietly reintroduce the old branch.
       const alice = yield* auth.registerProfile("pk-last-rc@example.com", "pklastrc");
       const only = yield* seedPasskey(alice.accountId);
 
