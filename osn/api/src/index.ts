@@ -7,6 +7,7 @@ import { Effect, Logger } from "effect";
 import { Elysia } from "elysia";
 
 import type { CookieSessionConfig } from "./lib/cookie-session";
+import { assertCorsOriginsConfigured, resolveCorsOrigins } from "./lib/cors-config";
 import { createOriginGuard } from "./lib/origin-guard";
 import {
   createRedisAuthRateLimiters,
@@ -152,37 +153,17 @@ const profileRateLimiters = createRedisProfileRateLimiters(redisClient);
 const recommendationRateLimiter = createRedisRecommendationRateLimiter(redisClient);
 
 // S-L1: Restrict CORS to the known app origin instead of the open wildcard.
-// OSN_CORS_ORIGIN may be a comma-separated list for multi-origin setups.
-//
-// In local dev, fall back to the actual frontend dev ports used by the
-// monorepo's Tauri apps (@pulse/app on 1420, @osn/social on 1422) so that
-// handle checks, passkey ceremonies, etc. work out-of-the-box without
-// requiring every contributor to set OSN_CORS_ORIGIN. The WebAuthn origin
-// (authConfig.origin) is a separate concern and defaults to 5173 for
-// backwards compatibility with the SDK's example app.
-const isLocalEnv = !process.env.OSN_ENV || process.env.OSN_ENV === "local";
-const corsOrigins: string[] = process.env.OSN_CORS_ORIGIN
-  ? process.env.OSN_CORS_ORIGIN.split(",").map((o) => o.trim())
-  : isLocalEnv
-    ? ["http://localhost:1420", "http://localhost:1422"]
-    : [];
+// Derivation + S-L4 fail-closed invariant live in `./lib/cors-config` so they
+// can be unit-tested without booting the whole app.
+const corsOrigins = resolveCorsOrigins(process.env);
 
 // C3: Cookie session config — Secure flag + __Host- prefix in non-local envs.
 const cookieConfig: CookieSessionConfig = {
   secure: !!process.env.OSN_ENV && process.env.OSN_ENV !== "local",
 };
 
-// M1: Origin guard — validate Origin header on state-changing requests.
-// S-L4: fail loudly if the allowlist is empty in a non-local env. A
-// previous warning-only posture left the entire CSRF surface silently
-// disabled any time OSN_CORS_ORIGIN was forgotten on a deploy.
-const corsOriginSet = new Set(corsOrigins);
-if (corsOriginSet.size === 0 && cookieConfig.secure) {
-  throw new Error(
-    "OSN_CORS_ORIGIN must be set in non-local environments — Origin guard is mandatory for CSRF protection",
-  );
-}
-const originGuard = createOriginGuard({ allowedOrigins: corsOriginSet });
+assertCorsOriginsConfigured(corsOrigins, cookieConfig.secure);
+const originGuard = createOriginGuard({ allowedOrigins: new Set(corsOrigins) });
 
 const app = new Elysia()
   .use(cors({ origin: corsOrigins, credentials: true }))
