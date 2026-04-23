@@ -70,7 +70,7 @@ export function ExploreCard(props: {
 }) {
   const e = () => props.event;
   const date = () => new Date(e().startTime);
-  const { mo, day, dow } = fmtDate(date());
+  const dateParts = () => fmtDate(date());
   const time = () => fmtTime(date());
   const dayLabel = () => fmtDay(date());
   const ph = () => CATEGORY_PH[e().category ?? ""] ?? "ph-4";
@@ -131,10 +131,12 @@ export function ExploreCard(props: {
             class="text-[9px] font-semibold uppercase tracking-widest"
             style={{ color: "var(--pulse-accent-strong)" }}
           >
-            {mo}
+            {dateParts().mo}
           </div>
-          <div class="mt-0.5 text-lg font-semibold leading-none">{day}</div>
-          <div class="mt-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">{dow}</div>
+          <div class="mt-0.5 text-lg font-semibold leading-none">{dateParts().day}</div>
+          <div class="mt-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">
+            {dateParts().dow}
+          </div>
         </div>
 
         {/* Status tags */}
@@ -163,7 +165,7 @@ export function ExploreCard(props: {
           style={{ "font-family": "var(--font-mono)", color: "var(--pulse-accent-strong)" }}
         >
           <Icon name="clock" size={11} />
-          {dayLabel()} \u00B7 {time()}
+          {dayLabel()} · {time()}
         </div>
 
         {/* Title */}

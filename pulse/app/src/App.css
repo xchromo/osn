@@ -1,10 +1,10 @@
+/* Pulse editorial fonts — must precede all other @import */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap");
+
 @import "tailwindcss";
 @source "../../../osn/ui/src";
 
 @custom-variant base (:where(&));
-
-/* Pulse editorial fonts */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap");
 
 @theme inline {
   --color-background: var(--background);

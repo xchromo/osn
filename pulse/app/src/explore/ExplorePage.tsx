@@ -101,7 +101,7 @@ export function ExplorePage() {
           <FilterRail active={filter()} onSelect={setFilter} />
 
           <Show when={events.loading}>
-            <p class="py-16 text-center text-muted-foreground">Loading events\u2026</p>
+            <p class="py-16 text-center text-muted-foreground">Loading events…</p>
           </Show>
 
           <Show when={events.error}>

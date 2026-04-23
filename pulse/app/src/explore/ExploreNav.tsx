@@ -119,17 +119,19 @@ export function ExploreNav(props: {
           <nav class="flex gap-0.5">
             <For each={TABS}>
               {(tab) => (
-                <button
-                  type="button"
-                  class={`relative rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition-colors ${
-                    activeTab() === tab.id
-                      ? "explore-tab-active bg-secondary text-foreground"
-                      : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
+                <Show when={tab.id === "home" || session()}>
+                  <button
+                    type="button"
+                    class={`relative rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition-colors ${
+                      activeTab() === tab.id
+                        ? "explore-tab-active bg-secondary text-foreground"
+                        : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    }`}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                </Show>
               )}
             </For>
           </nav>
@@ -143,37 +145,28 @@ export function ExploreNav(props: {
                 type="text"
                 value={props.query}
                 onInput={(e) => props.onQueryChange(e.currentTarget.value)}
-                placeholder="Search events, people, venues\u2026"
+                placeholder="Search events, people, venues…"
                 class="flex-1 border-0 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
               />
               <kbd
                 class="rounded-[5px] border border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground"
                 style={{ "font-family": "var(--font-mono)" }}
               >
-                \u2318K
+                ⌘K
               </kbd>
             </div>
 
             <Show
               when={session()}
               fallback={
-                <>
-                  <button
-                    type="button"
-                    class="inline-flex h-9 items-center gap-2 rounded-full border border-transparent px-3.5 text-[13px] font-medium text-[var(--pulse-accent-fg)]"
-                    style={{ background: "var(--pulse-accent)" }}
-                    onClick={() => setShowRegister(true)}
-                  >
-                    Create account
-                  </button>
-                  <button
-                    type="button"
-                    class="inline-flex h-9 items-center gap-2 rounded-full border border-border bg-card px-3.5 text-[13px] font-medium hover:bg-secondary"
-                    onClick={() => setShowSignIn(true)}
-                  >
-                    Sign in
-                  </button>
-                </>
+                <button
+                  type="button"
+                  class="inline-flex h-9 items-center gap-2 rounded-full border border-transparent px-3.5 text-[13px] font-medium text-[var(--pulse-accent-fg)]"
+                  style={{ background: "var(--pulse-accent)" }}
+                  onClick={() => setShowSignIn(true)}
+                >
+                  Sign in
+                </button>
               }
             >
               {/* Notifications */}
@@ -249,7 +242,7 @@ export function ExploreNav(props: {
               <Show when={displayName()} fallback={<>{greeting}</>}>
                 {greeting}, {displayName()}
               </Show>
-              {" \u00B7 "}
+              {" · "}
               <b class="font-semibold text-foreground">
                 {new Date().toLocaleDateString("en-US", {
                   weekday: "long",
@@ -314,11 +307,6 @@ export function ExploreNav(props: {
       </header>
 
       {/* Auth dialogs */}
-      <Dialog open={showRegister() && !session()} onOpenChange={setShowRegister}>
-        <DialogContent class="max-w-sm p-0">
-          <Register client={registrationClient} onCancel={() => setShowRegister(false)} />
-        </DialogContent>
-      </Dialog>
       <Dialog open={showSignIn() && !session()} onOpenChange={setShowSignIn}>
         <DialogContent class="max-w-sm p-0">
           <SignIn
@@ -327,6 +315,37 @@ export function ExploreNav(props: {
             onCancel={() => setShowSignIn(false)}
             onSuccess={() => setShowSignIn(false)}
           />
+          <div class="border-t border-border px-6 py-4 text-center text-sm text-muted-foreground">
+            Don't have an account?{" "}
+            <button
+              type="button"
+              class="font-medium text-foreground hover:underline"
+              onClick={() => {
+                setShowSignIn(false);
+                setShowRegister(true);
+              }}
+            >
+              Register here
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={showRegister() && !session()} onOpenChange={setShowRegister}>
+        <DialogContent class="max-w-sm p-0">
+          <Register client={registrationClient} onCancel={() => setShowRegister(false)} />
+          <div class="border-t border-border px-6 py-4 text-center text-sm text-muted-foreground">
+            Already have an account?{" "}
+            <button
+              type="button"
+              class="font-medium text-foreground hover:underline"
+              onClick={() => {
+                setShowRegister(false);
+                setShowSignIn(true);
+              }}
+            >
+              Sign in
+            </button>
+          </div>
         </DialogContent>
       </Dialog>
 

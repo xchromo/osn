@@ -146,7 +146,7 @@ function StyleMap(props: { width: number; height: number }) {
           BUSHWICK
         </text>
         <text x={w() * 0.6} y={h() * 0.45}>
-          BED\u2013STUY
+          BED–STUY
         </text>
       </g>
     </svg>
@@ -281,7 +281,7 @@ function TimeScrubber(props: { hour: number; onHourChange: (h: number) => void }
             class="text-[12px] italic text-muted-foreground"
             style={{ "font-family": "var(--font-sans)" }}
           >
-            \u00B7 {label()}
+            · {label()}
           </span>
         </span>
       </div>
@@ -322,7 +322,7 @@ function Legend() {
       }}
     >
       <div class="mb-1.5 text-[10.5px] font-semibold uppercase tracking-widest text-muted-foreground">
-        Heat \u00B7 people here
+        Heat · people here
       </div>
       <div class="legend-bar" />
       <div
@@ -429,7 +429,7 @@ export function ExploreMap(props: {
               class="mt-0.5 text-[10.5px] text-muted-foreground"
               style={{ "font-family": "var(--font-mono)" }}
             >
-              {pin().event.venue ?? ""} \u00B7 {fmtTime(new Date(pin().event.startTime))}
+              {pin().event.venue ?? ""} · {fmtTime(new Date(pin().event.startTime))}
             </div>
           </div>
         )}
