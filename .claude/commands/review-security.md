@@ -58,6 +58,10 @@ Read all changed source files in the affected workspaces and examine them for th
 
 - User-controlled redirect parameters (`redirect_to`, `next`, `return_url`, etc.) reflected verbatim rather than validated against an allowlist of internal paths or known origins
 
+## Post-Quantum Exposure
+
+- New code that encrypts data with long-term relevance (E2E message payloads, encrypted backups, archived key material, sealed long-lived credentials) using a classical-only KEM or key agreement (X25519, ECDH, plain RSA-OAEP) without a post-quantum hybrid (e.g. ML-KEM-768 + X25519). Harvest-now-decrypt-later makes durable ciphertext the one place this matters — short-lived primitives (JWTs with minute-scale TTLs, TLS session keys, WebAuthn challenges) are explicitly out of scope
+
 ## Dependency & Supply Chain (OWASP A06)
 
 - Dependencies that appear unusual or out of place for this codebase (flag for manual review)
