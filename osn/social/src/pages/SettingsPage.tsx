@@ -1,5 +1,4 @@
 import { useAuth } from "@osn/client/solid";
-import { PasskeysView } from "@osn/ui/auth/PasskeysView";
 import { ProfileOnboarding } from "@osn/ui/auth/ProfileOnboarding";
 import { clsx } from "@osn/ui/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@osn/ui/ui/avatar";
@@ -7,11 +6,14 @@ import { Button } from "@osn/ui/ui/button";
 import { Card } from "@osn/ui/ui/card";
 import { Input } from "@osn/ui/ui/input";
 import { Label } from "@osn/ui/ui/label";
-import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, lazy, Show, Suspense } from "solid-js";
 
-import { passkeysClient, registrationClient, stepUpClient } from "../lib/authClients";
+import { registrationClient } from "../lib/authClients";
 import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
+
+// Code-split the Security section so `@simplewebauthn/browser` is only
+// fetched when the user opens that tab (P-I1).
+const SecuritySection = lazy(() => import("../components/SecuritySection"));
 
 type Section = "profile" | "account" | "security" | "apps";
 
@@ -154,24 +156,9 @@ export function SettingsPage() {
                 <p class="text-muted-foreground text-sm">Sign in to manage your passkeys.</p>
               }
             >
-              <PasskeysView
-                client={passkeysClient}
-                stepUpClient={stepUpClient}
-                accessToken={accessToken()!}
-                profileId={claims().profileId!}
-                runPasskeyCeremony={(options: unknown) =>
-                  startAuthentication({
-                    optionsJSON: options as Parameters<
-                      typeof startAuthentication
-                    >[0]["optionsJSON"],
-                  })
-                }
-                runPasskeyRegistration={(options: unknown) =>
-                  startRegistration({
-                    optionsJSON: options as Parameters<typeof startRegistration>[0]["optionsJSON"],
-                  })
-                }
-              />
+              <Suspense fallback={<p class="text-muted-foreground text-sm">Loading…</p>}>
+                <SecuritySection accessToken={accessToken()!} profileId={claims().profileId!} />
+              </Suspense>
             </Show>
           </Card>
         </Show>
