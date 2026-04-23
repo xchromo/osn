@@ -16,21 +16,36 @@ import {
 import type {
   AuthMethod,
   AuthRateLimitedEndpoint,
+  EmailChangeStep,
   GraphBlockAction,
   GraphCloseFriendAction,
   GraphConnectionAction,
   OrgAction,
   OrgMemberAction,
+  OriginGuardRejectionReason,
+  PasskeyAction,
   ProfileCrudAction,
   ProfileSwitchAction,
+  RecoveryCodeConsumeResult,
+  RecoveryCodeStep,
   RegisterStep,
   Result,
+  RotatedStoreAction,
+  RotatedStoreBackend,
+  RotatedStoreResult,
+  SecurityEventKind,
+  SecurityEventNotifyResult,
   SecurityInvalidationTrigger,
+  SessionAction,
+  StepUpFactor,
+  StepUpStep,
+  StepUpVerifyResult,
 } from "@shared/observability/metrics";
 import { Effect } from "effect";
 
 /** Canonical metric name consts — grep-able, refactor-safe. */
 export const OSN_METRICS = {
+  authOriginGuardRejections: "osn.auth.origin_guard.rejections",
   authJwksServed: "osn.auth.jwks.served",
   authRegisterAttempts: "osn.auth.register.attempts",
   authRegisterDuration: "osn.auth.register.duration",
@@ -39,12 +54,28 @@ export const OSN_METRICS = {
   authTokenRefresh: "osn.auth.token.refresh",
   authHandleCheck: "osn.auth.handle.check",
   authOtpSent: "osn.auth.otp.sent",
-  authMagicLinkSent: "osn.auth.magic_link.sent",
   authRateLimited: "osn.auth.rate_limited",
   authSessionRotations: "osn.auth.session.rotations",
   authSessionReuseDetected: "osn.auth.session.reuse_detected",
   authSessionFamilyRevoked: "osn.auth.session.family_revoked",
+  authSessionRotatedStoreOps: "osn.auth.session.rotated_store.operations",
+  authSessionRotatedStoreDuration: "osn.auth.session.rotated_store.duration",
   authSessionSecurityInvalidation: "osn.auth.session.security_invalidation",
+  authRecoveryCodesGenerated: "osn.auth.recovery.codes_generated",
+  authRecoveryCodeConsumed: "osn.auth.recovery.code_consumed",
+  authRecoveryDuration: "osn.auth.recovery.duration",
+  authStepUpIssued: "osn.auth.step_up.issued",
+  authStepUpVerified: "osn.auth.step_up.verified",
+  authSessionOps: "osn.auth.session.operations",
+  authEmailChangeAttempts: "osn.auth.account.email_change.attempts",
+  authEmailChangeDuration: "osn.auth.account.email_change.duration",
+  authSecurityEventRecorded: "osn.auth.security_event.recorded",
+  authSecurityEventNotified: "osn.auth.security_event.notified",
+  authSecurityEventAcknowledged: "osn.auth.security_event.acknowledged",
+  authSecurityEventNotifyDuration: "osn.auth.security_event.notify.duration",
+  authPasskeyOps: "osn.auth.passkey.operations",
+  authPasskeyDuration: "osn.auth.passkey.duration",
+  authPasskeyLoginDiscoverable: "osn.auth.passkey.login_discoverable",
   graphConnectionOps: "osn.graph.connection.operations",
   graphBlockOps: "osn.graph.block.operations",
   graphCloseFriendOps: "osn.graph.close_friend.operations",
@@ -63,8 +94,7 @@ type RegisterAttrs = { step: RegisterStep; result: Result };
 type LoginAttrs = { method: AuthMethod; result: Result };
 type TokenRefreshAttrs = { result: Result };
 type HandleCheckAttrs = { result: "available" | "taken" | "invalid" };
-type OtpSentAttrs = { purpose: "registration" | "login" };
-type MagicLinkSentAttrs = { result: Result };
+type OtpSentAttrs = { purpose: "registration" | "step_up" | "email_change" };
 type AuthRateLimitAttrs = { endpoint: AuthRateLimitedEndpoint };
 type GraphConnectionAttrs = { action: GraphConnectionAction; result: Result };
 type GraphBlockAttrs = { action: GraphBlockAction; result: Result };
@@ -119,12 +149,6 @@ const authHandleCheck = createCounter<HandleCheckAttrs>({
 const authOtpSent = createCounter<OtpSentAttrs>({
   name: OSN_METRICS.authOtpSent,
   description: "OTP codes successfully sent",
-  unit: "{message}",
-});
-
-const authMagicLinkSent = createCounter<MagicLinkSentAttrs>({
-  name: OSN_METRICS.authMagicLinkSent,
-  description: "Magic-link emails",
   unit: "{message}",
 });
 
@@ -359,10 +383,8 @@ export const withGraphCloseFriendOp =
 export const metricAuthHandleCheck = (result: "available" | "taken" | "invalid"): void =>
   authHandleCheck.inc({ result });
 
-export const metricAuthOtpSent = (purpose: "registration" | "login"): void =>
+export const metricAuthOtpSent = (purpose: "registration" | "step_up" | "email_change"): void =>
   authOtpSent.inc({ purpose });
-
-export const metricAuthMagicLinkSent = (result: Result): void => authMagicLinkSent.inc({ result });
 
 export const withOrgOp =
   (action: OrgAction) =>
@@ -479,6 +501,101 @@ export const metricSessionSecurityInvalidation = (trigger: SecurityInvalidationT
   authSessionSecurityInvalidation.inc({ trigger });
 
 // ---------------------------------------------------------------------------
+// Rotated-session store (S-H1: cluster-safe C2 reuse detection)
+// ---------------------------------------------------------------------------
+
+type RotatedStoreOpAttrs = {
+  action: RotatedStoreAction;
+  result: RotatedStoreResult;
+  backend: RotatedStoreBackend;
+};
+type RotatedStoreDurationAttrs = {
+  action: RotatedStoreAction;
+  backend: RotatedStoreBackend;
+};
+
+const authSessionRotatedStoreOps = createCounter<RotatedStoreOpAttrs>({
+  name: OSN_METRICS.authSessionRotatedStoreOps,
+  description:
+    "Rotated-session store operations (C2 reuse detection) by action, outcome, and backend",
+  unit: "{operation}",
+});
+
+const authSessionRotatedStoreDuration = createHistogram<RotatedStoreDurationAttrs>({
+  name: OSN_METRICS.authSessionRotatedStoreDuration,
+  description: "Rotated-session store operation latency by action and backend",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+export const metricRotatedStoreOp = (attrs: RotatedStoreOpAttrs): void =>
+  authSessionRotatedStoreOps.inc(attrs);
+
+export const metricRotatedStoreDuration = (
+  seconds: number,
+  attrs: RotatedStoreDurationAttrs,
+): void => authSessionRotatedStoreDuration.record(seconds, attrs);
+
+// ---------------------------------------------------------------------------
+// Recovery codes (Copenhagen Book M2)
+// ---------------------------------------------------------------------------
+
+type RecoveryConsumeAttrs = { result: RecoveryCodeConsumeResult };
+type RecoveryStepAttrs = { step: RecoveryCodeStep; result: Result };
+
+const authRecoveryCodesGenerated = createCounter<Record<never, never>>({
+  name: OSN_METRICS.authRecoveryCodesGenerated,
+  description: "Recovery code sets generated (each event = one 10-code batch)",
+  unit: "{set}",
+});
+
+const authRecoveryCodeConsumed = createCounter<RecoveryConsumeAttrs>({
+  name: OSN_METRICS.authRecoveryCodeConsumed,
+  description: "Recovery code consume attempts by outcome",
+  unit: "{attempt}",
+});
+
+const authRecoveryDuration = createHistogram<RecoveryStepAttrs>({
+  name: OSN_METRICS.authRecoveryDuration,
+  description: "Recovery code generate/consume duration by step",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+export const metricRecoveryCodesGenerated = (): void => authRecoveryCodesGenerated.inc({});
+
+export const metricRecoveryCodeConsumed = (result: RecoveryCodeConsumeResult): void =>
+  authRecoveryCodeConsumed.inc({ result });
+
+export const withAuthRecovery =
+  (step: RecoveryCodeStep) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      measureSeconds((seconds, outcome) => {
+        authRecoveryDuration.record(seconds, {
+          step,
+          result: outcome === "ok" ? "ok" : "error",
+        });
+      }),
+      Effect.withSpan(`auth.recovery.${step}`),
+    );
+
+// ---------------------------------------------------------------------------
+// Origin guard (M1)
+// ---------------------------------------------------------------------------
+
+type OriginGuardAttrs = { reason: OriginGuardRejectionReason };
+
+const authOriginGuardRejections = createCounter<OriginGuardAttrs>({
+  name: OSN_METRICS.authOriginGuardRejections,
+  description: "Requests rejected by Origin header validation (CSRF guard)",
+  unit: "{rejection}",
+});
+
+export const metricOriginGuardRejection = (reason: OriginGuardRejectionReason): void =>
+  authOriginGuardRejections.inc({ reason });
+
+// ---------------------------------------------------------------------------
 // JWKS
 // ---------------------------------------------------------------------------
 
@@ -489,3 +606,192 @@ const authJwksServed = createCounter<Record<never, never>>({
 });
 
 export const metricAuthJwksServed = (): void => authJwksServed.inc({});
+
+// ---------------------------------------------------------------------------
+// Step-up (sudo mode)
+// ---------------------------------------------------------------------------
+
+type StepUpIssuedAttrs = { factor: StepUpFactor };
+type StepUpVerifiedAttrs = { result: StepUpVerifyResult };
+type SessionOpAttrs = { action: SessionAction; result: Result };
+type EmailChangeAttrs = { step: EmailChangeStep; result: Result };
+
+const authStepUpIssued = createCounter<StepUpIssuedAttrs>({
+  name: OSN_METRICS.authStepUpIssued,
+  description: "Step-up tokens minted, by the factor that authorised issuance",
+  unit: "{token}",
+});
+
+const authStepUpVerified = createCounter<StepUpVerifiedAttrs>({
+  name: OSN_METRICS.authStepUpVerified,
+  description: "Step-up token verification outcomes on gated endpoints",
+  unit: "{verification}",
+});
+
+const authSessionOps = createCounter<SessionOpAttrs>({
+  name: OSN_METRICS.authSessionOps,
+  description: "Caller-initiated session-management operations",
+  unit: "{operation}",
+});
+
+const authEmailChangeAttempts = createCounter<EmailChangeAttrs>({
+  name: OSN_METRICS.authEmailChangeAttempts,
+  description: "Email-change ceremony attempts by step and outcome",
+  unit: "{attempt}",
+});
+
+const authEmailChangeDuration = createHistogram<EmailChangeAttrs>({
+  name: OSN_METRICS.authEmailChangeDuration,
+  description: "Email-change ceremony duration by step",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+export const metricStepUpIssued = (factor: StepUpFactor): void => authStepUpIssued.inc({ factor });
+
+export const metricStepUpVerified = (result: StepUpVerifyResult): void =>
+  authStepUpVerified.inc({ result });
+
+export const withStepUp =
+  (step: StepUpStep) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(Effect.withSpan(`auth.step_up.${step}`));
+
+export const withSessionOp =
+  (action: SessionAction) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      Effect.withSpan(`auth.session.${action}`),
+      Effect.tap(() => Effect.sync(() => authSessionOps.inc({ action, result: "ok" }))),
+      Effect.tapError((e) =>
+        Effect.all([
+          Effect.sync(() => authSessionOps.inc({ action, result: classifyError(e) })),
+          Effect.logError("auth.session operation failed", {
+            action,
+            ...safeErrorSummary(e),
+          }),
+        ]),
+      ),
+    );
+
+export const withEmailChange =
+  (step: EmailChangeStep) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      measureSeconds((seconds, outcome) => {
+        authEmailChangeDuration.record(seconds, {
+          step,
+          result: outcome === "ok" ? "ok" : "error",
+        });
+      }),
+      Effect.withSpan(`auth.account.email_change.${step}`),
+      Effect.tap(() => Effect.sync(() => authEmailChangeAttempts.inc({ step, result: "ok" }))),
+      Effect.tapError((e) =>
+        Effect.all([
+          Effect.sync(() => authEmailChangeAttempts.inc({ step, result: classifyError(e) })),
+          Effect.logError("auth.account.email_change failed", {
+            step,
+            ...safeErrorSummary(e),
+          }),
+        ]),
+      ),
+    );
+
+// ---------------------------------------------------------------------------
+// Security events (M-PK1b) — out-of-band audit trail for account-level
+// security actions so the client can surface "did you do this?" banners.
+// ---------------------------------------------------------------------------
+
+type SecurityEventAttrs = { kind: SecurityEventKind };
+type SecurityEventNotifyAttrs = {
+  kind: SecurityEventKind;
+  result: SecurityEventNotifyResult;
+};
+type SecurityEventNotifyDurationAttrs = { result: "ok" | "error" };
+
+const authSecurityEventRecorded = createCounter<SecurityEventAttrs>({
+  name: OSN_METRICS.authSecurityEventRecorded,
+  description: "Security-event audit rows recorded (M-PK1b)",
+  unit: "{event}",
+});
+
+const authSecurityEventNotified = createCounter<SecurityEventNotifyAttrs>({
+  name: OSN_METRICS.authSecurityEventNotified,
+  description: "Out-of-band security-event notification outcomes",
+  unit: "{notification}",
+});
+
+const authSecurityEventAcknowledged = createCounter<SecurityEventAttrs>({
+  name: OSN_METRICS.authSecurityEventAcknowledged,
+  description: "Security-event banners acknowledged by the account holder",
+  unit: "{ack}",
+});
+
+const authSecurityEventNotifyDuration = createHistogram<SecurityEventNotifyDurationAttrs>({
+  name: OSN_METRICS.authSecurityEventNotifyDuration,
+  description: "Out-of-band security-event notification dispatch duration",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+export const metricSecurityEventRecorded = (kind: SecurityEventKind): void =>
+  authSecurityEventRecorded.inc({ kind });
+
+export const metricSecurityEventNotified = (
+  kind: SecurityEventKind,
+  result: SecurityEventNotifyResult,
+): void => authSecurityEventNotified.inc({ kind, result });
+
+export const metricSecurityEventAcknowledged = (kind: SecurityEventKind): void =>
+  authSecurityEventAcknowledged.inc({ kind });
+
+export const metricSecurityEventNotifyDuration = (seconds: number, result: "ok" | "error"): void =>
+  authSecurityEventNotifyDuration.record(seconds, { result });
+
+// ---------------------------------------------------------------------------
+// Passkey management (M-PK) — caller-initiated list / rename / delete on
+// existing credentials. Login/register flows keep their own metric families.
+// ---------------------------------------------------------------------------
+
+type PasskeyOpAttrs = { action: PasskeyAction; result: Result };
+type PasskeyDurationAttrs = { action: PasskeyAction; result: "ok" | "error" };
+type PasskeyLoginDiscoverableAttrs = { result: Result };
+
+const authPasskeyOps = createCounter<PasskeyOpAttrs>({
+  name: OSN_METRICS.authPasskeyOps,
+  description: "Passkey management operations (list / rename / delete) by outcome",
+  unit: "{operation}",
+});
+
+const authPasskeyDuration = createHistogram<PasskeyDurationAttrs>({
+  name: OSN_METRICS.authPasskeyDuration,
+  description: "Passkey management operation duration by action",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+const authPasskeyLoginDiscoverable = createCounter<PasskeyLoginDiscoverableAttrs>({
+  name: OSN_METRICS.authPasskeyLoginDiscoverable,
+  description: "Identifier-free (discoverable credential / conditional-UI) passkey login attempts",
+  unit: "{attempt}",
+});
+
+export const withPasskeyOp =
+  (action: PasskeyAction) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      measureSeconds((seconds, outcome) => {
+        authPasskeyDuration.record(seconds, { action, result: outcome === "ok" ? "ok" : "error" });
+      }),
+      Effect.withSpan(`auth.passkey.${action}`),
+      Effect.tap(() => Effect.sync(() => authPasskeyOps.inc({ action, result: "ok" }))),
+      Effect.tapError((e) =>
+        Effect.all([
+          Effect.sync(() => authPasskeyOps.inc({ action, result: classifyError(e) })),
+          Effect.logError("auth.passkey operation failed", { action, ...safeErrorSummary(e) }),
+        ]),
+      ),
+    );
+
+export const metricPasskeyLoginDiscoverable = (result: Result): void =>
+  authPasskeyLoginDiscoverable.inc({ result });

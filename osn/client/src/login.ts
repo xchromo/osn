@@ -1,17 +1,13 @@
 import { parseTokenResponse, type Session } from "./tokens";
 
 /**
- * Plain-fetch helpers for the first-party sign-in flow. Mirrors
- * `createRegistrationClient`: no Effect, no PKCE state, no authorization
- * code round-trip. The server's `/login/*` endpoints return a session
- * directly, which the UI layer can hand straight to `AuthProvider.adoptSession`.
+ * Plain-fetch helpers for the sign-in flow. WebAuthn (passkey or security
+ * key) is the only primary login factor; "lost device" recovery lives in
+ * `./recovery.ts`.
  *
- * Third-party apps that still want the PKCE redirect flow can continue to
- * drive `OsnAuthService.startLogin` / `handleCallback` in `./service`.
- *
- * The WebAuthn browser ceremony (`startAuthentication`) is intentionally
- * performed by the caller — keeping it caller-side avoids pulling
- * `@simplewebauthn/browser` into `@osn/client`.
+ * The browser-side WebAuthn ceremony (`startAuthentication`) is
+ * intentionally performed by the caller so `@osn/client` doesn't pull in
+ * `@simplewebauthn/browser`.
  */
 
 export interface LoginClientConfig {
@@ -27,8 +23,8 @@ export class LoginError extends Error {
 }
 
 /**
- * The publicly-safe profile subset returned alongside a fresh session by the
- * `/login/*` endpoints. Matches `PublicProfile` in `@osn/core`.
+ * The publicly-safe profile subset returned alongside a fresh session by
+ * `/login/passkey/complete`. Matches `PublicProfile` in `@osn/core`.
  */
 export interface LoginProfile {
   id: string;
@@ -47,6 +43,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   const json = (await res.json()) as T & { error?: string };
@@ -56,28 +53,18 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return json;
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  const json = (await res.json()) as T & { error?: string };
-  if (!res.ok) {
-    throw new LoginError(json.error ?? `Request failed: ${res.status}`);
-  }
-  return json;
-}
-
 export interface LoginClient {
-  /** Begin passkey login — returns the WebAuthn assertion challenge options. */
-  passkeyBegin(identifier: string): Promise<{ options: unknown }>;
-  /** Complete passkey login — exchange a signed assertion for a session. */
-  passkeyComplete(identifier: string, assertion: unknown): Promise<LoginResult>;
-  /** Send a 6-digit OTP code to the identifier's email. Always resolves to { sent: true }. */
-  otpBegin(identifier: string): Promise<{ sent: true }>;
-  /** Exchange a 6-digit OTP code for a session. */
-  otpComplete(identifier: string, code: string): Promise<LoginResult>;
-  /** Send a magic sign-in link to the identifier's email. Always resolves to { sent: true }. */
-  magicBegin(identifier: string): Promise<{ sent: true }>;
-  /** Exchange a magic-link token (from the emailed link's query string) for a session. */
-  magicVerify(token: string): Promise<LoginResult>;
+  /**
+   * Begin WebAuthn login. Pass a handle / email for the identifier-bound
+   * flow, or omit to kick off the discoverable-credential (conditional-UI)
+   * flow — the response then carries a `challengeId` the caller must pass
+   * to `passkeyComplete`.
+   */
+  passkeyBegin(identifier?: string): Promise<{ options: unknown; challengeId?: string }>;
+  /** Complete WebAuthn login — exchange a signed assertion for a session. */
+  passkeyComplete(
+    input: { identifier: string; assertion: unknown } | { challengeId: string; assertion: unknown },
+  ): Promise<LoginResult>;
 }
 
 export function createLoginClient(config: LoginClientConfig): LoginClient {
@@ -90,32 +77,15 @@ export function createLoginClient(config: LoginClientConfig): LoginClient {
 
   return {
     passkeyBegin: (identifier) =>
-      postJson<{ options: unknown }>(`${base}/login/passkey/begin`, { identifier }),
+      postJson<{ options: unknown; challengeId?: string }>(
+        `${base}/login/passkey/begin`,
+        identifier === undefined ? {} : { identifier },
+      ),
 
-    passkeyComplete: async (identifier, assertion) => {
+    passkeyComplete: async (input) => {
       const raw = await postJson<{ session: unknown; profile: LoginProfile }>(
         `${base}/login/passkey/complete`,
-        { identifier, assertion },
-      );
-      return toLoginResult(raw);
-    },
-
-    otpBegin: (identifier) => postJson<{ sent: true }>(`${base}/login/otp/begin`, { identifier }),
-
-    otpComplete: async (identifier, code) => {
-      const raw = await postJson<{ session: unknown; profile: LoginProfile }>(
-        `${base}/login/otp/complete`,
-        { identifier, code },
-      );
-      return toLoginResult(raw);
-    },
-
-    magicBegin: (identifier) =>
-      postJson<{ sent: true }>(`${base}/login/magic/begin`, { identifier }),
-
-    magicVerify: async (token) => {
-      const raw = await getJson<{ session: unknown; profile: LoginProfile }>(
-        `${base}/login/magic/verify?token=${encodeURIComponent(token)}`,
+        input,
       );
       return toLoginResult(raw);
     },

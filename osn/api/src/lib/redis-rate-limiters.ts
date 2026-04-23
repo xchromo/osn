@@ -19,9 +19,10 @@ import type { AuthRateLimiters } from "../routes/auth";
 import type { ProfileRateLimiters } from "../routes/profile";
 
 const ONE_MINUTE_MS = 60_000;
+const ONE_HOUR_MS = 3_600_000;
 
 /**
- * Build all 13 auth rate limiters backed by a shared Redis client.
+ * Build all auth rate limiters backed by a shared Redis client.
  * Namespace convention: `auth:{endpoint_name}` — produces Redis keys like
  * `rl:auth:register_begin:192.168.1.1`.
  */
@@ -33,16 +34,39 @@ export function createRedisAuthRateLimiters(client: RedisClient): AuthRateLimite
     registerBegin: rl("auth:register_begin", 5),
     registerComplete: rl("auth:register_complete", 10),
     handleCheck: rl("auth:handle_check", 10),
-    otpBegin: rl("auth:otp_begin", 5),
-    otpComplete: rl("auth:otp_complete", 10),
-    magicBegin: rl("auth:magic_begin", 5),
-    magicVerify: rl("auth:magic_verify", 10),
     passkeyLoginBegin: rl("auth:passkey_login_begin", 10),
     passkeyLoginComplete: rl("auth:passkey_login_complete", 10),
     passkeyRegisterBegin: rl("auth:passkey_register_begin", 10),
     passkeyRegisterComplete: rl("auth:passkey_register_complete", 10),
     profileSwitch: rl("auth:profile_switch", 10),
     profileList: rl("auth:profile_list", 10),
+    recoveryGenerate: createRedisRateLimiter(client, {
+      namespace: "auth:recovery_generate",
+      maxRequests: 10,
+      windowMs: ONE_HOUR_MS,
+    }),
+    recoveryComplete: createRedisRateLimiter(client, {
+      namespace: "auth:recovery_complete",
+      maxRequests: 5,
+      windowMs: ONE_HOUR_MS,
+    }),
+    stepUpPasskeyBegin: rl("auth:step_up_passkey_begin", 10),
+    stepUpPasskeyComplete: rl("auth:step_up_passkey_complete", 10),
+    stepUpOtpBegin: rl("auth:step_up_otp_begin", 5),
+    stepUpOtpComplete: rl("auth:step_up_otp_complete", 10),
+    sessionList: rl("auth:session_list", 30),
+    sessionRevoke: rl("auth:session_revoke", 10),
+    emailChangeBegin: createRedisRateLimiter(client, {
+      namespace: "auth:email_change_begin",
+      maxRequests: 3,
+      windowMs: ONE_HOUR_MS,
+    }),
+    emailChangeComplete: rl("auth:email_change_complete", 10),
+    securityEventList: rl("auth:security_event_list", 30),
+    securityEventAck: rl("auth:security_event_ack", 10),
+    passkeyList: rl("auth:passkey_list", 30),
+    passkeyRename: rl("auth:passkey_rename", 20),
+    passkeyDelete: rl("auth:passkey_delete", 10),
   };
 }
 

@@ -8,12 +8,51 @@ related:
   - "[[zap]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-04-14
+last-reviewed: 2026-04-22
 ---
 
 # Completed Features
 
 Archived completed feature work from [[TODO]]. For open work see [[TODO]].
+
+## Auth improvements — Phase 5b (passkey-primary, M-PK, 2026-04-22)
+
+- **Passkey-primary login.** WebAuthn (passkey or security key) is the only primary login factor. `POST /login/otp/{begin,complete}` and `POST /login/magic/{begin,verify}` removed. `AuthMethod` union narrowed to `"passkey" | "recovery_code" | "refresh"`; `AuthRateLimitedEndpoint` dropped `otp_begin`/`otp_complete`/`magic_begin`; `osn.auth.magic_link.sent` counter deleted. — see `[[passkey-primary]]`.
+- **Mandatory first-credential enrollment.** `Register.tsx` is gated at the start on `browserSupportsWebAuthn()` (no fallback form), and the flow cannot be dismissed until `/passkey/register/complete` succeeds. The old "Skip for now" button was removed.
+- **`enrollmentToken` JWT machinery deleted.** `/register/complete` no longer mints a single-use enrollment token; `/passkey/register/{begin,complete}` now authenticates via the normal access token issued by `/register/complete`. Dropped: `AuthService.issueEnrollmentToken` / `verifyEnrollmentToken`, `consumedEnrollmentTokens` Map, `CompleteRegistrationResult.enrollmentToken` in `@osn/client`, the `enrollmentToken` plumbing in `passkeyRegisterBegin`/`Complete` (now takes `accessToken`).
+- **Security keys accepted (S-H2 consistent).** `generateRegistrationOptions` sets `residentKey: "preferred"` + `userVerification: "required"`. FIDO2 keys with PIN/biometric register as non-discoverable; obsolete UP-only U2F tokens cannot register (they would fail at verification anyway — options and verifier must agree). Both identified and identifier-less login use `userVerification: "required"` to match the verifier's `requireUserVerification: true`.
+- **S-H1 — Passkey-register step-up gate.** `/passkey/register/begin` requires a fresh step-up token (webauthn or otp AMR) when the account already has ≥1 passkey. First-passkey bootstrap is exempt. `/passkey/register/complete` inserts a `security_events{kind: "passkey_register"}` row atomically, fires a best-effort email notification via `forkDaemon` (10s timeout), and derives the caller's session token from the HttpOnly cookie — H1 invalidation of other sessions cannot be silently skipped by a malicious body. Closes the "stolen access token → silent authenticator binding" vector.
+- **S-M1 — Login-begin enumeration safety.** `/login/passkey/begin` returns a uniform `200 { options }` for unknown identifiers, known-with-zero-passkeys, and known-with-passkeys; synthetic branches get a random 32-byte fake credentialId with no persisted challenge. An anonymous caller cannot probe the handle/email namespace.
+- **S-M2 — Access-token audience pin.** Access tokens now carry `aud: "osn-access"`; `verifyAccessToken` asserts it. Prevents accidental acceptance of any future token type minted with the same ES256 key.
+- **Strict last-passkey guard.** `deletePasskey` refuses unconditionally when the delete would leave 0 passkeys — recovery codes are no longer a substitute credential. Combined with mandatory enrollment on registration this gives the account-level invariant "every live account has ≥1 WebAuthn credential" cradle-to-grave.
+- **WebAuthn-unsupported fallback.** `SignIn.tsx` detects missing WebAuthn and shows an informational screen with a "use a recovery code" path; `<MagicLinkHandler>` deleted (no longer has any reason to exist).
+
+## Auth improvements — Phase 5b (PKCE cleanup)
+
+- **Removed legacy OAuth authorization-code / PKCE flow**: deleted `GET /authorize`, the `authorization_code` branch of `POST /token`, the hosted HTML login page (`buildAuthorizeHtml`), and the duplicate hosted-form routes `/passkey/login/*`, `/otp/*`, `/magic/*`. The first-party `/login/*` endpoints (Session + PublicProfile returned inline) are now the only sign-in surface.
+- **Service cleanup**: deleted `exchangeCode`, `issueCode`, `completePasskeyLogin`, `completeOtp`, `verifyMagic`, `validateRedirectUri`; removed `AuthConfig.allowedRedirectUris`.
+- **Client SDK cleanup (breaking, @osn/client major)**: deleted `OsnAuthService.startLogin`/`handleCallback`, `pkce.ts` (code verifier / challenge helpers), `AuthorizationError`, `TokenExchangeError`, `StateMismatchError`, `OsnAuthConfig.clientId`. Solid `AuthProvider` context drops `login` and `handleCallback`. First-party `CallbackHandler` components removed from `@pulse/app` and `@osn/social` along with their `/callback` routes.
+- **Cookie-only `/token` (S-M1)**: `grant_type=refresh_token` reads the session token exclusively from the HttpOnly cookie. The body fallback was a silent-rotation trap (rotated token never returned in body) and a log-leak surface — removed, along with the `osn.auth.session.cookie_fallback` metric.
+- **Magic-link routed through frontend (S-H1)**: `beginMagic` now emits a URL on `config.magicLinkBaseUrl ?? config.origin` (the frontend RP origin), not the API. `POST /login/magic/verify` accepts the token in the body; the client app's `MagicLinkHandler` consumes the token on mount and POSTs it. Restores the security posture of the removed redirect path — access token never visible in the browser window, never in URL access logs, resilient to email-client pre-fetchers.
+- **OIDC discovery**: `grant_types_supported: ["refresh_token"]` only; `authorization_endpoint`, `response_types_supported`, and `code_challenge_methods_supported` removed.
+- **Observability**: `magic_verify` dropped from `AuthRateLimitedEndpoint` and its rate-limiter slot; `osn.auth.session.cookie_fallback` counter deleted.
+
+## Auth improvements — Phase 5a (step-up, sessions, email change)
+
+- **Step-up (sudo) tokens (M-PK1)**: short-lived (5 min) ES256 JWTs with `aud: "osn-step-up"`. Passkey or OTP ceremony mints the token; single-use `jti` replay guard. Required on `/recovery/generate` (breaking — stop-gap 1/day rate limit removed) and `/account/email/complete`. Routes: `POST /step-up/{passkey,otp}/{begin,complete}`. — see [[step-up]]
+- **Session introspection + revocation**: `GET /sessions`, `DELETE /sessions/:id`, `POST /sessions/revoke-all-other`. Each session carries a coarse UA label (`"Firefox on macOS"`), HMAC-peppered IP hash, and `last_used_at`. Public revocation handle is the first 16 hex of the session-token SHA-256. Metadata preserved across C2 rotations. — see [[sessions]]
+- **Email change**: step-up gated `POST /account/email/{begin,complete}`. Begin sends OTP to the NEW email. Complete verifies OTP + step-up token and atomically swaps `accounts.email`, revokes every other session, and inserts an `email_changes` audit row. Hard cap of 2 changes per trailing 7 days.
+- **Client SDK cleanup (breaking)**: `Session` and `AccountSession` no longer carry `refreshToken` — cookie-only C3. `AccountSession.hasSession: boolean` replaces the stored token. `/logout` body `refresh_token` parameter removed.
+- **Observability**: new `osn.auth.step_up.{issued,verified}`, `osn.auth.session.operations`, `osn.auth.account.email_change.{attempts,duration}` metrics; `SecurityInvalidationTrigger` extended with `session_revoke`, `session_revoke_all`; redaction deny-list extended with `stepUpToken`, `ipHash`, `uaLabel` (both camel + snake spellings).
+
+## Auth improvements — M-PK1b (out-of-band security-event audit for recovery codes)
+
+- **Security events audit trail**: new `security_events` table + partial index on `WHERE acknowledged_at IS NULL` (P-W1). Inserted in the same transaction as BOTH recovery-code regeneration AND successful consumption (S-H1 — the takeover half). Captures the coarse UA label + HMAC-peppered IP hash so the UI can render "was this you?" without exposing raw signals.
+- **Fire-and-forget email notifications**: both kinds (`recovery_code_generate`, `recovery_code_consume`) fire a best-effort email post-commit on `Effect.forkDaemon` with a 10 s `Effect.timeout` (P-W2 + S-L1) — the user-visible request latency is decoupled from mailer health. S-L5 framed; codes are never included. Failure is reported via `osn.auth.security_event.notified{result=failed}` and never rolls back the primary action.
+- **Step-up-gated dismissal (S-M1)**: `POST /account/security-events/:id/ack` and `POST /account/security-events/ack-all` both require a fresh step-up token (same amr set as `/recovery/generate`). A compromised access token cannot silently dismiss the banner that warns about its own compromise. Ack-all acks every unacked row in one transaction so the user completes one step-up ceremony per banner visit.
+- **Client surface**: `GET /account/security-events` (Bearer-auth, rate-limited, explicit projection) + step-up-gated ack routes. `createSecurityEventsClient` in `@osn/client` exposes `list / acknowledge / acknowledgeAll`. `SecurityEventsBanner` in `@osn/ui/auth` opens `StepUpDialog` on "Acknowledge" and uses optimistic local removal (P-I3) — no refetch after dismissal.
+- **Observability**: new `osn.auth.security_event.{recorded,notified,acknowledged}` counters + `osn.auth.security_event.notify.duration` histogram. `SecurityEventKind` (`recovery_code_generate | recovery_code_consume`) + `SecurityEventNotifyResult` added to `@shared/observability/metrics` with bounded string-literal unions. Redaction deny-list now includes `securityEventId` / `security_event_id`.
+- Unblocks the Phase-5 passkey-primary migration: a stolen access token + inbox hijack can no longer silently burn OR use the account's recovery codes, and the banner itself is out of the XSS blast radius. — see [[recovery-codes]]
 
 ## Multi-account
 

@@ -21,8 +21,8 @@ export type Result =
   | "validation_error"
   | "conflict";
 
-/** Auth methods supported by OSN Core. */
-export type AuthMethod = "passkey" | "otp" | "magic_link" | "refresh" | "password";
+/** Auth methods supported by OSN Core. Passkey (incl. security keys) is the only primary login factor; recovery_code is the "lost device" escape hatch; refresh tracks token refresh cycles. */
+export type AuthMethod = "passkey" | "recovery_code" | "refresh";
 
 /** Registration funnel steps. */
 export type RegisterStep = "begin" | "otp_verify" | "passkey_enroll" | "complete";
@@ -68,17 +68,83 @@ export type ProfileDeleteCascadeTable = "connections" | "close_friends" | "block
 export type JwksCacheResult = "hit" | "miss" | "refresh";
 
 /** Security events that trigger session invalidation (H1). */
-export type SecurityInvalidationTrigger = "passkey_register" | "email_change";
+export type SecurityInvalidationTrigger =
+  | "passkey_register"
+  | "passkey_delete"
+  | "email_change"
+  | "recovery_code_generate"
+  | "recovery_code_consume"
+  | "session_revoke"
+  | "session_revoke_all";
+
+/** Step-up (sudo mode) factor presented by the caller. */
+export type StepUpFactor = "passkey" | "otp" | "recovery_code";
+
+/** Step-up ceremony steps, for attempt funnel counters. */
+export type StepUpStep = "begin" | "complete";
+
+/** Step-up verification outcomes on protected endpoints. */
+export type StepUpVerifyResult =
+  | "ok"
+  | "missing"
+  | "invalid"
+  | "expired"
+  | "wrong_audience"
+  | "wrong_subject"
+  | "jti_replay"
+  | "amr_not_allowed";
+
+/** Session-management actions initiated by the caller. */
+export type SessionAction = "list" | "revoke" | "revoke_all";
+
+/** Rotated-session tracking store operations (C2 reuse detection). */
+export type RotatedStoreAction = "track" | "check" | "revoke_family";
+
+/** Outcome of a rotated-session store operation. */
+export type RotatedStoreResult = "ok" | "hit" | "miss" | "error";
+
+/** Rotated-session store backend. */
+export type RotatedStoreBackend = "memory" | "redis";
+
+/** Email-change ceremony steps, for funnel counters. */
+export type EmailChangeStep = "begin" | "complete";
+
+/** Recovery code (Copenhagen Book M2) operation steps. */
+export type RecoveryCodeStep = "generate" | "consume";
+
+/** Recovery code consume outcomes. */
+export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
+
+/**
+ * Out-of-band security event kinds (M-PK1b). Mirrors the `kind` column on
+ * the `security_events` table; new entries here MUST be matched by the
+ * service layer, otherwise the counter attribute will fall outside the
+ * bounded union.
+ */
+export type SecurityEventKind =
+  | "recovery_code_generate"
+  | "recovery_code_consume"
+  | "passkey_register"
+  | "passkey_delete";
+
+/**
+ * Caller-initiated passkey management actions (M-PK). Keep the list tight —
+ * this attribute appears on counter + histogram dashboards that slice by
+ * action, so additions raise cardinality linearly.
+ */
+export type PasskeyAction = "list" | "rename" | "delete";
+
+/** Result of an attempted security-event email notification. */
+export type SecurityEventNotifyResult = "sent" | "failed" | "skipped";
+
+/** Origin guard CSRF rejection reasons (M1). */
+export type OriginGuardRejectionReason = "missing" | "mismatch";
 
 /** Auth endpoints subject to IP-based rate limiting (S-H1). */
 export type AuthRateLimitedEndpoint =
   | "register_begin"
   | "register_complete"
   | "handle_check"
-  | "otp_begin"
-  | "otp_complete"
-  | "magic_begin"
-  | "magic_verify"
   | "passkey_login_begin"
   | "passkey_login_complete"
   | "passkey_register_begin"
@@ -87,4 +153,19 @@ export type AuthRateLimitedEndpoint =
   | "profile_list"
   | "profile_create"
   | "profile_delete"
-  | "profile_set_default";
+  | "profile_set_default"
+  | "recovery_generate"
+  | "recovery_complete"
+  | "step_up_passkey_begin"
+  | "step_up_passkey_complete"
+  | "step_up_otp_begin"
+  | "step_up_otp_complete"
+  | "session_list"
+  | "session_revoke"
+  | "email_change_begin"
+  | "email_change_complete"
+  | "security_event_list"
+  | "security_event_ack"
+  | "passkey_list"
+  | "passkey_rename"
+  | "passkey_delete";

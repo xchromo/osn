@@ -7,12 +7,38 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-04-14
+last-reviewed: 2026-04-22
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## Auth Phase 5b — PKCE cleanup (2026-04-22)
+
+- **S-H1 (auth 5b)** — Magic-link email URL previously pointed at `${issuerUrl}/login/magic/verify?token=...` (API origin). Clicking the link rendered a raw JSON response with `access_token` visible in the browser window, set the session cookie on the API domain (wrong origin, user not signed in to the app), and was vulnerable to email-client pre-fetchers (Defender SafeLinks, Outlook Protected View) burning the token or capturing it from URL access logs. Fixed: added `AuthConfig.magicLinkBaseUrl` (defaults to `config.origin`); email URL now points at the **frontend origin** with `?token=…`, and `/login/magic/verify` is now POST-only with the token in the body (consumed client-side by `MagicLinkHandler`). Restores the security posture of the removed authorization-code redirect without reintroducing PKCE.
+- **S-M1 (auth 5b)** — `POST /token` accepted `refresh_token` in the request body as a cookieless fallback, while `toTokenResponseCookieOnly` intentionally omitted the rotated refresh token from the response — leaving body-fallback callers in a silent "works once, breaks on next rotation" trap and adding a log-leak surface. Fixed: body fallback removed entirely; `/token` reads the session token **only** from the HttpOnly cookie. The `osn.auth.session.cookie_fallback` counter + `metricSessionCookieFallback` helper were deleted.
+- **S-L11 / S-L12 / S-L13 / S-L23 / S-M1 (auth) / S-M2 (auth) / S-L1 (pkce)** — Obsoleted by the PKCE flow removal: `pkceStore` (unbounded in-memory Map with no sweep, no size bound) deleted; `/authorize` route (unrate-limited) deleted; `REDIRECT_URI` client-side constant deleted; orphan PKCE verifier in localStorage deleted; PKCE `state` nonce validation moot. The `authorization_code` grant on `/token` is gone; the redirect-URI allowlist (`AuthConfig.allowedRedirectUris`, `validateRedirectUri`) is gone.
+
+## Auth Phase 5b — Session reuse detection
+
+- **S-H1 (session)** — The C2 reuse-detection map (`rotatedSessions`) was a single-process in-memory `Map`; in a multi-pod deployment a rotation recorded on pod A was invisible to pod B, so a replayed rotated-out token hitting B passed without triggering family revocation. Fixed: extracted `RotatedSessionStore` interface (`osn/api/src/lib/rotated-session-store.ts`) with in-memory + Redis-backed impls, wired from `osn/api/src/index.ts`. Fail-open on Redis error — an outage must not manufacture false-positive family revocations that log legitimate users out — with structured warning logs and a `{backend, action, result}` counter so ops dashboards surface degradation. — see [[sessions]]
+- **S-M1 (session)** — The `onError` hook in `osn/api/src/index.ts` annotated logs with `error: String(cause)`, which would leak a credentialed `redis://user:pass@…` URL if ioredis ever embedded one in a connection-level error string. Fixed: route the cause through `sanitizeCause()` from `@shared/redis` before annotation, matching the convention already used by every other Redis error sink in the repo.
+- **S-L1 (session)** — The prior design held a JSON-array family-set in Redis (`{ns}:fam:{familyId}`) to drive proactive `revokeFamily` cleanup. `track` was a three-round-trip read-modify-write with no cross-command atomicity, creating a theoretical race under concurrent rotations of the same family. Fixed: dropped the family set entirely. `track` is now a single `SET hashKey = familyId PX ttl`; the DB-level `DELETE FROM sessions WHERE family_id = ?` in `detectReuse` remains the authoritative family revocation. Stale `hash:*` keys expire under their own TTL.
+- **S-L2 (session)** — `JSON.parse(existing) as string[]` on the family-set payload was a cast rather than a runtime guard — a malformed value written by a different process (migration, manual intervention) would have propagated a thrown error. Removed by the same family-set drop in S-L1.
+- **S-L3 (session)** — `revokeFamily` spread every tracked hash into a single unbounded `DEL` command. Under adversarial `/token` flooding (within the existing rate-limit ceiling) the argument list could have grown large enough to press Redis protocol limits. Removed by the same family-set drop in S-L1.
+
+## Auth Phase 5a (2026-04-19)
+
+- **S-H1** — Step-up jti replay guard was single-process in-memory; a captured token could replay once per pod. Fixed: extracted `StepUpJtiStore` interface; Redis-backed implementation in `osn/api/src/lib/step-up-jti-store.ts` wired from startup, fail-closed on Redis errors. — see [[step-up]]
+- **S-H2** — `beginEmailChange` leaked user existence via a distinct "Email already in use" error. Fixed: silently returns `{ sent: true }` on collision (matches `beginRegistration`'s anti-enumeration posture); the UNIQUE(email) constraint at `complete` remains the real defence.
+- **S-H3** — `/account/email/begin` was an authenticated email-spam amplifier (per-IP only, bypassable via IP rotation). Fixed: per-account cap of 3 begins per 24h on top of the existing per-IP limit.
+- **S-M1** — No per-account session cap; `revokeAccountSession` was O(N) scan. Fixed: `MAX_SESSIONS_PER_ACCOUNT = 50` with LRU-evict in `issueTokens`; revoke uses `LIKE 'handle%'` on the indexed PK.
+- **S-M2** — `sessionIpPepper` silently disabled when unset in production. Fixed: fails loudly at startup when `OSN_SESSION_IP_PEPPER` is missing/short in non-local env. — see [[sessions]]
+- **S-M4** — Session revoke returned distinct "Session not found" — handle-existence oracle. Fixed: idempotent `revokedSelf: false` on miss (matches `/logout` posture).
+- **S-L1** — Step-up and email-change OTPs were tagged `purpose: "login"` on `osn.auth.otp.sent`. Fixed: extended `OtpSentAttrs.purpose` union with `"step_up"` and `"email_change"`.
+- **S-L4** — Origin guard warning-only when allowlist empty. Fixed: throws at startup in non-local envs.
+- **S-L5** — Email-change OTP message was phishing-friendly at misdelivered inboxes. Fixed: reframed with explicit "someone requested this on your account" so a mistaken recipient reads it as junk.
 
 ## Critical
 
@@ -86,6 +112,8 @@ Archived completed security findings from [[TODO]]. Finding IDs follow the [[rev
 - **S-M1 (multi)** — Missing email index after UNIQUE removal. Fixed: re-added `users_email_idx`.
 - **S-M2 (multi)** — `accountId` exposed in org `listMembers`. Fixed: stripped from projection.
 - **S-M2 (org)** — No `org:write` scope constant. Fixed: `_SCOPE_ORG_WRITE` added.
+- **Copenhagen Book M2** — Recovery codes: 10 × 64-bit single-use codes, SHA-256 hashed, tight rate limits (3/hr generate, 5/hr login), revoke-all-sessions on consume. See [[recovery-codes]].
+- **Access-token TTL reduction** (S-M20 mitigation + S-L1 (social)) — default cut from 3600s → 300s. Client `authFetch` silent-refreshes on 401 via the HttpOnly session cookie so UX is unchanged. XSS blast radius on the localStorage access token drops from ~1h to ≤5min. See [[identity-model]].
 
 ## Low
 

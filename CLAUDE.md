@@ -6,7 +6,15 @@ AI coding assistant reference. For full spec see README.md. For progress/decisio
 
 OSN: Modular social platform. Users own identity + social graph. Apps opt-in/out independently.
 
-Phase 1 apps: OSN Core (auth), Pulse (events), Zap (messaging), Landing (marketing).
+Phase 1 surfaces:
+
+| Surface | Package(s) | Status |
+|---|---|---|
+| Identity / auth API | `@osn/api` (port 4000) | Active |
+| Identity & graph UI | `@osn/social` (port 1422) | Active |
+| Events | `@pulse/app` + `@pulse/api` (port 3001) + `@pulse/db` | Active |
+| Messaging | `@zap/api` (port 3002) + `@zap/db` | M0 scaffolded; M1 in flight; client app not started |
+| Marketing | `@osn/landing` | Scaffolded |
 
 ## File Responsibilities
 
@@ -48,15 +56,25 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 | Write a new Effect service or Elysia route | `[[wiki/architecture/backend-patterns]]`, `[[wiki/architecture/schema-layers]]` |
 | Understand accounts, profiles, and orgs | `[[wiki/systems/identity-model]]` |
 | Add or verify ARC S2S tokens | `[[wiki/systems/arc-tokens]]` |
-| Add rate limiting to an endpoint | `[[wiki/systems/rate-limiting]]` |
+| Add rate limiting to an endpoint | `[[wiki/systems/rate-limiting]]`, `[[wiki/systems/redis]]` |
 | Instrument logging, tracing, or metrics | `[[wiki/observability/overview]]`, then the specific page |
 | Write or review tests | `[[wiki/conventions/testing-patterns]]` |
 | Understand event visibility rules | `[[wiki/systems/event-access]]` |
 | Add or use a UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
 | Understand Pulse visual design (tokens, typography, Explore layout) | `pulse/DESIGN.md` |
 | Work on the social graph or close friends | `[[wiki/systems/social-graph]]`, `[[wiki/systems/close-friends]]` |
+| Gate a sensitive action behind step-up auth | `[[wiki/systems/step-up]]` |
+| Understand the passkey-only login model | `[[wiki/systems/passkey-primary]]` |
+| Surface session list / revoke per device | `[[wiki/systems/sessions]]` |
 | Understand cross-service calls | `[[wiki/architecture/s2s-patterns]]` |
-| Debug a production issue | Browse `wiki/runbooks/` |
+| Work on the OSN identity / social UI | `[[wiki/apps/osn-core]]`, `[[wiki/apps/social]]` |
+| Work on Pulse | `[[wiki/apps/pulse]]` |
+| Work on Zap | `[[wiki/apps/zap]]` |
+| Debug an auth failure | `[[wiki/runbooks/auth-failure]]` |
+| Debug an ARC verification failure | `[[wiki/runbooks/arc-token-debugging]]` |
+| Debug a rate-limit incident | `[[wiki/runbooks/rate-limit-incident]]` |
+| Debug an event-visibility leak | `[[wiki/runbooks/event-visibility-bug]]` |
+| Wire a new service into observability | `[[wiki/runbooks/observability-setup]]` |
 | Check security or perf findings | `wiki/TODO.md` (Security Backlog / Performance Backlog sections) |
 | Track progress and priorities | `wiki/TODO.md` |
 
@@ -107,44 +125,45 @@ Monorepo organised by domain. Four directories, four prefixes — see `[[wiki/ar
 
 Bun, TypeScript, Elysia, Effect.ts (trial), Drizzle, SQLite→Supabase, Eden+REST, WebSockets, Signal Protocol, SolidJS, Astro, Tauri, Turborepo, oxlint, oxfmt, Vitest + @effect/vitest
 
-## Key Patterns (summaries)
+## Key Patterns
 
-**ARC Tokens** — S2S auth via self-issued ES256 JWTs. Lives in `@shared/crypto`. See `[[wiki/systems/arc-tokens]]`.
+One-line summaries — open the wiki page for the full contract, current API surface, finding history, and observability.
 
-**User Access Tokens** — ES256 JWTs issued by `@osn/api` on login. Public key exposed at `GET /.well-known/jwks.json`. Downstream services (e.g. `@pulse/api`) verify via JWKS fetch — no shared secret. `AuthConfig` takes `jwtPrivateKey`, `jwtPublicKey`, `jwtKid`, `jwtPublicKeyJwk` (not `jwtSecret`). Env vars: `OSN_JWT_PRIVATE_KEY` / `OSN_JWT_PUBLIC_KEY` (base64 JWK JSON); ephemeral pair generated in local dev when unset. `thumbprintKid(publicKey)` from `@shared/crypto` computes the RFC 7638 kid. Downstream: set `OSN_JWKS_URL` in each service; must be HTTPS in non-local envs.
-
-**Server-side Sessions (Copenhagen Book C1/C2/H1)** — Session tokens (refresh tokens) are opaque (`ses_` + 40 hex chars, 160-bit entropy). Server stores only SHA-256(token) in the `sessions` table — DB leak does not expose valid tokens. Sliding-window expiry: 30 days, extended when <15 days remain. **Rotation (C2):** every `/token` refresh grant issues a new session token and deletes the old one. All tokens in a refresh chain share a `familyId` (`sfam_` prefix). Replaying a rotated-out token triggers family revocation (reuse detection via in-memory tracking). **H1:** `invalidateOtherAccountSessions(accountId, keepSessionHash)` revokes all sessions except the caller's on security events (passkey registration). `invalidateSession(token)` revokes one session; `invalidateAccountSessions(accountId)` revokes all. `POST /logout` endpoint for server-side session destruction. **S-H1:** Profile endpoints (`/profiles/list`, `/profiles/switch`, `/profiles/create`, `/profiles/delete`, `/profiles/:id/default`) authenticate via `Authorization: Bearer <access_token>`, not refresh token in body. See `[[wiki/systems/identity-model]]`.
-
-**Observability** — OpenTelemetry end-to-end, shipped to Grafana Cloud. Three golden rules: no `console.*`, no raw OTel constructors, no unbounded metric attributes. See `[[wiki/observability/overview]]`.
-
-**Rate Limiting** — Per-IP fixed-window on all auth endpoints; per-user on graph writes, org writes, and `/recommendations/connections` reads. Two backends: Redis-backed when `REDIS_URL` is set (cross-process, survives restarts), in-memory fallback when unset (local dev). See `[[wiki/systems/rate-limiting]]`, `[[wiki/systems/redis]]`.
-
-**Testing** — `it.effect` + `createTestLayer()` for service tests; `createXxxRoutes(createTestLayer())` for route tests. All in-memory SQLite. See `[[wiki/conventions/testing-patterns]]`.
-
-**Schema Layers** — Elysia TypeBox at HTTP boundary, Effect Schema in service layer. Never mix. See `[[wiki/architecture/schema-layers]]`.
-
-**Review Finding IDs** — S-C/H/M/L (security), P-C/W/I (performance), T-M/U/E/R/S (tests). Four-field format. See `[[wiki/conventions/review-findings]]`.
-
-**Component Library** — Zaidan-style (shadcn for SolidJS) components in `@osn/ui`, backed by Kobalte. Three class utilities: `bx()` for component defaults (zero-specificity `base:` variant), `clsx()` for conditional joining, `cn()` (with `tailwind-merge`) only when arbitrary conflicts exist. See `[[wiki/architecture/component-library]]`.
+| Pattern | Purpose | Wiki page |
+|---|---|---|
+| ARC Tokens | S2S auth via self-issued ES256 JWTs (kid + scope + audience). Lives in `@shared/crypto`. | `[[wiki/systems/arc-tokens]]` |
+| Passkey-Primary Login | The only primary login factor. OTP / magic-link primary surfaces removed; OTP survives only as a step-up factor. Account-level invariant: ≥1 WebAuthn credential at all times. | `[[wiki/systems/passkey-primary]]` |
+| User Access Tokens | ES256 JWTs, **5-min TTL**, `aud: "osn-access"`. Public key at `/.well-known/jwks.json`; downstream services verify via JWKS fetch (no shared secret). Client `authFetch` silent-refreshes on 401 from the HttpOnly session cookie. | `[[wiki/systems/identity-model]]` |
+| Server-side Sessions | Opaque `ses_*` refresh tokens, SHA-256 hashed at rest, 30-day sliding window. Rotated on every `/token` grant; reuse → family revocation via `RotatedSessionStore`. Refresh token lives **only** in an HttpOnly cookie (S-M1). | `[[wiki/systems/sessions]]` |
+| Step-up (sudo) tokens | Short-lived `aud: "osn-step-up"` JWTs minted by a fresh passkey/OTP ceremony. Required by `/recovery/generate`, `/account/email/complete`, security-event ack, passkey rename/delete. Single-use via `StepUpJtiStore`. | `[[wiki/systems/step-up]]` |
+| Recovery Codes | Copenhagen Book M2 — 10 × 64-bit single-use codes, hashed at rest. Generate / consume both inserted into `security_events` and surfaced via the in-app banner. | `[[wiki/systems/recovery-codes]]` |
+| Session Introspection | `GET/DELETE /sessions[/:id]`, `POST /sessions/revoke-all-other`. Coarse UA labels + HMAC-peppered IP hashes. | `[[wiki/systems/sessions]]` |
+| Email Change | Step-up gated; OTP to the NEW address; atomically swaps email and revokes other sessions. Cap 2 changes / 7 days. | `[[wiki/systems/identity-model]]` |
+| Origin Guard (M1) | Origin header validation on POST/PUT/PATCH/DELETE. ARC-protected internal routes are exempt. | `osn/api/src/lib/origin-guard.ts` |
+| Rate Limiting | Per-IP on auth endpoints; per-user on graph/org writes and `/recommendations/connections`. Redis-backed when `REDIS_URL` set, in-memory fallback for local dev. Fail-closed. | `[[wiki/systems/rate-limiting]]`, `[[wiki/systems/redis]]` |
+| Observability | OpenTelemetry → Grafana Cloud. Three rules: no `console.*`, no raw OTel constructors, no unbounded metric attributes. | `[[wiki/observability/overview]]` |
+| Testing | `it.effect` + `createTestLayer()` for service tests; `createXxxRoutes(createTestLayer())` for route tests. In-memory SQLite. | `[[wiki/conventions/testing-patterns]]` |
+| Schema Layers | Elysia TypeBox at HTTP boundary, Effect Schema in services. Never mix. | `[[wiki/architecture/schema-layers]]` |
+| Review Finding IDs | S-C/H/M/L (security), P-C/W/I (perf), T-M/U/E/R/S (tests). Four-field format (Issue / Why / Solution / Rationale). | `[[wiki/conventions/review-findings]]` |
+| Component Library | Zaidan-style (shadcn for SolidJS) on Kobalte. Three class utilities: `bx()` defaults, `clsx()` conditional joins, `cn()` only for arbitrary conflicts. | `[[wiki/architecture/component-library]]` |
 
 ## Conventions
 
-- Tauri apps created via CLI (`bunx create-tauri-app`), not manually
-- Effect.ts: trial with OSN/Pulse first, then decide (see TODO.md)
-- Messaging backend (`@zap/api`) is a shared service: Zap consumes it directly; Pulse uses it indirectly for event chats. Users don't need a Zap install to participate in event group chats.
-- E2E encryption everywhere
-- All personalization data user-accessible + resettable
-- Priority: iOS > Web > Android (Android deferred)
-- Pre-commit: lefthook runs oxlint + oxfmt (auto-fix + re-stage) on staged files
-- Pre-push: lefthook runs type check
-- oxlint configured via `oxlintrc.json` — plugins: typescript, unicorn, oxc, import, promise, vitest, node, jsx-a11y (React plugin intentionally disabled for SolidJS)
-- oxfmt configured via `.oxfmtrc.json` — import sorting and Tailwind class sorting enabled
-- Use `bunx --bun` flag for all tooling (bypasses Node.js)
-- PRs required to merge to main (no direct pushes)
-- Always work on a feature branch — never commit directly to main
-- Every PR must include a changeset (`bun run changeset`) — CI will fail without one
-- **Changeset packages must use the workspace `name` field exactly** (e.g. `"@pulse/app"`, not `"pulse"`). The Changeset Check workflow runs `bunx changeset status` to catch typos before merge — without it, a bad reference fails the Release workflow on main and blocks all subsequent versioning.
-- Versioning is automatic: changesets are consumed and committed by CI on merge to main
+| Area | Rule |
+|---|---|
+| Apps | Tauri apps created via CLI (`bunx create-tauri-app`), not manually |
+| Functional core | Effect.ts trial in OSN/Pulse first, decision tracked in `wiki/TODO.md` Deferred Decisions |
+| Messaging | `@zap/api` is a shared backend — Pulse consumes it for event chats; users don't need a Zap install |
+| Privacy | E2E encryption everywhere; all personalisation data user-accessible + resettable |
+| Platform priority | iOS > Web > Android (Android deferred) |
+| Pre-commit | lefthook runs oxlint + oxfmt (auto-fix + re-stage) on staged files |
+| Pre-push | lefthook runs type check |
+| oxlint | `oxlintrc.json` — plugins: typescript, unicorn, oxc, import, promise, vitest, node, jsx-a11y (React plugin disabled — SolidJS) |
+| oxfmt | `.oxfmtrc.json` — import sorting + Tailwind class sorting |
+| Runtime | Use `bunx --bun` for all tooling |
+| Branching | PRs required to merge to main; always work on a feature branch |
+| Changesets | Every PR includes a changeset (`bun run changeset`) — CI fails without one. Package names must match the workspace `name` field exactly (e.g. `"@pulse/app"`, not `"pulse"`); Changeset Check enforces this |
+| Versioning | Automatic — changesets consumed and committed by CI on merge to main |
 
 ## Commands
 

@@ -8,12 +8,13 @@ related:
   - "[[arc-tokens]]"
 packages:
   - "@osn/db"
-  - "@osn/core"
+  - "@osn/api"
   - "@osn/client"
-last-reviewed: 2026-04-17
+last-reviewed: 2026-04-23
 p4-completed: 2026-04-14
 p2-completed: 2026-04-14
 p3-completed: 2026-04-14
+m-pk-completed: 2026-04-22
 ---
 
 # Identity Model
@@ -33,27 +34,32 @@ OSN uses a two-tier identity model inspired by Meta's Accounts Center. A single 
 
 ## Architecture
 
+```mermaid
+flowchart TD
+  user(["User<br/>(real human)"])
+  account["accounts<br/>acc_xxxx · email · passkeyUserId<br/><i>login identity — never exposed</i>"]
+  profileA["users (profile)<br/>usr_aaaa · handle: @alice<br/><i>public identity</i>"]
+  profileB["users (profile)<br/>usr_bbbb · handle: @alice_work<br/><i>public identity</i>"]
+  graph["social graph<br/>connections · close-friends · blocks"]
+  pulse["pulse/*<br/>events · RSVPs"]
+  zap["zap/*<br/>chats · messages"]
+
+  user -.owns.-> account
+  account -- "1:N (private link)" --> profileA
+  account -- "1:N (private link)" --> profileB
+  profileA --> graph
+  profileA --> pulse
+  profileA --> zap
+  profileB --> graph
+  profileB --> pulse
+  profileB --> zap
 ```
-┌─────────────────────────────────────┐
-│           accounts                  │  ← Login identity (invisible externally)
-│  acc_xxxx | email | passkeyUserId   │
-└──────────────┬──────────────────────┘
-               │ 1:N (private link)
-               │
-┌──────────────▼──────────────────────┐
-│     users table (= profiles)        │  ← Public-facing identity / handle
-│  usr_xxxx | accountId | handle | …  │
-└──────────────┬──────────────────────┘
-               │ (canonical entity everywhere)
-               │
-    ┌──────────┼──────────┐
-    ▼          ▼          ▼
-connections  pulse/*    zap/*
-```
+
+Key invariant: every cross-domain reference (RSVP, chat membership, connection edge) keys on `profileId`. `accountId` never leaves the auth boundary — see Privacy Rules below.
 
 ## Accounts
 
-The `accounts` table is the **authentication principal** — the entity that logs in, owns passkeys, and receives OTP/magic-link emails.
+The `accounts` table is the **authentication principal** — the entity that logs in, owns passkeys, and receives step-up / email-change OTPs.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -120,9 +126,12 @@ Organisations are independent entities that are **composed of profiles, not acco
 
 | Token | Bound to | Format | TTL | Purpose |
 |-------|----------|--------|-----|---------|
-| Access | Profile | ES256 JWT (`sub` = profileId) | 1 hour | Authorize API calls as a specific profile |
+| Access | Profile | ES256 JWT (`sub` = profileId) | **5 min** | Authorize API calls as a specific profile |
 | Session (refresh) | Account | Opaque `ses_` + 40 hex chars (160-bit entropy) | 30 days (sliding) | Re-issue access tokens; enables profile switching without re-authentication |
 | Enrollment | Account | ES256 JWT (`sub` = accountId) | 5 min | Passkey registration after signup |
+| Recovery code | Account | 16 hex chars `xxxx-xxxx-xxxx-xxxx` (64-bit entropy) | No expiry, single-use | Lost-device account recovery (Copenhagen Book M2) — see [[recovery-codes]] |
+
+Access tokens live in `localStorage` and are the only auth secret there after C3. A 5-minute TTL caps the XSS blast radius — the companion change is client `authFetch` silent-refresh on 401 via the HttpOnly refresh cookie. Third-party OAuth clients receive `expires_in: 300` in the `/token` response.
 
 ### Server-side sessions (Copenhagen Book C1)
 
@@ -174,14 +183,31 @@ interface AccountSession {
 
 ## Registration Flow
 
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant API as @osn/api
+  participant DB as accounts + users + passkeys
+
+  U->>API: POST /register/begin<br/>{ email, handle, displayName }
+  API->>U: 200 (OTP emailed)
+  U->>API: POST /register/complete { otp }
+  API->>DB: tx { insert account, insert profile }
+  API-->>U: 200 + access token + HttpOnly session cookie
+  Note over U,API: UI refuses to advance until passkey enrollment completes
+  U->>API: POST /passkey/register/begin<br/>Authorization: Bearer <access>
+  API-->>U: WebAuthn options
+  U->>API: POST /passkey/register/complete { attestation }
+  API->>DB: insert passkey row
+  API-->>U: 200 — account now has ≥1 WebAuthn credential
 ```
-POST /register/begin  → email + handle + displayName → OTP sent
-POST /register/complete → OTP →
-  1. Creates account (acc_*) with email
-  2. Creates profile (usr_*) with accountId, handle (in a transaction)
-  3. Issues access + refresh tokens scoped to the profile
-  4. Issues enrollment token scoped to the account (for passkey setup)
-```
+
+Passkey enrollment is **mandatory**; `deletePasskey` refuses to drop below 1 credential. This gives the account-level invariant "every live account has ≥1 WebAuthn credential at all times".
+
+Passkey (or security key) is the only primary login factor. OTP and magic-
+link primary-login surfaces were removed; OTP survives as the step-up and
+email-change verification factor. The recovery-code path is the single
+"lost device" escape hatch — see `[[recovery-codes]]`.
 
 ## Cross-Service Impact
 
@@ -196,12 +222,46 @@ POST /register/complete → OTP →
 
 ## Privacy Rules
 
-1. **`accountId` never appears in**: API responses, JWT claims (except refresh/enrollment tokens, which are only seen by the account holder), log entries (enforced via redaction deny-list), metric attributes, span attributes, or any data sent to other services.
+1. **`accountId` never appears in**: API responses, JWT claims (except refresh tokens, which are only seen by the account holder), log entries (enforced via redaction deny-list), metric attributes, span attributes, or any data sent to other services.
 2. **`passkeyUserId` (not `accountId`)** is used as the WebAuthn `user.id` to prevent passkey-based profile correlation.
 3. **Rate limiting is per-profile** for API calls, **per-IP for auth** — per-account rate limits would correlate profiles. Exception: profile-switch rate limiting is per-account (acceptable because the endpoint inherently requires the account-scoped refresh token).
 4. **Block independence** — blocking on one profile does NOT affect other profiles on the same account.
 5. **Self-interaction allowed** — two profiles from the same account can follow, message, and interact. Preventing this would reveal the link.
 6. **Log redaction** — `accountId` and `account_id` are in the observability deny-list (`shared/observability/src/logger/redact.ts`) as defence in depth.
+
+## Passkey Management (M-PK)
+
+Settings-surface operations over an account's existing credentials. All routes bearer-authenticated; `DELETE` additionally gated by a fresh step-up token (passkey or OTP amr).
+
+| Endpoint | Purpose | Step-up required? |
+|----------|---------|-------------------|
+| `GET /passkeys` | List credentials with label / created / last-used / backup-eligible flags | No |
+| `PATCH /passkeys/:id` | Rename (label-only, 1–64 chars trimmed) | No |
+| `DELETE /passkeys/:id` | Remove + invalidate other sessions (H1) + write `security_events{kind: "passkey_delete"}` (M-PK1b) | **Yes** |
+
+### Schema columns (added 2026-04-22, migration `0007_passkey_management.sql`)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `label` | `text` | User-editable friendly name. NULL → UI falls back to synced/device heuristic |
+| `last_used_at` | `integer` | Unix seconds. Coalesced to 60s on assertion / step-up (P-W4) |
+| `aaguid` | `text` | Authenticator model UUID from WebAuthn attestation |
+| `backup_eligible` / `backup_state` | `integer` 0/1 | WebAuthn sync-capable / synced flags |
+| `updated_at` | `integer` | Unix seconds for any metadata change (rename, counter bump) |
+
+### Enrolment hardening
+
+- `residentKey: "required"` — discoverable-credential / conditional-UI login is mandatory.
+- `userVerification: "required"` — biometric or PIN, never silent sign-in.
+- `maxPasskeys = 10` per account (P-I10), enforced at `begin` and re-checked race-safely at `complete`.
+
+### Discoverable-credential login
+
+`POST /login/passkey/begin` with no body (or `{}`) returns `{ options, challengeId }`. Browser calls `navigator.credentials.get({ mediation: "conditional", … })`; the signed assertion is posted back via `/login/passkey/complete` with `{ challengeId, assertion }`. The server resolves the caller from the credential's `accountId` + `userHandle`. Exactly one of `identifier` / `challengeId` must be present — the route returns 400 otherwise.
+
+### Last-passkey guard
+
+`deletePasskey` refuses when this would be the final passkey AND the account has zero unused recovery codes. Users must generate recovery codes (or add a second passkey) before we let them lock themselves out.
 
 ## Multi-Account Roadmap
 

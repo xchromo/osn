@@ -1,14 +1,11 @@
 import { AuthProvider } from "@osn/client/solid";
-import { MagicLinkHandler } from "@osn/ui/auth/MagicLinkHandler";
 import { Router, Route, useLocation } from "@solidjs/router";
 import { lazy, Show } from "solid-js";
 import { Toaster } from "solid-toast";
 
-import { CallbackHandler } from "./components/CallbackHandler";
 import { Header } from "./components/Header";
 import { ExplorePage } from "./explore/ExplorePage";
-import { OSN_ISSUER_URL, OSN_CLIENT_ID } from "./lib/auth";
-import { loginClient } from "./lib/authClients";
+import { OSN_ISSUER_URL } from "./lib/auth";
 
 import "./App.css";
 
@@ -34,8 +31,6 @@ function Layout(props: { children?: unknown }) {
 
   return (
     <>
-      <CallbackHandler />
-      <MagicLinkHandler client={loginClient} />
       <Show when={!isHome()}>
         <Header />
       </Show>
@@ -47,7 +42,7 @@ function Layout(props: { children?: unknown }) {
 
 export default function App() {
   return (
-    <AuthProvider config={{ issuerUrl: OSN_ISSUER_URL, clientId: OSN_CLIENT_ID }}>
+    <AuthProvider config={{ issuerUrl: OSN_ISSUER_URL }}>
       <Router root={Layout}>
         <Route path="/" component={ExplorePage} />
         <Route path="/events/:id" component={EventDetailPage} />

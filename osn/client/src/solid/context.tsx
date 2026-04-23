@@ -18,9 +18,7 @@ interface AuthContextValue {
   session: Resource<Session | null>;
   profiles: Resource<PublicProfile[] | null>;
   activeProfileId: Accessor<string | null>;
-  login: (redirectUri: string, scopes?: string[]) => void;
   logout: () => Promise<void>;
-  handleCallback: (params: { code: string; state: string; redirectUri: string }) => Promise<void>;
   /**
    * Persists a Session obtained from the registration flow (or any other
    * out-of-band source) and refetches the session resource so the UI updates.
@@ -29,6 +27,13 @@ interface AuthContextValue {
   switchProfile: (profileId: string) => Promise<{ session: Session; profile: PublicProfile }>;
   createProfile: (handle: string, displayName?: string) => Promise<PublicProfile>;
   deleteProfile: (profileId: string) => Promise<void>;
+  /**
+   * Access-token-aware fetch with silent refresh on 401. Mirrors
+   * `OsnAuthService.authFetch`, wrapped for Promise-returning Solid
+   * consumers. Throws on `AuthExpiredError` so callers can redirect to
+   * sign-in.
+   */
+  authFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
 
 export const AuthContext = createContext<AuthContextValue>();
@@ -78,30 +83,11 @@ export function AuthProvider(props: AuthProviderProps) {
     }
   });
 
-  const login = (redirectUri: string, scopes?: string[]) => {
-    run(
-      Effect.flatMap(OsnAuth, (auth) =>
-        Effect.flatMap(auth.startLogin({ redirectUri, scopes }), ({ authorizationUrl }) =>
-          Effect.sync(() => {
-            window.location.href = authorizationUrl;
-          }),
-        ),
-      ),
-    );
-  };
-
   const logout = async () => {
     await run(Effect.flatMap(OsnAuth, (auth) => auth.logout()));
     await refetchSession();
     mutateProfiles(null);
     setActiveProfileId(null);
-  };
-
-  // P-I2: Await refetches for consistent state before returning
-  const handleCallback = async (params: { code: string; state: string; redirectUri: string }) => {
-    await run(Effect.flatMap(OsnAuth, (auth) => auth.handleCallback(params)));
-    await refetchSession();
-    await refetchProfiles();
   };
 
   const adoptSession = async (next: Session) => {
@@ -131,19 +117,21 @@ export function AuthProvider(props: AuthProviderProps) {
     await refetchProfiles();
   };
 
+  const authFetch = (input: RequestInfo | URL, init?: RequestInit) =>
+    run(Effect.flatMap(OsnAuth, (auth) => auth.authFetch(input, init)));
+
   return (
     <AuthContext.Provider
       value={{
         session,
         profiles,
         activeProfileId,
-        login,
         logout,
-        handleCallback,
         adoptSession,
         switchProfile,
         createProfile,
         deleteProfile,
+        authFetch,
       }}
     >
       {props.children}

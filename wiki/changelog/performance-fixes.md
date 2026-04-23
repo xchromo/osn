@@ -6,12 +6,28 @@ related:
   - "[[redis]]"
   - "[[arc-tokens]]"
   - "[[component-library]]"
-last-reviewed: 2026-04-14
+last-reviewed: 2026-04-22
 ---
 
 # Performance Fixes — Completed
 
 Archived completed performance findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Performance Backlog in [[TODO]].
+
+## Auth Phase 5b (2026-04-22)
+
+- **P-W1 (session)** — `trackRotatedSession` performed a JS-side map sweep on every `/token` refresh (O(n) amortised via FIFO). Fixed: the Redis-backed store delegates expiry to Redis's native per-key PX TTL; the in-memory fallback keeps the existing bounded FIFO sweep for single-process deployments. `track` is a single Redis round-trip on the `/token` hot path. — see [[sessions]]
+- **P-W2 (session)** — Prior design kept a `{ns}:fam:{familyId}` JSON-array of tracked hashes and re-parsed/re-stringified it on every `track`. Over a 30-day active refresh chain (access-token TTL 5 min → ~8 640 rotations) that blob would have grown to ~550 KB of CPU + bandwidth per rotation. Fixed: dropped the family set. `track` writes one 64-hex hash key; `revokeFamily` is a no-op on Redis because the DB-level `DELETE FROM sessions WHERE family_id = ?` already revokes the sessions and the hash keys expire under their own TTL.
+- **P-I1 (session)** — In-memory `revokeFamily` deleted from `entries` but left stale keys in the `order` FIFO queue, so the `ROTATED_SESSIONS_MAX` cap-driven eviction path could pop already-revoked entries. Fixed: filter the queue alongside the `entries` purge — one extra pass per revocation, which is rare.
+
+## Auth Phase 5a (2026-04-19)
+
+- **P-W1** — `revokeAccountSession` fetched all account sessions and JS-filtered to find the handle match. Fixed: `LIKE 'handle%'` on the indexed PK with `LIMIT 1` — O(1) instead of O(sessions-per-account).
+- **P-W2** — `listAccountSessions` had no `LIMIT` and no composite index for its `ORDER BY lastUsedAt DESC`. Fixed: `LIMIT MAX_SESSIONS_PER_ACCOUNT` on the query plus a new composite index `sessions(account_id, last_used_at)` served by migration 0005.
+- **P-W3** — Email-change rate-cap scan fetched full history and JS-filtered the 7-day window. Fixed: `count()` with `gte(completedAt, windowStart)` predicate served by `email_changes_completed_at_idx`.
+- **P-W4** — `verifyRefreshToken` wrote `last_used_at` on every verify (hot-path write amplification). Fixed: coalesce writes to a 60-second threshold — ~60× fewer writes at typical 5-min refresh cadence.
+- **P-I3** — Step-up / email-change in-memory ceremony stores didn't sweep on insert. Fixed: `sweepExpired` on every `set` so abandoned ceremonies don't linger.
+- **P-I4** — `completeEmailChange` held the writer lock across three reads (account fetch, history count, collision check) plus the writes. Fixed: preflight moved out of the transaction; collision race handled by the UNIQUE(email) constraint catching winners inside the TX.
+- **P-I5** — `rotatedSessions` sweep was O(n) per insert → O(n²) over the 30-day window. Fixed: FIFO queue so sweep only inspects the head; belt-and-braces size cap at 100k entries.
 
 ## Critical
 

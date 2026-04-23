@@ -19,7 +19,7 @@ import { A, useLocation } from "@solidjs/router";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
-import { registrationClient, loginClient } from "../lib/authClients";
+import { registrationClient, loginClient, recoveryClient } from "../lib/authClients";
 import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
 
 interface NavItem {
@@ -203,7 +203,7 @@ export function Sidebar() {
             }
           >
             <DropdownMenu>
-              <DropdownMenuTrigger class="hover:bg-muted flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 outline-none transition-colors">
+              <DropdownMenuTrigger class="hover:bg-muted flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors outline-none">
                 <Avatar class="h-8 w-8">
                   <Show when={safeAvatarUrl(activeProfile()?.avatarUrl)}>
                     {(url) => (
@@ -258,6 +258,7 @@ export function Sidebar() {
         <DialogContent class="max-w-sm p-0">
           <SignIn
             client={loginClient}
+            recoveryClient={recoveryClient}
             onCancel={() => setShowSignIn(false)}
             onSuccess={() => setShowSignIn(false)}
           />

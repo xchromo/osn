@@ -1,14 +1,11 @@
 import { Context, Effect, Layer } from "effect";
 
 import {
-  AuthorizationError,
+  AuthExpiredError,
   ProfileManagementError,
-  StateMismatchError,
   StorageError,
-  TokenExchangeError,
   TokenRefreshError,
 } from "./errors";
-import { generateCodeChallenge, generateCodeVerifier } from "./pkce";
 import { Storage } from "./storage";
 import {
   decodeAccountSession,
@@ -21,8 +18,6 @@ import {
 import type { AccountSession, PublicProfile, Session } from "./tokens";
 
 const ACCOUNT_SESSION_KEY = "@osn/client:account_session";
-const VERIFIER_KEY = "@osn/client:pkce_verifier";
-const STATE_KEY = "@osn/client:state";
 
 /** Build a Session from the active profile's cached token. Returns null if expired or missing. */
 function toSession(account: AccountSession): Session | null {
@@ -30,18 +25,17 @@ function toSession(account: AccountSession): Session | null {
   if (!profileToken || Date.now() >= profileToken.expiresAt) return null;
   return {
     accessToken: profileToken.accessToken,
-    refreshToken: account.refreshToken,
     idToken: account.idToken,
     expiresAt: profileToken.expiresAt,
     scopes: account.scopes,
   };
 }
 
-/** Create a fresh AccountSession from a Session (used by handleCallback / setSession). */
+/** Create a fresh AccountSession from a Session (used by setSession). */
 function sessionToAccountSession(session: Session): AccountSession {
   const profileId = extractJwtSub(session.accessToken) ?? "default";
   return {
-    refreshToken: session.refreshToken ?? "",
+    hasSession: true,
     activeProfileId: profileId,
     profileTokens: {
       [profileId]: {
@@ -51,6 +45,19 @@ function sessionToAccountSession(session: Session): AccountSession {
     },
     scopes: session.scopes,
     idToken: session.idToken,
+  };
+}
+
+/**
+ * Returns the Authorization header value for the active profile's
+ * access token, or null if no valid token is available.
+ */
+function authHeader(account: AccountSession): Record<string, string> | null {
+  const pt = account.profileTokens[account.activeProfileId];
+  if (!pt || Date.now() >= pt.expiresAt) return null;
+  return {
+    Authorization: `Bearer ${pt.accessToken}`,
+    "Content-Type": "application/json",
   };
 }
 
@@ -66,25 +73,10 @@ function pruneExpiredTokens(account: AccountSession): void {
 
 export interface OsnAuthConfig {
   issuerUrl: string;
-  clientId: string;
 }
 
 // Methods close over the already-resolved Storage instance, so requirements are never.
 export interface OsnAuthService {
-  readonly startLogin: (params: {
-    redirectUri: string;
-    scopes?: string[];
-  }) => Effect.Effect<
-    { authorizationUrl: string; state: string },
-    AuthorizationError | StorageError
-  >;
-
-  readonly handleCallback: (params: {
-    code: string;
-    state: string;
-    redirectUri: string;
-  }) => Effect.Effect<Session, TokenExchangeError | StateMismatchError | StorageError>;
-
   readonly getSession: () => Effect.Effect<Session | null, StorageError>;
 
   readonly refreshSession: () => Effect.Effect<Session, TokenRefreshError | StorageError>;
@@ -93,8 +85,7 @@ export interface OsnAuthService {
 
   /**
    * Persists a Session that was obtained out-of-band (e.g. from the
-   * email-verified registration flow, which exchanges its auth code through
-   * the standalone registration client and bypasses the PKCE callback).
+   * email-verified registration flow, which returns a Session directly).
    */
   readonly setSession: (session: Session) => Effect.Effect<void, StorageError>;
 
@@ -120,6 +111,21 @@ export interface OsnAuthService {
   ) => Effect.Effect<void, ProfileManagementError | StorageError>;
 
   readonly getActiveProfile: () => Effect.Effect<string | null, StorageError>;
+
+  /**
+   * Access-token-aware fetch. Adds `Authorization: Bearer <accessToken>` and
+   * transparently retries once on a 401 after silent-refreshing the session.
+   * If the retry also 401s, surfaces `AuthExpiredError` and clears the
+   * cached session — callers should redirect to sign-in.
+   *
+   * Short access-token TTL (5 min) makes this the expected fast path for
+   * first-party API calls; the refresh token sits in an HttpOnly cookie so
+   * the rotation is invisible to the user.
+   */
+  readonly authFetch: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Effect.Effect<Response, AuthExpiredError | StorageError>;
 }
 
 export class OsnAuth extends Context.Tag("@osn/client/OsnAuth")<OsnAuth, OsnAuthService>() {}
@@ -171,73 +177,6 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       // Existing auth methods (updated for multi-key storage)
       // ---------------------------------------------------------------------------
 
-      const startLogin = (params: { redirectUri: string; scopes?: string[] }) =>
-        Effect.gen(function* () {
-          const verifier = generateCodeVerifier();
-          const challenge = yield* Effect.tryPromise({
-            try: () => generateCodeChallenge(verifier),
-            catch: (cause) => new AuthorizationError({ cause }),
-          });
-          const state = crypto.randomUUID();
-          const scopes = params.scopes ?? ["openid", "profile"];
-
-          yield* storage.set(VERIFIER_KEY, verifier);
-          yield* storage.set(STATE_KEY, state);
-
-          const url = new URL(`${config.issuerUrl}/authorize`);
-          url.searchParams.set("response_type", "code");
-          url.searchParams.set("client_id", config.clientId);
-          url.searchParams.set("redirect_uri", params.redirectUri);
-          url.searchParams.set("scope", scopes.join(" "));
-          url.searchParams.set("state", state);
-          url.searchParams.set("code_challenge", challenge);
-          url.searchParams.set("code_challenge_method", "S256");
-
-          return { authorizationUrl: url.toString(), state };
-        });
-
-      const handleCallback = (params: { code: string; state: string; redirectUri: string }) =>
-        Effect.gen(function* () {
-          const storedState = yield* storage.get(STATE_KEY);
-          const verifier = yield* storage.get(VERIFIER_KEY);
-
-          if (storedState !== params.state) {
-            return yield* Effect.fail(
-              new StateMismatchError({
-                expected: storedState ?? "",
-                received: params.state,
-              }),
-            );
-          }
-
-          const raw = yield* Effect.tryPromise({
-            try: () =>
-              fetch(`${config.issuerUrl}/token`, {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({
-                  grant_type: "authorization_code",
-                  code: params.code,
-                  redirect_uri: params.redirectUri,
-                  client_id: config.clientId,
-                  code_verifier: verifier ?? "",
-                }).toString(),
-              }).then((r) => r.json() as Promise<unknown>),
-            catch: (cause) => new TokenExchangeError({ cause }),
-          });
-
-          const session = yield* Effect.try({
-            try: () => parseTokenResponse(raw),
-            catch: (cause) => new TokenExchangeError({ cause }),
-          });
-
-          yield* saveAccountSession(sessionToAccountSession(session));
-          yield* storage.remove(VERIFIER_KEY);
-          yield* storage.remove(STATE_KEY);
-
-          return session;
-        });
-
       const getSession = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
@@ -245,24 +184,40 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           return toSession(account);
         });
 
-      const refreshSession = () =>
+      // -----------------------------------------------------------------------
+      // Single-flight refresh (S-H1 / P-W1).
+      //
+      // Multiple concurrent authFetch calls that all 401 must NOT each fire
+      // /token. The server rotates the session token on every grant (Copenhagen
+      // Book C2); replaying the rotated-out cookie value a second time trips
+      // reuse detection and revokes every session in the family — the user
+      // gets logged out across all devices.
+      //
+      // Store the in-flight refresh as a shared Promise<Either>. Concurrent
+      // callers join it instead of kicking off a second /token roundtrip.
+      // -----------------------------------------------------------------------
+
+      type RefreshEither =
+        | { readonly _tag: "Left"; readonly left: TokenRefreshError | StorageError }
+        | { readonly _tag: "Right"; readonly right: Session };
+      let inFlightRefresh: Promise<RefreshEither> | null = null;
+
+      const doRefresh = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
-          if (!account?.refreshToken) {
-            return yield* Effect.fail(
-              new TokenRefreshError({ cause: "No refresh token available" }),
-            );
+          if (!account) {
+            return yield* Effect.fail(new TokenRefreshError({ cause: "No session available" }));
           }
 
+          // C3: session token is in the HttpOnly cookie; send credentials: include.
           const raw = yield* Effect.tryPromise({
             try: () =>
               fetch(`${config.issuerUrl}/token`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                credentials: "include",
                 body: new URLSearchParams({
                   grant_type: "refresh_token",
-                  refresh_token: account.refreshToken,
-                  client_id: config.clientId,
                 }).toString(),
               }).then((r) => r.json() as Promise<unknown>),
             catch: (cause) => new TokenRefreshError({ cause }),
@@ -278,7 +233,9 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
             accessToken: next.accessToken,
             expiresAt: next.expiresAt,
           };
-          if (next.refreshToken) account.refreshToken = next.refreshToken;
+          // C3: refresh token lives in the HttpOnly cookie; the fact that this
+          // refresh call succeeded is itself proof the cookie is alive.
+          account.hasSession = true;
           account.scopes = next.scopes;
           account.idToken = next.idToken;
 
@@ -286,8 +243,44 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           return next;
         });
 
+      const refreshSession = () =>
+        Effect.gen(function* () {
+          // Join the in-flight refresh if one is already running.
+          if (!inFlightRefresh) {
+            // Either-wrapped so the shared promise never rejects — survives
+            // FiberFailure wrapping from runPromise across Effect versions.
+            const promise = Effect.runPromise(Effect.either(doRefresh())) as Promise<RefreshEither>;
+            inFlightRefresh = promise;
+            // Clear the cache once the refresh settles so the next 401 burst
+            // kicks off a fresh refresh rather than replaying a stale result.
+            void promise.finally(() => {
+              if (inFlightRefresh === promise) inFlightRefresh = null;
+            });
+          }
+
+          const result = yield* Effect.tryPromise({
+            try: () => inFlightRefresh!,
+            catch: (cause) => new TokenRefreshError({ cause }),
+          });
+          if (result._tag === "Left") {
+            return yield* Effect.fail(result.left);
+          }
+          return result.right;
+        });
+
       const logout = () =>
         Effect.gen(function* () {
+          // C3: server-side session destruction + cookie clearing
+          yield* Effect.tryPromise({
+            try: () =>
+              fetch(`${config.issuerUrl}/logout`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: "{}",
+              }),
+            catch: () => new StorageError({ cause: "Logout request failed" }),
+          }).pipe(Effect.catchAll(() => Effect.void));
           cache = null;
           yield* storage.remove(ACCOUNT_SESSION_KEY);
         });
@@ -301,19 +294,6 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       // S-H1: Profile endpoints authenticate via Bearer access token (not
       // refresh token in body). The access token's `sub` claim identifies
       // the caller's profile; the server resolves the owning account.
-
-      /**
-       * Returns the Authorization header value for the active profile's
-       * access token, or null if no valid token is available.
-       */
-      function authHeader(account: AccountSession): Record<string, string> | null {
-        const pt = account.profileTokens[account.activeProfileId];
-        if (!pt || Date.now() >= pt.expiresAt) return null;
-        return {
-          Authorization: `Bearer ${pt.accessToken}`,
-          "Content-Type": "application/json",
-        };
-      }
 
       const listProfiles = () =>
         Effect.gen(function* () {
@@ -337,6 +317,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
               const r = await fetch(`${config.issuerUrl}/profiles/list`, {
                 method: "GET",
                 headers,
+                credentials: "include",
               });
               if (!r.ok) throw new Error(`Request failed: ${r.status}`);
               return decodeListProfilesResponse(await r.json());
@@ -369,6 +350,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
               const r = await fetch(`${config.issuerUrl}/profiles/switch`, {
                 method: "POST",
                 headers,
+                credentials: "include",
                 body: JSON.stringify({ profile_id: profileId }),
               });
               if (!r.ok) throw new Error(`Request failed: ${r.status}`);
@@ -389,7 +371,6 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
 
           const session: Session = {
             accessToken: res.access_token,
-            refreshToken: account.refreshToken,
             idToken: account.idToken,
             expiresAt,
             scopes: account.scopes,
@@ -423,6 +404,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
               const r = await fetch(`${config.issuerUrl}/profiles/create`, {
                 method: "POST",
                 headers,
+                credentials: "include",
                 body: JSON.stringify(body),
               });
               if (!r.ok) throw new Error(`Request failed: ${r.status}`);
@@ -455,6 +437,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
               const r = await fetch(`${config.issuerUrl}/profiles/delete`, {
                 method: "POST",
                 headers,
+                credentials: "include",
                 body: JSON.stringify({ profile_id: profileId }),
               });
               if (!r.ok) throw new Error(`Request failed: ${r.status}`);
@@ -478,9 +461,71 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
           return account?.activeProfileId || null;
         });
 
+      /**
+       * authFetch — attach the current access token and silent-refresh once on 401.
+       *
+       * Rationale: access tokens are short-lived (5 min default) so the 401
+       * path is the common case for any long-lived session. Retrying once
+       * after a successful refresh makes the UX indistinguishable from a
+       * long-TTL token while capping XSS blast radius to ~5 min.
+       *
+       * Contract:
+       * - Adds `Authorization: Bearer <accessToken>` to the request headers
+       *   unless caller has already set one (caller-supplied wins).
+       * - On response.status === 401 exactly once, calls `refreshSession()`
+       *   and reissues the original request with the new token.
+       * - If refresh fails, or the retry also 401s, returns
+       *   `AuthExpiredError` and clears the cached session. Callers should
+       *   redirect to sign-in.
+       */
+      const authFetch = (input: RequestInfo | URL, init?: RequestInit) =>
+        Effect.gen(function* () {
+          const account = yield* getAccountSession();
+          if (!account) {
+            return yield* Effect.fail(new AuthExpiredError({ cause: "no session" }));
+          }
+          const current = account.profileTokens[account.activeProfileId];
+          if (!current) {
+            return yield* Effect.fail(new AuthExpiredError({ cause: "no access token" }));
+          }
+
+          const withAuth = (token: string): RequestInit => {
+            const headers = new Headers(init?.headers);
+            if (!headers.has("authorization")) {
+              headers.set("Authorization", `Bearer ${token}`);
+            }
+            return { credentials: "include", ...init, headers };
+          };
+
+          const first = yield* Effect.tryPromise({
+            try: () => fetch(input, withAuth(current.accessToken)),
+            catch: (cause) => new AuthExpiredError({ cause }),
+          });
+          if (first.status !== 401) return first;
+
+          // Silent refresh + retry once.
+          const refreshed = yield* Effect.either(refreshSession());
+          if (refreshed._tag === "Left") {
+            cache = null;
+            yield* storage.remove(ACCOUNT_SESSION_KEY);
+            return yield* Effect.fail(new AuthExpiredError({ cause: refreshed.left }));
+          }
+
+          const second = yield* Effect.tryPromise({
+            try: () => fetch(input, withAuth(refreshed.right.accessToken)),
+            catch: (cause) => new AuthExpiredError({ cause }),
+          });
+          if (second.status === 401) {
+            cache = null;
+            yield* storage.remove(ACCOUNT_SESSION_KEY);
+            return yield* Effect.fail(
+              new AuthExpiredError({ cause: "refresh did not repair 401" }),
+            );
+          }
+          return second;
+        });
+
       return {
-        startLogin,
-        handleCallback,
         getSession,
         refreshSession,
         logout,
@@ -490,6 +535,7 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
         createProfile,
         deleteProfile,
         getActiveProfile,
+        authFetch,
       };
     }),
   );

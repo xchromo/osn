@@ -7,7 +7,7 @@ import {
 } from "../../src/lib/redis-rate-limiters";
 
 describe("createRedisAuthRateLimiters", () => {
-  it("returns all 13 rate limiter slots", () => {
+  it("returns every rate limiter slot in the auth bundle", () => {
     const client = createMemoryClient();
     const limiters = createRedisAuthRateLimiters(client);
 
@@ -15,22 +15,37 @@ describe("createRedisAuthRateLimiters", () => {
       "registerBegin",
       "registerComplete",
       "handleCheck",
-      "otpBegin",
-      "otpComplete",
-      "magicBegin",
-      "magicVerify",
       "passkeyLoginBegin",
       "passkeyLoginComplete",
       "passkeyRegisterBegin",
       "passkeyRegisterComplete",
       "profileSwitch",
       "profileList",
+      "recoveryGenerate",
+      "recoveryComplete",
+      "stepUpPasskeyBegin",
+      "stepUpPasskeyComplete",
+      "stepUpOtpBegin",
+      "stepUpOtpComplete",
+      "sessionList",
+      "sessionRevoke",
+      "emailChangeBegin",
+      "emailChangeComplete",
+      "securityEventList",
+      "securityEventAck",
+      "passkeyList",
+      "passkeyRename",
+      "passkeyDelete",
     ] as const;
 
     for (const key of expectedKeys) {
       expect(limiters[key]).toBeDefined();
       expect(typeof limiters[key].check).toBe("function");
     }
+
+    // Catch additions to the bundle that aren't reflected in expectedKeys —
+    // a new slot without a matching entry here means the test is stale.
+    expect(Object.keys(limiters).toSorted()).toEqual([...expectedKeys].toSorted());
   });
 
   it("enforces begin-endpoint limits (5 req/min)", async () => {
@@ -66,8 +81,8 @@ describe("createRedisAuthRateLimiters", () => {
     }
     expect(await limiters.registerBegin.check("ip1")).toBe(false);
 
-    // otpBegin should still have its own quota
-    expect(await limiters.otpBegin.check("ip1")).toBe(true);
+    // A different slot should still have its own quota
+    expect(await limiters.passkeyLoginBegin.check("ip1")).toBe(true);
   });
 
   it("check() returns a Promise (async-compatible)", () => {

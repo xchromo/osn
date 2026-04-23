@@ -80,6 +80,14 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     // an error log that includes the inbound request, an outbound fetch
     // trace event — must not leak the bearer token.
     "authorization",
+    // `cookie` header may carry the session token in HttpOnly cookies (C3).
+    "cookie",
+
+    // --- Session cookies (C3) ---
+    // The HttpOnly session cookie names — if someone logs a parsed cookie
+    // object or a Set-Cookie header, the raw session token must not appear.
+    "__host-osn_session",
+    "osn_session",
 
     // --- OAuth / first-party token responses ---
     // Both spellings exist: snake_case is the OAuth wire format
@@ -98,6 +106,45 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     // profile as accessToken.
     "enrollmentToken",
     "enrollment_token",
+    // Recovery codes (Copenhagen Book M2). Raw codes are returned once by
+    // /recovery/generate and POSTed by /login/recovery/complete; hashed codes
+    // live in the recovery_codes table (osn/db/src/schema/index.ts). Both
+    // plaintext and the hash are session-granting and must never appear in
+    // operator logs.
+    "recoveryCode",
+    "recovery_code",
+    "recoveryCodes",
+    "recovery_codes",
+    "codeHash",
+    "code_hash",
+
+    // --- Step-up (sudo) tokens ---
+    // Short-lived bearer tokens minted by /step-up/*/complete and required
+    // by sensitive endpoints (/recovery/generate, /account/email/*). Same
+    // secrecy profile as accessToken — anyone who holds one can execute the
+    // gated action inside the 5-minute window.
+    "stepUpToken",
+    "step_up_token",
+
+    // --- Session metadata ---
+    // `ipHash` is HMAC-peppered but still a privacy signal — operators
+    // shouldn't routinely see which IP issued which session. `uaLabel` is
+    // coarse ("Firefox on macOS") and not secret in itself, but listing raw
+    // user-agent strings under this key would be, so we redact both spellings
+    // defensively.
+    "ipHash",
+    "ip_hash",
+    "uaLabel",
+    "ua_label",
+
+    // --- Security events (M-PK1b) ---
+    // `securityEventId` is the public row id for security_events audit rows
+    // (osn/db/src/schema/index.ts → securityEvents). It's low-entropy and
+    // scoped to the owning account, but pairing it with `accountId` in a
+    // log line would let an operator fingerprint which accounts have
+    // unacknowledged events. Defensive both-spellings.
+    "securityEventId",
+    "security_event_id",
 
     // --- WebAuthn ---
     // `assertion` is the AuthenticationResponseJSON body posted to
@@ -105,6 +152,16 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     // carries clientDataJSON + signature material that should never be
     // mirrored back into logs verbatim.
     "assertion",
+    // `attestation` is the RegistrationResponseJSON body posted to
+    // /passkey/register/complete. Same shape / same rationale as assertion —
+    // clientDataJSON + attestationObject should not land in a log line.
+    "attestation",
+    // User-chosen free-text nickname for a passkey
+    // (osn/db/src/schema/index.ts → passkeys.label; PATCH /passkeys/:id body).
+    // Labels default to "iCloud Keychain"-style model names but are editable;
+    // an operator-readable log of "Mom's old iPad" is a privacy regression.
+    "passkeyLabel",
+    "passkey_label",
 
     // --- ARC token signing keys ---
     // `privateKey` is the parameter name on createArcToken /

@@ -31,7 +31,6 @@ function authedProvider() {
     session: Object.assign(
       () => ({
         accessToken: "tkn",
-        refreshToken: "r",
         idToken: null,
         expiresAt: Date.now() + 60_000,
         scopes: [],
@@ -54,9 +53,7 @@ function authedProvider() {
       mutate: () => {},
     }),
     activeProfileId: () => "usr_1",
-    login: () => undefined,
     logout: () => Promise.resolve(),
-    handleCallback: () => Promise.resolve(),
     adoptSession: () => Promise.resolve(),
     switchProfile: () => Promise.reject(new Error("unused")),
     createProfile: () => Promise.reject(new Error("unused")),

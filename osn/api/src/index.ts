@@ -2,9 +2,12 @@ import { cors } from "@elysiajs/cors";
 import { DbLive } from "@osn/db/service";
 import { generateArcKeyPair, importKeyFromJwk, thumbprintKid } from "@shared/crypto";
 import { healthRoutes, initObservability, observabilityPlugin } from "@shared/observability";
+import { sanitizeCause } from "@shared/redis";
 import { Effect, Logger } from "effect";
 import { Elysia } from "elysia";
 
+import type { CookieSessionConfig } from "./lib/cookie-session";
+import { createOriginGuard } from "./lib/origin-guard";
 import {
   createRedisAuthRateLimiters,
   createRedisGraphRateLimiter,
@@ -12,6 +15,8 @@ import {
   createRedisProfileRateLimiters,
   createRedisRecommendationRateLimiter,
 } from "./lib/redis-rate-limiters";
+import { createRedisRotatedSessionStore } from "./lib/rotated-session-store";
+import { createRedisJtiStore } from "./lib/step-up-jti-store";
 import { initRedisClient } from "./redis";
 import { createAuthRoutes } from "./routes/auth";
 import { createGraphRoutes } from "./routes/graph";
@@ -76,6 +81,18 @@ const {
   ephemeral: jwtEphemeral,
 } = await loadJwtKeyPair();
 
+// S-M2: Session IP pepper is the HMAC key used to turn issuing IPs into
+// rainbow-table-resistant hashes on the `sessions.ip_hash` column. Fail
+// loudly if it's missing in a non-local deployment — silently dropping
+// the hash degrades the Sessions panel's "is this device mine" signal.
+const envNonLocal = process.env.OSN_ENV && process.env.OSN_ENV !== "local";
+const sessionIpPepper = process.env.OSN_SESSION_IP_PEPPER;
+if (envNonLocal && (!sessionIpPepper || sessionIpPepper.length < 32)) {
+  throw new Error(
+    "OSN_SESSION_IP_PEPPER must be set to at least 32 bytes in non-local environments",
+  );
+}
+
 const authConfig = {
   rpId: process.env.OSN_RP_ID || "localhost",
   rpName: process.env.OSN_RP_NAME || "OSN",
@@ -85,8 +102,12 @@ const authConfig = {
   jwtPublicKey,
   jwtKid,
   jwtPublicKeyJwk,
-  accessTokenTtl: Number(process.env.OSN_ACCESS_TOKEN_TTL) || 3600,
+  // 5 min default — short TTL caps XSS blast radius on the access token.
+  // Refresh token is in an HttpOnly cookie (C3) so silent refresh on 401
+  // is transparent to the user.
+  accessTokenTtl: Number(process.env.OSN_ACCESS_TOKEN_TTL) || 300,
   refreshTokenTtl: Number(process.env.OSN_REFRESH_TOKEN_TTL) || 2592000,
+  sessionIpPepper,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +124,27 @@ const redisClient = await initRedisClient({
   loggerLayer: observabilityLayer,
 });
 
+// S-H1: cluster-safe single-use guard for step-up JWTs. Wired into
+// `authConfig` below so verifyStepUpToken consults Redis on every
+// check rather than an in-process Map.
+const stepUpJtiStore = createRedisJtiStore(redisClient);
+
+// S-H1 (session): cluster-safe record of rotated-out session hashes so
+// C2 reuse detection works across pods. Errors are logged via the Effect
+// logger layer so a Redis blip surfaces in ops dashboards. S-M1 —
+// `sanitizeCause` strips any credentialed URL (redis://user:pass@…) that
+// ioredis may embed in connection-level error strings.
+const rotatedSessionStore = createRedisRotatedSessionStore(redisClient, {
+  onError: (action, cause) => {
+    void Effect.runPromise(
+      Effect.logWarning("Rotated-session store Redis error").pipe(
+        Effect.annotateLogs({ action, error: sanitizeCause(cause) }),
+        Effect.provide(observabilityLayer),
+      ),
+    );
+  },
+});
+
 const authRateLimiters = createRedisAuthRateLimiters(redisClient);
 const graphRateLimiter = createRedisGraphRateLimiter(redisClient);
 const orgRateLimiter = createRedisOrgRateLimiter(redisClient);
@@ -115,12 +157,38 @@ const corsOrigins = process.env.OSN_CORS_ORIGIN
   ? process.env.OSN_CORS_ORIGIN.split(",").map((o) => o.trim())
   : authConfig.origin;
 
+// C3: Cookie session config — Secure flag + __Host- prefix in non-local envs.
+const cookieConfig: CookieSessionConfig = {
+  secure: !!process.env.OSN_ENV && process.env.OSN_ENV !== "local",
+};
+
+// M1: Origin guard — validate Origin header on state-changing requests.
+// S-L4: fail loudly if the allowlist is empty in a non-local env. A
+// previous warning-only posture left the entire CSRF surface silently
+// disabled any time OSN_CORS_ORIGIN was forgotten on a deploy.
+const corsOriginSet = new Set(Array.isArray(corsOrigins) ? corsOrigins : [corsOrigins]);
+if (corsOriginSet.size === 0 && cookieConfig.secure) {
+  throw new Error(
+    "OSN_CORS_ORIGIN must be set in non-local environments — Origin guard is mandatory for CSRF protection",
+  );
+}
+const originGuard = createOriginGuard({ allowedOrigins: corsOriginSet });
+
 const app = new Elysia()
-  .use(cors({ origin: corsOrigins }))
+  .use(cors({ origin: corsOrigins, credentials: true }))
+  .onBeforeHandle(originGuard)
   .use(observabilityPlugin({ serviceName: SERVICE_NAME }))
   .use(healthRoutes({ serviceName: SERVICE_NAME }))
   .get("/", () => ({ status: "ok", service: "osn-auth" }))
-  .use(createAuthRoutes(authConfig, DbLive, observabilityLayer, authRateLimiters))
+  .use(
+    createAuthRoutes(
+      { ...authConfig, stepUpJtiStore, rotatedSessionStore },
+      DbLive,
+      observabilityLayer,
+      authRateLimiters,
+      cookieConfig,
+    ),
+  )
   .use(createGraphRoutes(authConfig, DbLive, observabilityLayer, graphRateLimiter))
   .use(createInternalGraphRoutes(DbLive))
   .use(createOrganisationRoutes(authConfig, DbLive, observabilityLayer, orgRateLimiter))

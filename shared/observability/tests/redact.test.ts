@@ -45,6 +45,26 @@ describe("redact", () => {
     expect(out.headers.authorization).toBe(REDACTION_PLACEHOLDER);
   });
 
+  it("redacts recovery codes (Copenhagen Book M2) in both camelCase and snake_case", () => {
+    const input = {
+      accountId: "acc_123",
+      recoveryCode: "abcd-1234-5678-ef00",
+      recovery_code: "abcd-1234-5678-ef00",
+      recoveryCodes: ["abcd-1234-5678-ef00"],
+      recovery_codes: ["abcd-1234-5678-ef00"],
+      codeHash: "ab".repeat(32),
+      code_hash: "ab".repeat(32),
+    };
+    const out = redact(input) as Record<string, unknown>;
+    expect(out.accountId).toBe(REDACTION_PLACEHOLDER);
+    expect(out.recoveryCode).toBe(REDACTION_PLACEHOLDER);
+    expect(out.recovery_code).toBe(REDACTION_PLACEHOLDER);
+    expect(out.recoveryCodes).toBe(REDACTION_PLACEHOLDER);
+    expect(out.recovery_codes).toBe(REDACTION_PLACEHOLDER);
+    expect(out.codeHash).toBe(REDACTION_PLACEHOLDER);
+    expect(out.code_hash).toBe(REDACTION_PLACEHOLDER);
+  });
+
   it("redacts WebAuthn assertion bodies", () => {
     const input = {
       identifier: "u_123",
@@ -205,6 +225,21 @@ describe("redact", () => {
    * accidentally dropping an entry without updating the explicit
    * assertion below.
    */
+  it("redacts step-up tokens and session-metadata keys", () => {
+    const input = {
+      stepUpToken: "eyJ...",
+      step_up_token: "eyJ...",
+      ipHash: "abcdef",
+      ip_hash: "abcdef",
+      uaLabel: "Firefox on macOS",
+      ua_label: "Firefox on macOS",
+    };
+    const out = redact(input) as Record<string, unknown>;
+    for (const k of Object.keys(input)) {
+      expect(out[k], `key "${k}" was not redacted`).toBe(REDACTION_PLACEHOLDER);
+    }
+  });
+
   it("every entry in REDACT_KEYS is actually redacted", () => {
     expect(REDACT_KEYS.size).toBeGreaterThan(0);
     for (const key of REDACT_KEYS) {
@@ -230,7 +265,7 @@ describe("redact", () => {
       otpCode: "000000",
       jwt: "eyJ...",
       sessionToken: "tok",
-      cookie: "sid=abc",
+      // cookie: moved to deny-list (C3 — HttpOnly session cookies)
       apiKey: "sk_live_",
       secretKey: "sk",
       // E2E / Signal — no messaging impl yet:
@@ -268,6 +303,9 @@ describe("redact", () => {
   it("deny-list contains the documented set of keys (and only that set)", () => {
     const expected = [
       "authorization",
+      "cookie",
+      "__host-osn_session",
+      "osn_session",
       "accesstoken",
       "access_token",
       "refreshtoken",
@@ -276,7 +314,24 @@ describe("redact", () => {
       "id_token",
       "enrollmenttoken",
       "enrollment_token",
+      "recoverycode",
+      "recovery_code",
+      "recoverycodes",
+      "recovery_codes",
+      "codehash",
+      "code_hash",
+      "stepuptoken",
+      "step_up_token",
+      "iphash",
+      "ip_hash",
+      "ualabel",
+      "ua_label",
+      "securityeventid",
+      "security_event_id",
       "assertion",
+      "attestation",
+      "passkeylabel",
+      "passkey_label",
       "privatekey",
       "private_key",
       "accountid",

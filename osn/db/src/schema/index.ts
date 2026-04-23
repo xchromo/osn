@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, index, unique } from "drizzle-orm/sqlite-core";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,35 @@ export const passkeys = sqliteTable(
     counter: integer("counter").notNull().default(0),
     transports: text("transports"), // JSON of AuthenticatorTransport[]
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    /**
+     * User-editable friendly name for this passkey. Defaulted at enrolment
+     * from the `aaguid` lookup ("iCloud Keychain", "Windows Hello", …) and
+     * editable from Settings → Passkeys. Optional: older rows can be null.
+     */
+    label: text("label"),
+    /**
+     * Unix seconds of the most recent successful authentication or step-up
+     * ceremony. Drives the "last used" column in Settings → Passkeys so the
+     * user can spot a stale credential at a glance.
+     */
+    lastUsedAt: integer("last_used_at"),
+    /**
+     * Authenticator-model UUID from WebAuthn attestation. Not a secret; the
+     * FIDO MDS publishes the full list. We keep it so a future migration can
+     * backfill `label` from the MDS name map without re-prompting the user.
+     */
+    aaguid: text("aaguid"),
+    /** WebAuthn `backupEligible` bit — does this authenticator support sync? */
+    backupEligible: integer("backup_eligible", { mode: "boolean" }),
+    /** WebAuthn `backupState` bit — has this credential been synced yet? */
+    backupState: integer("backup_state", { mode: "boolean" }),
+    /**
+     * Unix seconds for the most recent metadata change (rename, counter
+     * update, sync-state flip). `createdAt` stays immutable. Indexing
+     * `last_used_at` alone would miss renames; a dedicated updatedAt is
+     * cleaner than over-reading the hot last_used_at column.
+     */
+    updatedAt: integer("updated_at"),
   },
   (t) => [index("passkeys_account_id_idx").on(t.accountId)],
 );
@@ -208,15 +238,149 @@ export const sessions = sqliteTable(
     expiresAt: integer("expires_at").notNull(),
     /** Unix seconds */
     createdAt: integer("created_at").notNull(),
+    /**
+     * Coarse UA label, e.g. "Firefox on macOS". Derived from the User-Agent
+     * header at session-issue time and never stored raw — we keep
+     * cardinality bounded to ~browser × OS so Settings UI can render a
+     * recognisable device list without turning this into a fingerprint.
+     */
+    uaLabel: text("ua_label"),
+    /**
+     * HMAC-SHA256(peppered, client-IP), hex-encoded. Rainbow-table resistant
+     * handle for the issuing IP. Only used to let the owner recognise which
+     * session is which — never exposed beyond the caller's own list.
+     */
+    ipHash: text("ip_hash"),
+    /** Unix seconds. Updated on every successful refresh/verify hit. */
+    lastUsedAt: integer("last_used_at"),
   },
   (t) => [
     index("sessions_account_idx").on(t.accountId),
     index("sessions_family_idx").on(t.familyId),
+    // P-W2: composite index serves ORDER BY last_used_at DESC for
+    // listAccountSessions + LRU eviction scan in issueTokens.
+    index("sessions_account_last_used_idx").on(t.accountId, t.lastUsedAt),
   ],
 );
 
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Recovery codes (Copenhagen Book M2)
+//
+// Single-use account-recovery tokens. Only the SHA-256 hash of the code is
+// stored; the raw codes are shown to the user exactly once at generation
+// time. Regenerating wipes the previous set (see service.generateRecoveryCodes).
+// A successful `consume` revokes all active sessions (the recovery ceremony
+// establishes a fresh session anyway).
+// ---------------------------------------------------------------------------
+
+export const recoveryCodes = sqliteTable(
+  "recovery_codes",
+  {
+    id: text("id").primaryKey(), // "rec_" prefix
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    /** SHA-256(normalised raw code), hex-encoded */
+    codeHash: text("code_hash").notNull().unique(),
+    /** Unix seconds. Set when the code is consumed; remains for audit purposes. */
+    usedAt: integer("used_at"),
+    /** Unix seconds. */
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("recovery_codes_account_idx").on(t.accountId)],
+);
+
+export type RecoveryCode = typeof recoveryCodes.$inferSelect;
+export type NewRecoveryCode = typeof recoveryCodes.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Email change audit log
+//
+// Captures completed email-address changes so we can enforce a "max 2 changes
+// per 7 days" cap (a soft anti-abuse guard — low enough to curb account-stuff
+// churn, high enough to forgive a legitimate typo + correction). Rows stay
+// after the window expires for audit purposes; the cap only counts rows
+// completed inside the trailing 7-day window.
+// ---------------------------------------------------------------------------
+
+export const emailChanges = sqliteTable(
+  "email_changes",
+  {
+    id: text("id").primaryKey(), // "ech_" prefix
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    previousEmail: text("previous_email").notNull(),
+    newEmail: text("new_email").notNull(),
+    /** Unix seconds */
+    completedAt: integer("completed_at").notNull(),
+  },
+  (t) => [
+    index("email_changes_account_idx").on(t.accountId),
+    index("email_changes_completed_at_idx").on(t.completedAt),
+  ],
+);
+
+export type EmailChange = typeof emailChanges.$inferSelect;
+export type NewEmailChange = typeof emailChanges.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Security events (M-PK1b)
+//
+// Out-of-band audit trail for account-level security actions. Every row is
+// created alongside the primary action (e.g. recovery-code regeneration) so
+// a UI banner can surface "did you do this?" to the account holder even if
+// the attacker suppressed the confirmation email.
+//
+// `kind` is a bounded string enum — see SecurityEventKind in
+// @shared/observability/metrics. New kinds get added there first so the
+// metric attribute union stays in sync with the schema column.
+//
+// Rows are created per-event; `acknowledged_at` goes from NULL → unix seconds
+// when the user dismisses the banner. We keep acknowledged rows for audit
+// (the banner just stops surfacing them).
+// ---------------------------------------------------------------------------
+
+export const securityEvents = sqliteTable(
+  "security_events",
+  {
+    id: text("id").primaryKey(), // "sev_" prefix
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    /**
+     * Bounded kind enum — see SecurityEventKind in @shared/observability.
+     * Enforced at the service boundary, not the column level, so adding
+     * a new kind doesn't require a schema migration.
+     */
+    kind: text("kind").notNull(),
+    /** Unix seconds */
+    createdAt: integer("created_at").notNull(),
+    /** Unix seconds — NULL while the banner is still surfacing. */
+    acknowledgedAt: integer("acknowledged_at"),
+    /** HMAC-peppered IP hash of the request that triggered the event (optional). */
+    ipHash: text("ip_hash"),
+    /** Coarse UA label captured at event time ("Firefox on macOS"). */
+    uaLabel: text("ua_label"),
+  },
+  (t) => [
+    // P-W1: partial index over the hot "unacknowledged" slice. Acked rows
+    // are kept for audit but grow unbounded over time; the Settings banner
+    // only reads unacked rows, so excluding acked rows from the index keeps
+    // it tiny regardless of history. Column order (account_id, created_at DESC)
+    // also satisfies the `ORDER BY created_at DESC` on the list query so
+    // SQLite serves the sort from the index instead of materialising it.
+    index("security_events_unacked_idx")
+      .on(t.accountId, t.createdAt)
+      .where(sql`${t.acknowledgedAt} IS NULL`),
+  ],
+);
+
+export type SecurityEvent = typeof securityEvents.$inferSelect;
+export type NewSecurityEvent = typeof securityEvents.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // Organisations

@@ -38,7 +38,13 @@ export function createTestLayer() {
       public_key TEXT NOT NULL,
       counter INTEGER NOT NULL DEFAULT 0,
       transports TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      label TEXT,
+      last_used_at INTEGER,
+      aaguid TEXT,
+      backup_eligible INTEGER,
+      backup_state INTEGER,
+      updated_at INTEGER
     )
   `);
   sqlite.run(`CREATE INDEX passkeys_account_id_idx ON passkeys (account_id)`);
@@ -83,11 +89,50 @@ export function createTestLayer() {
       account_id TEXT NOT NULL REFERENCES accounts(id),
       family_id TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      ua_label TEXT,
+      ip_hash TEXT,
+      last_used_at INTEGER
     )
   `);
   sqlite.run(`CREATE INDEX sessions_account_idx ON sessions (account_id)`);
   sqlite.run(`CREATE INDEX sessions_family_idx ON sessions (family_id)`);
+  sqlite.run(`CREATE INDEX sessions_account_last_used_idx ON sessions (account_id, last_used_at)`);
+  sqlite.run(`
+    CREATE TABLE email_changes (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      previous_email TEXT NOT NULL,
+      new_email TEXT NOT NULL,
+      completed_at INTEGER NOT NULL
+    )
+  `);
+  sqlite.run(`CREATE INDEX email_changes_account_idx ON email_changes (account_id)`);
+  sqlite.run(`CREATE INDEX email_changes_completed_at_idx ON email_changes (completed_at)`);
+  sqlite.run(`
+    CREATE TABLE security_events (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      kind TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      acknowledged_at INTEGER,
+      ip_hash TEXT,
+      ua_label TEXT
+    )
+  `);
+  sqlite.run(
+    `CREATE INDEX security_events_unacked_idx ON security_events (account_id, created_at) WHERE acknowledged_at IS NULL`,
+  );
+  sqlite.run(`
+    CREATE TABLE recovery_codes (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      code_hash TEXT NOT NULL UNIQUE,
+      used_at INTEGER,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  sqlite.run(`CREATE INDEX recovery_codes_account_idx ON recovery_codes (account_id)`);
   sqlite.run(`
     CREATE TABLE service_accounts (
       service_id TEXT PRIMARY KEY,
