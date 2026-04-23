@@ -1,4 +1,5 @@
 import { useAuth } from "@osn/client/solid";
+import { PasskeysView } from "@osn/ui/auth/PasskeysView";
 import { ProfileOnboarding } from "@osn/ui/auth/ProfileOnboarding";
 import { clsx } from "@osn/ui/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@osn/ui/ui/avatar";
@@ -6,16 +7,18 @@ import { Button } from "@osn/ui/ui/button";
 import { Card } from "@osn/ui/ui/card";
 import { Input } from "@osn/ui/ui/input";
 import { Label } from "@osn/ui/ui/label";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-import { registrationClient } from "../lib/authClients";
+import { passkeysClient, registrationClient, stepUpClient } from "../lib/authClients";
 import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
 
-type Section = "profile" | "account" | "apps";
+type Section = "profile" | "account" | "security" | "apps";
 
 const SECTIONS: { value: Section; label: string }[] = [
   { value: "profile", label: "Profile" },
   { value: "account", label: "Account" },
+  { value: "security", label: "Security" },
   { value: "apps", label: "Connected apps" },
 ];
 
@@ -139,6 +142,37 @@ export function SettingsPage() {
                 Delete account (coming soon)
               </Button>
             </div>
+          </Card>
+        </Show>
+
+        {/* Security section — manage passkeys (add / rename / delete). */}
+        <Show when={section() === "security"}>
+          <Card class="flex flex-col gap-3 p-5">
+            <Show
+              when={accessToken() && claims().profileId}
+              fallback={
+                <p class="text-muted-foreground text-sm">Sign in to manage your passkeys.</p>
+              }
+            >
+              <PasskeysView
+                client={passkeysClient}
+                stepUpClient={stepUpClient}
+                accessToken={accessToken()!}
+                profileId={claims().profileId!}
+                runPasskeyCeremony={(options: unknown) =>
+                  startAuthentication({
+                    optionsJSON: options as Parameters<
+                      typeof startAuthentication
+                    >[0]["optionsJSON"],
+                  })
+                }
+                runPasskeyRegistration={(options: unknown) =>
+                  startRegistration({
+                    optionsJSON: options as Parameters<typeof startRegistration>[0]["optionsJSON"],
+                  })
+                }
+              />
+            </Show>
           </Card>
         </Show>
 
