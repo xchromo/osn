@@ -1,5 +1,4 @@
-/* Pulse editorial fonts — must precede all other @import */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap");
+/* Pulse editorial fonts loaded via <link> in index.html (non-blocking) */
 
 @import "tailwindcss";
 @source "../../../osn/ui/src";

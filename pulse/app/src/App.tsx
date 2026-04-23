@@ -4,16 +4,15 @@ import { lazy, Show } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import { Header } from "./components/Header";
-import { ExplorePage } from "./explore/ExplorePage";
 import { OSN_ISSUER_URL } from "./lib/auth";
 
 import "./App.css";
 
-// P-W3: route-level code-splitting. EventDetailPage pulls in
-// `MapPreview`, which transitively imports Leaflet (~150KB) + its CSS.
-// Lazy-loading the route boundary keeps Leaflet out of the initial
-// bundle so the home feed doesn't pay for a dependency it doesn't use.
-// Settings is split for the same reason — it's a low-traffic page.
+// Route-level code-splitting: each page is lazy-loaded so its transitive
+// dependencies don't bloat the entry bundle.
+const ExplorePage = lazy(() =>
+  import("./explore/ExplorePage").then((m) => ({ default: m.ExplorePage })),
+);
 const EventDetailPage = lazy(() =>
   import("./pages/EventDetailPage").then((m) => ({ default: m.EventDetailPage })),
 );
