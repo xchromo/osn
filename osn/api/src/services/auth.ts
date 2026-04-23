@@ -1118,9 +1118,7 @@ export function createAuthService(config: AuthConfig) {
             .limit(MAX_SESSIONS_PER_ACCOUNT + 1);
           if (rows.length >= MAX_SESSIONS_PER_ACCOUNT) {
             const evictIds = rows.slice(MAX_SESSIONS_PER_ACCOUNT - 1).map((r) => r.id);
-            for (const id of evictIds) {
-              await db.delete(sessions).where(eq(sessions.id, id));
-            }
+            await Promise.all(evictIds.map((id) => db.delete(sessions).where(eq(sessions.id, id))));
           }
         },
         catch: (cause) => new DatabaseError({ cause }),
