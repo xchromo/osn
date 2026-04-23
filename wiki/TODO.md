@@ -73,7 +73,7 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 ### M1 — 1:1 DMs (E2E)
 
-- [ ] Signal Protocol primitives in `@osn/crypto/signal` (X3DH handshake, double ratchet)
+- [ ] Signal Protocol primitives in `@shared/crypto/signal` — **PQXDH** handshake (post-quantum hybrid: X25519 + ML-KEM-768) and double ratchet. Classical-only X3DH is HNDL-exposed and must not ship for durable message ciphertext
 - [ ] WebSocket transport for live message delivery (`@zap/api`)
 - [ ] Push receipt + read receipt model (defer push notifications to M4)
 - [ ] `@zap/app` Socials view: chat list + message thread UI
@@ -249,7 +249,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [x] S-L40 — `publicKeyCacheSize`, `_setPublicKeyCacheMaxSizeForTest`, `_resetPublicKeyCacheMaxSize` re-exported from `@shared/crypto` public index.ts (test-only symbols in public API). **Fixed** — removed from `index.ts`; tests import direct from `../src/arc` — see [[arc-tokens]]
 - [ ] S-L14 — `assertion: t.Any()` on passkey routes — add TypeBox shape validation
 - [ ] S-L15 — No reserved-handle blocklist in DB
-- [x] S-L101 — `registerWithOsnApi()` silently returned early when `INTERNAL_SERVICE_SECRET` unset. **Fixed** — now throws, caught at startup by `index.ts` — see [[arc-tokens]]
+- [x] S-L101 — `registerWithOsnApi()` silently returned early when `INTERNAL_SERVICE_SECRET` unset. **Fixed** — throws in non-local envs (`OSN_ENV != "local"`) so misconfiguration is caught at boot; in local dev logs a warning and boots anyway to unblock developer workflows — see [[arc-tokens]]
 - [x] S-M1 (auth) — ~~`pkceStore` unbounded + no expiry sweep~~ — **Obsolete**: `pkceStore` deleted with PKCE cleanup (Phase 5b)
 - [x] S-M2 (auth) — ~~`/authorize` has no rate limiter~~ — **Obsolete**: `/authorize` route deleted with PKCE cleanup (Phase 5b)
 - [ ] S-M4 (auth) — No startup assertion that `OSN_JWT_PRIVATE_KEY` has `sign` usage — assert `key.usages.includes("sign")` after import in `loadJwtKeyPair`
@@ -388,7 +388,7 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 | Decision | Context | Revisit When |
 |----------|---------|--------------|
 | Social media platform name | Need a catchy name | Before starting Phase 3 |
-| Signal vs MLS for Zap group chats — see [[zap]] | Sender-keys is simpler; MLS scales past ~50 members | Before Zap M2 |
+| Signal vs MLS for Zap group chats — see [[zap]] | Sender-keys is simpler; MLS scales past ~50 members. **Hard constraint either way:** hybrid PQ KEM (classical + ML-KEM-768) — messages are durable and HNDL-exposed | Before Zap M2 |
 | Zap media storage (images / voice / video) | Needs E2E-friendly blob storage; SQLite-only won't cut it | When Zap M2 lands |
 | Effect.ts adoption | Trial underway in `pulse/api` | After more service coverage |
 | Supabase migration | Currently SQLite | When scaling needed |
