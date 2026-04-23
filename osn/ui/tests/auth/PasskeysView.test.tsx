@@ -323,6 +323,70 @@ describe("PasskeysView", () => {
     expect(pk.registerComplete).not.toHaveBeenCalled();
   });
 
+  // T-E2: most likely real-world failure shape — the user dismisses the
+  // browser's WebAuthn prompt. registerBegin already resolved, so we must
+  // surface the error AND release the `busy` / `pending` lock so the Add
+  // button is clickable again.
+  it("re-enables Add passkey after the browser ceremony is cancelled", async () => {
+    pk.list.mockResolvedValue({ passkeys: passkeyRows });
+    pk.registerBegin.mockResolvedValue({ challenge: "chal" });
+    su.otpBegin.mockResolvedValue({ sent: true });
+    su.otpComplete.mockResolvedValue(stepUpToken);
+    const runRegistration = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+
+    render(() => (
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        profileId="prof_123"
+        runPasskeyRegistration={runRegistration}
+      />
+    ));
+
+    await waitFor(() => screen.getByRole("button", { name: /Add passkey/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add passkey/i }));
+    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
+    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
+    fireEvent.input(codeInput, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
+
+    await waitFor(() => expect(screen.getByText(/NotAllowedError/)).toBeTruthy());
+    expect(pk.registerComplete).not.toHaveBeenCalled();
+    // finally-block cleanup: the Add button must be clickable again.
+    const addButton = screen.getByRole("button", {
+      name: /Add passkey/i,
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(addButton.disabled).toBe(false));
+  });
+
+  // T-S1: the S-L1 lock must cover the Add button too — a rename/delete
+  // step-up in flight must not allow a second ceremony to kick off.
+  it("disables Add passkey while a rename/delete step-up is in flight (T-S1)", async () => {
+    pk.list.mockResolvedValue({ passkeys: passkeyRows });
+    su.otpBegin.mockResolvedValue({ sent: true });
+
+    render(() => (
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        profileId="prof_123"
+        runPasskeyRegistration={vi.fn()}
+      />
+    ));
+
+    await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
+    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+
+    const addButton = screen.getByRole("button", {
+      name: /Add passkey/i,
+    }) as HTMLButtonElement;
+    expect(addButton.disabled).toBe(true);
+  });
+
   // S-L1: while a step-up is in flight, every Rename / Delete button on the
   // page is disabled to prevent a rapid double-click swapping the pending id.
   it("locks every Rename/Delete button while a step-up is in flight (S-L1)", async () => {

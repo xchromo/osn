@@ -208,6 +208,21 @@ describe("createPasskeysClient", () => {
         }),
       ).rejects.toBeInstanceOf(PasskeysError);
     });
+
+    // T-U1: locks the pass-through contract — `registerBegin` does not
+    // validate the WebAuthn options shape, it just forwards whatever the
+    // server returns on 2xx. If we ever tighten that into a shape check
+    // (e.g. require a `challenge` field), this test fails loudly and
+    // forces the change to be intentional.
+    it("passes an empty 2xx body through unchanged (pass-through contract)", async () => {
+      stubFetch(() => jsonResponse({}));
+      const result = await client.registerBegin({
+        accessToken: "t",
+        profileId: "prof",
+        stepUpToken: "s",
+      });
+      expect(result).toEqual({});
+    });
   });
 
   describe("registerComplete", () => {
@@ -234,6 +249,20 @@ describe("createPasskeysClient", () => {
 
     it("throws PasskeysError when the body is missing passkeyId", async () => {
       stubFetch(() => jsonResponse({ error: "bad_attestation" }, { status: 400 }));
+      await expect(
+        client.registerComplete({
+          accessToken: "t",
+          profileId: "prof",
+          attestation: {},
+        }),
+      ).rejects.toBeInstanceOf(PasskeysError);
+    });
+
+    // T-E1: the negative test above hits `!res.ok` before the missing-
+    // passkeyId guard is even reached. Cover the guard directly: a 2xx
+    // with a non-string `passkeyId` must still surface as PasskeysError.
+    it("throws PasskeysError on 2xx when passkeyId is absent / wrong type", async () => {
+      stubFetch(() => jsonResponse({ ok: true }, { status: 200 }));
       await expect(
         client.registerComplete({
           accessToken: "t",
