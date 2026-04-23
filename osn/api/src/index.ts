@@ -152,16 +152,17 @@ const orgRateLimiter = createRedisOrgRateLimiter(redisClient);
 const profileRateLimiters = createRedisProfileRateLimiters(redisClient);
 const recommendationRateLimiter = createRedisRecommendationRateLimiter(redisClient);
 
-// S-L1: Restrict CORS to the known app origin instead of the open wildcard.
-// Derivation + S-L4 fail-closed invariant live in `./lib/cors-config` so they
-// can be unit-tested without booting the whole app.
-const corsOrigins = resolveCorsOrigins(process.env);
-
 // C3: Cookie session config — Secure flag + __Host- prefix in non-local envs.
 const cookieConfig: CookieSessionConfig = {
   secure: !!process.env.OSN_ENV && process.env.OSN_ENV !== "local",
 };
 
+// S-L1: Restrict CORS to the known app origin instead of the open wildcard.
+// Derivation + S-L4 fail-closed invariant live in `./lib/cors-config` so they
+// can be unit-tested without booting the whole app. `cookieConfig.secure` is
+// the single non-local predicate — a deploy that forgets both `OSN_ENV` and
+// `OSN_CORS_ORIGIN` still fails closed at `assertCorsOriginsConfigured`.
+const corsOrigins = resolveCorsOrigins(process.env, cookieConfig.secure);
 assertCorsOriginsConfigured(corsOrigins, cookieConfig.secure);
 const originGuard = createOriginGuard({ allowedOrigins: new Set(corsOrigins) });
 
