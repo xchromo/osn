@@ -396,10 +396,13 @@ export function createAuthRoutes(
       // -------------------------------------------------------------------------
       // Passkey: begin registration
       //
-      // Authenticated via `Authorization: Bearer <access_token>`. Works for
-      // both "new user enrolling first passkey" (access token from
-      // `/register/complete`) and "existing user adding another passkey"
-      // (access token from a normal login).
+      // Authenticated via `Authorization: Bearer <access_token>`. S-H1:
+      // when the account already has ≥1 passkey, a fresh step-up token
+      // (via `X-Step-Up-Token` header or `step_up_token` body field) is
+      // REQUIRED — a stolen access token alone cannot bind a new
+      // authenticator. First-passkey enrollment (bootstrap) bypasses the
+      // gate because no step-up ceremony is reachable before the account
+      // has any credentials.
       // -------------------------------------------------------------------------
       .post(
         "/passkey/register/begin",
@@ -418,7 +421,11 @@ export function createAuthRoutes(
               set.status = 401;
               return { error: "unauthorized" };
             }
-            const result = await run(auth.beginPasskeyRegistration(principal.accountId));
+            const headerToken = headers["x-step-up-token"];
+            const stepUpToken = body.step_up_token ?? headerToken;
+            const result = await run(
+              auth.beginPasskeyRegistration(principal.accountId, stepUpToken),
+            );
             return result.options;
           } catch (e) {
             const { status, body: errBody } = handleError(e);
@@ -427,11 +434,19 @@ export function createAuthRoutes(
           }
         },
         {
-          body: t.Object({ profileId: t.String() }),
+          body: t.Object({
+            profileId: t.String(),
+            step_up_token: t.Optional(t.String()),
+          }),
         },
       )
       // -------------------------------------------------------------------------
       // Passkey: complete registration
+      //
+      // S-H1: the caller's session token is derived from the HttpOnly
+      // cookie — NOT from optional body input — so H1 invalidation (every
+      // other session on the account gets revoked) cannot be silently
+      // skipped by a malicious caller.
       // -------------------------------------------------------------------------
       .post(
         "/passkey/register/complete",
@@ -454,14 +469,13 @@ export function createAuthRoutes(
               set.status = 401;
               return { error: "unauthorized" };
             }
-            // H1: Pass raw session_token to the service — it handles hashing
-            // internally (S-H2). On the enrollment path (new user) there is
-            // typically only one session, so session_token is optional.
+            const cookieToken = readSessionCookie(headers.cookie, cookieConfig);
             const result = await run(
               auth.completePasskeyRegistration(
                 principal.accountId,
                 body.attestation,
-                body.session_token,
+                cookieToken,
+                sessionMetaFrom(headers),
               ),
             );
             return result;
@@ -475,7 +489,6 @@ export function createAuthRoutes(
           body: t.Object({
             profileId: t.String(),
             attestation: t.Any(),
-            session_token: t.Optional(t.String()),
           }),
         },
       )

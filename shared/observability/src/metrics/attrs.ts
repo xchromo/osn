@@ -124,6 +124,7 @@ export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
 export type SecurityEventKind =
   | "recovery_code_generate"
   | "recovery_code_consume"
+  | "passkey_register"
   | "passkey_delete";
 
 /**

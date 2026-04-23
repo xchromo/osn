@@ -455,7 +455,14 @@ describe("auth routes", () => {
   });
 
   describe("POST /login/passkey/begin", () => {
-    it("returns 400 for an unknown identifier", async () => {
+    // S-M1: begin is enumeration-safe. Unknown identifier, known-with-
+    // zero-passkeys, and known-with-passkeys all return 200 with the same
+    // envelope shape `{ options: { …, allowCredentials: [...] } }`. An
+    // attacker cannot probe the handle / email namespace through this
+    // endpoint. (A subsequent /login/passkey/complete on the synthetic
+    // branches fails at the challenge-lookup guard, indistinguishable
+    // from a legitimate timeout.)
+    it("returns 200 with synthetic options for an unknown identifier (S-M1)", async () => {
       const res = await app.handle(
         new Request("http://localhost/login/passkey/begin", {
           method: "POST",
@@ -463,10 +470,15 @@ describe("auth routes", () => {
           body: JSON.stringify({ identifier: "nobody@example.com" }),
         }),
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        options: { allowCredentials: { id: string }[]; userVerification: string };
+      };
+      expect(body.options.allowCredentials).toHaveLength(1);
+      expect(body.options.userVerification).toBe("required");
     });
 
-    it("returns 400 when the user has no registered passkey", async () => {
+    it("returns 200 with synthetic options when the account has no passkey (S-M1)", async () => {
       const svc = createAuthService(config);
       await Effect.runPromise(
         svc.registerProfile("pk-begin@example.com", "pkbegin").pipe(Effect.provide(layer)),
@@ -478,8 +490,11 @@ describe("auth routes", () => {
           body: JSON.stringify({ identifier: "pk-begin@example.com" }),
         }),
       );
-      // Service surfaces "No passkey registered" → 400.
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        options: { allowCredentials: { id: string }[] };
+      };
+      expect(body.options.allowCredentials).toHaveLength(1);
     });
   });
 
@@ -728,6 +743,66 @@ describe("auth routes", () => {
         }),
       );
       expect(res.status).toBe(401);
+    });
+
+    // S-H1: begin requires a step-up token once the account has ≥1
+    // passkey. A bare access token is insufficient — a stolen token
+    // (XSS) cannot silently enroll a new authenticator.
+    it("S-H1: rejects when account has ≥1 passkey and no step-up token", async () => {
+      const svc = createAuthService(config);
+      const profile = await Effect.runPromise(
+        svc.registerProfile("ulla@example.com", "ulla").pipe(Effect.provide(layer)),
+      );
+      const tokens = await Effect.runPromise(
+        svc
+          .issueTokens(
+            profile.id,
+            profile.accountId,
+            profile.email,
+            profile.handle,
+            profile.displayName,
+          )
+          .pipe(Effect.provide(layer)),
+      );
+      // Seed one passkey to flip the account out of the bootstrap path.
+      const { passkeys: passkeysTable } = await import("@osn/db/schema");
+      const { Db } = await import("@osn/db/service");
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const { db } = yield* Db;
+          yield* Effect.tryPromise(() =>
+            db.insert(passkeysTable).values({
+              id: "pk_shonenollafg",
+              accountId: profile.accountId,
+              credentialId: "cred-ulla-seed",
+              publicKey: "AAAA",
+              counter: 0,
+              transports: null,
+              createdAt: new Date(),
+              label: null,
+              lastUsedAt: null,
+              aaguid: null,
+              backupEligible: false,
+              backupState: false,
+              updatedAt: null,
+            }),
+          );
+        }).pipe(Effect.provide(layer)),
+      );
+      const res = await app.handle(
+        new Request("http://localhost/passkey/register/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${tokens.accessToken}`,
+          },
+          body: JSON.stringify({ profileId: profile.id }),
+        }),
+      );
+      // The service throws AuthError("Step-up required"); publicError maps
+      // it to a 400 with a masked body. 400 or 403 are both acceptable
+      // shapes for "missing step-up"; we care that it's NOT 200.
+      expect([400, 403]).toContain(res.status);
     });
   });
 

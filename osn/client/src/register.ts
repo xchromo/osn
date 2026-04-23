@@ -14,11 +14,21 @@ import { parseTokenResponse, type Session } from "./tokens";
  *                                            `{ profileId, session }`. The
  *                                            session is ready to hand to
  *                                            `AuthProvider.adoptSession`.
- *  4. `passkeyRegisterBegin({profileId})`  — fetch WebAuthn options. The
- *                                            caller passes the access token
- *                                            returned in step 3.
- *  5. `passkeyRegisterComplete({profileId,attestation})` — submit the
- *                                            attested credential.
+ *  4. `passkeyRegisterBegin({profileId, accessToken})`  — fetch WebAuthn
+ *                                            options. Pass the access
+ *                                            token returned in step 3.
+ *  5. `passkeyRegisterComplete({profileId,accessToken,attestation})` —
+ *                                            submit the attested
+ *                                            credential. The server
+ *                                            derives the caller's session
+ *                                            token from the HttpOnly
+ *                                            cookie (S-H1); no body field
+ *                                            for it here.
+ *
+ * Adding a SECOND passkey post-registration requires a `stepUpToken` on
+ * `passkeyRegisterBegin` (S-H1) — pass one minted by the step-up client.
+ * The first-passkey bootstrap flow from `completeRegistration` never
+ * needs it because the account has no credentials yet.
  *
  * The WebAuthn browser ceremony is intentionally not performed inside this
  * package — keeping it caller-side avoids pulling in @simplewebauthn/browser.
@@ -76,7 +86,16 @@ export interface RegistrationClient {
   }): Promise<{ sent: boolean }>;
   completeRegistration(input: { email: string; code: string }): Promise<CompleteRegistrationResult>;
   /** WebAuthn options for the first-passkey enrollment. `accessToken` is the one returned by `completeRegistration`. */
-  passkeyRegisterBegin(input: { profileId: string; accessToken: string }): Promise<unknown>;
+  /**
+   * Fetch WebAuthn options. `stepUpToken` is REQUIRED by the server when
+   * the account already has ≥1 passkey (S-H1); the first-passkey
+   * bootstrap flow from `completeRegistration` can omit it.
+   */
+  passkeyRegisterBegin(input: {
+    profileId: string;
+    accessToken: string;
+    stepUpToken?: string;
+  }): Promise<unknown>;
   passkeyRegisterComplete(input: {
     profileId: string;
     accessToken: string;
@@ -118,10 +137,16 @@ export function createRegistrationClient(config: RegistrationClientConfig): Regi
     };
   };
 
-  const passkeyRegisterBegin = (input: { profileId: string; accessToken: string }) =>
+  const passkeyRegisterBegin = (input: {
+    profileId: string;
+    accessToken: string;
+    stepUpToken?: string;
+  }) =>
     postJson<unknown>(
       `${base}/passkey/register/begin`,
-      { profileId: input.profileId },
+      input.stepUpToken !== undefined
+        ? { profileId: input.profileId, step_up_token: input.stepUpToken }
+        : { profileId: input.profileId },
       { bearer: input.accessToken },
     );
 

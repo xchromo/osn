@@ -10,7 +10,7 @@ packages:
   - "@osn/api"
   - "@osn/client"
   - "@osn/ui"
-last-reviewed: 2026-04-22
+last-reviewed: 2026-04-23
 ---
 
 # Passkey-Primary Login
@@ -62,19 +62,39 @@ UI surface (`@osn/ui/auth`):
 ## Accepting security keys
 
 `generateRegistrationOptions` uses `residentKey: "preferred"` +
-`userVerification: "preferred"`:
+`userVerification: "required"`:
 
-- Modern platform passkeys still register as discoverable credentials with UV
+- Modern platform passkeys register as discoverable credentials with UV
   (the Copenhagen Book path).
-- FIDO2 security keys without a resident-key slot register as non-
-  discoverable — they work for identified login but not for the identifier-
-  less (`/login/passkey/begin` with no identifier) flow.
-- UP-only keys register without user verification.
+- FIDO2 security keys with PIN/biometric register as non-discoverable — they
+  work for identified login but not for the identifier-less flow.
+- Obsolete UP-only U2F tokens **cannot register** — intentional (S-H2). They
+  would fail at verification time anyway because `verifyAuthenticationResponse`
+  sets `requireUserVerification: true`; admitting them at registration and
+  rejecting at login would only produce broken accounts.
 
-The identifier-less login path keeps `userVerification: "required"` so the
-ceremony's correctness does not depend on what happened at registration:
-users who registered a UP-only key simply can't use the identifier-less
-flow; the identified flow still works.
+Both login options (identified and identifier-less) use `userVerification:
+"required"` so options and verifier agree. The ceremony is phishing-resistant
+with a second factor (UV = PIN, biometric, or device unlock).
+
+## Step-up gating on register (S-H1)
+
+`/passkey/register/begin` requires a fresh step-up token (`X-Step-Up-Token`
+header or `step_up_token` body field; webauthn or otp AMR) when the account
+already has ≥1 passkey. First-passkey enrollment (bootstrap) bypasses the
+gate because no step-up ceremony is reachable before the account has any
+credentials. This closes the "stolen access token → silent authenticator
+binding" vector that the enrollmentToken deletion otherwise opened.
+
+`/passkey/register/complete` additionally:
+- Inserts a `security_events{kind: "passkey_register"}` row in the same
+  transaction as the passkey insert — the user sees the new-credential
+  banner even if an attacker skips the email client.
+- Fires a best-effort `notifyPasskeyRegisteredByAccountId` via `forkDaemon`
+  with a 10-second timeout. The body never includes identifying material.
+- Derives the caller's session token from the HttpOnly cookie — H1
+  invalidation of every other session cannot be silently skipped by a
+  malicious caller omitting a body field.
 
 ## WebAuthn-unsupported environments
 
@@ -100,6 +120,30 @@ on a different device before the recovery would technically have access
 via only recovery codes — but because `deletePasskey` itself refuses to
 leave 0, that state is unreachable in normal operation.
 
+## Enumeration safety (S-M1)
+
+`/login/passkey/begin` returns a uniform `200 { options: { allowCredentials,
+userVerification, … } }` in all three branches:
+
+- Unknown identifier: synthetic `allowCredentials` of length 1 (random 32
+  bytes, base64url). No challenge is persisted, so a subsequent
+  `/login/passkey/complete` hits the "challenge not found" guard,
+  indistinguishable from a legitimate timeout.
+- Known account with 0 passkeys (unreachable in practice — the ≥1 invariant
+  holds — legacy/corrupt data only): same synthetic shape.
+- Known account with ≥1 passkey: real `allowCredentials` from the DB.
+
+An anonymous caller cannot probe the handle/email namespace through this
+endpoint. A DB SELECT runs on both branches (real query for known; a
+never-matching accountId query for unknown) so the latency distribution is
+the same.
+
+## Access-token audience (S-M2)
+
+Access tokens carry `aud: "osn-access"`; `verifyAccessToken` asserts it.
+This prevents any future token type minted with the same ES256 key from
+authenticating access-token routes by accident.
+
 ## What was removed
 
 - **Routes**: `POST /login/otp/{begin,complete}`, `POST /login/magic/{begin,verify}`.
@@ -115,3 +159,6 @@ leave 0, that state is unreachable in normal operation.
 - **Metrics**: `osn.auth.magic_link.sent`; `AuthMethod` union narrowed to
   `"passkey" | "recovery_code" | "refresh"`; `AuthRateLimitedEndpoint`
   dropped `otp_begin`, `otp_complete`, `magic_begin`.
+- **Body input**: `POST /passkey/register/complete` no longer accepts
+  `session_token` in the body; the server derives it from the HttpOnly
+  cookie (S-H1).

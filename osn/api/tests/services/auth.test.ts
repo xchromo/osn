@@ -372,20 +372,21 @@ describe("passkey registration", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // Pins the security-key-friendly registration posture (M-PK). Tightening
-  // either of these back to "required" would silently lock out FIDO2 roaming
-  // keys that lack a resident-key slot or UV; the change is invisible to
-  // other tests, so this is the only place that notices a regression.
-  it.effect("beginPasskeyRegistration uses residentKey + userVerification 'preferred'", () =>
+  // Pins the WebAuthn-option posture (M-PK + S-H2):
+  //   • `residentKey: "preferred"` — FIDO2 security keys without a resident-
+  //     key slot still register (as non-discoverable), so identified login
+  //     works for them.
+  //   • `userVerification: "required"` — must match the verifier (which
+  //     sets `requireUserVerification: true`). Obsolete UP-only U2F tokens
+  //     cannot register, which is intentional — they would fail at
+  //     verification time anyway.
+  it.effect("beginPasskeyRegistration uses residentKey 'preferred' + UV 'required'", () =>
     Effect.gen(function* () {
       const profile = yield* auth.registerProfile("pk-opts@example.com", "pkopts");
       const result = yield* auth.beginPasskeyRegistration(profile.accountId);
-      // toMatchObject: @simplewebauthn/server adds a derived
-      // `requireResidentKey` field alongside our two explicit ones; we only
-      // want to pin the policy values we set.
       expect(result.options.authenticatorSelection).toMatchObject({
         residentKey: "preferred",
-        userVerification: "preferred",
+        userVerification: "required",
       });
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -455,12 +456,12 @@ describe("passkey login", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("beginPasskeyLogin(identifier) uses userVerification 'preferred'", () =>
+  // S-H2: identified login must match the verifier (`requireUserVerification:
+  // true`), so options sets `userVerification: "required"`. The
+  // identifier-less flow above is identical — the two must not diverge.
+  it.effect("beginPasskeyLogin(identifier) uses userVerification 'required'", () =>
     Effect.gen(function* () {
       const profile = yield* auth.registerProfile("pk-login-opts@example.com", "pkloginopts");
-      // The identified branch needs at least one passkey row to generate
-      // options; seed a minimal one. The real WebAuthn ceremony is out of
-      // scope — we're pinning the option-generation policy.
       const { db } = yield* Db;
       yield* Effect.tryPromise(() =>
         db.insert(passkeys).values({
@@ -480,7 +481,7 @@ describe("passkey login", () => {
         }),
       );
       const result = yield* auth.beginPasskeyLogin("pk-login-opts@example.com");
-      expect(result.options.userVerification).toBe("preferred");
+      expect(result.options.userVerification).toBe("required");
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -571,6 +572,25 @@ describe("verifyAccessToken", () => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(auth.verifyAccessToken("not.a.token"));
       expect(error._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // S-M2 regression pin: a JWT signed with the same key but lacking the
+  // `aud: "osn-access"` claim (e.g. a step-up token or any future token
+  // type) must not authenticate access-token routes.
+  it.effect("rejects a token without aud: 'osn-access' (S-M2)", () =>
+    Effect.gen(function* () {
+      const { SignJWT } = yield* Effect.tryPromise(() => import("jose"));
+      const forged = yield* Effect.tryPromise(() =>
+        new SignJWT({ sub: "usr_forged00000", email: "x@x.com", handle: "x" })
+          .setProtectedHeader({ alg: "ES256", kid: config.jwtKid })
+          .setIssuedAt()
+          .setExpirationTime(Math.floor(Date.now() / 1000) + 300)
+          .sign(config.jwtPrivateKey),
+      );
+      const error = yield* Effect.flip(auth.verifyAccessToken(forged));
+      expect(error._tag).toBe("AuthError");
+      expect(error.message).toContain("Invalid token claims");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });

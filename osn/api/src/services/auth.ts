@@ -153,6 +153,17 @@ export interface AuthConfig {
    */
   passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp")[];
   /**
+   * Permitted AMR values for `/passkey/register/{begin,complete}` step-up
+   * when the account already has ≥1 passkey (S-H1). First-passkey
+   * enrollment bypasses the gate entirely — no step-up ceremony is
+   * reachable before the account has any credentials. Defaults to
+   * `["webauthn", "otp"]` because a user who legitimately wants to add a
+   * second device may be doing so precisely because the original is hard
+   * to reach; forcing passkey-only step-up would create a chicken-and-
+   * egg.
+   */
+  passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp")[];
+  /**
    * Cluster-wide single-use guard for step-up token jtis (S-H1). Inject a
    * Redis-backed store in multi-pod deployments; otherwise the default
    * in-memory map means a captured token replays successfully once per pod.
@@ -606,6 +617,9 @@ export function createAuthService(config: AuthConfig) {
     config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp"],
   );
   const passkeyDeleteAllowedAmr = new Set<string>(config.passkeyDeleteAllowedAmr ?? ["webauthn"]);
+  const passkeyRegisterAllowedAmr = new Set<string>(
+    config.passkeyRegisterAllowedAmr ?? ["webauthn", "otp"],
+  );
   const jtiStore = config.stepUpJtiStore ?? createInMemoryJtiStore();
   const rotatedSessionStore = config.rotatedSessionStore ?? createInMemoryRotatedSessionStore();
   const rotatedSessionStoreBackend = rotatedSessionStore.backend;
@@ -1028,6 +1042,12 @@ export function createAuthService(config: AuthConfig) {
   // Token issuance
   // -------------------------------------------------------------------------
 
+  // Access-token audience (S-M2). Asserted in `verifyAccessToken` so an
+  // ES256 token signed with the same key but minted for a different
+  // audience (step-up, or any future type) cannot authenticate access-
+  // token routes. Mirrors STEP_UP_AUDIENCE below.
+  const ACCESS_TOKEN_AUDIENCE = "osn-access";
+
   /**
    * Signs a short-lived ES256 access token JWT. Used by both initial login
    * (via `issueTokens`) and token refresh / profile switch (standalone).
@@ -1042,6 +1062,7 @@ export function createAuthService(config: AuthConfig) {
       try: () => {
         const payload: Record<string, unknown> = {
           sub: profileId,
+          aud: ACCESS_TOKEN_AUDIENCE,
           email,
           handle,
           scope: "openid profile",
@@ -1469,8 +1490,12 @@ export function createAuthService(config: AuthConfig) {
       if (
         typeof payload["sub"] !== "string" ||
         typeof payload["email"] !== "string" ||
-        typeof payload["handle"] !== "string"
+        typeof payload["handle"] !== "string" ||
+        payload["aud"] !== ACCESS_TOKEN_AUDIENCE
       ) {
+        // S-M2: `aud` pinning ensures only tokens explicitly issued as
+        // access tokens authenticate these routes. Without it any ES256
+        // JWT with string sub/email/handle would be accepted.
         return yield* Effect.fail(new AuthError({ message: "Invalid token claims" }));
       }
       return {
@@ -1487,6 +1512,13 @@ export function createAuthService(config: AuthConfig) {
 
   const beginPasskeyRegistration = (
     accountId: string,
+    /**
+     * S-H1: required when the account already has ≥1 passkey. First-
+     * credential enrollment (bootstrap) bypasses the gate — no step-up
+     * ceremony is reachable before the account has any authenticators.
+     * Verified below after the existingPasskeys read.
+     */
+    stepUpToken?: string,
   ): Effect.Effect<
     { options: PublicKeyCredentialCreationOptionsJSON },
     AuthError | DatabaseError,
@@ -1518,13 +1550,23 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Account not found" }));
       }
 
-      // P-I10: refuse to mint options past the per-account cap. The WebAuthn
-      // ceremony would still land DB-side at `complete` anyway; failing early
-      // avoids the user rehearsing a fingerprint / PIN for nothing.
+      // P-I10: refuse to mint options past the per-account cap. Checked
+      // BEFORE the step-up gate so a user who's already at the cap
+      // doesn't burn a single-use step-up token for nothing.
       if (existingPasskeys.length >= MAX_PASSKEYS_PER_ACCOUNT) {
         return yield* Effect.fail(
           new AuthError({ message: "Passkey limit reached for this account" }),
         );
+      }
+
+      // S-H1: once the account has any passkey, adding another requires a
+      // fresh step-up token. A stolen access token alone cannot bind a
+      // new authenticator.
+      if (existingPasskeys.length > 0) {
+        if (!stepUpToken) {
+          return yield* Effect.fail(new AuthError({ message: "Step-up required" }));
+        }
+        yield* verifyStepUpForPasskeyRegister(accountId, stepUpToken);
       }
 
       const options = yield* Effect.tryPromise({
@@ -1542,18 +1584,17 @@ export function createAuthService(config: AuthConfig) {
                 ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
                 : undefined,
             })),
-            // "preferred" on both so roaming security keys register too:
-            // modern platform passkeys deliver a discoverable credential with
-            // UV (the Copenhagen Book path); FIDO2 security keys without a
-            // resident-key slot fall through to non-discoverable (they work
-            // for identified login but not the identifier-less flow); older
-            // UP-only keys register without user verification. The identifier-
-            // less login path still enforces `userVerification: "required"`,
-            // so the identifier-less ceremony's correctness does not depend
-            // on the registration ceremony here.
+            // `residentKey: "preferred"` admits FIDO2 security keys without
+            // a resident-key slot (they register as non-discoverable and
+            // still work for identified login). `userVerification: "required"`
+            // keeps the factor strength at "something you have + something
+            // you are/know" — obsolete UP-only U2F tokens cannot register,
+            // which is intentional: they would subsequently fail the
+            // verifier's `requireUserVerification: true` anyway (S-H2 —
+            // options and verify must agree).
             authenticatorSelection: {
               residentKey: "preferred",
-              userVerification: "preferred",
+              userVerification: "required",
             },
           }),
         catch: (cause) => new AuthError({ message: String(cause) }),
@@ -1574,10 +1615,16 @@ export function createAuthService(config: AuthConfig) {
   const completePasskeyRegistration = (
     accountId: string,
     attestation: RegistrationResponseJSON,
-    /** Raw session token of the caller. When provided, hashed internally
-     *  and all OTHER sessions for this account are revoked (H1). Keeps
-     *  the raw-token → hash boundary inside the service (S-H2). */
-    currentSessionToken?: string,
+    /**
+     * Raw session token of the caller, hashed internally so all OTHER
+     * sessions for this account can be revoked (H1). The route layer
+     * derives this from the HttpOnly cookie — it is NOT user-supplied
+     * body input — so an attacker with only an access token cannot skip
+     * H1 invalidation by omitting a body field (S-H1).
+     */
+    currentSessionToken: string | null,
+    /** IP + UA for the security_events row (S-H1). Best-effort; omitted in tests. */
+    eventMeta?: SessionMeta,
   ): Effect.Effect<{ passkeyId: string }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = registrationChallenges.get(accountId);
@@ -1618,6 +1665,19 @@ export function createAuthService(config: AuthConfig) {
       const ts = now();
       const nowSec = Math.floor(ts.getTime() / 1000);
 
+      // S-H1: write the audit row in the SAME transaction as the passkey
+      // insert so a signed-out attacker who skips the notification path
+      // still leaves a row in security_events for the user to discover.
+      const securityEventRow: typeof securityEvents.$inferInsert = {
+        id: genId("sev_"),
+        accountId,
+        kind: "passkey_register",
+        createdAt: nowSec,
+        acknowledgedAt: null,
+        ipHash: eventMeta?.ip ? hashIp(eventMeta.ip) : null,
+        uaLabel: eventMeta?.uaLabel ?? null,
+      };
+
       // P-W1 / P-I10: race-safe cap enforcement inside a single transaction.
       // `beginPasskeyRegistration` already refuses past the limit, but a pair
       // of `begin` calls racing `complete` would both pass the pre-check.
@@ -1651,6 +1711,7 @@ export function createAuthService(config: AuthConfig) {
               backupState: backedUp,
               updatedAt: nowSec,
             });
+            await tx.insert(securityEvents).values(securityEventRow);
           }),
         catch: (cause) =>
           cause instanceof Error && /limit reached/i.test(cause.message)
@@ -1658,12 +1719,24 @@ export function createAuthService(config: AuthConfig) {
             : new DatabaseError({ cause }),
       });
 
+      metricSecurityEventRecorded("passkey_register");
+
       // H1: Invalidate all other sessions on passkey registration.
       // An attacker who stole a session token cannot persist after the
       // legitimate user adds a passkey.
       if (currentSessionToken) {
         yield* invalidateOtherAccountSessions(accountId, hashSessionToken(currentSessionToken));
       }
+
+      // S-H1: best-effort email notification. Forked daemon — failure
+      // logged but never rolls back the enrolment. 10s timeout matches
+      // passkey_delete / recovery_code_* paths.
+      yield* Effect.forkDaemon(
+        notifyPasskeyRegisteredByAccountId(accountId).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.catchAll(() => Effect.void),
+        ),
+      );
 
       return { passkeyId: id };
     });
@@ -1733,51 +1806,86 @@ export function createAuthService(config: AuthConfig) {
 
       const normalised = normaliseIdentifier(identifier);
       const profile = yield* resolveIdentifier(normalised);
-      if (!profile) {
-        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
-      }
 
+      // Resolve passkeys for the account when the identifier is known, or
+      // nothing when it isn't. Both branches run a DB SELECT so the query
+      // latency distribution is the same (S-M1: no timing oracle).
       const { db } = yield* Db;
-      const profilePasskeys = yield* Effect.tryPromise({
-        try: () => db.select().from(passkeys).where(eq(passkeys.accountId, profile.accountId)),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
+      const profilePasskeys = profile
+        ? yield* Effect.tryPromise({
+            try: () => db.select().from(passkeys).where(eq(passkeys.accountId, profile.accountId)),
+            catch: (cause) => new DatabaseError({ cause }),
+          })
+        : yield* Effect.tryPromise({
+            // Burn-in query: hit the table with a never-matching accountId
+            // so an unknown identifier costs the same shape of work as a
+            // known one.
+            try: () => db.select().from(passkeys).where(eq(passkeys.accountId, "acc_enum_probe")),
+            catch: (cause) => new DatabaseError({ cause }),
+          });
 
-      if (profilePasskeys.length === 0) {
-        return yield* Effect.fail(
-          new AuthError({ message: "No passkeys registered for this account" }),
-        );
-      }
+      // S-M1: equalise the response envelope. Unknown identifier AND
+      // known-with-zero-passkeys return a single fabricated credentialId;
+      // known-with-passkeys returns the real allowCredentials. The wire
+      // shape — `{ options: { …, allowCredentials: [...], userVerification } }`
+      // — is identical in all three cases, so an anonymous caller can no
+      // longer probe the handle/email namespace through this endpoint.
+      // The "≥1 passkey" account invariant means the no-passkey branch is
+      // only reachable for legacy/corrupt data; it collapses into the
+      // unknown-identifier branch for free.
+      const realCredentials =
+        profile && profilePasskeys.length > 0
+          ? profilePasskeys.map((pk) => ({
+              id: pk.credentialId,
+              transports: pk.transports
+                ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
+                : undefined,
+            }))
+          : null;
+      const allowCredentials = realCredentials ?? [
+        {
+          // Random bytes base64url-encoded — never corresponds to a real
+          // credential. A subsequent `/login/passkey/complete` with an
+          // assertion for this id will fail at the challenge lookup
+          // because we do NOT persist a challenge for the synthetic
+          // branch.
+          id: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"),
+        },
+      ];
 
       const options = yield* Effect.tryPromise({
         try: () =>
           generateAuthenticationOptions({
             rpID: config.rpId,
-            allowCredentials: profilePasskeys.map((pk) => ({
-              id: pk.credentialId,
-              transports: pk.transports
-                ? (JSON.parse(pk.transports) as AuthenticatorTransportFuture[])
-                : undefined,
-            })),
-            // Identified flow: "preferred" so UP-only security keys still
-            // work. The identifier binds the ceremony to a single account,
-            // so UV is a belt, not the braces. The identifier-less flow
-            // above still hard-requires UV.
-            userVerification: "preferred",
+            allowCredentials,
+            // S-H2: `verifyAuthenticationResponse` sets
+            // `requireUserVerification: true`, so options and verify must
+            // agree. "required" here matches the verifier, matches the
+            // identifier-less flow, and makes the ceremony phishing-
+            // resistant with a second factor (UV) — the whole point of
+            // passkey-primary. Registration only admits UV-capable
+            // credentials, so this does not regress legitimate sign-ins.
+            userVerification: "required",
           }),
         catch: (cause) => new AuthError({ message: String(cause) }),
       });
 
       // Key challenge by normalised identifier so completePasskeyLoginDirect
-      // can check the in-memory guard before touching the DB.
-      sweepExpired(loginChallenges);
-      if (loginChallenges.size >= MAX_LOGIN_CHALLENGES) {
-        return yield* Effect.fail(new AuthError({ message: "Try again shortly" }));
+      // can check the in-memory guard before touching the DB. Skip the
+      // write on the synthetic branch: a subsequent complete call hits the
+      // "challenge not found" guard, which is indistinguishable from a
+      // legitimate timeout — preserves the enumeration safety into
+      // the complete step too.
+      if (realCredentials) {
+        sweepExpired(loginChallenges);
+        if (loginChallenges.size >= MAX_LOGIN_CHALLENGES) {
+          return yield* Effect.fail(new AuthError({ message: "Try again shortly" }));
+        }
+        loginChallenges.set(normalised, {
+          challenge: options.challenge,
+          expiresAt: Date.now() + 120_000,
+        });
       }
-      loginChallenges.set(normalised, {
-        challenge: options.challenge,
-        expiresAt: Date.now() + 120_000,
-      });
 
       return { options };
     }).pipe(Effect.withSpan("auth.login.passkey.begin"));
@@ -2848,6 +2956,21 @@ export function createAuthService(config: AuthConfig) {
       yield* verifyStepUpToken(stepUpToken, accountId, passkeyDeleteAllowedAmr);
     });
 
+  /**
+   * S-H1: step-up verifier for `/passkey/register/{begin,complete}` on
+   * accounts that already have ≥1 passkey. Without this gate, a stolen
+   * access token (XSS) could silently bind an attacker-controlled
+   * authenticator to the victim account — every other high-value auth
+   * mutation on the branch is step-up gated, and enroll must match.
+   */
+  const verifyStepUpForPasskeyRegister = (
+    accountId: string,
+    stepUpToken: string,
+  ): Effect.Effect<void, AuthError> =>
+    Effect.gen(function* () {
+      yield* verifyStepUpToken(stepUpToken, accountId, passkeyRegisterAllowedAmr);
+    });
+
   const verifyStepUpForRecoveryGenerate = (
     accountId: string,
     stepUpToken: string,
@@ -3415,6 +3538,57 @@ export function createAuthService(config: AuthConfig) {
    * never includes identifying material beyond "it was you if you did this,
    * otherwise investigate."
    */
+  /**
+   * Best-effort email notification that a passkey was added to the
+   * account. Codes never included — the body is a boilerplate "it was you
+   * or investigate" framing. Mirrors `notifyPasskeyDeletedByAccountId`.
+   */
+  const notifyPasskeyRegisteredByAccountId = (
+    accountId: string,
+  ): Effect.Effect<void, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () => db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const email = rows[0]?.email;
+      if (!email) {
+        metricSecurityEventNotified("passkey_register", "skipped");
+        return;
+      }
+      if (!config.sendEmail) {
+        yield* Effect.logDebug(`[OSN local] Passkey-added notice for ${email}: audit row written`);
+        metricSecurityEventNotified("passkey_register", "skipped");
+        return;
+      }
+      const start = Date.now();
+      yield* Effect.tryPromise({
+        try: () =>
+          config.sendEmail!(
+            email,
+            "A passkey was added to your OSN account",
+            `A passkey was just added to your OSN account. If that was you, no further action is needed.\n\nIf this wasn't you: sign in, remove the unexpected credential, and rotate your recovery codes.`,
+          ),
+        catch: () => new AuthError({ message: "notify_dispatch_failed" }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            metricSecurityEventNotifyDuration((Date.now() - start) / 1000, "ok");
+            metricSecurityEventNotified("passkey_register", "sent");
+          }),
+        ),
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            metricSecurityEventNotifyDuration((Date.now() - start) / 1000, "error");
+            metricSecurityEventNotified("passkey_register", "failed");
+          }),
+        ),
+      );
+    }).pipe(
+      Effect.withSpan("auth.security_event.notify", { attributes: { kind: "passkey_register" } }),
+    );
+
   const notifyPasskeyDeletedByAccountId = (
     accountId: string,
   ): Effect.Effect<void, AuthError | DatabaseError, Db> =>
@@ -3519,6 +3693,7 @@ export function createAuthService(config: AuthConfig) {
     completeStepUpOtp,
     verifyStepUpForRecoveryGenerate,
     verifyStepUpForPasskeyDelete,
+    verifyStepUpForPasskeyRegister,
     listAccountSessions,
     revokeAccountSession,
     revokeAllOtherAccountSessions,

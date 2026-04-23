@@ -289,6 +289,50 @@ describe("listPasskeys public shape", () => {
   );
 });
 
+// S-H1: step-up gate on /passkey/register/* when the account already has
+// ≥1 passkey. First-passkey bootstrap is exempt (no ceremony reachable
+// before the account has credentials). Prevents silent passkey enrollment
+// via a stolen access token.
+describe("passkey register step-up gate (S-H1)", () => {
+  it.effect("first-passkey enrollment does not require step-up", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-first@example.com", "pkfirst");
+      // No passkey seeded — bootstrap path.
+      const result = yield* auth.beginPasskeyRegistration(alice.accountId);
+      expect(result.options.challenge).toBeTruthy();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("adding a second passkey without step-up fails with AuthError", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-add@example.com", "pkadd");
+      yield* seedPasskey(alice.accountId);
+      const err = yield* Effect.flip(auth.beginPasskeyRegistration(alice.accountId));
+      expect(err._tag).toBe("AuthError");
+      expect((err as { message: string }).message).toMatch(/step.up/i);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("adding a second passkey with a valid step-up token succeeds", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-add-ok@example.com", "pkaddok");
+      yield* seedPasskey(alice.accountId);
+      let capturedCode: string | undefined;
+      const svc = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/(\d{6})/);
+          if (m) capturedCode = m[1];
+        },
+      });
+      yield* svc.beginStepUpOtp(alice.accountId);
+      const { stepUpToken } = yield* svc.completeStepUpOtp(alice.accountId, capturedCode!);
+      const result = yield* auth.beginPasskeyRegistration(alice.accountId, stepUpToken);
+      expect(result.options.challenge).toBeTruthy();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
 // T-U2: MAX_PASSKEYS_PER_ACCOUNT cap enforcement — begin refuses past the
 // limit; complete's race-guard refuses even if begin was passed concurrently.
 describe("passkey count cap (MAX_PASSKEYS_PER_ACCOUNT)", () => {
@@ -304,13 +348,25 @@ describe("passkey count cap (MAX_PASSKEYS_PER_ACCOUNT)", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("still allows begin at count = 9", () =>
+  it.effect("still allows begin at count = 9 (with step-up)", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("pk-cap9@example.com", "pkcap9");
       for (let i = 0; i < 9; i++) {
         yield* seedPasskey(alice.accountId);
       }
-      const result = yield* auth.beginPasskeyRegistration(alice.accountId);
+      // S-H1: begin requires step-up once the account has ≥1 passkey.
+      // Mint one via the OTP ceremony.
+      let capturedCode: string | undefined;
+      const svc = createAuthService({
+        ...config,
+        sendEmail: async (_to, _subject, body) => {
+          const m = body.match(/(\d{6})/);
+          if (m) capturedCode = m[1];
+        },
+      });
+      yield* svc.beginStepUpOtp(alice.accountId);
+      const { stepUpToken } = yield* svc.completeStepUpOtp(alice.accountId, capturedCode!);
+      const result = yield* auth.beginPasskeyRegistration(alice.accountId, stepUpToken);
       expect(result.options.challenge).toBeTruthy();
     }).pipe(Effect.provide(createTestLayer())),
   );
