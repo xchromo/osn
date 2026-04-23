@@ -1,12 +1,12 @@
 import { AuthProvider } from "@osn/client/solid";
 import { MagicLinkHandler } from "@osn/ui/auth/MagicLinkHandler";
-import { Router, Route } from "@solidjs/router";
-import { lazy } from "solid-js";
+import { Router, Route, useLocation } from "@solidjs/router";
+import { lazy, Show } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import { CallbackHandler } from "./components/CallbackHandler";
-import { EventList } from "./components/EventList";
 import { Header } from "./components/Header";
+import { ExplorePage } from "./explore/ExplorePage";
 import { OSN_ISSUER_URL, OSN_CLIENT_ID } from "./lib/auth";
 import { loginClient } from "./lib/authClients";
 
@@ -25,16 +25,20 @@ const SettingsPage = lazy(() =>
 );
 
 /**
- * Root layout. Wraps every route in the AuthProvider and deep-link
- * handlers so auth context and magic-link/OAuth callbacks keep working
- * regardless of the initial URL.
+ * Root layout. The Explore home page provides its own ExploreNav, so we
+ * only render the legacy Header on non-home routes.
  */
 function Layout(props: { children?: unknown }) {
+  const location = useLocation();
+  const isHome = () => location.pathname === "/";
+
   return (
     <>
       <CallbackHandler />
       <MagicLinkHandler client={loginClient} />
-      <Header />
+      <Show when={!isHome()}>
+        <Header />
+      </Show>
       {props.children}
       <Toaster position="bottom-right" />
     </>
@@ -45,7 +49,7 @@ export default function App() {
   return (
     <AuthProvider config={{ issuerUrl: OSN_ISSUER_URL, clientId: OSN_CLIENT_ID }}>
       <Router root={Layout}>
-        <Route path="/" component={EventList} />
+        <Route path="/" component={ExplorePage} />
         <Route path="/events/:id" component={EventDetailPage} />
         <Route path="/settings" component={SettingsPage} />
       </Router>

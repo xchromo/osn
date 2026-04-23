@@ -12,6 +12,7 @@ Phase 1 apps: OSN Core (auth), Pulse (events), Zap (messaging), Landing (marketi
 
 - `README.md` → Project spec, vision, features, tech stack, contributing (human-readable)
 - `CLAUDE.md` → AI entry point: quick context, conventions, commands, and wiki navigation
+- `pulse/DESIGN.md` → Pulse visual design system: typography, color tokens, component catalog, layout patterns
 - `wiki/TODO.md` → Progress tracking, deferred decisions, task checklists
 - `wiki/` → Obsidian knowledge graph: architecture, systems, observability, runbooks
   - Open in Obsidian for graph view; or navigate via `[[wiki links]]` from this file
@@ -52,6 +53,7 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 | Write or review tests | `[[wiki/conventions/testing-patterns]]` |
 | Understand event visibility rules | `[[wiki/systems/event-access]]` |
 | Add or use a UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
+| Understand Pulse visual design (tokens, typography, Explore layout) | `pulse/DESIGN.md` |
 | Work on the social graph or close friends | `[[wiki/systems/social-graph]]`, `[[wiki/systems/close-friends]]` |
 | Understand cross-service calls | `[[wiki/architecture/s2s-patterns]]` |
 | Debug a production issue | Browse `wiki/runbooks/` |

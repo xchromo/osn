@@ -23,6 +23,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] "What's on today" default view
 - [ ] Prompt for max event duration when creating events without an endTime
 - [ ] Event discovery (location, category, datetime, friends, interests)
+- [ ] Add `price` field to events schema (`text`, nullable — free events = null, otherwise display string like "$18" or "$8 entry")
 - [ ] Recurring events (series + instances)
 - [ ] Event group chats (via Zap once M2 lands — placeholder shipped)
 - [ ] Organizer tools (moderation, blacklists)
