@@ -41,7 +41,9 @@ if (process.env.NODE_ENV !== "test") {
         Effect.provide(Logger.pretty),
         Effect.provide(observabilityLayer),
       ),
-    ).finally(() => process.exit(1));
+    )
+      .catch(() => {})
+      .finally(() => process.exit(1));
   });
 
   // One structured info log at boot, routed through the observability layer
