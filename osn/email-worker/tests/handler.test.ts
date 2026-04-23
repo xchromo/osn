@@ -182,6 +182,118 @@ describe("email-worker /send", () => {
     expect(res.status).toBe(400);
   });
 
+  // T-S1: the validator returns a distinct `reason` string per branch.
+  // Clients (including OSN's own retry / log pipeline) may depend on the
+  // exact value, so we lock every branch individually.
+  describe("body validation branches", () => {
+    interface BadCase {
+      name: string;
+      patch: Record<string, unknown>;
+      reason: string;
+    }
+    const cases: BadCase[] = [
+      {
+        name: "invalid_to (malformed)",
+        patch: { to: "not-an-email" },
+        reason: "invalid_to",
+      },
+      {
+        name: "invalid_to (missing)",
+        patch: { to: undefined },
+        reason: "invalid_to",
+      },
+      {
+        name: "invalid_from (malformed)",
+        patch: { from: "bogus" },
+        reason: "invalid_from",
+      },
+      {
+        name: "invalid_subject (empty)",
+        patch: { subject: "" },
+        reason: "invalid_subject",
+      },
+      {
+        name: "invalid_subject (>200 chars)",
+        patch: { subject: "x".repeat(201) },
+        reason: "invalid_subject",
+      },
+      {
+        name: "invalid_text (empty)",
+        patch: { text: "" },
+        reason: "invalid_text",
+      },
+      {
+        name: "invalid_text (>20k chars)",
+        patch: { text: "x".repeat(20_001) },
+        reason: "invalid_text",
+      },
+      {
+        name: "invalid_html (>50k chars)",
+        patch: { html: "x".repeat(50_001) },
+        reason: "invalid_html",
+      },
+    ];
+
+    for (const c of cases) {
+      it(`rejects ${c.name} with reason=${c.reason}`, async () => {
+        vi.stubGlobal("fetch", buildFetchMock({}));
+        const env: Env = {
+          ...BASE_ENV,
+          OSN_API_ISSUER_JWKS: `https://jwks.osn.test/${crypto.randomUUID()}.json`,
+        };
+        const token = await signArc(key.privateKey, key.kid, {
+          iss: "osn-api",
+          aud: "osn-email-worker",
+          scope: "email:send",
+        });
+        // Explicitly pass `undefined` fields so JSON.stringify drops them,
+        // exercising the "missing" branch when the test table specifies it.
+        const body: Record<string, unknown> = { ...validBody, ...c.patch };
+        const res = await worker.fetch(
+          new Request("https://worker.local/send", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `ARC ${token}`,
+            },
+            body: JSON.stringify(body),
+          }),
+          env,
+        );
+        expect(res.status).toBe(400);
+        const err = (await res.json()) as { error: string };
+        expect(err.error).toBe(c.reason);
+      });
+    }
+
+    it("rejects a non-JSON body with invalid_json", async () => {
+      vi.stubGlobal("fetch", buildFetchMock({}));
+      const env: Env = {
+        ...BASE_ENV,
+        OSN_API_ISSUER_JWKS: `https://jwks.osn.test/${crypto.randomUUID()}.json`,
+      };
+      const token = await signArc(key.privateKey, key.kid, {
+        iss: "osn-api",
+        aud: "osn-email-worker",
+        scope: "email:send",
+      });
+      const res = await worker.fetch(
+        new Request("https://worker.local/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `ARC ${token}`,
+          },
+          body: "not-json",
+        }),
+        env,
+      );
+      expect(res.status).toBe(400);
+      const err = (await res.json()) as { error: string };
+      expect(err.error).toBe("invalid_json");
+    });
+  });
+
   it("returns 502 when the provider returns 5xx", async () => {
     vi.stubGlobal(
       "fetch",
@@ -223,5 +335,92 @@ describe("email-worker /send", () => {
       env,
     );
     expect(res.status).toBe(404);
+  });
+
+  // T-U1: primary ARC-forgery defence. A token signed by a key the JWKS
+  // does not publish must fail verification, otherwise a compromised peer
+  // could reach the email path.
+  it("rejects a token signed by a key not in the JWKS with 401 (verify_failed)", async () => {
+    // JWKS serves `key.publicJwk`; we sign with a DIFFERENT keypair whose
+    // public half is never published.
+    const attacker = await makeKey();
+    vi.stubGlobal("fetch", buildFetchMock({}));
+    const env: Env = {
+      ...BASE_ENV,
+      OSN_API_ISSUER_JWKS: `https://jwks.osn.test/${crypto.randomUUID()}.json`,
+    };
+    const forgedToken = await signArc(attacker.privateKey, attacker.kid, {
+      iss: "osn-api",
+      aud: "osn-email-worker",
+      scope: "email:send",
+    });
+    const res = await worker.fetch(
+      new Request("https://worker.local/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `ARC ${forgedToken}`,
+        },
+        body: JSON.stringify(validBody),
+      }),
+      env,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  // T-U1: a token with the wrong `iss` must be rejected. jose enforces
+  // this via the `issuer` verify option; the Worker also defence-in-depth
+  // re-checks the claim so a future jose change doesn't silently soften
+  // the gate.
+  it("rejects a token with a mismatched issuer with 401", async () => {
+    vi.stubGlobal("fetch", buildFetchMock({}));
+    const env: Env = {
+      ...BASE_ENV,
+      OSN_API_ISSUER_JWKS: `https://jwks.osn.test/${crypto.randomUUID()}.json`,
+    };
+    const token = await signArc(key.privateKey, key.kid, {
+      iss: "pulse-api", // not the configured expectedIssuer
+      aud: "osn-email-worker",
+      scope: "email:send",
+    });
+    const res = await worker.fetch(
+      new Request("https://worker.local/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `ARC ${token}`,
+        },
+        body: JSON.stringify(validBody),
+      }),
+      env,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  // T-U1: rejects tokens whose Authorization header uses the wrong scheme
+  // (e.g. `Bearer`). Documents the `bad_scheme` branch explicitly.
+  it("rejects a Bearer-scheme Authorization header with 401 (bad_scheme)", async () => {
+    vi.stubGlobal("fetch", buildFetchMock({}));
+    const env: Env = {
+      ...BASE_ENV,
+      OSN_API_ISSUER_JWKS: `https://jwks.osn.test/${crypto.randomUUID()}.json`,
+    };
+    const token = await signArc(key.privateKey, key.kid, {
+      iss: "osn-api",
+      aud: "osn-email-worker",
+      scope: "email:send",
+    });
+    const res = await worker.fetch(
+      new Request("https://worker.local/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(validBody),
+      }),
+      env,
+    );
+    expect(res.status).toBe(401);
   });
 });

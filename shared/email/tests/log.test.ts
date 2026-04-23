@@ -62,4 +62,28 @@ describe("LogEmailLive", () => {
     reset();
     expect(recorded()).toHaveLength(0);
   });
+
+  // T-U2: the ring is capped at MAX_RECORD (256). If the eviction branch
+  // silently flips (`>=` → `>`, or `shift()` drops out of a refactor) the
+  // recorder would grow unbounded in long test runs.
+  it("evicts the oldest entry once the ring hits MAX_RECORD", async () => {
+    const { layer, recorded } = makeLogEmailLive();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const email = yield* EmailService;
+        for (let i = 0; i < 257; i++) {
+          yield* email.send({
+            template: "passkey-added",
+            to: `user${String(i).padStart(3, "0")}@example.com`,
+            data: {},
+          });
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+    const all = recorded();
+    expect(all).toHaveLength(256);
+    // The first send (user000@) was evicted; the earliest remaining is user001@.
+    expect(all[0].to).toBe("user001@example.com");
+    expect(all.at(-1)!.to).toBe("user256@example.com");
+  });
 });

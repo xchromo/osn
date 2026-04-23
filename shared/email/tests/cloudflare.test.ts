@@ -144,6 +144,57 @@ describe("CloudflareEmailLive", () => {
     );
   });
 
+  it("returns dispatch_failed on Worker 4xx (non-429) — boundary at 422", async () => {
+    responder = () => new Response("validation failed", { status: 422 });
+    await expectFailsWith(
+      await buildLayer(),
+      {
+        template: "otp-registration",
+        to: "alice@example.com",
+        data: { code: "000000", ttlMinutes: 10 },
+      },
+      "dispatch_failed",
+    );
+  });
+
+  it("returns render_failed when a template renderer throws", async () => {
+    // Passing a non-string `code` makes `esc()` in the OTP template throw on
+    // `.replaceAll` — exercises the render_failed branch without mocking the
+    // template registry. Cast via `as never` to bypass the normal type guard;
+    // a production call site can never do this, but a regression that lands
+    // bad data here (e.g. forgetting to stringify an OTP number) would fail
+    // the same way.
+    await expectFailsWith(
+      await buildLayer(),
+      {
+        template: "otp-registration",
+        to: "alice@example.com",
+        data: { code: null as unknown as string, ttlMinutes: 10 },
+      },
+      "render_failed",
+    );
+  });
+
+  it("returns misconfigured when ARC signing fails (bad private key)", async () => {
+    const { publicKey } = await generateArcKeyPair();
+    const kid = await thumbprintKid(publicKey);
+    // The public key cannot sign — jose rejects `.sign(publicKey)` inside
+    // `getOrCreateArcToken`, which `CloudflareEmailLive` catches and maps to
+    // `misconfigured`. This models a deploy that wires the wrong key handle
+    // into `arcPrivateKey`.
+    const layer = makeCloudflareEmailLive({
+      workerUrl: WORKER_URL,
+      arcPrivateKey: publicKey,
+      arcKid: kid,
+      fromAddress: "noreply@osn.test",
+    });
+    await expectFailsWith(
+      layer,
+      { template: "passkey-added", to: "alice@example.com", data: {} },
+      "misconfigured",
+    );
+  });
+
   it("does not include OTP code on span attributes (only `template`)", async () => {
     // Smoke test: the rendered payload is in the HTTP body (expected),
     // but the span attribute ought to be just {template}. We assert by
