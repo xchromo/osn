@@ -22,7 +22,7 @@ packages:
   - "@shared/crypto"
   - "@osn/api"
   - "@pulse/api"
-last-reviewed: 2026-04-23
+last-reviewed: 2026-04-24
 security-fixes:
   - S-H100
   - S-H101
@@ -190,6 +190,11 @@ Behaviour when `INTERNAL_SERVICE_SECRET` is unset:
 
 - **Non-local env** (`OSN_ENV != "local"`): throws at startup so misconfiguration is caught immediately rather than failing silently on the first S2S call.
 - **Local dev** (`OSN_ENV` unset or `"local"`): registration is skipped, a warning is logged, and the server still boots. Any S2S call to `osn/api` will fail until the secret is configured — useful for unrelated local work that doesn't need the social graph bridge.
+
+Behaviour when `osn/api` is unreachable (`ConnectionRefused`, DNS failure, etc):
+
+- **Non-local env**: throws at startup and the process exits. Deployment ordering is expected to guarantee `osn/api` is up first; a race here signals a real misconfiguration.
+- **Local dev**: a warning is logged, `startKeyRotation()` returns `"pending-retry"`, and a background retry is scheduled every ~5 s until registration succeeds. Lets `bun run dev:pulse` boot both services in parallel without a crash when `pulse-api` wins the startup race. HTTP 4xx/5xx responses still throw and exit — only network-level failures trigger the retry loop.
 
 Env vars: `INTERNAL_SERVICE_SECRET`, `KEY_TTL_HOURS` (default 24), `KEY_ROTATION_BUFFER_HOURS` (default 2).
 

@@ -209,19 +209,19 @@ describe("startKeyRotation", () => {
     await expect(startKeyRotation()).rejects.toThrow("INTERNAL_SERVICE_SECRET must be set");
   });
 
-  it("returns false (and makes no HTTP call) when the secret is unset in local dev", async () => {
+  it("returns skipped-secret-unset (and makes no HTTP call) when the secret is unset in local dev", async () => {
     vi.unstubAllEnvs(); // remove the SECRET stub
     // OSN_ENV unset → treated as local
     const spy = vi.spyOn(globalThis, "fetch");
-    await expect(startKeyRotation()).resolves.toBe(false);
+    await expect(startKeyRotation()).resolves.toBe("skipped-secret-unset");
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("returns false when OSN_ENV=local and the secret is unset", async () => {
+  it("returns skipped-secret-unset when OSN_ENV=local and the secret is unset", async () => {
     vi.unstubAllEnvs();
     vi.stubEnv("OSN_ENV", "local");
     const spy = vi.spyOn(globalThis, "fetch");
-    await expect(startKeyRotation()).resolves.toBe(false);
+    await expect(startKeyRotation()).resolves.toBe("skipped-secret-unset");
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -233,7 +233,7 @@ describe("startKeyRotation", () => {
       }),
     );
 
-    await expect(startKeyRotation()).resolves.toBe(true);
+    await expect(startKeyRotation()).resolves.toBe("registered");
 
     expect(spy).toHaveBeenCalledOnce();
     const [url, init] = spy.mock.calls[0]!;
@@ -255,5 +255,40 @@ describe("startKeyRotation", () => {
     );
 
     await expect(startKeyRotation()).rejects.toThrow("failed to register");
+  });
+
+  it("returns pending-retry and schedules a background retry when osn/api is unreachable in local dev", async () => {
+    // Simulate a Bun ConnectionRefused: fetch() throws an Error with a `code` field.
+    const netErr = Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(netErr)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    await expect(startKeyRotation()).resolves.toBe("pending-retry");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    // Advance past the retry delay (base 5s + up to 1s jitter).
+    await vi.advanceTimersByTimeAsync(6_500);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rethrows a network error in non-local environments (no background retry)", async () => {
+    vi.stubEnv("OSN_ENV", "production");
+    const netErr = Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(netErr);
+
+    await expect(startKeyRotation()).rejects.toThrow("Unable to connect");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    // No retry scheduled: advancing time must not trigger more fetches.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 });
