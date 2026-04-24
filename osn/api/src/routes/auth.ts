@@ -1329,7 +1329,7 @@ export function createAuthRoutes(
       // `POST /login/cross-device/begin` — unauthenticated. Creates a pending
       //   request and returns { requestId, secret, expiresAt }.
       //
-      // `GET /login/cross-device/:requestId/status` — unauthenticated. Polls
+      // `POST /login/cross-device/:requestId/status` — unauthenticated. Polls
       //   for approval. Returns session tokens exactly once on approved.
       //
       // `POST /login/cross-device/:requestId/approve` — authenticated. Device A
@@ -1353,18 +1353,16 @@ export function createAuthRoutes(
           return errBody;
         }
       })
-      .get(
+      .post(
         "/login/cross-device/:requestId/status",
-        async ({ params, query, set, headers }) => {
+        async ({ params, body, set, headers }) => {
           const rlErr = await rateLimit(headers, "cross_device_poll", rl.crossDevicePoll);
           if (rlErr) {
             set.status = 429;
             return rlErr;
           }
           try {
-            const result = await run(
-              auth.getCrossDeviceLoginStatus(params.requestId, query.secret),
-            );
+            const result = await run(auth.getCrossDeviceLoginStatus(params.requestId, body.secret));
             if (result.status === "approved") {
               set.headers["set-cookie"] = buildSessionCookie(
                 result.session.refreshToken,
@@ -1385,7 +1383,7 @@ export function createAuthRoutes(
         },
         {
           params: t.Object({ requestId: t.String({ pattern: "^cdl_[a-f0-9]{12}$" }) }),
-          query: t.Object({ secret: t.String() }),
+          body: t.Object({ secret: t.String() }),
         },
       )
       .post(

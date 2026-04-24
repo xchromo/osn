@@ -217,8 +217,8 @@ interface CrossDeviceRequest {
   uaLabel: string | null;
   /** Device B's peppered IP hash. */
   ipHash: string | null;
-  expiresAt: number; // Unix seconds
-  createdAt: number; // Unix seconds
+  expiresAt: number; // milliseconds (matches sweepExpired convention)
+  createdAt: number; // milliseconds
   // Populated on approve:
   accountId?: string;
   session?: { accessToken: string; refreshToken: string; expiresIn: number };
@@ -3646,7 +3646,7 @@ export function createAuthService(config: AuthConfig) {
    */
   const beginCrossDeviceLogin = (
     sessionMeta?: SessionMeta,
-  ): Effect.Effect<{ requestId: string; secret: string; expiresAt: number }, AuthError, never> =>
+  ): Effect.Effect<{ requestId: string; cdlSecret: string; expiresAt: number }, AuthError, never> =>
     Effect.sync(() => {
       // FIFO eviction — cap memory under abuse.
       sweepExpired(pendingCrossDeviceRequests);
@@ -3660,7 +3660,8 @@ export function createAuthService(config: AuthConfig) {
       crypto.getRandomValues(secretBytes);
       const secret = Buffer.from(secretBytes).toString("hex");
       const secretHash = createHash("sha256").update(secret).digest("hex");
-      const nowSec = Math.floor(Date.now() / 1000);
+      const nowMs = Date.now();
+      const expiresAtMs = nowMs + CDL_TTL_SECONDS * 1000;
 
       pendingCrossDeviceRequests.set(requestId, {
         requestId,
@@ -3668,11 +3669,13 @@ export function createAuthService(config: AuthConfig) {
         status: "pending",
         uaLabel: sessionMeta?.uaLabel ?? null,
         ipHash: sessionMeta?.ip ? hashIp(sessionMeta.ip) : null,
-        expiresAt: nowSec + CDL_TTL_SECONDS,
-        createdAt: nowSec,
+        expiresAt: expiresAtMs,
+        createdAt: nowMs,
       });
 
-      return { requestId, secret, expiresAt: nowSec + CDL_TTL_SECONDS };
+      // API response uses Unix seconds for consistency with other endpoints.
+      // Field named `cdlSecret` to match the redaction deny-list entry.
+      return { requestId, cdlSecret: secret, expiresAt: Math.floor(expiresAtMs / 1000) };
     }).pipe(withCrossDeviceOp("begin"));
 
   /**
@@ -3704,7 +3707,7 @@ export function createAuthService(config: AuthConfig) {
       }
 
       // Check expiry
-      if (Math.floor(Date.now() / 1000) > entry.expiresAt) {
+      if (Date.now() > entry.expiresAt) {
         pendingCrossDeviceRequests.delete(requestId);
         return { status: "expired" as const };
       }
@@ -3754,7 +3757,7 @@ export function createAuthService(config: AuthConfig) {
       }
 
       // Check expiry
-      if (Math.floor(Date.now() / 1000) > entry.expiresAt) {
+      if (Date.now() > entry.expiresAt) {
         pendingCrossDeviceRequests.delete(requestId);
         return yield* Effect.fail(new AuthError({ message: "Request expired" }));
       }

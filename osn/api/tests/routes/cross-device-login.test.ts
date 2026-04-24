@@ -62,13 +62,17 @@ describe("cross-device login routes", () => {
       new Request("http://localhost/login/cross-device/begin", { method: "POST" }),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { requestId: string; secret: string; expiresAt: number };
+    const body = (await res.json()) as {
+      requestId: string;
+      cdlSecret: string;
+      expiresAt: number;
+    };
     expect(body.requestId).toMatch(/^cdl_[a-f0-9]{12}$/);
-    expect(body.secret).toHaveLength(64);
+    expect(body.cdlSecret).toHaveLength(64);
     expect(body.expiresAt).toBeGreaterThan(0);
   });
 
-  it("GET /login/cross-device/:requestId/status returns pending before approval", async () => {
+  it("POST /login/cross-device/:requestId/status returns pending before approval", async () => {
     const base = createTestLayer();
     const { layer } = buildEmailCapture(base);
     const app = createAuthRoutes(config, layer);
@@ -76,13 +80,17 @@ describe("cross-device login routes", () => {
     const beginRes = await app.handle(
       new Request("http://localhost/login/cross-device/begin", { method: "POST" }),
     );
-    const { requestId, secret } = (await beginRes.json()) as {
+    const { requestId, cdlSecret: secret } = (await beginRes.json()) as {
       requestId: string;
-      secret: string;
+      cdlSecret: string;
     };
 
     const statusRes = await app.handle(
-      new Request(`http://localhost/login/cross-device/${requestId}/status?secret=${secret}`),
+      new Request(`http://localhost/login/cross-device/${requestId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret }),
+      }),
     );
     expect(statusRes.status).toBe(200);
     const body = (await statusRes.json()) as { status: string };
@@ -106,9 +114,9 @@ describe("cross-device login routes", () => {
     const beginRes = await app.handle(
       new Request("http://localhost/login/cross-device/begin", { method: "POST" }),
     );
-    const { requestId, secret } = (await beginRes.json()) as {
+    const { requestId, cdlSecret: secret } = (await beginRes.json()) as {
       requestId: string;
-      secret: string;
+      cdlSecret: string;
     };
 
     // Device A approves
@@ -128,7 +136,11 @@ describe("cross-device login routes", () => {
 
     // Device B polls and gets session
     const statusRes = await app.handle(
-      new Request(`http://localhost/login/cross-device/${requestId}/status?secret=${secret}`),
+      new Request(`http://localhost/login/cross-device/${requestId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret }),
+      }),
     );
     expect(statusRes.status).toBe(200);
     const statusBody = (await statusRes.json()) as {
@@ -155,9 +167,9 @@ describe("cross-device login routes", () => {
     const beginRes = await app.handle(
       new Request("http://localhost/login/cross-device/begin", { method: "POST" }),
     );
-    const { requestId, secret } = (await beginRes.json()) as {
+    const { requestId, cdlSecret: secret } = (await beginRes.json()) as {
       requestId: string;
-      secret: string;
+      cdlSecret: string;
     };
 
     const res = await app.handle(
@@ -185,9 +197,9 @@ describe("cross-device login routes", () => {
     const beginRes = await app.handle(
       new Request("http://localhost/login/cross-device/begin", { method: "POST" }),
     );
-    const { requestId, secret } = (await beginRes.json()) as {
+    const { requestId, cdlSecret: secret } = (await beginRes.json()) as {
       requestId: string;
-      secret: string;
+      cdlSecret: string;
     };
 
     const rejectRes = await app.handle(
@@ -203,7 +215,11 @@ describe("cross-device login routes", () => {
     expect(rejectRes.status).toBe(200);
 
     const statusRes = await app.handle(
-      new Request(`http://localhost/login/cross-device/${requestId}/status?secret=${secret}`),
+      new Request(`http://localhost/login/cross-device/${requestId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret }),
+      }),
     );
     const body = (await statusRes.json()) as { status: string };
     expect(body.status).toBe("rejected");

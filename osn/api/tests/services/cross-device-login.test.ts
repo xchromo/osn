@@ -41,7 +41,7 @@ describe("cross-device login", () => {
     return Effect.gen(function* () {
       const result = yield* svc.beginCrossDeviceLogin({ uaLabel: "Chrome on macOS" });
       expect(result.requestId).toMatch(/^cdl_[a-f0-9]{12}$/);
-      expect(result.secret).toHaveLength(64); // 32 bytes hex
+      expect(result.cdlSecret).toHaveLength(64); // 32 bytes hex
       expect(result.expiresAt).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
   });
@@ -49,7 +49,7 @@ describe("cross-device login", () => {
   it.effect("poll returns pending before approval", () => {
     const { svc } = makeAuth();
     return Effect.gen(function* () {
-      const { requestId, secret } = yield* svc.beginCrossDeviceLogin();
+      const { requestId, cdlSecret: secret } = yield* svc.beginCrossDeviceLogin();
       const status = yield* svc.getCrossDeviceLoginStatus(requestId, secret);
       expect(status.status).toBe("pending");
     });
@@ -85,7 +85,7 @@ describe("cross-device login", () => {
       expect(profile).not.toBeNull();
 
       // Device B begins CDL
-      const { requestId, secret } = yield* svc.beginCrossDeviceLogin({
+      const { requestId, cdlSecret: secret } = yield* svc.beginCrossDeviceLogin({
         uaLabel: "Device B",
       });
 
@@ -117,7 +117,7 @@ describe("cross-device login", () => {
       yield* svc.completeRegistration("cdl2@example.com", captured.code!, {});
       const profile = yield* svc.findProfileByEmail("cdl2@example.com");
 
-      const { requestId, secret } = yield* svc.beginCrossDeviceLogin();
+      const { requestId, cdlSecret: secret } = yield* svc.beginCrossDeviceLogin();
       yield* svc.approveCrossDeviceLogin(requestId, secret, profile!.accountId);
 
       // First poll: get session
@@ -133,7 +133,7 @@ describe("cross-device login", () => {
   it.effect("reject marks request as rejected", () => {
     const { svc } = makeAuth();
     return Effect.gen(function* () {
-      const { requestId, secret } = yield* svc.beginCrossDeviceLogin();
+      const { requestId, cdlSecret: secret } = yield* svc.beginCrossDeviceLogin();
       yield* svc.rejectCrossDeviceLogin(requestId, secret);
 
       const status = yield* svc.getCrossDeviceLoginStatus(requestId, secret);
@@ -164,7 +164,7 @@ describe("cross-device login", () => {
       yield* svc.completeRegistration("cdl4@example.com", captured.code!, {});
       const profile = yield* svc.findProfileByEmail("cdl4@example.com");
 
-      const { requestId, secret } = yield* svc.beginCrossDeviceLogin();
+      const { requestId, cdlSecret: secret } = yield* svc.beginCrossDeviceLogin();
       yield* svc.approveCrossDeviceLogin(requestId, secret, profile!.accountId);
 
       const error = yield* Effect.flip(
