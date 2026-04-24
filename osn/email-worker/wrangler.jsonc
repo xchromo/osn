@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "osn-email-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+
+  // Cloudflare Email Service — native send binding. No API key, no provider
+  // SDK. The Worker calls `env.EMAIL.send({ to, from, subject, text, html })`
+  // and Cloudflare DKIM-signs via the verified domain configured in the
+  // dashboard (Email Sending → Onboard Domain).
+  //
+  // The binding name `EMAIL` is what `env.EMAIL.send(...)` resolves to.
+  "send_email": [{ "name": "EMAIL" }],
+
+  // Required vars (set in the dashboard or via `wrangler deploy --var ...`):
+  //   - OSN_API_ISSUER_JWKS : URL of OSN's JWKS endpoint (e.g.
+  //                          https://api.osn.app/.well-known/jwks.json).
+  //   - OSN_API_ISSUER_ID   : Expected issuer claim on inbound ARC tokens.
+  //                          Defaults to "osn-api".
+  //   - FROM_ADDRESS_DEFAULT: Fallback `From:` address if the request omits
+  //                          one. Must match the domain configured in Email
+  //                          Sending; a misconfig is surfaced by Cloudflare's
+  //                          own error response.
+  "vars": {
+    "OSN_API_ISSUER_JWKS": "https://api.osn.local/.well-known/jwks.json",
+    "OSN_API_ISSUER_ID": "osn-api",
+    "FROM_ADDRESS_DEFAULT": "noreply@osn.local",
+  },
+}

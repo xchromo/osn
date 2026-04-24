@@ -1,5 +1,6 @@
 /**
- * OSN email Worker — ARC-authed fan-out to a provider (Resend today).
+ * OSN email Worker — ARC-authed fan-out over Cloudflare's native
+ * `SEND_EMAIL` binding.
  *
  * Contract (documented in `wiki/systems/email.md`):
  *
@@ -14,18 +15,39 @@
  *   }
  *
  * Response: 202 on accept; 400 on schema violation; 401 on missing ARC;
- * 403 on bad scope; 429 on per-recipient rate-limit; 5xx on provider error.
+ * 403 on bad scope; 502 on Cloudflare Email Service failure.
  *
- * The Worker is intentionally thin — OSN owns the templates, the ARC
- * signing key, and the metrics. The Worker owns only the provider
- * credentials (via a Worker Secret) and the per-recipient rate limit.
+ * Why a Worker and not `CloudflareEmailLive` calling `EMAIL.send` directly?
+ * The `send_email` binding is Workers-only — it isn't available to a Bun
+ * process running `@osn/api`. OSN API mints an ARC token and POSTs here;
+ * we verify the signature, apply per-recipient guards, and use the binding
+ * on the other side of the trust boundary. No API key, no provider SDK —
+ * Cloudflare DKIM-signs via the verified-domain configuration in the
+ * dashboard.
  */
 
 import { verifyArc } from "./arc-verify";
-import { sendViaResend } from "./providers/resend";
+
+/**
+ * `SEND_EMAIL` binding shape. Cloudflare's `@cloudflare/workers-types`
+ * has this under `SendEmail` but the public-beta types aren't yet on the
+ * version pinned in our devDependencies — declared locally to keep the
+ * Worker type-tight without chasing weekly type package bumps. The
+ * binding's runtime shape is documented at
+ * developers.cloudflare.com/email-service/api/send-emails/workers-api/.
+ */
+interface SendEmailBinding {
+  send(message: {
+    to: string;
+    from: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }): Promise<{ messageId?: string }>;
+}
 
 export interface Env {
-  readonly RESEND_API_KEY: string;
+  readonly EMAIL: SendEmailBinding;
   readonly OSN_API_ISSUER_JWKS: string;
   readonly OSN_API_ISSUER_ID: string;
   readonly FROM_ADDRESS_DEFAULT: string;
@@ -113,20 +135,22 @@ export default {
 
     const { body } = validation;
 
-    // Dispatch to the provider. Only minimal metadata leaks back to the
-    // caller — provider responses sometimes echo the recipient, which we
-    // do not want propagating into OSN logs.
-    const result = await sendViaResend({
-      to: body.to,
-      from: body.from ?? env.FROM_ADDRESS_DEFAULT,
-      subject: body.subject,
-      text: body.text,
-      html: body.html,
-      apiKey: env.RESEND_API_KEY,
-    });
-
-    if (!result.ok) {
-      return jsonError(result.status >= 500 ? 502 : result.status, "provider_error");
+    // Dispatch via Cloudflare's native SEND_EMAIL binding. On the public-
+    // beta binding, a rejection indicates the domain isn't onboarded, the
+    // From address doesn't match the verified domain, or Cloudflare's
+    // send pipeline is unavailable — all of which we surface as 502 so
+    // OSN API retries-or-fails-closed. We intentionally do not echo the
+    // underlying error message into the response body.
+    try {
+      await env.EMAIL.send({
+        to: body.to,
+        from: body.from ?? env.FROM_ADDRESS_DEFAULT,
+        subject: body.subject,
+        text: body.text,
+        html: body.html,
+      });
+    } catch {
+      return jsonError(502, "provider_error");
     }
 
     return new Response(JSON.stringify({ ok: true }), {

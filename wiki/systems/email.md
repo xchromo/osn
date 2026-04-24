@@ -23,7 +23,7 @@ packages:
   - "@shared/email"
   - "@osn/email-worker"
   - "@osn/api"
-last-reviewed: 2026-04-23
+last-reviewed: 2026-04-24
 ---
 
 # Email Transport
@@ -41,20 +41,31 @@ email.
   │ @osn/api services    │        │  @shared/email       │        │ @osn/email-worker      │
   │ auth.ts call sites:  │ calls  │  EmailService (Tag)  │ ARC+   │ POST /send             │
   │  beginRegistration   ├───────▶│  CloudflareEmailLive ├───────▶│  verifies ARC via JWKS │
-  │  beginStepUpOtp      │ Effect │  LogEmailLive (dev)  │  JSON  │  forwards to provider  │
-  │  beginEmailChange    │        │                      │        │  (Resend today)        │
-  │  notifyRecovery      │        │  renderTemplate()    │        │                        │
-  │  notifyPasskey*      │        │                      │        └────────────────────────┘
-  └──────────────────────┘        └──────────────────────┘
+  │  beginStepUpOtp      │ Effect │  LogEmailLive (dev)  │  JSON  │  env.EMAIL.send(...)   │
+  │  beginEmailChange    │        │                      │        │    ↓                   │
+  │  notifyRecovery      │        │  renderTemplate()    │        │  Cloudflare Email      │
+  │  notifyPasskey*      │        │                      │        │  Service (native)      │
+  └──────────────────────┘        └──────────────────────┘        └────────────────────────┘
 ```
+
+Dispatch uses Cloudflare's native **`SEND_EMAIL` Worker binding** (Email
+Service, public beta). No third-party API keys, no Resend/SendGrid
+SDK — the Worker declares `send_email` in `wrangler.jsonc` and calls
+`env.EMAIL.send({ to, from, subject, text, html })`. Cloudflare
+DKIM-signs via the verified-domain configuration in the dashboard.
 
 ## Packages
 
 - **`@shared/email`** — the Effect service + template renderers + both
   transport Layers. Imported by any OSN service that needs to send mail.
-- **`@osn/email-worker`** — Cloudflare Worker. Owns the provider
-  credentials (Worker Secret) and the per-recipient rate-limit;
-  verifies ARC tokens against OSN's JWKS; forwards to Resend.
+- **`@osn/email-worker`** — Cloudflare Worker. Verifies ARC tokens
+  against OSN's JWKS; forwards via the native `SEND_EMAIL` binding.
+
+Why a Worker and not `CloudflareEmailLive` calling `EMAIL.send`
+directly? The `send_email` binding is Workers-only — a Bun process
+running `@osn/api` can't invoke it. OSN API mints an ARC token and
+POSTs to the Worker; the Worker is on the other side of the trust
+boundary where the binding lives.
 
 ## Contract
 
@@ -108,12 +119,16 @@ Responses:
 
 | Status | Meaning                                                           |
 |--------|-------------------------------------------------------------------|
-| 202    | Accepted and forwarded to the provider                            |
+| 202    | Accepted and forwarded to the Cloudflare Email Service            |
 | 400    | Schema violation (invalid `to`, missing `subject`, oversized body)|
 | 401    | Missing / invalid ARC token                                       |
 | 403    | ARC scope does not include `email:send`                           |
-| 429    | Per-recipient rate limit hit (see [[rate-limiting]])              |
-| 502    | Provider 5xx                                                      |
+| 502    | Cloudflare Email Service rejected the send (usually: unverified   |
+|        | domain in `from`, unconfigured dashboard, pipeline unavailable)   |
+
+The Worker never echoes the Cloudflare error message back — the
+response body is bounded to `{ error: "provider_error" }`. Operator
+visibility lives in Cloudflare's Email Sending dashboard.
 
 ## ARC verification (Worker-slim)
 
@@ -149,8 +164,38 @@ Selection in `osn/api/src/index.ts`: `OSN_EMAIL_WORKER_URL` set →
 `CloudflareEmailLive`; unset → `LogEmailLive`. Required in non-local
 envs (mirrors `OSN_JWT_PRIVATE_KEY` guard).
 
+## Worker configuration
+
+`wrangler.jsonc` declares the native binding:
+
+```jsonc
+{
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": {
+    "OSN_API_ISSUER_JWKS": "https://api.osn.app/.well-known/jwks.json",
+    "OSN_API_ISSUER_ID":   "osn-api",
+    "FROM_ADDRESS_DEFAULT": "noreply@osn.app"
+  }
+}
+```
+
+Before deploying:
+
+1. Cloudflare dashboard → **Email Sending → Onboard Domain**. Choose the
+   domain that will appear in `From:`. Add the DNS records Cloudflare
+   displays (MX for bounce handling, TXT for SPF/DMARC). Wait for
+   verification.
+2. `wrangler deploy` (or via CI). No secrets to set — the binding is
+   privilege-scoped by the account, not by an API key, so there's
+   nothing to rotate or leak.
+3. OSN API: set `OSN_EMAIL_WORKER_URL` to the deployed Worker URL and
+   `OSN_EMAIL_FROM` to the verified sender address.
+
 ## Security notes
 
+- **No third-party API key**: the old Resend-based plan required a
+  Worker Secret (`RESEND_API_KEY`). Switching to the native binding
+  removes that rotation surface entirely.
 - **OTP bodies**: the rendered `text` / `html` contains the OTP digit
   string. The service layer only logs `template`, `subject`, `to` —
   never the rendered body, never `data`. The redaction deny-list
@@ -162,10 +207,10 @@ envs (mirrors `OSN_JWT_PRIVATE_KEY` guard).
   `shared/email/src/templates/otp.ts → renderEmailChangeOtp`.
 - **ARC scope isolation**: `email:send` is dedicated. A stolen ARC
   token with any other scope cannot reach the Worker.
-- **Provider-body opacity**: the Worker reads the provider response but
-  never echoes it back to the OSN caller (Resend can embed the
-  recipient in error strings). OSN sees `{ ok: true }` or
-  `provider_error`.
+- **Binding-error opacity**: the Worker catches the `env.EMAIL.send`
+  rejection but never propagates the message (Cloudflare error strings
+  can contain the recipient). OSN sees `{ error: "provider_error" }`
+  with a 502.
 
 ## Observability
 
@@ -197,8 +242,9 @@ Feature-flagged via `OSN_EMAIL_WORKER_URL`:
 
 1. **Local / tests**: env unset → `LogEmailLive`. Zero behavioural
    change from today. `bun run test` stays offline.
-2. **Staging**: deploy the Worker, set the env var for staging pods
-   only. Send real mail to a synthetic inbox. Watch the
+2. **Staging**: onboard the sender domain in Cloudflare Email Sending,
+   deploy the Worker, set `OSN_EMAIL_WORKER_URL` on staging pods only.
+   Send real mail to a synthetic inbox. Watch the
    `osn.email.send.attempts{outcome="sent"}` panel by template.
 3. **Production**: flip the env var in prod secrets. No code change.
    Watch the `outcome="failed"` rate for 24h.
@@ -211,10 +257,11 @@ Feature-flagged via `OSN_EMAIL_WORKER_URL`:
 These live in `wiki/TODO.md > Deferred Decisions`; the defaults here
 are the current code path, not a commitment.
 
-- **Provider choice** — Resend is the default adapter; SendGrid /
-  Postmark / SES are swap-ins at the Worker level only.
-- **Worker-side rate-limit bound** — per-recipient-per-minute cap. TBD
-  once we have real send-rate telemetry.
+- **Per-recipient rate limit at the Worker** — defence in depth against
+  OSN bugs that would flood a single inbox. Cloudflare Email Service
+  does its own account-level enforcement but a per-recipient ceiling
+  in the Worker is still valuable. TBD once we have real send-rate
+  telemetry.
 - **Dry-run flag** — `OSN_EMAIL_DRY_RUN` env knob that short-circuits
   before Worker dispatch. Not implemented yet.
 - **HTML vs text-only** — current templates send both. If downstream
