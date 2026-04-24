@@ -54,4 +54,13 @@ describe("formatPrice", () => {
     // "XX" is <3 chars and guaranteed to throw in Intl.NumberFormat.
     expect(formatPrice(1850, "XX")).toBe("XX 18.50");
   });
+
+  it("returns stable output across repeated calls (formatter cache)", () => {
+    const a = formatPrice(1850, "USD", "en-US");
+    const b = formatPrice(1850, "USD", "en-US");
+    const c = formatPrice(2500, "USD", "en-US");
+    expect(a).toBe(b);
+    expect(a).toBe("$18.50");
+    expect(c).toBe("$25.00");
+  });
 });

@@ -18,6 +18,29 @@ const EXPONENT: Record<string, number> = {
   JPY: 0,
 };
 
+// P-I1: cache formatters instead of reconstructing on every call. With
+// ~6 currencies × a small number of locales this caps at a handful of
+// entries; keeps the helper cheap on long feeds.
+const formatterCache = new Map<string, Intl.NumberFormat>();
+
+function getFormatter(
+  locale: string | undefined,
+  currency: string,
+  exp: number,
+): Intl.NumberFormat {
+  const key = `${locale ?? ""}|${currency}|${exp}`;
+  const cached = formatterCache.get(key);
+  if (cached) return cached;
+  const fmt = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    minimumFractionDigits: exp,
+    maximumFractionDigits: exp,
+  });
+  formatterCache.set(key, fmt);
+  return fmt;
+}
+
 export function formatPrice(
   amount: number | null | undefined,
   currency: string | null | undefined,
@@ -27,12 +50,7 @@ export function formatPrice(
   const exp = EXPONENT[currency] ?? 2;
   const major = amount / 10 ** exp;
   try {
-    return new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency,
-      minimumFractionDigits: exp,
-      maximumFractionDigits: exp,
-    }).format(major);
+    return getFormatter(locale, currency, exp).format(major);
   } catch {
     return `${currency} ${major.toFixed(exp)}`;
   }
