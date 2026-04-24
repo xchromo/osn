@@ -5,6 +5,12 @@ import { and, eq, gte, lte, or, type SQL } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
 import {
+  MAX_PRICE_MAJOR,
+  SUPPORTED_CURRENCIES,
+  toMinorUnits,
+  type SupportedCurrency,
+} from "../lib/currency";
+import {
   metricEventCreated,
   metricEventDeleted,
   metricEventStatusTransition,
@@ -64,6 +70,31 @@ const LocationString = Schema.String.pipe(Schema.maxLength(500));
 const VenueString = Schema.String.pipe(Schema.maxLength(500));
 const CategoryString = Schema.String.pipe(Schema.maxLength(100));
 
+// Price input is a major-unit decimal (e.g. 18.50 USD). The service
+// converts to minor units before INSERT. Cap at MAX_PRICE_MAJOR shared
+// across all currencies.
+const PriceAmountMajor = Schema.Number.pipe(
+  Schema.between(0, MAX_PRICE_MAJOR, {
+    message: () => `price must be between 0 and ${MAX_PRICE_MAJOR}`,
+  }),
+);
+const CurrencySchema = Schema.Literal(...SUPPORTED_CURRENCIES);
+
+// Enforce "both set or both null" invariant. `undefined` on both is fine
+// (price not being changed); otherwise they must pair up.
+const priceInvariant = <
+  T extends { priceAmount?: number | null; priceCurrency?: SupportedCurrency | null },
+>(
+  s: T,
+): boolean => {
+  const amountProvided = "priceAmount" in s && s.priceAmount !== undefined;
+  const currencyProvided = "priceCurrency" in s && s.priceCurrency !== undefined;
+  if (amountProvided !== currencyProvided) return false;
+  if (!amountProvided) return true;
+  // Both provided — either both null (clear) or both non-null (set).
+  return (s.priceAmount === null) === (s.priceCurrency === null);
+};
+
 const InsertEventSchema = Schema.Struct({
   title: TitleString,
   description: Schema.optional(DescriptionString),
@@ -81,7 +112,13 @@ const InsertEventSchema = Schema.Struct({
   joinPolicy: Schema.optional(JoinPolicyEnum),
   allowInterested: Schema.optional(Schema.Boolean),
   commsChannels: Schema.optional(CommsChannelsSchema),
-});
+  priceAmount: Schema.optional(Schema.NullOr(PriceAmountMajor)),
+  priceCurrency: Schema.optional(Schema.NullOr(CurrencySchema)),
+}).pipe(
+  Schema.filter(priceInvariant, {
+    message: () => "priceAmount and priceCurrency must both be set or both be null",
+  }),
+);
 
 const UpdateEventSchema = Schema.Struct({
   title: Schema.optional(TitleString),
@@ -100,7 +137,13 @@ const UpdateEventSchema = Schema.Struct({
   joinPolicy: Schema.optional(JoinPolicyEnum),
   allowInterested: Schema.optional(Schema.Boolean),
   commsChannels: Schema.optional(CommsChannelsSchema),
-});
+  priceAmount: Schema.optional(Schema.NullOr(PriceAmountMajor)),
+  priceCurrency: Schema.optional(Schema.NullOr(CurrencySchema)),
+}).pipe(
+  Schema.filter(priceInvariant, {
+    message: () => "priceAmount and priceCurrency must both be set or both be null",
+  }),
+);
 
 interface ListEventsParams {
   status?: "upcoming" | "ongoing" | "finished" | "cancelled";
@@ -263,7 +306,13 @@ export const createEvent = (
     // Serialise the commsChannels array to JSON text for the DB column.
     // The schema default is `'["email"]'` so only overwrite when the
     // caller explicitly provided a value.
-    const { commsChannels, ...rest } = validated;
+    const { commsChannels, priceAmount, priceCurrency, ...rest } = validated;
+    const priceFields =
+      priceAmount != null && priceCurrency != null
+        ? { priceAmount: toMinorUnits(priceAmount, priceCurrency), priceCurrency }
+        : priceAmount === null && priceCurrency === null
+          ? { priceAmount: null, priceCurrency: null }
+          : {};
     const row = {
       ...rest,
       ...creator,
@@ -271,6 +320,7 @@ export const createEvent = (
       createdAt: now,
       updatedAt: now,
       ...(commsChannels ? { commsChannels: JSON.stringify(commsChannels) } : {}),
+      ...priceFields,
     };
 
     yield* Effect.tryPromise({
@@ -305,11 +355,18 @@ export const updateEvent = (
     );
 
     const now = new Date();
-    const { commsChannels, ...rest } = validated;
+    const { commsChannels, priceAmount, priceCurrency, ...rest } = validated;
+    const priceFields =
+      priceAmount != null && priceCurrency != null
+        ? { priceAmount: toMinorUnits(priceAmount, priceCurrency), priceCurrency }
+        : priceAmount === null && priceCurrency === null
+          ? { priceAmount: null, priceCurrency: null }
+          : {};
     const update = {
       ...rest,
       updatedAt: now,
       ...(commsChannels ? { commsChannels: JSON.stringify(commsChannels) } : {}),
+      ...priceFields,
     };
     yield* Effect.tryPromise({
       try: () => db.update(events).set(update).where(eq(events.id, id)),

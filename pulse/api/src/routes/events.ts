@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 import { decodeProtectedHeader, jwtVerify } from "jose";
 
+import { MAX_PRICE_MAJOR } from "../lib/currency";
 import { resolvePublicKeyForKid, refreshPublicKeyForKid } from "../lib/jwks-cache";
 import { MAX_EVENT_GUESTS } from "../lib/limits";
 import {
@@ -37,6 +38,24 @@ const guestListVisibilityEnum = t.Optional(
 const joinPolicyEnum = t.Optional(t.Union([t.Literal("open"), t.Literal("guest_list")]));
 const commsChannelsSchema = t.Optional(
   t.Array(t.Union([t.Literal("sms"), t.Literal("email")]), { minItems: 1, maxItems: 2 }),
+);
+const priceAmountSchema = t.Optional(
+  t.Nullable(t.Number({ minimum: 0, maximum: MAX_PRICE_MAJOR })),
+);
+// Must be a static union of literals so Eden treaty can narrow the
+// client-side body type. Keep in sync with SUPPORTED_CURRENCIES in
+// ../lib/currency.ts.
+const priceCurrencySchema = t.Optional(
+  t.Nullable(
+    t.Union([
+      t.Literal("USD"),
+      t.Literal("EUR"),
+      t.Literal("GBP"),
+      t.Literal("CAD"),
+      t.Literal("AUD"),
+      t.Literal("JPY"),
+    ]),
+  ),
 );
 const rsvpStatusEnum = t.Union([
   t.Literal("going"),
@@ -270,6 +289,8 @@ export const createEventsRoutes = (
             joinPolicy: joinPolicyEnum,
             allowInterested: t.Optional(t.Boolean()),
             commsChannels: commsChannelsSchema,
+            priceAmount: priceAmountSchema,
+            priceCurrency: priceCurrencySchema,
           }),
         },
       )
@@ -331,6 +352,8 @@ export const createEventsRoutes = (
             joinPolicy: joinPolicyEnum,
             allowInterested: t.Optional(t.Boolean()),
             commsChannels: commsChannelsSchema,
+            priceAmount: priceAmountSchema,
+            priceCurrency: priceCurrencySchema,
           }),
         },
       )
