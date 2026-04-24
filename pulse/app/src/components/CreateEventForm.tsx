@@ -166,8 +166,9 @@ export function CreateEventForm(props: {
             </div>
             <p class="text-muted-foreground text-xs">
               If you're not sure, your event will be marked as{" "}
-              <span class="font-medium">potentially finished</span> after 8 hours and{" "}
-              <span class="font-medium">automatically closed</span> after 48 hours.
+              <span class="font-medium">maybe finished</span> after 8 hours and{" "}
+              <span class="font-medium">automatically closed</span> after 12 hours. You can close it
+              manually any time.
             </p>
           </div>
         </Show>

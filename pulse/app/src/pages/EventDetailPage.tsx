@@ -11,7 +11,7 @@ import { MapPreview } from "../components/MapPreview";
 import { RsvpSection } from "../components/RsvpSection";
 import { api } from "../lib/api";
 import { apiBaseUrl } from "../lib/rsvps";
-import { formatTime, getProfileIdFromToken, isPotentiallyFinished } from "../lib/utils";
+import { formatTime, getProfileIdFromToken } from "../lib/utils";
 
 interface EventDetail {
   id: string;
@@ -24,7 +24,7 @@ interface EventDetail {
   category: string | null;
   startTime: string;
   endTime: string | null;
-  status: "upcoming" | "ongoing" | "finished" | "cancelled";
+  status: "upcoming" | "ongoing" | "maybe_finished" | "finished" | "cancelled";
   imageUrl: string | null;
   visibility: "public" | "private";
   guestListVisibility: "public" | "connections" | "private";
@@ -86,16 +86,14 @@ export function EventDetailPage() {
                   </Show>
                   <span
                     class={`text-xs ${
-                      isPotentiallyFinished(e())
-                        ? "text-muted-foreground"
-                        : e().status === "ongoing"
-                          ? "font-semibold text-green-600"
-                          : e().status === "cancelled"
-                            ? "text-destructive"
-                            : "text-muted-foreground"
+                      e().status === "ongoing"
+                        ? "font-semibold text-green-600"
+                        : e().status === "cancelled"
+                          ? "text-destructive"
+                          : "text-muted-foreground"
                     }`}
                   >
-                    {isPotentiallyFinished(e()) ? "maybe finished" : e().status}
+                    {e().status === "maybe_finished" ? "maybe finished" : e().status}
                   </span>
                   <Show when={e().visibility === "private"}>
                     <span class="text-muted-foreground text-xs">· Private</span>

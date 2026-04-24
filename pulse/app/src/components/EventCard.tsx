@@ -5,7 +5,7 @@ import { A } from "@solidjs/router";
 import { Show } from "solid-js";
 
 import type { EventItem } from "../lib/types";
-import { formatTime, isPotentiallyFinished } from "../lib/utils";
+import { formatTime } from "../lib/utils";
 
 function mapsUrl(event: EventItem): string | null {
   if (event.latitude != null && event.longitude != null) {
@@ -57,16 +57,14 @@ export function EventCard(props: {
             </Show>
             <span
               class={`text-xs ${
-                isPotentiallyFinished(props.event)
-                  ? "text-muted-foreground"
-                  : props.event.status === "ongoing"
-                    ? "font-semibold text-green-600"
-                    : props.event.status === "cancelled"
-                      ? "text-destructive"
-                      : "text-muted-foreground"
+                props.event.status === "ongoing"
+                  ? "font-semibold text-green-600"
+                  : props.event.status === "cancelled"
+                    ? "text-destructive"
+                    : "text-muted-foreground"
               }`}
             >
-              {isPotentiallyFinished(props.event) ? "maybe finished" : props.event.status}
+              {props.event.status === "maybe_finished" ? "maybe finished" : props.event.status}
             </span>
           </div>
           <h2 class="text-foreground mb-1 text-base font-semibold">{props.event.title}</h2>

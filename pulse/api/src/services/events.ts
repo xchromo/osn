@@ -4,7 +4,11 @@ import { Db } from "@pulse/db/service";
 import { and, eq, gte, lte, or, type SQL } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
-import { MAX_EVENT_DURATION_HOURS } from "../lib/limits";
+import {
+  AUTO_CLOSE_NO_END_TIME_HOURS,
+  MAX_EVENT_DURATION_HOURS,
+  MAYBE_FINISHED_AFTER_HOURS,
+} from "../lib/limits";
 import {
   metricEventCreated,
   metricEventDeleted,
@@ -15,6 +19,8 @@ import {
 } from "../metrics";
 
 const MAX_EVENT_DURATION_MS = MAX_EVENT_DURATION_HOURS * 60 * 60 * 1000;
+const MAYBE_FINISHED_AFTER_MS = MAYBE_FINISHED_AFTER_HOURS * 60 * 60 * 1000;
+const AUTO_CLOSE_NO_END_TIME_MS = AUTO_CLOSE_NO_END_TIME_HOURS * 60 * 60 * 1000;
 
 export class EventNotFound extends Data.TaggedError("EventNotFound")<{
   readonly id: string;
@@ -32,7 +38,7 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
   readonly id: string;
 }> {}
 
-const StatusEnum = Schema.Literal("upcoming", "ongoing", "finished", "cancelled");
+const StatusEnum = Schema.Literal("upcoming", "ongoing", "maybe_finished", "finished", "cancelled");
 const VisibilityEnum = Schema.Literal("public", "private");
 const GuestListVisibilityEnum = Schema.Literal("public", "connections", "private");
 const JoinPolicyEnum = Schema.Literal("open", "guest_list");
@@ -106,7 +112,7 @@ const UpdateEventSchema = Schema.Struct({
 });
 
 interface ListEventsParams {
-  status?: "upcoming" | "ongoing" | "finished" | "cancelled";
+  status?: "upcoming" | "ongoing" | "maybe_finished" | "finished" | "cancelled";
   category?: string;
   limit?: string;
   /**
@@ -118,17 +124,26 @@ interface ListEventsParams {
 }
 
 const deriveStatus = (event: Event, now: Date): Event["status"] => {
+  // Terminal states never transition automatically. "cancelled" and a
+  // manually-set "finished" (organiser closed early) are sticky.
   if (event.status === "cancelled" || event.status === "finished") return event.status;
   const started = event.startTime <= now;
-  // Events without an explicit endTime are auto-closed once they've run
-  // for MAX_EVENT_DURATION_HOURS past their startTime. This matches the
-  // duration cap enforced at create/update time — an organiser who
-  // declined to set an endTime is agreeing to a hard 48h ceiling.
-  const impliedEnd = new Date(event.startTime.getTime() + MAX_EVENT_DURATION_MS);
-  const ended = event.endTime !== null ? event.endTime <= now : started && impliedEnd <= now;
-  if (ended) return "finished";
-  if (started) return "ongoing";
-  return "upcoming";
+  if (!started) return "upcoming";
+
+  // Explicit-endTime path: a single transition at endTime.
+  if (event.endTime !== null) {
+    return event.endTime <= now ? "finished" : "ongoing";
+  }
+
+  // No-endTime path: soft/hard ladder. The organiser agreed to a
+  // best-effort ceiling by not setting an endTime. Guests see a
+  // "maybe finished" label at 8h, and the event auto-closes at 12h
+  // (see AUTO_CLOSE_NO_END_TIME_HOURS) so open-ended events don't
+  // linger as "ongoing" forever.
+  const elapsedMs = now.getTime() - event.startTime.getTime();
+  if (elapsedMs >= AUTO_CLOSE_NO_END_TIME_MS) return "finished";
+  if (elapsedMs >= MAYBE_FINISHED_AFTER_MS) return "maybe_finished";
+  return "ongoing";
 };
 
 export const applyTransition = (event: Event): Effect.Effect<Event, DatabaseError, Db> => {

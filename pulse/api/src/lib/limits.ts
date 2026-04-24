@@ -44,10 +44,13 @@ export const MAX_EVENT_GUESTS = 1000;
 
 /**
  * Maximum duration, in hours, from `startTime` to `endTime` for any
- * single event. Enforced server-side in `createEvent` and `updateEvent`
- * as a defence-in-depth check behind the client-side duration picker —
- * a client that bypasses the picker and POSTs a 30-year-long event
- * should still fail validation.
+ * single event with an *explicit* endTime. Enforced server-side in
+ * `createEvent` and `updateEvent` as a defence-in-depth check behind
+ * the client-side duration picker — a client that bypasses the picker
+ * and POSTs a 30-year-long event should still fail validation.
+ *
+ * Events *without* an endTime are governed by a separate, tighter
+ * ladder: see `MAYBE_FINISHED_AFTER_HOURS` / `AUTO_CLOSE_NO_END_TIME_HOURS`.
  *
  * ## Why 48h?
  *
@@ -65,3 +68,22 @@ export const MAX_EVENT_GUESTS = 1000;
  * event has `"finished"`.
  */
 export const MAX_EVENT_DURATION_HOURS = 48;
+
+/**
+ * Hours past `startTime` after which an event that was created
+ * *without* an explicit `endTime` auto-transitions to
+ * `"maybe_finished"`. This is a soft signal to guests that the event
+ * has probably wrapped — the organiser can still mark it finished
+ * earlier, or leave it alone until the auto-close kicks in
+ * (`AUTO_CLOSE_NO_END_TIME_HOURS`).
+ */
+export const MAYBE_FINISHED_AFTER_HOURS = 8;
+
+/**
+ * Hours past `startTime` after which an event that was created
+ * *without* an explicit `endTime` auto-transitions to `"finished"`.
+ * Tighter than `MAX_EVENT_DURATION_HOURS` because an organiser who
+ * declined to set an endTime is implicitly accepting a shorter, best-
+ * effort ceiling — no open-ended events lingering in "ongoing" forever.
+ */
+export const AUTO_CLOSE_NO_END_TIME_HOURS = 12;

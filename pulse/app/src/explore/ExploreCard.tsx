@@ -3,7 +3,6 @@ import { A } from "@solidjs/router";
 import { Show } from "solid-js";
 
 import type { EventItem } from "../lib/types";
-import { isPotentiallyFinished } from "../lib/utils";
 import { Icon } from "./icons";
 
 /** Gradient class for events without an image — keyed by category. */
@@ -141,7 +140,7 @@ export function ExploreCard(props: {
         </div>
 
         {/* Status tags */}
-        <Show when={e().status === "ongoing" && !isPotentiallyFinished(e())}>
+        <Show when={e().status === "ongoing"}>
           <div
             class="absolute bottom-2.5 left-2.5 inline-flex items-center gap-[5px] rounded-full px-2 py-[3px] text-[10px] font-medium text-white"
             style={{ background: "oklch(0.15 0 0 / 0.7)", "backdrop-filter": "blur(8px)" }}
@@ -214,10 +213,10 @@ export function ExploreCard(props: {
             class="text-muted-foreground text-[11.5px]"
             style={{ "font-family": "var(--font-mono)" }}
           >
-            {isPotentiallyFinished(e())
-              ? "Maybe finished"
-              : e().status === "ongoing"
-                ? "Live"
+            {e().status === "ongoing"
+              ? "Live"
+              : e().status === "maybe_finished"
+                ? "Maybe finished"
                 : e().status}
           </span>
         </div>

@@ -55,33 +55,6 @@ export function deriveEndFromDuration(start: string, hours: number): string {
 }
 
 /**
- * Soft-finished threshold, in hours, for events without an explicit
- * `endTime`. The server auto-closes such events after 48h (see
- * `MAX_EVENT_DURATION_HOURS` in `pulse/api/src/lib/limits.ts`); between
- * 8h and 48h past `startTime` the client surfaces them as "maybe
- * finished" so guests aren't left wondering.
- */
-export const POTENTIALLY_FINISHED_AFTER_HOURS = 8;
-
-/**
- * Returns true when an event is still server-side "ongoing" but has
- * been running long enough (with no explicit `endTime`) that it's
- * probably actually over. Client-only display signal — the server still
- * reports `status: "ongoing"`.
- */
-export function isPotentiallyFinished(event: {
-  status: string;
-  startTime: string | Date;
-  endTime: string | Date | null;
-}): boolean {
-  if (event.status !== "ongoing") return false;
-  if (event.endTime) return false;
-  const startMs = new Date(event.startTime).getTime();
-  if (isNaN(startMs)) return false;
-  return Date.now() - startMs >= POTENTIALLY_FINISHED_AFTER_HOURS * 60 * 60 * 1000;
-}
-
-/**
  * Decodes a JWT payload without verifying the signature.
  * Safe for display-only purposes — the server verifies the signature on every write.
  */
