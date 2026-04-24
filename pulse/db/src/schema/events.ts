@@ -1,5 +1,7 @@
 import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
+import { eventSeries } from "./eventSeries";
+
 export const events = sqliteTable(
   "events",
   {
@@ -13,7 +15,17 @@ export const events = sqliteTable(
     category: text("category"),
     startTime: integer("start_time", { mode: "timestamp" }).notNull(),
     endTime: integer("end_time", { mode: "timestamp" }),
-    status: text("status", { enum: ["upcoming", "ongoing", "finished", "cancelled"] })
+    // ── Status ────────────────────────────────────────────────────────────
+    // "upcoming"        → startTime in the future
+    // "ongoing"         → startTime past, endTime (explicit or implied) still in the future
+    // "maybe_finished"  → no explicit endTime + >= 8h past startTime; grace window
+    //                     before auto-closing (organiser can still mark finished early)
+    // "finished"        → endTime reached OR no-endTime event auto-closed after 12h
+    //                     OR organiser manually closed
+    // "cancelled"       → organiser cancelled
+    status: text("status", {
+      enum: ["upcoming", "ongoing", "maybe_finished", "finished", "cancelled"],
+    })
       .notNull()
       .default("upcoming"),
     imageUrl: text("image_url"),
@@ -61,6 +73,12 @@ export const events = sqliteTable(
     // enables event chat (provisioned via zapBridge). NOT a foreign key —
     // the chat lives in a different SQLite file.
     chatId: text("chat_id"),
+    // ── Series membership ────────────────────────────────────────────────
+    // When non-null, this event is an instance of a recurring series. Edits
+    // to the series template only propagate to instances with
+    // `instance_override = false`; single-instance edits flip the flag true.
+    seriesId: text("series_id").references(() => eventSeries.id),
+    instanceOverride: integer("instance_override", { mode: "boolean" }).notNull().default(false),
     createdByProfileId: text("created_by_profile_id").notNull(),
     createdByName: text("created_by_name"),
     createdByAvatar: text("created_by_avatar"),
@@ -75,6 +93,8 @@ export const events = sqliteTable(
     index("events_start_time_idx").on(t.startTime),
     index("events_created_by_profile_id_idx").on(t.createdByProfileId),
     index("events_visibility_idx").on(t.visibility),
+    // Powers `GET /series/:id/instances` — walk a single series by start time.
+    index("events_series_id_idx").on(t.seriesId, t.startTime),
   ],
 );
 

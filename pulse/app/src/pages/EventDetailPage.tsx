@@ -25,7 +25,7 @@ interface EventDetail {
   category: string | null;
   startTime: string;
   endTime: string | null;
-  status: "upcoming" | "ongoing" | "finished" | "cancelled";
+  status: "upcoming" | "ongoing" | "maybe_finished" | "finished" | "cancelled";
   imageUrl: string | null;
   visibility: "public" | "private";
   guestListVisibility: "public" | "connections" | "private";
@@ -33,6 +33,7 @@ interface EventDetail {
   allowInterested: boolean;
   priceAmount: number | null;
   priceCurrency: string | null;
+  seriesId: string | null;
   createdByProfileId: string;
   createdByName: string | null;
 }
@@ -97,7 +98,7 @@ export function EventDetailPage() {
                           : "text-muted-foreground"
                     }`}
                   >
-                    {e().status}
+                    {e().status === "maybe_finished" ? "maybe finished" : e().status}
                   </span>
                   <Show when={e().visibility === "private"}>
                     <span class="text-muted-foreground text-xs">· Private</span>
@@ -110,6 +111,32 @@ export function EventDetailPage() {
                 </p>
                 <Show when={e().createdByName}>
                   {(name) => <p class="text-muted-foreground mb-3 text-xs">Hosted by {name()}</p>}
+                </Show>
+                <Show when={e().seriesId}>
+                  {(id) => (
+                    <A
+                      href={`/series/${id()}`}
+                      class="border-border/60 hover:border-border mb-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs"
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M17 1l4 4-4 4" />
+                        <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                        <path d="M7 23l-4-4 4-4" />
+                        <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                      </svg>
+                      <span>Part of a series</span>
+                    </A>
+                  )}
                 </Show>
                 <Show when={e().description}>
                   <p class="text-foreground text-sm whitespace-pre-wrap">{e().description}</p>

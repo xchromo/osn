@@ -1,5 +1,57 @@
 # @osn/api
 
+## 0.14.0
+
+### Minor Changes
+
+- a326b65: Introduce recurring event series.
+
+  - New `event_series` table + `series_id`/`instance_override` columns on `events`, with migration `0001_recurring_events.sql`.
+  - New `/series` API surface: `POST /series`, `GET /series/:id`, `GET /series/:id/instances`, `PATCH /series/:id` (scope: `this_and_following` | `all_future`), `DELETE /series/:id`.
+  - Reduced-grammar RRULE expander (`FREQ=WEEKLY|MONTHLY`, `INTERVAL`, `BYDAY`, `COUNT`, `UNTIL`) capped at `MAX_SERIES_INSTANCES = 260`.
+  - Series-level edits propagate to non-override future instances; patching a single instance flips `instanceOverride=true` so subsequent bulk edits skip it.
+  - `pulse.series.*` metrics (created / updated / cancelled / instances_materialized / rrule.rejected) with bounded string-literal attribute unions.
+  - Seed fixtures now include a weekly yoga series (with an overridden + cancelled instance) and a monthly book club.
+  - Frontend: "Part of a series" badge on event detail, repeat icon on event cards, new `/series/:id` page with Upcoming / Past tabs — all anchored on `pulse/DESIGN.md` tokens.
+
+### Patch Changes
+
+- Updated dependencies [a326b65]
+  - @pulse/db@0.11.0
+
+## 0.13.0
+
+### Minor Changes
+
+- 9de67a2: Pulse: prompt for max event duration + new `maybe_finished` event status.
+
+  Organisers creating an event now see a set of duration presets (1h / 2h / 4h /
+  8h / All day) when the end time is left blank, plus a hint that an event
+  without an explicit end time will be marked **maybe finished** after 8 hours
+  and **automatically closed** after 12 hours. Organisers can manually close an
+  event at any time.
+
+  Schema: adds `"maybe_finished"` to the `events.status` enum (pure TS — no SQL
+  migration; the column is plain text). The `EventStatus` union in
+  `@shared/observability` and the service/route Effect + TypeBox schemas are
+  updated in lockstep.
+
+  Server: `deriveStatus` in `pulse/api/src/services/events.ts` now auto-
+  transitions ongoing events with no `endTime` to `"maybe_finished"` at 8h past
+  `startTime` and to `"finished"` at 12h. Events with an explicit `endTime`
+  keep the original single-transition behaviour, and the 48h
+  `MAX_EVENT_DURATION_HOURS` cap is enforced on both `POST /events` and
+  `PATCH /events/:id` (including patches that change only `startTime` or only
+  `endTime`) — rejections return 422 and emit
+  `metricEventValidationFailure(op, "duration_exceeds_max")`.
+
+### Patch Changes
+
+- Updated dependencies [9de67a2]
+  - @pulse/db@0.10.0
+  - @shared/observability@0.9.0
+  - @shared/crypto@0.6.9
+
 ## 0.12.2
 
 ### Patch Changes
