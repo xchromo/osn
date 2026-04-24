@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { describe, it, expect } from "vitest";
 
 import { makeLogEmailLive } from "../src/log";
-import { EmailService } from "../src/service";
+import { EmailError, EmailService } from "../src/service";
 
 describe("LogEmailLive", () => {
   it("records the rendered payload without sending", async () => {
@@ -61,6 +61,24 @@ describe("LogEmailLive", () => {
     expect(recorded()).toHaveLength(1);
     reset();
     expect(recorded()).toHaveLength(0);
+  });
+
+  it("returns render_failed when a template renderer throws", async () => {
+    const { layer } = makeLogEmailLive();
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const email = yield* EmailService;
+        yield* email.send({
+          template: "otp-registration",
+          to: "alice@example.com",
+          data: { code: null as unknown as string, ttlMinutes: 10 },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(exit._tag).toBe("Failure");
+    const error = (exit as { cause: { _tag: string; error: EmailError } }).cause.error;
+    expect(error).toBeInstanceOf(EmailError);
+    expect(error.reason).toBe("render_failed");
   });
 
   // T-U2: the ring is capped at MAX_RECORD (256). If the eviction branch

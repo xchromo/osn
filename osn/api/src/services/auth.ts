@@ -872,7 +872,7 @@ export function createAuthService(config: AuthConfig) {
       // or just log. `LogEmailLive` (local dev + tests) captures the
       // rendered body in-memory for operator inspection without opening
       // a network connection; `CloudflareEmailLive` (staging / prod)
-      // signs an ARC token and POSTs to the email Worker.
+      // POSTs directly to the Cloudflare Email Service REST API.
       const emailSvc = yield* EmailService;
       yield* emailSvc
         .send({

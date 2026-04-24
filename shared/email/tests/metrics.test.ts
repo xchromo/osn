@@ -41,6 +41,8 @@ describe("classifyHttpStatus", () => {
     // above 5xx → "network" again
     { status: 600, expected: "network" },
     { status: 999, expected: "network" },
+    // negative status (some HTTP libraries use -1 for "no response")
+    { status: -1, expected: "network" },
   ];
   for (const { status, expected } of cases) {
     it(`${String(status)} → ${expected}`, () => {

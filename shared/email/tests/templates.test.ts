@@ -55,6 +55,17 @@ describe("renderTemplate", () => {
     expect(out.html).toContain("&lt;script&gt;");
   });
 
+  it("renders boundary TTL values without crashing", () => {
+    const zero = renderTemplate("otp-registration", { code: "000000", ttlMinutes: 0 });
+    expect(zero.text).toContain("0 minutes");
+
+    const fractional = renderTemplate("otp-step-up", { code: "000000", ttlMinutes: 0.5 });
+    expect(fractional.text).toContain("0.5 minutes");
+
+    const large = renderTemplate("otp-email-change", { code: "000000", ttlMinutes: 1440 });
+    expect(large.text).toContain("1440 minutes");
+  });
+
   it("renders every declared template without throwing", () => {
     const templates: readonly EmailTemplate[] = [
       "otp-registration",

@@ -160,6 +160,25 @@ describe("CloudflareEmailLive", () => {
     );
   });
 
+  it("preserves plus-addressed and subdomain emails in the payload", async () => {
+    const layer = buildLayer();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const email = yield* EmailService;
+        yield* email.send({
+          template: "passkey-added",
+          to: "user+tag@sub.domain.example.com",
+          data: {},
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    const payload = JSON.parse(captured!.body) as {
+      to: Array<{ email: string }>;
+    };
+    expect(payload.to).toEqual([{ email: "user+tag@sub.domain.example.com" }]);
+  });
+
   it("does not include OTP code on span attributes (only `template`)", async () => {
     const layer = buildLayer();
     await Effect.runPromise(

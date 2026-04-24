@@ -1,7 +1,7 @@
 import { it, expect, describe } from "@effect/vitest";
 import { passkeys } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { makeLogEmailLive } from "@shared/email";
+import { EmailError, EmailService, makeLogEmailLive } from "@shared/email";
 import { Effect, Layer, Logger, LogLevel } from "effect";
 import { beforeAll } from "vitest";
 
@@ -328,6 +328,22 @@ describe("beginRegistration + completeRegistration", () => {
       expect(err.message).toContain("already registered");
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "T-M2: begin fails with AuthError (not EmailError) when email transport rejects",
+    () => {
+      const failingEmailLayer = Layer.succeed(EmailService, {
+        send: () =>
+          Effect.fail(new EmailError({ reason: "dispatch_failed", cause: "simulated failure" })),
+      });
+      const layer = Layer.merge(createTestLayer(), failingEmailLayer);
+      return Effect.gen(function* () {
+        const err = yield* Effect.flip(auth.beginRegistration("fail@example.com", "failmail"));
+        expect(err._tag).toBe("AuthError");
+        expect(err.message).toContain("dispatch_failed");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("findProfileByEmail + findProfileByHandle", () => {

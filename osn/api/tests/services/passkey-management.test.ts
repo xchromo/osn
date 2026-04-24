@@ -23,6 +23,7 @@ function makeEmailCapture() {
       }
       return undefined;
     },
+    all: () => email.recorded(),
   };
 }
 
@@ -149,6 +150,24 @@ describe("renamePasskey", () => {
 });
 
 describe("deletePasskey", () => {
+  it.effect("T-M3: sends passkey-removed notification email on successful delete", () => {
+    const cap = makeEmailCapture();
+    return Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("pk-del-notify@example.com", "pkdelnotify");
+      yield* seedPasskey(alice.accountId);
+      const toDelete = yield* seedPasskey(alice.accountId);
+      yield* auth.deletePasskey(alice.accountId, toDelete, null);
+
+      // The notification is forkDaemon'd — wait for the fiber to complete.
+      yield* Effect.promise(() => new Promise((r) => setTimeout(r, 50)));
+
+      const emails = cap
+        .all()
+        .filter((e) => e.template === "passkey-removed" && e.to === "pk-del-notify@example.com");
+      expect(emails).toHaveLength(1);
+    }).pipe(Effect.provide(cap.layer));
+  });
+
   it.effect("removes one passkey, records a security event, and revokes other sessions", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("pk-del@example.com", "pkdel");

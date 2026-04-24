@@ -1,5 +1,5 @@
 import { it, expect, describe } from "@effect/vitest";
-import { makeLogEmailLive } from "@shared/email";
+import { EmailError, EmailService, makeLogEmailLive } from "@shared/email";
 import { Effect, Layer } from "effect";
 import { beforeAll } from "vitest";
 
@@ -153,5 +153,22 @@ describe("step-up OTP ceremony", () => {
       }).pipe(Effect.provide(cap.layer));
     },
     { timeout: 10_000 },
+  );
+
+  it.effect(
+    "T-M2: begin fails with AuthError (not EmailError) when email transport rejects",
+    () => {
+      const failingEmailLayer = Layer.succeed(EmailService, {
+        send: () =>
+          Effect.fail(new EmailError({ reason: "dispatch_failed", cause: "simulated failure" })),
+      });
+      const layer = Layer.merge(createTestLayer(), failingEmailLayer);
+      return Effect.gen(function* () {
+        const profile = yield* registered("su-fail-email@example.com", "sufailmail");
+        const err = yield* Effect.flip(auth.beginStepUpOtp(profile.accountId));
+        expect(err._tag).toBe("AuthError");
+        expect(err.message).toContain("dispatch_failed");
+      }).pipe(Effect.provide(layer));
+    },
   );
 });

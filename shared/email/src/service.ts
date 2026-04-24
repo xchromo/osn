@@ -21,12 +21,7 @@ import type { EmailTemplate, EmailTemplateData } from "./templates";
  * field dashboards should slice by; keep it a bounded literal union.
  */
 export class EmailError extends Data.TaggedError("EmailError")<{
-  readonly reason:
-    | "dispatch_failed"
-    | "rate_limited"
-    | "api_unreachable"
-    | "render_failed"
-    | "misconfigured";
+  readonly reason: "dispatch_failed" | "rate_limited" | "api_unreachable" | "render_failed";
   readonly cause?: unknown;
 }> {}
 
