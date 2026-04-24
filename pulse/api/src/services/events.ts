@@ -150,6 +150,18 @@ export const applyTransition = (event: Event): Effect.Effect<Event, DatabaseErro
   const now = new Date();
   const derived = deriveStatus(event, now);
   if (derived === event.status) return Effect.succeed(event);
+
+  // "maybe_finished" is a display-only projection for no-endTime events
+  // between MAYBE_FINISHED_AFTER_HOURS and AUTO_CLOSE_NO_END_TIME_HOURS
+  // past startTime. We don't persist it so a no-endTime event's
+  // lifecycle path is a single DB write (ongoing → finished at 12h)
+  // instead of two (ongoing → maybe_finished at 8h → finished at 12h).
+  // Callers still see the derived status on read; `status_transitions`
+  // only fires on persisted transitions.
+  if (derived === "maybe_finished") {
+    return Effect.succeed({ ...event, status: derived });
+  }
+
   const previous = event.status;
   return Effect.gen(function* () {
     const { db } = yield* Db;
@@ -365,8 +377,6 @@ export const updateEvent = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Build the updated event in-memory rather than re-fetching from DB.
-    // applyTransition is still called in case startTime/endTime changed.
     // Build the updated event in-memory rather than re-fetching from DB.
     // applyTransition is still called in case startTime/endTime changed.
     const updated = { ...existing, ...update } as Event;

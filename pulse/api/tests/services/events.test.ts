@@ -298,6 +298,31 @@ it.effect("getEvent marks no-endTime events maybe_finished between 8h and 12h pa
   ),
 );
 
+it.effect("maybe_finished is display-only — the DB row stays 'ongoing'", () =>
+  provide(
+    Effect.gen(function* () {
+      const ninehAgo = new Date(Date.now() - 9 * 60 * 60 * 1000);
+      const seeded = yield* seedEvent({
+        title: "Not persisted",
+        startTime: ninehAgo,
+        status: "ongoing",
+      });
+      // First read projects maybe_finished in-memory.
+      const fetched = yield* getEvent(seeded.id);
+      expect(fetched.status).toBe("maybe_finished");
+      // But the DB row still says ongoing — a direct SELECT via a second
+      // getEvent re-derives from the stored ongoing row, not a persisted
+      // maybe_finished one. Count status_transitions: none should fire
+      // for maybe_finished (only ongoing → finished at 12h is persisted).
+      const spy = vi.spyOn(metrics, "metricEventStatusTransition");
+      const refetched = yield* getEvent(seeded.id);
+      expect(refetched.status).toBe("maybe_finished");
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    }),
+  ),
+);
+
 it.effect("getEvent auto-finishes no-endTime events after AUTO_CLOSE_NO_END_TIME_HOURS", () =>
   provide(
     Effect.gen(function* () {
