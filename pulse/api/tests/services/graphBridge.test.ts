@@ -277,6 +277,12 @@ describe("startKeyRotation", () => {
     await vi.advanceTimersByTimeAsync(6_500);
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // Successful retry must not schedule another registration attempt.
+    // Advancing a further minute should not invoke fetch again — the
+    // next timer queued is the long-lived rotation timer (~22h out).
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("rethrows a network error in non-local environments (no background retry)", async () => {
