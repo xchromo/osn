@@ -36,7 +36,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] Venue pages
 - [ ] Real SMS/email comms providers — `sendBlast` is stubbed (writes to `event_comms`); plug in actual delivery
 - [ ] Tighten Tauri CSP to allowlist `*.tile.openstreetmap.org` for Leaflet tile loads (rolls into S-L3)
-- [ ] Drizzle: extract shared `createSchemaSql()` helper so adding a column is a one-file change (currently hand-rolled in 3 places)
+- [ ] Drizzle: extract shared `createSchemaSql()` helper so adding a column is a one-file change (currently hand-rolled in 4 places — `pulse/db/tests/schema.test.ts`, `pulse/db/tests/seed.test.ts`, `pulse/api/tests/helpers/db.ts`, `pulse/api/tests/services/zapBridge.test.ts`)
 - [ ] Verified-organisation tier (Phase 2): org accounts can run events over `MAX_EVENT_GUESTS` (1000) via per-event support flow
 
 ---
