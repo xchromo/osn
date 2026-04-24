@@ -297,4 +297,36 @@ describe("startKeyRotation", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
+
+  it("does NOT schedule a retry for errors with a non-network code (S-L1)", async () => {
+    // An Error with a `code` field that isn't in the network-error allowlist
+    // (e.g. a schema/parse error) must surface as a throw, not silently retry.
+    const otherErr = Object.assign(new Error("bad parse"), { code: "ERR_INVALID_JSON" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(otherErr);
+
+    await expect(startKeyRotation()).rejects.toThrow("bad parse");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("uses exponential backoff across successive retry failures (P-I1)", async () => {
+    const netErr = Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(netErr);
+
+    await expect(startKeyRotation()).resolves.toBe("pending-retry");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Attempt 1 fires at 5s ± 1s jitter. Advance past the upper bound.
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // Attempt 2 fires at 10s ± 1s. Advance 8.5s first (below min 9s) —
+    // no retry should have fired yet.
+    await vi.advanceTimersByTimeAsync(8_500);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // Now cross into the 10s ± 1s window.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
 });
