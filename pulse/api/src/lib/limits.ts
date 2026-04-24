@@ -41,3 +41,27 @@
  * affects rate limits, DB planning, and the free-vs-paid tier boundary.
  */
 export const MAX_EVENT_GUESTS = 1000;
+
+/**
+ * Maximum duration, in hours, from `startTime` to `endTime` for any
+ * single event. Enforced server-side in `createEvent` and `updateEvent`
+ * as a defence-in-depth check behind the client-side duration picker —
+ * a client that bypasses the picker and POSTs a 30-year-long event
+ * should still fail validation.
+ *
+ * ## Why 48h?
+ *
+ * Pulse is designed for social events — parties, meetups, dinners,
+ * weekend trips. 48h (two days) comfortably covers weekend-long
+ * gatherings while rejecting obvious abuse (an "event" that runs for a
+ * year is not an event). Multi-day festivals and conferences are served
+ * by the verified-organisation tier deferred to Pulse phase 2.
+ *
+ * ## Raising the cap
+ *
+ * Same rules as `MAX_EVENT_GUESTS` — bump requires sign-off. It
+ * interacts with the on-read status-transition logic (`applyTransition`
+ * in `services/events.ts`), which reads `endTime` to decide when an
+ * event has `"finished"`.
+ */
+export const MAX_EVENT_DURATION_HOURS = 48;

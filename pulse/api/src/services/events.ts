@@ -4,6 +4,7 @@ import { Db } from "@pulse/db/service";
 import { and, eq, gte, lte, or, type SQL } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
+import { MAX_EVENT_DURATION_HOURS } from "../lib/limits";
 import {
   metricEventCreated,
   metricEventDeleted,
@@ -12,6 +13,8 @@ import {
   metricEventValidationFailure,
   metricEventsListed,
 } from "../metrics";
+
+const MAX_EVENT_DURATION_MS = MAX_EVENT_DURATION_HOURS * 60 * 60 * 1000;
 
 export class EventNotFound extends Data.TaggedError("EventNotFound")<{
   readonly id: string;
@@ -117,7 +120,12 @@ interface ListEventsParams {
 const deriveStatus = (event: Event, now: Date): Event["status"] => {
   if (event.status === "cancelled" || event.status === "finished") return event.status;
   const started = event.startTime <= now;
-  const ended = event.endTime !== null && event.endTime <= now;
+  // Events without an explicit endTime are auto-closed once they've run
+  // for MAX_EVENT_DURATION_HOURS past their startTime. This matches the
+  // duration cap enforced at create/update time — an organiser who
+  // declined to set an endTime is agreeing to a hard 48h ceiling.
+  const impliedEnd = new Date(event.startTime.getTime() + MAX_EVENT_DURATION_MS);
+  const ended = event.endTime !== null ? event.endTime <= now : started && impliedEnd <= now;
   if (ended) return "finished";
   if (started) return "ongoing";
   return "upcoming";
@@ -260,6 +268,18 @@ export const createEvent = (
       return yield* Effect.fail(new ValidationError({ cause: "startTime must be in the future" }));
     }
 
+    if (
+      validated.endTime &&
+      validated.endTime.getTime() - validated.startTime.getTime() > MAX_EVENT_DURATION_MS
+    ) {
+      metricEventValidationFailure("create", "duration_exceeds_max");
+      return yield* Effect.fail(
+        new ValidationError({
+          cause: `event duration must not exceed ${MAX_EVENT_DURATION_HOURS} hours`,
+        }),
+      );
+    }
+
     // Serialise the commsChannels array to JSON text for the DB column.
     // The schema default is `'["email"]'` so only overwrite when the
     // caller explicitly provided a value.
@@ -303,6 +323,20 @@ export const updateEvent = (
       Effect.tapError(() => Effect.sync(() => metricEventValidationFailure("update", "schema"))),
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
+
+    // Compute the effective times that the event will have after this
+    // patch lands, so that patching only `endTime` still validates
+    // against the stored `startTime` (and vice versa).
+    const effectiveStart = validated.startTime ?? existing.startTime;
+    const effectiveEnd = validated.endTime ?? existing.endTime;
+    if (effectiveEnd && effectiveEnd.getTime() - effectiveStart.getTime() > MAX_EVENT_DURATION_MS) {
+      metricEventValidationFailure("update", "duration_exceeds_max");
+      return yield* Effect.fail(
+        new ValidationError({
+          cause: `event duration must not exceed ${MAX_EVENT_DURATION_HOURS} hours`,
+        }),
+      );
+    }
 
     const now = new Date();
     const { commsChannels, ...rest } = validated;

@@ -145,6 +145,83 @@ it.effect("createEvent fails with ValidationError for startTime equal to now", (
   ),
 );
 
+it.effect("createEvent accepts endTime exactly at MAX_EVENT_DURATION_HOURS", () =>
+  provide(
+    Effect.gen(function* () {
+      const start = new Date("2030-06-01T10:00:00.000Z");
+      const end = new Date(start.getTime() + 48 * 60 * 60 * 1000);
+      const event = yield* createEvent(
+        { title: "Weekend party", startTime: start.toISOString(), endTime: end.toISOString() },
+        ALICE,
+      );
+      expect(event.endTime).toEqual(end);
+    }),
+  ),
+);
+
+it.effect(
+  "createEvent fails with ValidationError when duration exceeds MAX_EVENT_DURATION_HOURS",
+  () =>
+    provide(
+      Effect.gen(function* () {
+        const start = new Date("2030-06-01T10:00:00.000Z");
+        const end = new Date(start.getTime() + 48 * 60 * 60 * 1000 + 60 * 1000);
+        const error = yield* Effect.flip(
+          createEvent(
+            { title: "Too long", startTime: start.toISOString(), endTime: end.toISOString() },
+            ALICE,
+          ),
+        );
+        expect(error._tag).toBe("ValidationError");
+      }),
+    ),
+);
+
+it.effect("updateEvent rejects endTime-only patch that pushes duration over cap", () =>
+  provide(
+    Effect.gen(function* () {
+      const start = new Date("2030-06-01T10:00:00.000Z");
+      const created = yield* createEvent(
+        { title: "Dinner", startTime: start.toISOString() },
+        ALICE,
+      );
+      const tooFar = new Date(start.getTime() + 49 * 60 * 60 * 1000).toISOString();
+      const error = yield* Effect.flip(updateEvent(created.id, { endTime: tooFar }, "usr_alice"));
+      expect(error._tag).toBe("ValidationError");
+    }),
+  ),
+);
+
+it.effect("getEvent auto-finishes no-endTime events after MAX_EVENT_DURATION_HOURS", () =>
+  provide(
+    Effect.gen(function* () {
+      const longAgo = new Date(Date.now() - 49 * 60 * 60 * 1000);
+      const seeded = yield* seedEvent({
+        title: "Stale ongoing",
+        startTime: longAgo,
+        status: "ongoing",
+      });
+      const fetched = yield* getEvent(seeded.id);
+      expect(fetched.status).toBe("finished");
+    }),
+  ),
+);
+
+it.effect("getEvent keeps no-endTime events ongoing before MAX_EVENT_DURATION_HOURS", () =>
+  provide(
+    Effect.gen(function* () {
+      const recent = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const seeded = yield* seedEvent({
+        title: "Fresh ongoing",
+        startTime: recent,
+        status: "ongoing",
+      });
+      const fetched = yield* getEvent(seeded.id);
+      expect(fetched.status).toBe("ongoing");
+    }),
+  ),
+);
+
 it.effect("createEvent fails with ValidationError for bad startTime", () =>
   provide(
     Effect.gen(function* () {
