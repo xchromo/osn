@@ -14,14 +14,12 @@
     "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
-    "@shared/crypto": "workspace:*",
     "@shared/observability": "workspace:*",
     "effect": "^3.21.2"
   },
   "devDependencies": {
     "@effect/vitest": "^0.29.0",
     "@shared/typescript-config": "workspace:*",
-    "jose": "^6.2.2",
     "vitest": "^4.1.5"
   }
 }

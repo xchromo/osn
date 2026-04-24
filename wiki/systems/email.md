@@ -4,7 +4,7 @@ aliases:
   - email
   - email service
   - outbound email
-  - cloudflare email worker
+  - cloudflare email
 tags:
   - systems
   - auth
@@ -13,7 +13,6 @@ tags:
   - observability
 status: current
 related:
-  - "[[arc-tokens]]"
   - "[[identity-model]]"
   - "[[step-up]]"
   - "[[passkey-primary]]"
@@ -21,7 +20,6 @@ related:
   - "[[observability/overview]]"
 packages:
   - "@shared/email"
-  - "@osn/email-worker"
   - "@osn/api"
 last-reviewed: 2026-04-24
 ---
@@ -38,34 +36,26 @@ email.
 
 ```
   ┌──────────────────────┐        ┌──────────────────────┐        ┌────────────────────────┐
-  │ @osn/api services    │        │  @shared/email       │        │ @osn/email-worker      │
-  │ auth.ts call sites:  │ calls  │  EmailService (Tag)  │ ARC+   │ POST /send             │
-  │  beginRegistration   ├───────▶│  CloudflareEmailLive ├───────▶│  verifies ARC via JWKS │
-  │  beginStepUpOtp      │ Effect │  LogEmailLive (dev)  │  JSON  │  env.EMAIL.send(...)   │
-  │  beginEmailChange    │        │                      │        │    ↓                   │
-  │  notifyRecovery      │        │  renderTemplate()    │        │  Cloudflare Email      │
-  │  notifyPasskey*      │        │                      │        │  Service (native)      │
+  │ @osn/api services    │        │  @shared/email       │        │ Cloudflare Email       │
+  │ auth.ts call sites:  │ calls  │  EmailService (Tag)  │ Bearer │ Service REST API       │
+  │  beginRegistration   ├───────▶│  CloudflareEmailLive ├───────▶│  /email-service/send   │
+  │  beginStepUpOtp      │ Effect │  LogEmailLive (dev)  │  JSON  │                        │
+  │  beginEmailChange    │        │                      │        │  Cloudflare DKIM-signs  │
+  │  notifyRecovery      │        │  renderTemplate()    │        │  via verified domain    │
+  │  notifyPasskey*      │        │                      │        │                        │
   └──────────────────────┘        └──────────────────────┘        └────────────────────────┘
 ```
 
-Dispatch uses Cloudflare's native **`SEND_EMAIL` Worker binding** (Email
-Service, public beta). No third-party API keys, no Resend/SendGrid
-SDK — the Worker declares `send_email` in `wrangler.jsonc` and calls
-`env.EMAIL.send({ to, from, subject, text, html })`. Cloudflare
-DKIM-signs via the verified-domain configuration in the dashboard.
+Dispatch uses Cloudflare's **Email Service REST API** directly. No
+intermediate Worker, no ARC tokens — a single bearer-authed HTTPS
+call to `https://api.cloudflare.com/client/v4/accounts/{id}/email-service/send`.
+Cloudflare handles DKIM-signing via the verified-domain configuration
+in the dashboard.
 
 ## Packages
 
 - **`@shared/email`** — the Effect service + template renderers + both
   transport Layers. Imported by any OSN service that needs to send mail.
-- **`@osn/email-worker`** — Cloudflare Worker. Verifies ARC tokens
-  against OSN's JWKS; forwards via the native `SEND_EMAIL` binding.
-
-Why a Worker and not `CloudflareEmailLive` calling `EMAIL.send`
-directly? The `send_email` binding is Workers-only — a Bun process
-running `@osn/api` can't invoke it. OSN API mints an ARC token and
-POSTs to the Worker; the Worker is on the other side of the trust
-boundary where the binding lives.
 
 ## Contract
 
@@ -100,84 +90,47 @@ a renderer file under `shared/email/src/templates/`, and a branch in
 `renderTemplate()`. The compile-time exhaustive-switch check fails
 otherwise.
 
-### Worker wire format
+### Cloudflare Email API wire format
 
 ```
-POST /send
-Authorization: ARC <JWT: iss=osn-api, aud=osn-email-worker, scope=email:send>
+POST https://api.cloudflare.com/client/v4/accounts/{account_id}/email-service/send
+Authorization: Bearer <CLOUDFLARE_EMAIL_API_TOKEN>
 Content-Type: application/json
 {
-  "to":      "user@example.com",
-  "from":    "noreply@osn.app",      // optional — falls back to FROM_ADDRESS_DEFAULT
+  "to":      [{ "email": "user@example.com" }],
+  "from":    { "email": "noreply@osn.app" },
   "subject": "Verify your OSN email",
   "text":    "...",
-  "html":    "..."                   // optional but recommended
+  "html":    "..."
 }
 ```
-
-Responses:
-
-| Status | Meaning                                                           |
-|--------|-------------------------------------------------------------------|
-| 202    | Accepted and forwarded to the Cloudflare Email Service            |
-| 400    | Schema violation (invalid `to`, missing `subject`, oversized body)|
-| 401    | Missing / invalid ARC token                                       |
-| 403    | ARC scope does not include `email:send`                           |
-| 502    | Cloudflare Email Service rejected the send (usually: unverified   |
-|        | domain in `from`, unconfigured dashboard, pipeline unavailable)   |
-
-The Worker never echoes the Cloudflare error message back — the
-response body is bounded to `{ error: "provider_error" }`. Operator
-visibility lives in Cloudflare's Email Sending dashboard.
-
-## ARC verification (Worker-slim)
-
-`@shared/crypto`'s ARC helpers pull in `@osn/db` transitively (DB-backed
-key resolver). That doesn't fit the Workers runtime, so the Worker uses
-its own thin verifier at `osn/email-worker/src/arc-verify.ts`:
-
-- `createRemoteJWKSet(new URL(OSN_API_ISSUER_JWKS))` — cached once per
-  isolate, reused across requests (sub-ms verify on warm cold-starts).
-- `jwtVerify(token, keySet, { algorithms: ["ES256"], audience, issuer })`
-  — jose enforces signature, alg, audience, issuer, and expiry.
-- Scope check: the Worker requires `email:send` specifically; a token
-  that authorizes `graph:read` cannot reach the email path.
-- The Worker does **not** consult OSN's `service_accounts` table — it
-  has its own issuer allow-list (today just `osn-api`). This is a
-  deliberate divergence from the in-process ARC verifier: the Worker is
-  a separate trust boundary and shouldn't need a DB.
 
 ## Transports
 
 `@shared/email` exposes two production Layers + the `EmailService` Tag:
 
-- `makeCloudflareEmailLive(config)` — real dispatch. Signs an ARC token
-  with the calling service's private key, POSTs to the Worker via
-  `instrumentedFetch` so the call becomes a child span.
+- `makeCloudflareEmailLive(config)` — real dispatch. POSTs directly to
+  Cloudflare's Email Service REST API via `instrumentedFetch` so the
+  call becomes a child span.
 - `makeLogEmailLive()` — dev + test. Renders the template in-process,
   records the payload into an in-memory ring buffer (exposed via
   `recorded()`), emits a single `Effect.logDebug` line with `template`
   + `subject` + `to` — **never** the OTP code. Tests that need to
   assert on captured content read the recorder directly.
 
-Selection in `osn/api/src/index.ts`: `OSN_EMAIL_WORKER_URL` set →
-`CloudflareEmailLive`; unset → `LogEmailLive`. Required in non-local
-envs (mirrors `OSN_JWT_PRIVATE_KEY` guard).
+Selection in `osn/api/src/index.ts`: `CLOUDFLARE_ACCOUNT_ID` +
+`CLOUDFLARE_EMAIL_API_TOKEN` set → `CloudflareEmailLive`; unset →
+`LogEmailLive`. Required in non-local envs.
 
-## Worker configuration
+## Configuration
 
-`wrangler.jsonc` declares the native binding:
+Environment variables for `@osn/api`:
 
-```jsonc
-{
-  "send_email": [{ "name": "EMAIL" }],
-  "vars": {
-    "OSN_API_ISSUER_JWKS": "https://api.osn.app/.well-known/jwks.json",
-    "OSN_API_ISSUER_ID":   "osn-api",
-    "FROM_ADDRESS_DEFAULT": "noreply@osn.app"
-  }
-}
-```
+| Variable | Required | Description |
+|---|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | non-local | Cloudflare account ID |
+| `CLOUDFLARE_EMAIL_API_TOKEN` | non-local | API token with Email Send permission |
+| `OSN_EMAIL_FROM` | optional | Verified sender address (default: `noreply@osn.local`) |
 
 Before deploying:
 
@@ -185,17 +138,14 @@ Before deploying:
    domain that will appear in `From:`. Add the DNS records Cloudflare
    displays (MX for bounce handling, TXT for SPF/DMARC). Wait for
    verification.
-2. `wrangler deploy` (or via CI). No secrets to set — the binding is
-   privilege-scoped by the account, not by an API key, so there's
-   nothing to rotate or leak.
-3. OSN API: set `OSN_EMAIL_WORKER_URL` to the deployed Worker URL and
-   `OSN_EMAIL_FROM` to the verified sender address.
+2. Create an API token with Email Send permission for the account.
+3. Set `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_EMAIL_API_TOKEN`, and
+   `OSN_EMAIL_FROM` in the deployment environment.
 
 ## Security notes
 
-- **No third-party API key**: the old Resend-based plan required a
-  Worker Secret (`RESEND_API_KEY`). Switching to the native binding
-  removes that rotation surface entirely.
+- **No third-party API key**: uses Cloudflare's own API token (scoped
+  to Email Send only). SPF/DKIM/DMARC auto-configured by Cloudflare.
 - **OTP bodies**: the rendered `text` / `html` contains the OTP digit
   string. The service layer only logs `template`, `subject`, `to` —
   never the rendered body, never `data`. The redaction deny-list
@@ -205,12 +155,6 @@ Before deploying:
   this on your account" framing (S-L5) so a misdirected message is
   clearly junk and useless as a phishing template. Live in
   `shared/email/src/templates/otp.ts → renderEmailChangeOtp`.
-- **ARC scope isolation**: `email:send` is dedicated. A stolen ARC
-  token with any other scope cannot reach the Worker.
-- **Binding-error opacity**: the Worker catches the `env.EMAIL.send`
-  rejection but never propagates the message (Cloudflare error strings
-  can contain the recipient). OSN sees `{ error: "provider_error" }`
-  with a 502.
 
 ## Observability
 
@@ -238,31 +182,27 @@ attributes — bounded literal unions only.
 
 ## Rollout
 
-Feature-flagged via `OSN_EMAIL_WORKER_URL`:
+Feature-flagged via `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_EMAIL_API_TOKEN`:
 
 1. **Local / tests**: env unset → `LogEmailLive`. Zero behavioural
    change from today. `bun run test` stays offline.
 2. **Staging**: onboard the sender domain in Cloudflare Email Sending,
-   deploy the Worker, set `OSN_EMAIL_WORKER_URL` on staging pods only.
+   create an API token, set the env vars on staging pods only.
    Send real mail to a synthetic inbox. Watch the
    `osn.email.send.attempts{outcome="sent"}` panel by template.
-3. **Production**: flip the env var in prod secrets. No code change.
+3. **Production**: flip the env vars in prod secrets. No code change.
    Watch the `outcome="failed"` rate for 24h.
-4. **Cleanup**: make `OSN_EMAIL_WORKER_URL` required when `OSN_ENV !==
-   "local"`. Delete the `LogEmailLive` fallback branch in
-   `osn/api/src/index.ts`.
 
 ## Deferred decisions
 
 These live in `wiki/TODO.md > Deferred Decisions`; the defaults here
 are the current code path, not a commitment.
 
-- **Per-recipient rate limit at the Worker** — defence in depth against
-  OSN bugs that would flood a single inbox. Cloudflare Email Service
-  does its own account-level enforcement but a per-recipient ceiling
-  in the Worker is still valuable. TBD once we have real send-rate
-  telemetry.
+- **Per-recipient rate limit** — defence in depth against OSN bugs
+  that would flood a single inbox. Cloudflare Email Service does its
+  own account-level enforcement but a per-recipient ceiling is still
+  valuable. TBD once we have real send-rate telemetry.
 - **Dry-run flag** — `OSN_EMAIL_DRY_RUN` env knob that short-circuits
-  before Worker dispatch. Not implemented yet.
+  before API dispatch. Not implemented yet.
 - **HTML vs text-only** — current templates send both. If downstream
   analysis shows HTML is unnecessary for auth flows, we can drop it.

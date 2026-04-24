@@ -1,17 +1,15 @@
 /**
  * `CloudflareEmailLive` — production email transport.
  *
- * Signs an ARC token with the local service's private key and POSTs the
- * rendered email to a Cloudflare Worker we own (`osn-email-worker`). The
- * Worker verifies ARC, applies per-recipient rate limits, and forwards
- * to the chosen provider via a Worker binding.
+ * Renders the template in-process and POSTs directly to Cloudflare's
+ * Email Service REST API. No intermediate Worker, no ARC tokens — a
+ * single bearer-authed HTTPS call.
  *
  * All outbound HTTP goes through `instrumentedFetch` so the call becomes
  * a child span of `email.cloudflare.dispatch` and `traceparent` is injected
  * for cross-service trace correlation.
  */
 
-import { getOrCreateArcToken } from "@shared/crypto";
 import { instrumentedFetch } from "@shared/observability/fetch";
 import { Effect, Layer } from "effect";
 
@@ -27,16 +25,10 @@ import { renderTemplate } from "./templates";
 
 /** Runtime configuration for the Cloudflare-backed transport. */
 export interface CloudflareEmailConfig {
-  /** Worker endpoint, e.g. `https://email.osn.workers.dev/send`. */
-  readonly workerUrl: string;
-  /** ES256 private key used to sign the outgoing ARC token. */
-  readonly arcPrivateKey: CryptoKey;
-  /** Key ID (JWK thumbprint) matching the public key registered for this service. */
-  readonly arcKid: string;
-  /** Issuer service ID. Default: "osn-api". */
-  readonly arcIssuer?: string;
-  /** Worker audience — ARC token `aud` claim. Default: "osn-email-worker". */
-  readonly arcAudience?: string;
+  /** Cloudflare account ID. */
+  readonly accountId: string;
+  /** Cloudflare API token with Email Send permission. */
+  readonly apiToken: string;
   /**
    * Sender email address (From header). Defaults to "noreply@osn.local"
    * — override in production with the verified domain address.
@@ -44,16 +36,13 @@ export interface CloudflareEmailConfig {
   readonly fromAddress?: string;
 }
 
-/** Scope required to reach the Worker. Single, dedicated scope — not overloaded. */
-const ARC_SCOPE = "email:send";
-
-/** Wire contract accepted by the Worker's POST /send. */
-interface WorkerSendPayload {
-  readonly to: string;
-  readonly from: string;
+/** Cloudflare Email Service REST API payload. */
+interface CloudflareEmailPayload {
+  readonly to: Array<{ readonly email: string }>;
+  readonly from: { readonly email: string };
   readonly subject: string;
   readonly text: string;
-  readonly html: string;
+  readonly html?: string;
 }
 
 export const makeCloudflareEmailLive = (config: CloudflareEmailConfig): Layer.Layer<EmailService> =>
@@ -80,40 +69,30 @@ export const makeCloudflareEmailLive = (config: CloudflareEmailConfig): Layer.La
           ),
         );
 
-        // --- mint ARC token ---
-        const token = yield* Effect.tryPromise({
-          try: () =>
-            getOrCreateArcToken(config.arcPrivateKey, {
-              iss: config.arcIssuer ?? "osn-api",
-              aud: config.arcAudience ?? "osn-email-worker",
-              scope: ARC_SCOPE,
-              kid: config.arcKid,
-            }),
-          catch: (cause) => new EmailError({ reason: "misconfigured", cause }),
-        });
-
         // --- dispatch (span: email.cloudflare.dispatch) ---
-        const payload: WorkerSendPayload = {
-          to: input.to,
-          from: config.fromAddress ?? "noreply@osn.local",
+        const payload: CloudflareEmailPayload = {
+          to: [{ email: input.to }],
+          from: { email: config.fromAddress ?? "noreply@osn.local" },
           subject: rendered.subject,
           text: rendered.text,
           html: rendered.html,
         };
 
+        const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/email-service/send`;
+
         const response = yield* Effect.tryPromise({
           try: () =>
-            instrumentedFetch(config.workerUrl, {
+            instrumentedFetch(apiUrl, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `ARC ${token}`,
+                Authorization: `Bearer ${config.apiToken}`,
               },
               body: JSON.stringify(payload),
             }),
           catch: (cause) => {
             metricEmailDispatchStatus(input.template, "network");
-            return new EmailError({ reason: "worker_unreachable", cause });
+            return new EmailError({ reason: "api_unreachable", cause });
           },
         }).pipe(
           Effect.withSpan("email.cloudflare.dispatch", {
@@ -133,9 +112,6 @@ export const makeCloudflareEmailLive = (config: CloudflareEmailConfig): Layer.La
         if (!response.ok) {
           metricEmailSendAttempt(input.template, "failed");
           metricEmailSendDuration((Date.now() - started) / 1000, input.template, "failed");
-          // Body is intentionally NOT read into a log — the provider may
-          // echo the recipient or subject, and we don't want that leaving
-          // the process through a log line.
           return yield* Effect.fail(
             new EmailError({ reason: "dispatch_failed", cause: { status: response.status } }),
           );

@@ -161,9 +161,8 @@ const cookieConfig: CookieSessionConfig = {
 // ---------------------------------------------------------------------------
 // Email transport (@shared/email)
 //
-// Production/staging: POST to a Cloudflare Worker we own; the Worker
-// verifies the ARC token against OSN's JWKS and forwards to the provider.
-//   - OSN_EMAIL_WORKER_URL is required (e.g. https://email.osn.workers.dev/send)
+// Production/staging: POST directly to Cloudflare's Email Service REST API.
+//   - CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_EMAIL_API_TOKEN required
 //   - OSN_EMAIL_FROM is the verified sender address (e.g. noreply@osn.app)
 //
 // Local dev / tests: no env vars → LogEmailLive records sends to an
@@ -172,24 +171,22 @@ const cookieConfig: CookieSessionConfig = {
 // directly via `makeLogEmailLive()` in its own composition.
 // ---------------------------------------------------------------------------
 
-const emailWorkerUrl = process.env.OSN_EMAIL_WORKER_URL;
-if (envNonLocal && !emailWorkerUrl) {
-  throw new Error("OSN_EMAIL_WORKER_URL must be set in non-local environments");
+const cfAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+const cfEmailToken = process.env.CLOUDFLARE_EMAIL_API_TOKEN;
+if (envNonLocal && (!cfAccountId || !cfEmailToken)) {
+  throw new Error(
+    "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_EMAIL_API_TOKEN must be set in non-local environments",
+  );
 }
 
-const emailLayer = emailWorkerUrl
-  ? makeCloudflareEmailLive({
-      workerUrl: emailWorkerUrl,
-      // S2S: reuse the same ES256 private key + kid used for user tokens.
-      // The Worker fetches the issuer's JWKS at /.well-known/jwks.json to
-      // verify, so the public key is already exposed and rotation-safe.
-      arcPrivateKey: jwtPrivateKey,
-      arcKid: jwtKid,
-      arcIssuer: SERVICE_NAME,
-      arcAudience: "osn-email-worker",
-      fromAddress: process.env.OSN_EMAIL_FROM,
-    })
-  : makeLogEmailLive().layer;
+const emailLayer =
+  cfAccountId && cfEmailToken
+    ? makeCloudflareEmailLive({
+        accountId: cfAccountId,
+        apiToken: cfEmailToken,
+        fromAddress: process.env.OSN_EMAIL_FROM,
+      })
+    : makeLogEmailLive().layer;
 
 const dbAndEmailLayer = Layer.merge(DbLive, emailLayer);
 

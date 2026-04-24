@@ -1,12 +1,12 @@
-import { generateArcKeyPair, thumbprintKid } from "@shared/crypto";
 import { Effect, Either } from "effect";
-import { decodeJwt } from "jose";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { makeCloudflareEmailLive } from "../src/cloudflare";
 import { EmailError, EmailService, type SendEmailInput } from "../src/service";
 
-const WORKER_URL = "https://email.osn.test/send";
+const CF_ACCOUNT_ID = "test-account-id";
+const CF_API_TOKEN = "test-api-token";
+const EXPECTED_URL = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/email-service/send`;
 
 type Captured = {
   url: string;
@@ -39,20 +39,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function buildLayer() {
-  const { privateKey, publicKey } = await generateArcKeyPair();
-  const kid = await thumbprintKid(publicKey);
+function buildLayer() {
   return makeCloudflareEmailLive({
-    workerUrl: WORKER_URL,
-    arcPrivateKey: privateKey,
-    arcKid: kid,
+    accountId: CF_ACCOUNT_ID,
+    apiToken: CF_API_TOKEN,
     fromAddress: "noreply@osn.test",
   });
 }
 
 describe("CloudflareEmailLive", () => {
-  it("POSTs JSON to the Worker with an ARC bearer and the rendered body", async () => {
-    const layer = await buildLayer();
+  it("POSTs JSON to the Cloudflare Email API with a bearer token and the rendered body", async () => {
+    const layer = buildLayer();
     await Effect.runPromise(
       Effect.gen(function* () {
         const email = yield* EmailService;
@@ -65,33 +62,27 @@ describe("CloudflareEmailLive", () => {
     );
 
     expect(captured).not.toBeNull();
-    expect(captured!.url).toBe(WORKER_URL);
+    expect(captured!.url).toBe(EXPECTED_URL);
     expect(captured!.method).toBe("POST");
     expect(captured!.headers.get("content-type")).toBe("application/json");
-    const auth = captured!.headers.get("authorization");
-    expect(auth).toMatch(/^ARC /);
-    const token = auth!.slice(4);
-    const claims = decodeJwt(token);
-    expect(claims.iss).toBe("osn-api");
-    expect(claims.aud).toBe("osn-email-worker");
-    expect(claims.scope).toBe("email:send");
+    expect(captured!.headers.get("authorization")).toBe(`Bearer ${CF_API_TOKEN}`);
 
     const payload = JSON.parse(captured!.body) as {
-      to: string;
-      from: string;
+      to: Array<{ email: string }>;
+      from: { email: string };
       subject: string;
       text: string;
       html: string;
     };
-    expect(payload.to).toBe("alice@example.com");
-    expect(payload.from).toBe("noreply@osn.test");
+    expect(payload.to).toEqual([{ email: "alice@example.com" }]);
+    expect(payload.from).toEqual({ email: "noreply@osn.test" });
     expect(payload.subject).toBe("Verify your OSN email");
     expect(payload.text).toContain("000000");
     expect(payload.html).toContain("000000");
   });
 
   const expectFailsWith = async (
-    layer: Awaited<ReturnType<typeof buildLayer>>,
+    layer: ReturnType<typeof buildLayer>,
     input: SendEmailInput,
     reason: EmailError["reason"],
   ) => {
@@ -108,10 +99,10 @@ describe("CloudflareEmailLive", () => {
     }
   };
 
-  it("returns rate_limited on Worker 429", async () => {
+  it("returns rate_limited on API 429", async () => {
     responder = () => new Response("too many", { status: 429 });
     await expectFailsWith(
-      await buildLayer(),
+      buildLayer(),
       {
         template: "otp-step-up",
         to: "alice@example.com",
@@ -121,16 +112,16 @@ describe("CloudflareEmailLive", () => {
     );
   });
 
-  it("returns dispatch_failed on Worker 5xx", async () => {
+  it("returns dispatch_failed on API 5xx", async () => {
     responder = () => new Response("boom", { status: 500 });
     await expectFailsWith(
-      await buildLayer(),
+      buildLayer(),
       { template: "passkey-added", to: "alice@example.com", data: {} },
       "dispatch_failed",
     );
   });
 
-  it("returns worker_unreachable when fetch throws", async () => {
+  it("returns api_unreachable when fetch throws", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -138,16 +129,16 @@ describe("CloudflareEmailLive", () => {
       }),
     );
     await expectFailsWith(
-      await buildLayer(),
+      buildLayer(),
       { template: "recovery-consumed", to: "alice@example.com", data: {} },
-      "worker_unreachable",
+      "api_unreachable",
     );
   });
 
-  it("returns dispatch_failed on Worker 4xx (non-429) — boundary at 422", async () => {
+  it("returns dispatch_failed on API 4xx (non-429) — boundary at 422", async () => {
     responder = () => new Response("validation failed", { status: 422 });
     await expectFailsWith(
-      await buildLayer(),
+      buildLayer(),
       {
         template: "otp-registration",
         to: "alice@example.com",
@@ -158,14 +149,8 @@ describe("CloudflareEmailLive", () => {
   });
 
   it("returns render_failed when a template renderer throws", async () => {
-    // Passing a non-string `code` makes `esc()` in the OTP template throw on
-    // `.replaceAll` — exercises the render_failed branch without mocking the
-    // template registry. Cast via `as never` to bypass the normal type guard;
-    // a production call site can never do this, but a regression that lands
-    // bad data here (e.g. forgetting to stringify an OTP number) would fail
-    // the same way.
     await expectFailsWith(
-      await buildLayer(),
+      buildLayer(),
       {
         template: "otp-registration",
         to: "alice@example.com",
@@ -175,34 +160,8 @@ describe("CloudflareEmailLive", () => {
     );
   });
 
-  it("returns misconfigured when ARC signing fails (bad private key)", async () => {
-    const { publicKey } = await generateArcKeyPair();
-    const kid = await thumbprintKid(publicKey);
-    // The public key cannot sign — jose rejects `.sign(publicKey)` inside
-    // `getOrCreateArcToken`, which `CloudflareEmailLive` catches and maps to
-    // `misconfigured`. This models a deploy that wires the wrong key handle
-    // into `arcPrivateKey`.
-    const layer = makeCloudflareEmailLive({
-      workerUrl: WORKER_URL,
-      arcPrivateKey: publicKey,
-      arcKid: kid,
-      fromAddress: "noreply@osn.test",
-    });
-    await expectFailsWith(
-      layer,
-      { template: "passkey-added", to: "alice@example.com", data: {} },
-      "misconfigured",
-    );
-  });
-
   it("does not include OTP code on span attributes (only `template`)", async () => {
-    // Smoke test: the rendered payload is in the HTTP body (expected),
-    // but the span attribute ought to be just {template}. We assert by
-    // checking the constructor contract — any span set up here would
-    // otherwise be a runtime concern; this test ensures the call path
-    // does not stringify `data` into any observable side-channel under
-    // our control (headers, URL, etc).
-    const layer = await buildLayer();
+    const layer = buildLayer();
     await Effect.runPromise(
       Effect.gen(function* () {
         const email = yield* EmailService;

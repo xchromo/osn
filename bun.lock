@@ -71,18 +71,6 @@
         "vitest": "^4.1.5",
       },
     },
-    "osn/email-worker": {
-      "name": "@osn/email-worker",
-      "version": "0.1.0",
-      "dependencies": {
-        "jose": "^6.2.2",
-      },
-      "devDependencies": {
-        "@cloudflare/workers-types": "^4.20250529.0",
-        "@shared/typescript-config": "workspace:*",
-        "vitest": "^4.1.5",
-      },
-    },
     "osn/landing": {
       "name": "@osn/landing",
       "version": "0.0.5",
@@ -170,7 +158,7 @@
     },
     "pulse/app": {
       "name": "@pulse/app",
-      "version": "0.8.20",
+      "version": "0.9.0",
       "dependencies": {
         "@osn/client": "workspace:*",
         "@osn/ui": "workspace:*",
@@ -248,14 +236,12 @@
       "name": "@shared/email",
       "version": "0.1.0",
       "dependencies": {
-        "@shared/crypto": "workspace:*",
         "@shared/observability": "workspace:*",
         "effect": "^3.21.2",
       },
       "devDependencies": {
         "@effect/vitest": "^0.29.0",
         "@shared/typescript-config": "workspace:*",
-        "jose": "^6.2.2",
         "vitest": "^4.1.5",
       },
     },
@@ -684,8 +670,6 @@
     "@osn/client": ["@osn/client@workspace:osn/client"],
 
     "@osn/db": ["@osn/db@workspace:osn/db"],
-
-    "@osn/email-worker": ["@osn/email-worker@workspace:osn/email-worker"],
 
     "@osn/landing": ["@osn/landing@workspace:osn/landing"],
 

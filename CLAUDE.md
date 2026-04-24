@@ -140,7 +140,7 @@ One-line summaries — open the wiki page for the full contract, current API sur
 | Recovery Codes | Copenhagen Book M2 — 10 × 64-bit single-use codes, hashed at rest. Generate / consume both inserted into `security_events` and surfaced via the in-app banner. | `[[wiki/systems/recovery-codes]]` |
 | Session Introspection | `GET/DELETE /sessions[/:id]`, `POST /sessions/revoke-all-other`. Coarse UA labels + HMAC-peppered IP hashes. | `[[wiki/systems/sessions]]` |
 | Email Change | Step-up gated; OTP to the NEW address; atomically swaps email and revokes other sessions. Cap 2 changes / 7 days. | `[[wiki/systems/identity-model]]` |
-| Email Transport | Transactional-only (OTPs + security notices). `EmailService` Effect Tag in `@shared/email`; `CloudflareEmailLive` POSTs ARC-authed to `@osn/email-worker` (Resend provider); `LogEmailLive` captures in-memory for dev + tests. | `[[wiki/systems/email]]` |
+| Email Transport | Transactional-only (OTPs + security notices). `EmailService` Effect Tag in `@shared/email`; `CloudflareEmailLive` POSTs directly to Cloudflare Email Service REST API (bearer-authed); `LogEmailLive` captures in-memory for dev + tests. | `[[wiki/systems/email]]` |
 | Origin Guard (M1) | Origin header validation on POST/PUT/PATCH/DELETE. ARC-protected internal routes are exempt. | `osn/api/src/lib/origin-guard.ts` |
 | Rate Limiting | Per-IP on auth endpoints; per-user on graph/org writes and `/recommendations/connections`. Redis-backed when `REDIS_URL` set, in-memory fallback for local dev. Fail-closed. | `[[wiki/systems/rate-limiting]]`, `[[wiki/systems/redis]]` |
 | Observability | OpenTelemetry → Grafana Cloud. Three rules: no `console.*`, no raw OTel constructors, no unbounded metric attributes. | `[[wiki/observability/overview]]` |

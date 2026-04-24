@@ -30,7 +30,7 @@ export type EmailOutcome = "sent" | "failed" | "rate_limited" | "skipped";
 export type EmailRenderOutcome = "ok" | "error";
 
 /**
- * HTTP status class bucket for the outbound call to the Cloudflare Worker.
+ * HTTP status class bucket for the outbound call to the Cloudflare Email API.
  * Keeps cardinality fixed regardless of provider-specific status codes.
  */
 export type EmailHttpStatusClass = "2xx" | "4xx" | "5xx" | "network";
@@ -62,7 +62,7 @@ const renderDurationHistogram = createHistogram<RenderDurationAttrs>({
 
 const dispatchStatusCounter = createCounter<DispatchStatusAttrs>({
   name: EMAIL_METRICS.dispatchStatus,
-  description: "Cloudflare Worker HTTP response class on email dispatch",
+  description: "Cloudflare Email API HTTP response class on email dispatch",
   unit: "{response}",
 });
 
