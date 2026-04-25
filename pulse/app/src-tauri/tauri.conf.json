@@ -34,7 +34,10 @@
         "script-src": ["'self'"],
         "font-src": ["'self'", "data:"],
         "object-src": ["'none'"],
+        "frame-src": ["'none'"],
         "frame-ancestors": ["'none'"],
+        "worker-src": ["'none'"],
+        "form-action": ["'none'"],
         "base-uri": ["'self'"]
       }
     }
