@@ -71,7 +71,9 @@ export function createTestLayer() {
       updated_at INTEGER NOT NULL
     )
   `);
-  sqlite.run(`CREATE INDEX events_visibility_idx ON events (visibility)`);
+  sqlite.run(`CREATE INDEX events_visibility_start_time_idx ON events (visibility, start_time)`);
+  sqlite.run(`CREATE INDEX events_category_idx ON events (category)`);
+  sqlite.run(`CREATE INDEX events_lat_lng_idx ON events (latitude, longitude)`);
   sqlite.run(`CREATE INDEX events_series_id_idx ON events (series_id, start_time)`);
   sqlite.run(`
     CREATE TABLE event_rsvps (
@@ -131,6 +133,8 @@ export interface SeedEventInput {
   chatId?: string;
   priceAmount?: number | null;
   priceCurrency?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export const seedEvent = (input: SeedEventInput): Effect.Effect<Event, never, Db> =>
@@ -144,8 +148,8 @@ export const seedEvent = (input: SeedEventInput): Effect.Effect<Event, never, Db
       description: null,
       location: null,
       venue: null,
-      latitude: null,
-      longitude: null,
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
       category: input.category ?? null,
       startTime: new Date(input.startTime),
       endTime: input.endTime ? new Date(input.endTime) : null,

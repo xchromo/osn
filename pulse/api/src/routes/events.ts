@@ -12,6 +12,7 @@ import {
 } from "../metrics";
 import { buildIcs } from "../services/calendar";
 import { listBlasts, parseCommsChannels, sendBlast } from "../services/comms";
+import { discoverEvents } from "../services/discovery";
 import { loadVisibleEvent } from "../services/eventAccess";
 import {
   createEvent,
@@ -106,6 +107,20 @@ const statusEnum = t.Optional(
   ]),
 );
 
+// Currency union for the discover route's query string. Separate from the
+// body schema above because query params don't need the `Nullable` wrapper
+// (you either pass the param or you don't).
+const discoveryCurrencyEnum = t.Optional(
+  t.Union([
+    t.Literal("USD"),
+    t.Literal("EUR"),
+    t.Literal("GBP"),
+    t.Literal("CAD"),
+    t.Literal("AUD"),
+    t.Literal("JPY"),
+  ]),
+);
+
 export const createEventsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
   jwksUrl: string = DEFAULT_JWKS_URL,
@@ -140,6 +155,77 @@ export const createEventsRoutes = (
         const result = await Effect.runPromise(listTodayEvents.pipe(Effect.provide(dbLayer)));
         return { events: result };
       })
+      .get(
+        "/discover",
+        async ({ query, headers, set }) => {
+          const claims = await extractClaims(
+            headers["authorization"],
+            jwksUrl,
+            _testKey as CryptoKey,
+          );
+          const viewerId = claims?.profileId ?? null;
+          // `friendsOnly` without a viewer is a validation error — the
+          // service raises `DiscoveryValidationError`, which we map to
+          // 401 here (not 422) because the issue is identity, not input.
+          if (query.friendsOnly === true && viewerId == null) {
+            set.status = 401;
+            return { message: "Authentication required for friendsOnly" } as const;
+          }
+          const result = await Effect.runPromise(
+            discoverEvents(query, viewerId).pipe(
+              Effect.catchTag("DiscoveryValidationError", (e) =>
+                Effect.sync(() => {
+                  set.status = 422;
+                  return { error: String(e.cause) } as const;
+                }),
+              ),
+              Effect.catchTag("GraphBridgeError", () =>
+                Effect.sync(() => {
+                  set.status = 502;
+                  return { error: "Failed to resolve social graph" } as const;
+                }),
+              ),
+              Effect.catchTag("DiscoveryError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Discovery failed" } as const;
+                }),
+              ),
+              Effect.catchTag("DatabaseError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Discovery failed" } as const;
+                }),
+              ),
+              Effect.provide(dbLayer),
+            ),
+          );
+          if ("error" in result) return result;
+          if ("message" in result) return result;
+          return {
+            events: result.events,
+            nextCursor: result.nextCursor,
+            series: result.series,
+          };
+        },
+        {
+          query: t.Object({
+            category: t.Optional(t.String({ maxLength: 100 })),
+            from: t.Optional(t.String({ format: "date-time" })),
+            to: t.Optional(t.String({ format: "date-time" })),
+            lat: t.Optional(t.Numeric({ minimum: -90, maximum: 90 })),
+            lng: t.Optional(t.Numeric({ minimum: -180, maximum: 180 })),
+            radiusKm: t.Optional(t.Numeric({ minimum: 0.1, maximum: 500 })),
+            friendsOnly: t.Optional(t.BooleanString()),
+            currency: discoveryCurrencyEnum,
+            priceMin: t.Optional(t.Numeric({ minimum: 0, maximum: MAX_PRICE_MAJOR })),
+            priceMax: t.Optional(t.Numeric({ minimum: 0, maximum: MAX_PRICE_MAJOR })),
+            cursorStartTime: t.Optional(t.String({ format: "date-time" })),
+            cursorId: t.Optional(t.String()),
+            limit: t.Optional(t.Numeric({ minimum: 1, maximum: 50 })),
+          }),
+        },
+      )
       .get(
         "/:id",
         async ({ params, headers, set }) => {

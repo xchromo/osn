@@ -27,9 +27,12 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 
 ## Pulse (`pulse/app` + `pulse/api` + `pulse/db`)
 
-- [ ] "What's on today" default view
+- [x] "What's on today" default view — unified into the discovery feed on `ExplorePage`; default view is `from = now` with the chip rail + more-filters drawer layered on top
 - [x] Prompt for max event duration when creating events without an endTime — duration presets + `maybe_finished` status at 8h, auto-close at 12h, 48h defence-in-depth cap on explicit endTimes (moved to `[[changelog/completed-features]]`)
-- [ ] Event discovery (location, category, datetime, friends, interests)
+- [x] Event discovery (location, category, datetime, friends, price) — `GET /events/discover` with cursor pagination; bbox + haversine for radius; friends branch unions organiser ∈ connections and RSVP ∈ connections and respects `attendanceVisibility=no_one`; interests deferred until the Pulse interest profile onboarding lands
+- [ ] Pulse interest profile (onboarding) — populate `pulseUsers.interests` (new column), surface as an onboarding step, wire into the discovery feed's "For you" chip
+- [ ] Pulse user preferred currency — add a currency field to `pulse_users`, drive the discovery drawer's price filter from it (today the client uses a USD default)
+- [ ] Discovery v2 — AI prompt filter surfaced after extended scrolling, server-side free-text search (currently client-side over the returned page)
 - [x] Recurring events (series + instances) — shipped on `claude/add-recurring-events-11qp9`: `event_series` schema, RRULE expander, `/series` routes, seed fixtures, `SeriesDetailPage`
 - [ ] Event group chats (via Zap once M2 lands — placeholder shipped)
 - [ ] Organizer tools (moderation, blacklists)
