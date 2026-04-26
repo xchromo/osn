@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  completeOnboarding,
   fetchOnboardingStatus,
   isOnboardingSkippedThisSession,
   markOnboardingSkippedThisSession,
@@ -10,12 +11,15 @@ import {
 } from "../../src/lib/onboarding";
 
 const mockMeOnboardingGet = vi.fn();
+const mockMeOnboardingCompletePost = vi.fn();
 vi.mock("../../src/lib/api", () => ({
   api: {
     me: {
       onboarding: {
         get: (...args: unknown[]) => mockMeOnboardingGet(...args),
-        complete: { post: vi.fn() },
+        complete: {
+          post: (...args: unknown[]) => mockMeOnboardingCompletePost(...args),
+        },
       },
     },
   },
@@ -195,5 +199,86 @@ describe("fetchOnboardingStatus", () => {
     const status = await fetchOnboardingStatus("tok");
     expect(status?.completedAt).toBeNull();
     expect(status?.interests).toEqual([]);
+  });
+});
+
+describe("completeOnboarding", () => {
+  const validPayload = {
+    interests: ["music"] as const,
+    notificationsOptIn: true,
+    eventRemindersOptIn: false,
+    notificationsPerm: "granted" as const,
+    locationPerm: "granted" as const,
+  };
+
+  beforeEach(() => {
+    mockMeOnboardingCompletePost.mockReset();
+  });
+
+  it("returns the status payload on success", async () => {
+    const completedAt = new Date().toISOString();
+    mockMeOnboardingCompletePost.mockResolvedValueOnce({
+      data: {
+        completedAt,
+        interests: ["music"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: false,
+        notificationsPerm: "granted",
+        locationPerm: "granted",
+      },
+      error: null,
+    });
+    const status = await completeOnboarding("tok", { ...validPayload });
+    expect(status.completedAt).toBe(completedAt);
+    expect(status.interests).toEqual(["music"]);
+  });
+
+  it("throws with the stringified server error when error.value is present", async () => {
+    mockMeOnboardingCompletePost.mockResolvedValueOnce({
+      data: null,
+      error: { value: { error: "Invalid onboarding payload" } },
+    });
+    await expect(completeOnboarding("tok", { ...validPayload })).rejects.toThrow(
+      /Invalid onboarding payload/,
+    );
+  });
+
+  it("throws a generic message when error is present but lacks .value", async () => {
+    mockMeOnboardingCompletePost.mockResolvedValueOnce({
+      data: null,
+      error: "boom",
+    });
+    await expect(completeOnboarding("tok", { ...validPayload })).rejects.toThrow(
+      "Failed to complete onboarding",
+    );
+  });
+
+  it("throws when the success response is missing the completedAt field", async () => {
+    mockMeOnboardingCompletePost.mockResolvedValueOnce({
+      data: { somethingElse: 1 },
+      error: null,
+    });
+    await expect(completeOnboarding("tok", { ...validPayload })).rejects.toThrow(
+      "Unexpected onboarding response",
+    );
+  });
+
+  it("forwards the bearer token in the Authorization header", async () => {
+    mockMeOnboardingCompletePost.mockResolvedValueOnce({
+      data: {
+        completedAt: new Date().toISOString(),
+        interests: [],
+        notificationsOptIn: false,
+        eventRemindersOptIn: false,
+        notificationsPerm: "prompt",
+        locationPerm: "prompt",
+      },
+      error: null,
+    });
+    await completeOnboarding("the-token", { ...validPayload });
+    const [, opts] = mockMeOnboardingCompletePost.mock.calls[0]!;
+    expect((opts as { headers: Record<string, string> }).headers.Authorization).toBe(
+      "Bearer the-token",
+    );
   });
 });

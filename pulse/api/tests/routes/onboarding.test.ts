@@ -197,6 +197,39 @@ describe("onboarding routes", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Bridge failure path
+  // -------------------------------------------------------------------------
+
+  it("GET 503 when the bridge is unreachable (GraphBridgeError → infra failure)", async () => {
+    vi.mocked(bridge.getAccountIdForProfile).mockReturnValueOnce(
+      Effect.fail(new bridge.GraphBridgeError({ cause: new Error("upstream") })),
+    );
+    const res = await get(app, "/me/onboarding", aliceToken);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining("unavailable") });
+  });
+
+  it("GET 401 when the bridge reports the profile doesn't exist (vs. 503 for infra)", async () => {
+    vi.mocked(bridge.getAccountIdForProfile).mockReturnValueOnce(
+      Effect.fail(new bridge.ProfileNotFoundError({ profileId: "usr_alice" })),
+    );
+    const res = await get(app, "/me/onboarding", aliceToken);
+    expect(res.status).toBe(401);
+  });
+
+  // -------------------------------------------------------------------------
+  // Resolver cache — verifies the second request hits the local mapping
+  // table rather than re-calling the bridge. Privacy + latency-relevant.
+  // -------------------------------------------------------------------------
+
+  it("second GET hits the profile→account cache (does not re-call the bridge)", async () => {
+    vi.mocked(bridge.getAccountIdForProfile).mockClear();
+    await get(app, "/me/onboarding", aliceToken);
+    await get(app, "/me/onboarding", aliceToken);
+    expect(vi.mocked(bridge.getAccountIdForProfile)).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
   // Rate limiter
   // -------------------------------------------------------------------------
 

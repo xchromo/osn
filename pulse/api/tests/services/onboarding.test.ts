@@ -52,6 +52,16 @@ describe("resolveAccountId", () => {
       expect(err._tag).toBe("ProfileNotFoundError");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("propagates GraphBridgeError from the bridge (infra-failure signal)", () =>
+    Effect.gen(function* () {
+      vi.mocked(bridge.getAccountIdForProfile).mockReturnValue(
+        Effect.fail(new bridge.GraphBridgeError({ cause: new Error("upstream 500") })),
+      );
+      const err = yield* Effect.flip(resolveAccountId("usr_alice"));
+      expect(err._tag).toBe("GraphBridgeError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -87,6 +97,33 @@ describe("getOnboardingStatus", () => {
       expect(status.eventRemindersOptIn).toBe(false);
       expect(status.notificationsPerm).toBe("granted");
       expect(status.locationPerm).toBe("denied");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Privacy invariant — defence-in-depth at the service layer. The route
+  // layer also asserts this on the wire shape, but a field added here for
+  // "convenience" would still pass the wire test if `toWire` strips it.
+  // Asserting on the service surface keeps the invariant one-deep at every
+  // boundary. Mirrors osn/api/tests/privacy.test.ts.
+  it.effect("returned status object never carries accountId (privacy invariant)", () =>
+    Effect.gen(function* () {
+      const empty = yield* getOnboardingStatus("usr_alice");
+      expect(Object.keys(empty)).not.toContain("accountId");
+      expect(Object.keys(empty)).not.toContain("account_id");
+
+      const completed = yield* completeOnboarding("usr_alice", {
+        interests: ["music"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: true,
+        notificationsPerm: "granted",
+        locationPerm: "granted",
+      });
+      expect(Object.keys(completed)).not.toContain("accountId");
+      expect(Object.keys(completed)).not.toContain("account_id");
+
+      const reread = yield* getOnboardingStatus("usr_alice");
+      expect(Object.keys(reread)).not.toContain("accountId");
+      expect(Object.keys(reread)).not.toContain("account_id");
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
