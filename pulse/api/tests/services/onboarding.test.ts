@@ -1,0 +1,212 @@
+import { it, expect } from "@effect/vitest";
+import { Effect } from "effect";
+import { vi, beforeEach, describe } from "vitest";
+
+import {
+  completeOnboarding,
+  getOnboardingStatus,
+  resolveAccountId,
+} from "../../src/services/onboarding";
+import { createTestLayer } from "../helpers/db";
+
+vi.mock("../../src/services/graphBridge", () => ({
+  GraphBridgeError: class GraphBridgeError {
+    _tag = "GraphBridgeError";
+    constructor(public args: { cause: unknown }) {}
+  },
+  ProfileNotFoundError: class ProfileNotFoundError {
+    _tag = "ProfileNotFoundError";
+    constructor(public args: { profileId: string }) {}
+  },
+  getAccountIdForProfile: vi.fn(() => Effect.succeed("acc_default")),
+}));
+
+import * as bridge from "../../src/services/graphBridge";
+
+beforeEach(() => {
+  vi.mocked(bridge.getAccountIdForProfile).mockReturnValue(Effect.succeed("acc_alice"));
+});
+
+// ---------------------------------------------------------------------------
+// resolveAccountId
+// ---------------------------------------------------------------------------
+
+describe("resolveAccountId", () => {
+  it.effect("hits the bridge on first call and caches the result", () =>
+    Effect.gen(function* () {
+      const a1 = yield* resolveAccountId("usr_alice");
+      const a2 = yield* resolveAccountId("usr_alice");
+      expect(a1).toBe("acc_alice");
+      expect(a2).toBe("acc_alice");
+      // Second call should hit the cache, not the bridge.
+      expect(vi.mocked(bridge.getAccountIdForProfile)).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("propagates ProfileNotFoundError from the bridge", () =>
+    Effect.gen(function* () {
+      vi.mocked(bridge.getAccountIdForProfile).mockReturnValue(
+        Effect.fail(new bridge.ProfileNotFoundError({ profileId: "usr_ghost" })),
+      );
+      const err = yield* Effect.flip(resolveAccountId("usr_ghost"));
+      expect(err._tag).toBe("ProfileNotFoundError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// getOnboardingStatus
+// ---------------------------------------------------------------------------
+
+describe("getOnboardingStatus", () => {
+  it.effect("returns defaults when no row exists for the account", () =>
+    Effect.gen(function* () {
+      const status = yield* getOnboardingStatus("usr_alice");
+      expect(status.completedAt).toBeNull();
+      expect(status.interests).toEqual([]);
+      expect(status.notificationsOptIn).toBe(false);
+      expect(status.eventRemindersOptIn).toBe(false);
+      expect(status.notificationsPerm).toBe("prompt");
+      expect(status.locationPerm).toBe("prompt");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("returns the stored row after completion", () =>
+    Effect.gen(function* () {
+      yield* completeOnboarding("usr_alice", {
+        interests: ["music", "food"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: false,
+        notificationsPerm: "granted",
+        locationPerm: "denied",
+      });
+      const status = yield* getOnboardingStatus("usr_alice");
+      expect(status.completedAt).toBeInstanceOf(Date);
+      expect(status.interests).toEqual(["music", "food"]);
+      expect(status.notificationsOptIn).toBe(true);
+      expect(status.eventRemindersOptIn).toBe(false);
+      expect(status.notificationsPerm).toBe("granted");
+      expect(status.locationPerm).toBe("denied");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// completeOnboarding
+// ---------------------------------------------------------------------------
+
+describe("completeOnboarding", () => {
+  it.effect("inserts a row with the validated payload", () =>
+    Effect.gen(function* () {
+      const result = yield* completeOnboarding("usr_alice", {
+        interests: ["music", "tech", "outdoor"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: true,
+        notificationsPerm: "granted",
+        locationPerm: "granted",
+      });
+      expect(result.completedAt).toBeInstanceOf(Date);
+      expect(result.interests).toEqual(["music", "tech", "outdoor"]);
+      expect(result.notificationsOptIn).toBe(true);
+      expect(result.eventRemindersOptIn).toBe(true);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("is idempotent — second call returns the original completedAt", () =>
+    Effect.gen(function* () {
+      const first = yield* completeOnboarding("usr_alice", {
+        interests: ["music"],
+        notificationsOptIn: false,
+        eventRemindersOptIn: false,
+        notificationsPerm: "denied",
+        locationPerm: "prompt",
+      });
+      const second = yield* completeOnboarding("usr_alice", {
+        // Different payload — should be ignored on the second call.
+        interests: ["food", "arts"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: true,
+        notificationsPerm: "granted",
+        locationPerm: "granted",
+      });
+      expect(second.completedAt?.getTime()).toBe(first.completedAt?.getTime());
+      expect(second.interests).toEqual(["music"]);
+      expect(second.notificationsOptIn).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("two profiles on the same account share onboarding state", () =>
+    Effect.gen(function* () {
+      // Both profiles resolve to acc_shared.
+      vi.mocked(bridge.getAccountIdForProfile).mockReturnValue(Effect.succeed("acc_shared"));
+
+      yield* completeOnboarding("usr_first_profile", {
+        interests: ["music"],
+        notificationsOptIn: true,
+        eventRemindersOptIn: true,
+        notificationsPerm: "granted",
+        locationPerm: "granted",
+      });
+
+      // Different profile, same account — should already be onboarded.
+      const status = yield* getOnboardingStatus("usr_second_profile");
+      expect(status.completedAt).toBeInstanceOf(Date);
+      expect(status.interests).toEqual(["music"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects unknown interest categories with ValidationError", () =>
+    Effect.gen(function* () {
+      const err = yield* Effect.flip(
+        completeOnboarding("usr_alice", {
+          interests: ["definitely_not_a_category"],
+          notificationsOptIn: false,
+          eventRemindersOptIn: false,
+          notificationsPerm: "prompt",
+          locationPerm: "prompt",
+        }),
+      );
+      expect(err._tag).toBe("OnboardingValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects more than 8 interests with ValidationError", () =>
+    Effect.gen(function* () {
+      const err = yield* Effect.flip(
+        completeOnboarding("usr_alice", {
+          interests: [
+            "music",
+            "food",
+            "sports",
+            "arts",
+            "tech",
+            "community",
+            "education",
+            "social",
+            "nightlife",
+          ],
+          notificationsOptIn: false,
+          eventRemindersOptIn: false,
+          notificationsPerm: "prompt",
+          locationPerm: "prompt",
+        }),
+      );
+      expect(err._tag).toBe("OnboardingValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("rejects unknown perm outcomes with ValidationError", () =>
+    Effect.gen(function* () {
+      const err = yield* Effect.flip(
+        completeOnboarding("usr_alice", {
+          interests: [],
+          notificationsOptIn: false,
+          eventRemindersOptIn: false,
+          notificationsPerm: "maybe",
+          locationPerm: "prompt",
+        }),
+      );
+      expect(err._tag).toBe("OnboardingValidationError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
