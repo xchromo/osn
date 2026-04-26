@@ -1,5 +1,18 @@
 # @osn/pulse
 
+## 0.10.4
+
+### Patch Changes
+
+- Updated dependencies [f071cd9]
+  - @pulse/api@0.15.2
+
+## 0.10.3
+
+### Patch Changes
+
+- 7a075c7: Pulse: replace `csp: null` in `tauri.conf.json` with a strict Content-Security-Policy allowlist. `connect-src` permits Tauri IPC, `photon.komoot.io` (geocoding) and the local OSN/Pulse API ports; `img-src` permits `*.tile.openstreetmap.org` for Leaflet tiles. Closes S-L3.
+
 ## 0.10.2
 
 ### Patch Changes
