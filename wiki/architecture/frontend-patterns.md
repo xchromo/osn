@@ -13,7 +13,7 @@ tags:
 status: current
 related:
   - "[[component-library]]"
-  - "[[close-friends]]"
+  - "[[pulse-close-friends]]"
   - "[[pulse]]"
   - "[[testing-patterns]]"
 packages:

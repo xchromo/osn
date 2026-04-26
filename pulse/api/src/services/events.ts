@@ -23,6 +23,10 @@ import {
   metricEventValidationFailure,
   metricEventsListed,
 } from "../metrics";
+import {
+  getCloseFriendIdsForViewer,
+  DatabaseError as CloseFriendsDatabaseError,
+} from "./closeFriends";
 
 const MAX_EVENT_DURATION_MS = MAX_EVENT_DURATION_HOURS * 60 * 60 * 1000;
 const MAYBE_FINISHED_AFTER_MS = MAYBE_FINISHED_AFTER_HOURS * 60 * 60 * 1000;
@@ -222,7 +226,9 @@ export const applyTransition = (event: Event): Effect.Effect<Event, DatabaseErro
   );
 };
 
-export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], DatabaseError, Db> =>
+export const listEvents = (
+  params: ListEventsParams,
+): Effect.Effect<Event[], DatabaseError | CloseFriendsDatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const filters: SQL[] = [];
@@ -267,8 +273,29 @@ export const listEvents = (params: ListEventsParams): Effect.Effect<Event[], Dat
     const transitioned = yield* Effect.forEach(results, applyTransition, {
       concurrency: 5,
     });
-    metricEventsListed("all", transitioned.length);
-    return transitioned;
+
+    // Feed boost: events organised by a close friend of the viewer surface
+    // first. Stable partition preserves the underlying startTime ordering
+    // within each bucket, so the feed remains chronological within each
+    // group rather than reshuffling the whole list. Skipped for anonymous
+    // viewers (close friends are a personal signal that doesn't apply).
+    const ranked =
+      params.viewerId == null
+        ? transitioned
+        : yield* Effect.gen(function* () {
+            const closeFriendIds = yield* getCloseFriendIdsForViewer(params.viewerId!);
+            if (closeFriendIds.size === 0) return transitioned;
+            const friends: Event[] = [];
+            const others: Event[] = [];
+            for (const event of transitioned) {
+              if (closeFriendIds.has(event.createdByProfileId)) friends.push(event);
+              else others.push(event);
+            }
+            return [...friends, ...others];
+          });
+
+    metricEventsListed("all", ranked.length);
+    return ranked;
   }).pipe(Effect.withSpan("events.list"));
 
 export const listTodayEvents: Effect.Effect<Event[], DatabaseError, Db> = Effect.gen(function* () {

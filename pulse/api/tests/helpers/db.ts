@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 
 import * as schema from "@pulse/db/schema";
-import { events, type Event } from "@pulse/db/schema";
+import { events, pulseCloseFriends, type Event } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Effect, Layer } from "effect";
@@ -106,6 +106,19 @@ export function createTestLayer() {
     )
   `);
   sqlite.run(`CREATE INDEX event_comms_event_idx ON event_comms (event_id)`);
+  sqlite.run(`
+    CREATE TABLE pulse_close_friends (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      friend_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE (profile_id, friend_id)
+    )
+  `);
+  sqlite.run(
+    `CREATE INDEX pulse_close_friends_profile_idx ON pulse_close_friends (profile_id)`,
+  );
+  sqlite.run(`CREATE INDEX pulse_close_friends_friend_idx ON pulse_close_friends (friend_id)`);
   const db = drizzle(sqlite, { schema });
   return Layer.succeed(Db, { db });
 }
@@ -132,6 +145,30 @@ export interface SeedEventInput {
   priceAmount?: number | null;
   priceCurrency?: string | null;
 }
+
+/**
+ * Insert a Pulse close-friends row directly, bypassing the eligibility
+ * check in `addCloseFriend`. Useful for setting up test fixtures without
+ * also having to mock the graph bridge.
+ */
+export const seedCloseFriend = (
+  profileId: string,
+  friendId: string,
+): Effect.Effect<void, never, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    yield* Effect.promise(() =>
+      db
+        .insert(pulseCloseFriends)
+        .values({
+          id: "pcf_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+          profileId,
+          friendId,
+          createdAt: new Date(),
+        })
+        .onConflictDoNothing(),
+    );
+  });
 
 export const seedEvent = (input: SeedEventInput): Effect.Effect<Event, never, Db> =>
   Effect.gen(function* () {

@@ -100,6 +100,19 @@ function createTestDb() {
       created_at INTEGER NOT NULL
     )
   `);
+  sqlite.run(`
+    CREATE TABLE pulse_close_friends (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      friend_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE (profile_id, friend_id)
+    )
+  `);
+  sqlite.run(
+    `CREATE INDEX pulse_close_friends_profile_idx ON pulse_close_friends (profile_id)`,
+  );
+  sqlite.run(`CREATE INDEX pulse_close_friends_friend_idx ON pulse_close_friends (friend_id)`);
   return drizzle(sqlite, { schema });
 }
 
@@ -428,6 +441,63 @@ describe("pulse_users schema", () => {
 // ---------------------------------------------------------------------------
 // event_comms schema
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// pulse_close_friends schema
+// ---------------------------------------------------------------------------
+
+describe("pulse_close_friends schema", () => {
+  it("inserts and retrieves a row", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.pulseCloseFriends).values({
+      id: "pcf_1",
+      profileId: "usr_alice",
+      friendId: "usr_bob",
+      createdAt: now,
+    });
+    const [row] = await db
+      .select()
+      .from(schema.pulseCloseFriends)
+      .where(eq(schema.pulseCloseFriends.id, "pcf_1"));
+    expect(row!.profileId).toBe("usr_alice");
+    expect(row!.friendId).toBe("usr_bob");
+    expect(row!.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("enforces unique (profile_id, friend_id) pair", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.pulseCloseFriends).values({
+      id: "pcf_dup1",
+      profileId: "usr_alice",
+      friendId: "usr_bob",
+      createdAt: now,
+    });
+    await expect(
+      db.insert(schema.pulseCloseFriends).values({
+        id: "pcf_dup2",
+        profileId: "usr_alice",
+        friendId: "usr_bob",
+        createdAt: now,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("allows the same friend across two different profiles (one-way edges)", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.pulseCloseFriends).values([
+      { id: "pcf_a", profileId: "usr_alice", friendId: "usr_carol", createdAt: now },
+      { id: "pcf_b", profileId: "usr_bob", friendId: "usr_carol", createdAt: now },
+    ]);
+    const rows = await db
+      .select()
+      .from(schema.pulseCloseFriends)
+      .where(eq(schema.pulseCloseFriends.friendId, "usr_carol"));
+    expect(rows).toHaveLength(2);
+  });
+});
 
 describe("event_comms schema", () => {
   async function seedEvent(db: ReturnType<typeof createTestDb>) {
