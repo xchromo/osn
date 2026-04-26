@@ -170,6 +170,13 @@ export const discoverEvents = (
 
     // Status gate — discovery surfaces events users can still attend.
     // Finished / cancelled events live on direct-fetch routes only.
+    //
+    // Unlike `listEvents`, discovery does NOT call `applyTransition` per
+    // row. The deliberate trade-off: a slightly-stale `ongoing` label on
+    // the wire vs. N×UPDATE writes per discovery page (P-I2). Direct-
+    // fetch routes still apply transitions, so the canonical lifecycle
+    // is honoured the moment a user opens the event. If the staleness
+    // becomes user-visible in metrics, batch the transition write.
     filters.push(inArray(events.status, ["upcoming", "ongoing", "maybe_finished"] as const));
 
     // Time window — default `from = now` so past events don't surface.
@@ -236,25 +243,30 @@ export const discoverEvents = (
           Effect.logError("pulse.discovery.graph_lookup_failed", { cause }),
         ),
       );
-      if (connections.size === 0) {
-        // No connections → no friend matches. Short-circuit with an empty
-        // page; still record the search for observability.
-        metricDiscoverySearched({
-          scope: "authenticated",
-          friends_only: "true",
-          has_location_filter: hasLocation ? "true" : "false",
-          has_price_filter: hasPrice ? "true" : "false",
-          result_empty: "true",
-        });
-        metricDiscoverySearchDuration((performance.now() - startedAt) / 1000, "ok");
-        return { events: [], nextCursor: null, series: {} };
-      }
-      const connectionIds = [...connections];
-      // RSVP-signal branch respects `pulse_users.attendance_visibility`:
-      // a user who hid their RSVPs never surfaces events via the friends
-      // signal. Users without a pulse_users row default to "connections"
-      // (visible), so the COALESCE is deliberate. The viewer's own RSVP
-      // is excluded — it's not a *friend* signal.
+      // S-L1: avoid a JS-side fast path that would let an on-path
+      // attacker distinguish "viewer has zero connections" from
+      // "≥1 connection" by response latency. When the connection set
+      // is empty, substitute a sentinel that no real profile_id will
+      // match — the query executes the same shape and returns 0 rows
+      // via the indexed lookup. Cost is one extra (cheap) round-trip
+      // for the zero-connection case.
+      const connectionIds =
+        connections.size === 0 ? ["__no_connection_sentinel__"] : [...connections];
+      // RSVP-signal branch:
+      //   - Restricted to `going`/`interested` (S-M1). Excludes `invited`
+      //     (organiser-only pre-RSVP marker — leaks the invite list to
+      //     the invitee's friends before they've engaged) and
+      //     `not_going` (an explicit decline must not re-broadcast as
+      //     a recommendation).
+      //   - Respects `pulse_users.attendance_visibility`: a user who
+      //     hid their RSVPs never surfaces events via the friends
+      //     signal. Users without a pulse_users row default to
+      //     "connections" (visible), so the COALESCE is deliberate.
+      //   - The viewer's own RSVP is excluded — it's not a *friend*
+      //     signal.
+      //   - Connection set is bounded by MAX_EVENT_GUESTS upstream in
+      //     `getConnectionIds`, capping the IN list size for the SQLite
+      //     prepared-statement cache.
       const friendsPredicate = or(
         inArray(events.createdByProfileId, connectionIds),
         sql`EXISTS (
@@ -266,6 +278,7 @@ export const discoverEvents = (
               sql`, `,
             )})
             AND ${eventRsvps.profileId} != ${viewerId}
+            AND ${eventRsvps.status} IN ('going', 'interested')
             AND COALESCE(${pulseUsers.attendanceVisibility}, 'connections') != 'no_one'
         )`,
       ) as SQL;

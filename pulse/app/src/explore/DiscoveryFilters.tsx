@@ -8,6 +8,14 @@ export interface DiscoveryFilterValues {
   from: string | null;
   to: string | null;
   radiusKm: number | null;
+  /**
+   * S-L2/P-W2: location is resolved at most once per filter session, when
+   * the user explicitly clicks "Use my location". The drawer never fires
+   * `navigator.geolocation` implicitly. If the user enters a radius
+   * without granting location, the filter is dropped silently with an
+   * inline explainer.
+   */
+  coords: { lat: number; lng: number } | null;
   priceMin: number | null;
   priceMax: number | null;
   friendsOnly: boolean;
@@ -17,6 +25,7 @@ export const emptyFilters = (): DiscoveryFilterValues => ({
   from: null,
   to: null,
   radiusKm: null,
+  coords: null,
   priceMin: null,
   priceMax: null,
   friendsOnly: false,
@@ -36,6 +45,17 @@ const toNumberOrNull = (raw: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+async function getCurrentPosition(): Promise<{ lat: number; lng: number } | null> {
+  if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 5000, maximumAge: 60_000 },
+    );
+  });
+}
+
 export function DiscoveryFilters(props: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -46,6 +66,8 @@ export function DiscoveryFilters(props: {
   // Internal draft — applied to the outer state only when the user clicks
   // Apply, so a partial edit doesn't trigger a refetch on every keystroke.
   const [draft, setDraft] = createSignal<DiscoveryFilterValues>({ ...props.value });
+  const [geoBusy, setGeoBusy] = createSignal(false);
+  const [geoError, setGeoError] = createSignal<string | null>(null);
 
   const setField = <K extends keyof DiscoveryFilterValues>(
     key: K,
@@ -99,7 +121,35 @@ export function DiscoveryFilters(props: {
               value={draft().radiusKm ?? ""}
               onInput={(e) => setField("radiusKm", toNumberOrNull(e.currentTarget.value))}
             />
-            <p class="text-muted-foreground text-xs">Uses your current location. Max 500km.</p>
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-muted-foreground text-xs">
+                <Show
+                  when={draft().coords}
+                  fallback="Click 'Use my location' to enable. Max 500km."
+                >
+                  Using your location. Max 500km.
+                </Show>
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={geoBusy()}
+                onClick={async () => {
+                  setGeoBusy(true);
+                  setGeoError(null);
+                  const pos = await getCurrentPosition();
+                  setGeoBusy(false);
+                  if (pos) setField("coords", pos);
+                  else setGeoError("Couldn't resolve your location.");
+                }}
+              >
+                {draft().coords ? "Update location" : "Use my location"}
+              </Button>
+            </div>
+            <Show when={geoError()}>
+              <p class="text-destructive text-xs">{geoError()}</p>
+            </Show>
           </div>
 
           <div class="grid grid-cols-2 gap-3">

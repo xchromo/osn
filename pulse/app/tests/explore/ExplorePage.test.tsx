@@ -185,6 +185,39 @@ describe("ExplorePage", () => {
     expect(await findByText("Music")).toBeTruthy();
   });
 
+  it("refetches with priceMax + currency when 'Free' chip clicked", async () => {
+    mockGet.mockResolvedValue({
+      data: { events: sampleEvents, nextCursor: null, series: {} },
+      error: null,
+    });
+    const { findByText } = render(() => <ExplorePage />);
+    await findByText("Jazz Night");
+    const initialCallCount = mockGet.mock.calls.length;
+    const freeChip = (await findByText("Free")).closest("button")!;
+    fireEvent.click(freeChip);
+    await vi.waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(initialCallCount));
+    const lastArgs = mockGet.mock.calls.at(-1)![0] as { query?: Record<string, string> };
+    expect(lastArgs.query?.priceMax).toBe("0");
+    expect(lastArgs.query?.currency).toBe("USD");
+  });
+
+  it("does NOT call geolocation on chip switches (P-W2)", async () => {
+    const geolocationSpy = vi.fn();
+    Object.defineProperty(globalThis.navigator ?? {}, "geolocation", {
+      value: { getCurrentPosition: geolocationSpy },
+      configurable: true,
+    });
+    mockGet.mockResolvedValue({
+      data: { events: sampleEvents, nextCursor: null, series: {} },
+      error: null,
+    });
+    const { findByText } = render(() => <ExplorePage />);
+    await findByText("Jazz Night");
+    fireEvent.click((await findByText("Music")).closest("button")!);
+    fireEvent.click((await findByText("Tonight")).closest("button")!);
+    expect(geolocationSpy).not.toHaveBeenCalled();
+  });
+
   it("refetches with server-side category filter when chip clicked", async () => {
     mockGet.mockResolvedValue({
       data: { events: sampleEvents, nextCursor: null, series: {} },

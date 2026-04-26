@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { eventRsvps, pulseUsers } from "@pulse/db/schema";
+import { eventRsvps, eventSeries, pulseUsers } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
 import { Effect } from "effect";
 
@@ -17,7 +17,7 @@ const PAST = "2020-01-01T10:00:00.000Z";
 const rsvp = (
   eventId: string,
   profileId: string,
-  status: "going" | "interested" | "invited" = "going",
+  status: "going" | "interested" | "invited" | "not_going" = "going",
 ) =>
   Effect.gen(function* () {
     const { db } = yield* Db;
@@ -276,7 +276,7 @@ it.effect("friendsOnly includes RSVPs from users with default attendanceVisibili
   ),
 );
 
-it.effect("friendsOnly short-circuits when viewer has no connections", () =>
+it.effect("friendsOnly returns empty when viewer has no connections (S-L1: no JS fast path)", () =>
   provide(
     Effect.gen(function* () {
       yield* seedEvent({
@@ -285,7 +285,71 @@ it.effect("friendsOnly short-circuits when viewer has no connections", () =>
         createdByProfileId: "usr_stranger",
       });
       const result = yield* discoverEvents({ friendsOnly: true }, "usr_alice", stubLookups([]));
+      // Sentinel substitution means the SQL still runs; we just match
+      // nothing. Same response as the populated-but-no-match case.
       expect(result.events).toEqual([]);
+      expect(result.nextCursor).toBeNull();
+      expect(result.series).toEqual({});
+    }),
+  ),
+);
+
+// S-M1 — friends signal is positive-engagement only.
+it.effect("friendsOnly excludes 'invited' (organiser-only pre-RSVP) signal", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* seedEvent({
+        title: "Invited but not engaged",
+        startTime: FUTURE(60_000),
+        createdByProfileId: "usr_stranger",
+      });
+      yield* rsvp(event.id, "usr_friend", "invited");
+      const result = yield* discoverEvents(
+        { friendsOnly: true },
+        "usr_alice",
+        stubLookups(["usr_friend"]),
+      );
+      expect(result.events).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("friendsOnly excludes 'not_going' RSVPs from the friends signal", () =>
+  provide(
+    Effect.gen(function* () {
+      const declined = yield* seedEvent({
+        title: "Friend declined",
+        startTime: FUTURE(60_000),
+        createdByProfileId: "usr_stranger",
+      });
+      yield* rsvp(declined.id, "usr_friend", "not_going");
+      const result = yield* discoverEvents(
+        { friendsOnly: true },
+        "usr_alice",
+        stubLookups(["usr_friend"]),
+      );
+      // not_going must NOT surface the event via the friends signal —
+      // the event has no other tie to the viewer.
+      expect(result.events).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("friendsOnly includes 'interested' RSVPs (positive signal)", () =>
+  provide(
+    Effect.gen(function* () {
+      const event = yield* seedEvent({
+        title: "Friend is interested",
+        startTime: FUTURE(60_000),
+        createdByProfileId: "usr_stranger",
+      });
+      yield* rsvp(event.id, "usr_friend", "interested");
+      const result = yield* discoverEvents(
+        { friendsOnly: true },
+        "usr_alice",
+        stubLookups(["usr_friend"]),
+      );
+      expect(result.events.map((e) => e.title)).toEqual(["Friend is interested"]);
     }),
   ),
 );
@@ -504,6 +568,160 @@ it.effect("rejects partial cursor (startTime without id)", () =>
         discoverEvents({ cursorStartTime: FUTURE(60_000) }, null, stubLookups()),
       );
       expect(err).toBeInstanceOf(DiscoveryValidationError);
+    }),
+  ),
+);
+
+// ---------------------------------------------------------------------------
+// Series metadata (T-U1)
+// ---------------------------------------------------------------------------
+
+const seedSeries = (id: string, title: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const now = new Date();
+    yield* Effect.promise(() =>
+      db.insert(eventSeries).values({
+        id,
+        title,
+        rrule: "FREQ=WEEKLY",
+        dtstart: now,
+        materializedThrough: now,
+        createdByProfileId: "usr_alice",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+  });
+
+const linkSeries = (eventId: string, seriesId: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const { events: eventsTable } = yield* Effect.promise(() => import("@pulse/db/schema"));
+    const { eq } = yield* Effect.promise(() => import("drizzle-orm"));
+    yield* Effect.promise(() =>
+      db.update(eventsTable).set({ seriesId }).where(eq(eventsTable.id, eventId)),
+    );
+  });
+
+it.effect("returns batched series summaries for series-instance events", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* seedSeries("series_yoga", "Sunrise Yoga");
+      const event = yield* seedEvent({ title: "Yoga #4", startTime: FUTURE(60_000) });
+      yield* linkSeries(event.id, "series_yoga");
+      const result = yield* discoverEvents({}, null, stubLookups());
+      expect(result.events.map((e) => e.seriesId)).toEqual(["series_yoga"]);
+      expect(result.series["series_yoga"]).toEqual({ id: "series_yoga", title: "Sunrise Yoga" });
+    }),
+  ),
+);
+
+it.effect("series map is empty when no event in the page belongs to a series", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* seedEvent({ title: "Standalone", startTime: FUTURE(60_000) });
+      const result = yield* discoverEvents({}, null, stubLookups());
+      expect(result.series).toEqual({});
+    }),
+  ),
+);
+
+// ---------------------------------------------------------------------------
+// Edge cases (T-S1)
+// ---------------------------------------------------------------------------
+
+it.effect("cursor tiebreak orders by id when startTimes collide", () =>
+  provide(
+    Effect.gen(function* () {
+      // Same startTime — cursor must use id to break the tie. SQLite
+      // timestamp mode stores seconds, so use a ms-zero value.
+      const ts = new Date(Math.floor((Date.now() + 60_000) / 1000) * 1000);
+      const { db } = yield* Db;
+      const { events: eventsTable } = yield* Effect.promise(() => import("@pulse/db/schema"));
+      const now = new Date();
+      yield* Effect.promise(() =>
+        db.insert(eventsTable).values([
+          {
+            id: "evt_aaa",
+            title: "First",
+            startTime: ts,
+            createdByProfileId: "usr_alice",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: "evt_bbb",
+            title: "Second",
+            startTime: ts,
+            createdByProfileId: "usr_alice",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+      );
+      const first = yield* discoverEvents({ limit: 1 }, null, stubLookups());
+      expect(first.events.map((e) => e.id)).toEqual(["evt_aaa"]);
+      expect(first.nextCursor).toEqual({ startTime: ts.toISOString(), id: "evt_aaa" });
+
+      const second = yield* discoverEvents(
+        {
+          limit: 1,
+          cursorStartTime: first.nextCursor!.startTime,
+          cursorId: first.nextCursor!.id,
+        },
+        null,
+        stubLookups(),
+      );
+      expect(second.events.map((e) => e.id)).toEqual(["evt_bbb"]);
+    }),
+  ),
+);
+
+it.effect("priceMin > 0 still excludes free events even with priceMax set", () =>
+  provide(
+    Effect.gen(function* () {
+      yield* seedEvent({ title: "Free", startTime: FUTURE(60_000) });
+      yield* seedEvent({
+        title: "Cheap",
+        startTime: FUTURE(60_000),
+        priceAmount: 500,
+        priceCurrency: "USD",
+      });
+      const result = yield* discoverEvents(
+        { priceMin: 1, priceMax: 50, currency: "USD" },
+        null,
+        stubLookups(),
+      );
+      expect(result.events.map((e) => e.title)).toEqual(["Cheap"]);
+    }),
+  ),
+);
+
+// ---------------------------------------------------------------------------
+// Negative paths (T-E1)
+// ---------------------------------------------------------------------------
+
+it.effect("propagates GraphBridgeError when friends lookup fails", () =>
+  provide(
+    Effect.gen(function* () {
+      const failingLookups: DiscoveryLookups = {
+        getConnectionIds: () =>
+          Effect.fail(
+            new (class extends Error {
+              readonly _tag = "GraphBridgeError";
+              constructor(public readonly cause: unknown) {
+                super("graph down");
+              }
+            })("simulated") as never,
+          ),
+      };
+      const err = yield* Effect.flip(
+        discoverEvents({ friendsOnly: true }, "usr_alice", failingLookups),
+      );
+      // The discover service tags GraphBridgeError; we confirm it didn't
+      // get swallowed into a success.
+      expect(err).toBeDefined();
     }),
   ),
 );

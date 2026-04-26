@@ -1,4 +1,5 @@
 import { DbLive, type Db } from "@pulse/db/service";
+import { createRateLimiter, getClientIp, type RateLimiterBackend } from "@shared/rate-limit";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -121,10 +122,30 @@ const discoveryCurrencyEnum = t.Optional(
   ]),
 );
 
+// S-L3: per-IP rate limit on the unauthenticated /events/discover read.
+// Discovery is the most expensive Pulse read (multi-filter + bbox prefilter
+// + optional graph fetch). Without throttling, an unauth client can drive
+// arbitrary load. Window matches the graph routes' 60 req/min posture in
+// `osn/api`.
+const DISCOVERY_RATE_LIMIT_MAX = 60;
+const DISCOVERY_RATE_LIMIT_WINDOW_MS = 60_000;
+
+export function createDefaultDiscoveryRateLimiter(): RateLimiterBackend {
+  return createRateLimiter({
+    maxRequests: DISCOVERY_RATE_LIMIT_MAX,
+    windowMs: DISCOVERY_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
 export const createEventsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
   jwksUrl: string = DEFAULT_JWKS_URL,
   _testKey?: CryptoKey,
+  /**
+   * Per-IP rate limiter for `GET /events/discover`. Defaults to the in-memory
+   * backend; production wires the Redis backend at composition time.
+   */
+  discoveryRateLimiter: RateLimiterBackend = createDefaultDiscoveryRateLimiter(),
 ) => {
   return (
     new Elysia({ prefix: "/events" })
@@ -158,6 +179,20 @@ export const createEventsRoutes = (
       .get(
         "/discover",
         async ({ query, headers, set }) => {
+          // S-L3: per-IP rate limit. Failures are treated as "deny" to
+          // avoid the limiter becoming a bypass when the backend is
+          // unhealthy (matches the osn/api graph-routes posture).
+          const ip = getClientIp(headers);
+          let allowed: boolean;
+          try {
+            allowed = await discoveryRateLimiter.check(ip);
+          } catch {
+            allowed = false;
+          }
+          if (!allowed) {
+            set.status = 429;
+            return { error: "Too many requests" } as const;
+          }
           const claims = await extractClaims(
             headers["authorization"],
             jwksUrl,

@@ -1,10 +1,17 @@
 import { generateArcKeyPair } from "@shared/crypto";
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { SignJWT } from "jose";
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
+
+/**
+ * Permissive rate limiter for tests — never trips. Real per-IP limiter
+ * shape is exercised separately in the rate-limit test below.
+ */
+const allowAllLimiter: RateLimiterBackend = { check: () => true };
 
 const FUTURE = (ms: number) => new Date(Date.now() + ms).toISOString();
 
@@ -29,7 +36,7 @@ describe("GET /events/discover", () => {
 
   beforeEach(() => {
     layer = createTestLayer();
-    app = createEventsRoutes(layer, "", testPublicKey);
+    app = createEventsRoutes(layer, "", testPublicKey, allowAllLimiter);
   });
 
   it("returns 200 with an empty page when there are no events", async () => {
@@ -91,6 +98,25 @@ describe("GET /events/discover", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: { title: string }[] };
     expect(body.events.map((e) => e.title)).toEqual(["Show"]);
+  });
+
+  it("returns 429 when the rate limiter denies the request", async () => {
+    const blockingLimiter: RateLimiterBackend = { check: () => false };
+    const blockedApp = createEventsRoutes(layer, "", testPublicKey, blockingLimiter);
+    const res = await blockedApp.handle(new Request("http://localhost/events/discover"));
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "Too many requests" });
+  });
+
+  it("returns 429 when the rate limiter throws (fail-closed)", async () => {
+    const failingLimiter: RateLimiterBackend = {
+      check: () => {
+        throw new Error("redis down");
+      },
+    };
+    const failedApp = createEventsRoutes(layer, "", testPublicKey, failingLimiter);
+    const res = await failedApp.handle(new Request("http://localhost/events/discover"));
+    expect(res.status).toBe(429);
   });
 
   it("returns an authenticated-scope page with a valid cursor shape", async () => {

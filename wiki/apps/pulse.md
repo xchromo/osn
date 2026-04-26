@@ -90,7 +90,9 @@ Every direct-fetch route (`GET /events/:id`, `/ics`, `/comms`, `/rsvps`, `/rsvps
 - **`from` / `to`** — startTime window. Default `from = now` so past events never surface.
 - **`lat` / `lng` / `radiusKm`** — bbox range-scan (`events_lat_lng_idx`) plus a JS haversine pass to convert the bounding square into an actual circle. Max 500 km.
 - **`priceMin` / `priceMax` / `currency`** — price in minor units under the given currency. Events in other currencies drop out. `priceMax=0` keeps null-priced rows (`null` ≡ free); `priceMin > 0` excludes them.
-- **`friendsOnly=true`** — union of events hosted by a connection OR RSVPed by a connection. The RSVP branch LEFT-JOINs `pulse_users` and respects `attendance_visibility = 'no_one'` (the viewer's own RSVP is excluded — it isn't a *friend* signal).
+- **`friendsOnly=true`** — union of events hosted by a connection OR RSVPed by a connection. RSVPs are restricted to **positive engagement only** (`going`, `interested`); `invited` (organiser-only pre-RSVP marker) and `not_going` (explicit decline) never surface. The RSVP branch LEFT-JOINs `pulse_users` and respects `attendance_visibility = 'no_one'` (the viewer's own RSVP is excluded — it isn't a *friend* signal). When the viewer has zero connections, the predicate uses a sentinel ID so the SQL still runs and timing matches the populated case.
+
+Per-IP rate limited (60 req/min, in-memory; Redis-swappable at composition time). Visibility predicate consumed via `buildVisibilityFilter` in `services/eventVisibility.ts` — single source of truth shared with `listEvents`.
 
 Pagination is cursor-based on `(startTime, id)` — stable under concurrent inserts, same shape on web + mobile. Finished / cancelled events are excluded.
 

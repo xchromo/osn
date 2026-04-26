@@ -88,6 +88,7 @@ export function createTestLayer() {
   `);
   sqlite.run(`CREATE INDEX event_rsvps_event_idx ON event_rsvps (event_id)`);
   sqlite.run(`CREATE INDEX event_rsvps_profile_idx ON event_rsvps (profile_id)`);
+  sqlite.run(`CREATE INDEX event_rsvps_profile_event_idx ON event_rsvps (profile_id, event_id)`);
   sqlite.run(`
     CREATE TABLE pulse_users (
       profile_id TEXT PRIMARY KEY,

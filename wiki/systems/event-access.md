@@ -97,6 +97,12 @@ Non-authorised viewers receive 404, not 403. Returning 403 would confirm that th
 
 `listRsvps` has an additional gate beyond `loadVisibleEvent`: queries with `status: "invited"` return empty unless the viewer is the event organiser. Invitees never opted into being listed -- the public guest-list override applies only to people who have actually RSVPed.
 
+## Friends Discovery — Graph-Symmetry Assumption
+
+The `friendsOnly` discovery branch in `discoverEvents` interprets `pulse_users.attendance_visibility = "connections"` as "visible to people the *RSVPer* is connected to". Today this is equivalent to "people who claim the RSVPer as a connection" because the OSN social graph is **symmetric** (see `[[social-graph]]`). The predicate gates on the *viewer's* connection set without re-validating the friendship from the RSVPer's side.
+
+If asymmetric follows / blocks ever land, this predicate must additionally verify `viewerId ∈ RSVPer.connections`, not only `RSVPer ∈ viewerId.connections`. Tracked as a forward-compatibility note (S-M2 from the discovery PR security review).
+
 ## Source Files
 
 - [pulse/api/src/services/eventAccess.ts](../pulse/api/src/services/eventAccess.ts) -- `canViewEvent`, `loadVisibleEvent`, `buildVisibilityFilter`

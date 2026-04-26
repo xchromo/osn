@@ -74,21 +74,16 @@ function mergeAdvanced(base: DiscoveryQuery, v: DiscoveryFilterValues): Discover
     merged.currency ??= DEFAULT_CURRENCY;
   }
   if (v.friendsOnly) merged.friendsOnly = true;
-  // Radius + lat/lng come from a live geolocation lookup handled at
-  // fetch-time (see `fetchDiscovery`). We only stash the radius here.
-  if (v.radiusKm != null) merged.radiusKm = v.radiusKm;
+  // Radius requires a centre point; the user resolves coords explicitly
+  // via the "Use my location" button in the drawer (S-L2/P-W2 — never
+  // implicit). Without coords we drop the radius silently — the drawer
+  // copy makes the requirement clear.
+  if (v.radiusKm != null && v.coords) {
+    merged.radiusKm = v.radiusKm;
+    merged.lat = v.coords.lat;
+    merged.lng = v.coords.lng;
+  }
   return merged;
-}
-
-async function getCurrentPosition(): Promise<{ lat: number; lng: number } | null> {
-  if (typeof navigator === "undefined" || !navigator.geolocation) return null;
-  return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => resolve(null),
-      { timeout: 5000, maximumAge: 60_000 },
-    );
-  });
 }
 
 async function fetchDiscovery(
@@ -103,16 +98,10 @@ async function fetchDiscovery(
   if (q.priceMax != null) query.priceMax = String(q.priceMax);
   if (q.currency) query.currency = q.currency;
   if (q.friendsOnly) query.friendsOnly = "true";
-  if (q.radiusKm != null) {
-    // Radius is only meaningful with a centre point; resolve lat/lng via
-    // browser geolocation on demand. If the user denies the prompt we
-    // drop the radius filter rather than fail the query.
-    const pos = await getCurrentPosition();
-    if (pos) {
-      query.lat = String(pos.lat);
-      query.lng = String(pos.lng);
-      query.radiusKm = String(q.radiusKm);
-    }
+  if (q.radiusKm != null && q.lat != null && q.lng != null) {
+    query.lat = String(q.lat);
+    query.lng = String(q.lng);
+    query.radiusKm = String(q.radiusKm);
   }
   const headers: Record<string, string> = {};
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
