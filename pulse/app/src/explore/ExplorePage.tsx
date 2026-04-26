@@ -97,21 +97,21 @@ export function ExplorePage() {
         style={{ "grid-template-columns": "minmax(0, 1fr) 44%" }}
       >
         {/* Events pane */}
-        <div class="min-w-0 px-8 pb-20 pt-6">
+        <div class="min-w-0 px-8 pt-6 pb-20">
           <FilterRail active={filter()} onSelect={setFilter} />
 
           <Show when={events.loading}>
-            <p class="py-16 text-center text-muted-foreground">Loading events…</p>
+            <p class="text-muted-foreground py-16 text-center">Loading events…</p>
           </Show>
 
           <Show when={events.error}>
-            <p class="py-16 text-center text-destructive">Failed to load events.</p>
+            <p class="text-destructive py-16 text-center">Failed to load events.</p>
           </Show>
 
           <Show when={!events.loading && !events.error}>
             {/* Happening now */}
             <Show when={liveEvents().length > 0}>
-              <div class="mb-2.5 mt-6 flex items-baseline justify-between">
+              <div class="mt-6 mb-2.5 flex items-baseline justify-between">
                 <h2
                   class="m-0 text-[22px] font-normal"
                   style={{ "font-family": "var(--font-serif)", "letter-spacing": "-0.01em" }}
@@ -119,7 +119,7 @@ export function ExplorePage() {
                   Happening now
                 </h2>
                 <span
-                  class="text-xs text-muted-foreground"
+                  class="text-muted-foreground text-xs"
                   style={{ "font-family": "var(--font-mono)" }}
                 >
                   {liveEvents().length} LIVE
@@ -143,14 +143,14 @@ export function ExplorePage() {
             <Show when={featured()}>
               {(feat) => (
                 <>
-                  <div class="mb-2.5 mt-6 flex items-baseline justify-between">
+                  <div class="mt-6 mb-2.5 flex items-baseline justify-between">
                     <h2
                       class="m-0 text-[22px] font-normal"
                       style={{ "font-family": "var(--font-serif)", "letter-spacing": "-0.01em" }}
                     >
                       On your radar
                     </h2>
-                    <span class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                    <span class="text-muted-foreground hover:text-foreground cursor-pointer text-xs">
                       View all <Icon name="chevron-right" size={11} />
                     </span>
                   </div>
@@ -169,7 +169,7 @@ export function ExplorePage() {
 
             {/* More this week */}
             <Show when={rest().length > 0}>
-              <div class="mb-2.5 mt-6 flex items-baseline justify-between">
+              <div class="mt-6 mb-2.5 flex items-baseline justify-between">
                 <h2
                   class="m-0 text-[22px] font-normal"
                   style={{ "font-family": "var(--font-serif)", "letter-spacing": "-0.01em" }}
@@ -177,7 +177,7 @@ export function ExplorePage() {
                   More this week
                 </h2>
                 <span
-                  class="text-xs text-muted-foreground"
+                  class="text-muted-foreground text-xs"
                   style={{ "font-family": "var(--font-mono)" }}
                 >
                   {rest().length} events
@@ -199,7 +199,7 @@ export function ExplorePage() {
 
             {/* Empty state */}
             <Show when={filtered().length === 0 && !events.loading}>
-              <div class="py-16 text-center text-muted-foreground">
+              <div class="text-muted-foreground py-16 text-center">
                 <div class="mb-1.5 text-[28px]" style={{ "font-family": "var(--font-serif)" }}>
                   Nothing here yet.
                 </div>
@@ -210,7 +210,7 @@ export function ExplorePage() {
         </div>
 
         {/* Map pane */}
-        <aside class="explore-map-pane sticky top-0 h-screen border-l border-border bg-background">
+        <aside class="explore-map-pane border-border bg-background sticky top-0 h-screen border-l">
           <ExploreMap events={filtered()} hoveredId={hoveredId()} onHoverEvent={setHoveredId} />
         </aside>
       </div>

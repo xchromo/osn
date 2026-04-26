@@ -39,7 +39,7 @@ export function FilterRail(props: { active: string; onSelect: (id: string) => vo
       <span class="w-2 shrink-0" />
       <button
         type="button"
-        class="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 text-[12.5px] font-medium text-muted-foreground hover:bg-secondary"
+        class="border-border bg-card text-muted-foreground hover:bg-secondary inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium"
       >
         <Icon name="filter" size={12} />
         More filters
