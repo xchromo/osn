@@ -7,7 +7,7 @@ related:
   - "[[event-access]]"
   - "[[pulse-close-friends]]"
   - "[[pulse]]"
-last-reviewed: 2026-04-23
+last-reviewed: 2026-04-26
 ---
 
 # Event Visibility Bug Runbook

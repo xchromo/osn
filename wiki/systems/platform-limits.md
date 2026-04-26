@@ -15,7 +15,7 @@ related:
   - "[[pulse]]"
 packages:
   - "@pulse/api"
-last-reviewed: 2026-04-23
+last-reviewed: 2026-04-26
 ---
 
 # Platform Limits
