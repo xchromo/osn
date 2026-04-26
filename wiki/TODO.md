@@ -151,6 +151,7 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 - [x] OSN Core: session schema — server-side sessions with SHA-256 hashed opaque tokens (Copenhagen Book C1)
 - [ ] Pulse: event series schema
 - [ ] Add indexes on `status` and `category` columns in pulse-db events schema
+- [ ] Mirror `@pulse/db/testing` (`createSchemaSql()` + `applySchema()`) into `@osn/db` and `@zap/db` so adding a column there is also a one-file change. Pattern: `pulse/db/src/testing.ts` derives DDL from the live Drizzle schema via `getTableConfig()` in FK-respecting topological order. `@zap/db` test fixtures (`pulse/api/tests/services/zapBridge.test.ts` zap side, plus any in `zap/api/tests/`) and `@osn/db` test fixtures should be migrated off hand-rolled `CREATE TABLE` blocks once the helpers exist.
 
 ### Crypto (`osn/crypto`)
 
