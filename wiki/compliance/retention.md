@@ -48,12 +48,23 @@ already enforced in code; others need a sweeper job.
 
 Tracked with `C-` IDs:
 
-1. **Sweeper job framework** — single cron-style worker in `@osn/api` that runs the per-table delete queries on a schedule. Use Bun's built-in `setInterval` for now; revisit if we move to Kubernetes CronJobs. ID: **C-M15**.
-2. **`security_events` sweeper** — `DELETE FROM security_events WHERE created_at < ?` for the 12-month cutoff. ID: **C-M2** (bundled).
+1. **Sweeper job framework** — single cron-style worker in `@osn/api` that runs the per-table delete queries on a schedule. Use Bun's built-in `setInterval` for now; revisit if we move to Kubernetes CronJobs. ID: **C-M15**. Mandatory design constraints (see "Sweeper design contract" below).
+2. **`security_events` sweeper** — batched delete of rows older than the 12-month cutoff per the C-M15 contract. ID: **C-M2** (bundled).
 3. **`email_changes` sweeper** — same pattern. ID: **C-M2** (bundled).
 4. **`sessions` expired-row purge** — sliding-window expiry already prevents valid use; the purge is for storage hygiene + DSAR completeness. ID: **C-M2** (bundled).
 5. **Pulse event archival flow** — `archived_events` view or a status flag + `endTime + 90 d` cutoff. ID: **C-L20**.
-6. **Deletion-tombstone retention** — keep enough info to explain "this user deleted their account on YYYY-MM-DD" for 30 d in case of recovery, then purge. ID: rolled into **C-H2**.
+6. **Deletion-tombstone retention** — keep enough info to explain "this user deleted their account on YYYY-MM-DD" for 30 d in case of recovery, then purge per the C-M15 contract. ID: rolled into **C-H2**.
+
+## Sweeper design contract (C-M15)
+
+Every sweeper invocation **must** follow these rules. They exist because a naive `DELETE … WHERE created_at < ?` against a large table holds a write lock long enough to time out concurrent auth writes (passkey ceremonies, refresh-token rotation, session revocation). Locked in before C-M15 implementation starts:
+
+1. **Batched delete** — `DELETE FROM <table> WHERE id IN (SELECT id FROM <table> WHERE <cutoff> LIMIT 500)` looped until 0 rows. Never an unbounded delete.
+2. **Inter-batch yield** — 50–100 ms `setTimeout` between batches to release the SQLite / Postgres write lock.
+3. **Single-instance lock** — Redis `SET sweeper:<table> $instance NX EX 600` before each cycle; abort if not acquired. Falls back to a DB advisory row when Redis is unavailable. Prevents two API nodes from running the same sweeper concurrently.
+4. **Re-entrancy guard** — the `setInterval` callback checks an in-process `running` flag; a slow run that crosses the next tick skips the new tick rather than overlapping itself.
+5. **Observability** — emit `osn.retention.rows_deleted` counter (attrs: `table`) and `osn.retention.cycle_duration_ms` histogram per pass. Spike on the counter is the early signal for a runaway accumulation.
+6. **All sweeper deletes share this pattern** — including the C-H2 deletion-tombstone purge, the Pulse event archival (C-L20), and the C-M2 trio. No per-table reinvention.
 
 ## Per-feature checklist
 

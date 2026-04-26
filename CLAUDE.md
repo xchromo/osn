@@ -37,7 +37,7 @@ Phase 1 surfaces:
 | **Platform** (API, DB, Client, UI, Infra) | Shared package work and infrastructure. Same check-off rule. |
 | **Security Backlog** | Open security findings only, sorted H → M → L. When a finding is fixed, move it to `[[changelog/security-fixes]]`. |
 | **Performance Backlog** | Open perf findings only. When fixed, move to `[[changelog/performance-fixes]]`. |
-| **Compliance Backlog** | Open compliance findings only (`C-` prefix), sorted H → M → L. Each row links to `[[wiki/compliance/...]]`. When closed, move to `[[changelog/compliance-fixes]]`. |
+| **Compliance Backlog** | Open compliance findings only (`C-` prefix), sorted H → M → L. Each row links to `[[wiki/compliance/...]]`. When closed, move to a future `wiki/changelog/compliance-fixes.md` (created on first close). |
 | **Deferred Decisions** | Questions we're not answering yet. Add a row; remove it when the decision is made. |
 | **Future** | Phase 2/3 items. Vague is fine here — detail gets added when the phase starts. |
 

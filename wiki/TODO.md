@@ -386,7 +386,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 
 ## Compliance Backlog
 
-Open compliance findings only. Closed items archived in `[[changelog/compliance-fixes]]` (created on first close). See `[[compliance/index]]` for the programme overview and `[[compliance/scope-matrix]]` for the in-scope-laws map. ID format documented in `[[review-findings]]`.
+Open compliance findings only. Closed items will be archived in a future `wiki/changelog/compliance-fixes.md` (created on first close). See `[[compliance/index]]` for the programme overview and `[[compliance/scope-matrix]]` for the in-scope-laws map. ID format documented in `[[review-findings]]`.
 
 ### High
 

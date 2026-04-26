@@ -45,7 +45,7 @@ becomes the controller; we process on its instruction).
 | Art. 25 — Privacy by design + by default | Bake in at design time | Strong — multi-account audit (P6) was a privacy-by-design exercise | [[identity-model]] |
 | Art. 28 — Processor obligations | Written contract with each processor | **Gap** — no DPAs on file with Cloudflare Email, Photon, Grafana Cloud, Redis provider | [[subprocessors]] |
 | Art. 30 — Records of processing activities | Maintain a register | **Gap** — [[data-map]] is the seed; needs flesh + maintenance discipline | [[data-map]] |
-| Art. 32 — Security of processing | Technical + organisational measures | Strong codified in skills | [[review-security]] |
+| Art. 32 — Security of processing | Technical + organisational measures | Strong codified in skills | `.claude/commands/review-security.md` |
 | Art. 33 — Notification of breach to DPA | 72 hours | **Gap** — no runbook | [[breach-response]] |
 | Art. 34 — Communication to data subject | Without undue delay if high risk | **Gap** — no template / channel | [[breach-response]] |
 | Art. 35 — DPIA | For high-risk processing | **Required** for Pulse special-category event surfacing, Zap M3 customer-support transcripts, Zap M4 locality / government channels, AI surfaces | One DPIA per feature, filed under `wiki/compliance/dpia/` |

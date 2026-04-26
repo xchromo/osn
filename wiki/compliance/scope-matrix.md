@@ -26,7 +26,7 @@ compliance obligations.
 | California (US) | CCPA / CPRA | DSAR + opt-out + SPI limit + non-discrimination. |
 | Other US states (VA, CT, TX, CO, UT, OR, IA, DE, FL, TN, IN, MT, NH, NJ, MN, RI…) | State privacy laws | All GDPR-shaped; deltas tracked in [[ccpa]]. |
 | Anywhere with users <13 (US) | COPPA | We hard-gate at signup. |
-| Brazil | LGPD | Defer to [[non-eu-privacy-laws]] when traffic justifies. |
+| Brazil | LGPD | Defer to a future `wiki/compliance/non-eu-privacy-laws.md` page when traffic justifies. |
 | Canada | PIPEDA | Defer. |
 | Australia | Privacy Act 1988 | Defer. |
 | Switzerland | nFADP | Defer; mostly aligns with GDPR. |

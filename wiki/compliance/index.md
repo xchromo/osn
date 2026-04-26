@@ -48,9 +48,9 @@ compliance" surface looks like.
 | Standard | Trigger | Plan |
 |---|---|---|
 | **PCI-DSS SAQ-A** (initially) | First paid Pulse ticket. Use Stripe-hosted checkout / Elements so we never touch PAN; SAQ-A keeps us out of full PCI scope. | Decision recorded in Deferred Decisions; revisit when ticketing exits "deferred". |
-| **EU AI Act** | Zap M5 "AI view" + Pulse "AI prompt filter" + Zap M4 "AI-assisted locality query". Most use cases are limited-risk (transparency obligations only), but the locality-query path could hit a high-risk category if it routes to public-safety / emergency content. | Capture in `[[ai-act]]` once Zap M5 spec firms up. |
+| **EU AI Act** | Zap M5 "AI view" + Pulse "AI prompt filter" + Zap M4 "AI-assisted locality query". Most use cases are limited-risk (transparency obligations only), but the locality-query path could hit a high-risk category if it routes to public-safety / emergency content. | Capture in a future `wiki/compliance/ai-act.md` once Zap M5 spec firms up. |
 | **State privacy laws** (VCDPA / CTDPA / TDPSA / CPA / UCPA / OCPA / DPDPA / FDBR / TIPA) | US users in those states; thresholds vary. The CCPA-shaped DSAR + opt-out infrastructure satisfies most of these — `[[ccpa]]` calls out the deltas. | Roll into `[[ccpa]]`. |
-| **Brazil LGPD / Canada PIPEDA / Australia Privacy Act / Switzerland nFADP** | Users in those jurisdictions. Each is GDPR-shaped with local deltas. | Single `[[non-eu-privacy-laws]]` page when traffic justifies. |
+| **Brazil LGPD / Canada PIPEDA / Australia Privacy Act / Switzerland nFADP** | Users in those jurisdictions. Each is GDPR-shaped with local deltas. | Single future `wiki/compliance/non-eu-privacy-laws.md` page when traffic justifies. |
 
 ## Standards we are explicitly NOT in scope for
 

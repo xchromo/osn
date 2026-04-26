@@ -46,7 +46,7 @@ runbook, two regimes, because the operational steps overlap.
 
 Use `GET /account/export`. The endpoint returns a JSON bundle:
 
-- `account` — row from `accounts` (email, passkey_user_id, max_profiles, timestamps).
+- `account` — explicit field list: `email`, `passkey_user_id`, `max_profiles`, `created_at`, `updated_at`. **Never includes the internal `accountId`** per the [[identity-model]] privacy invariant — `accountId` is the multi-account correlation key and must not appear in any API response, even one served to the account holder.
 - `profiles[]` — rows from `users` for this account.
 - `passkeys[]` — `id`, `label`, `aaguid`, `backup_eligible`, `backup_state`, `last_used_at`, `created_at`. **Not** `credentialId` or `publicKey` — those have no value to the user and could leak in transport.
 - `sessions[]` — `ua_label`, `ip_hash` (raw, not the public 16-hex handle), `last_used_at`, `created_at`. Note: `ip_hash` is HMAC-peppered; we cannot reverse to an IP.
@@ -63,7 +63,14 @@ Use `GET /account/export`. The endpoint returns a JSON bundle:
 - `consents[]` — once consent records ship (C-L1).
 - `dsar_requests[]` — prior requests for this user.
 
-Format: streaming JSON (multi-MB plausible for prolific users). Auth: bearer access token + step-up token. Rate-limit: 1 export per 24 h per account.
+**Wire format (locked before C-H1 implementation starts):**
+
+- **NDJSON envelope** — one JSON object per line, prefixed by a header line `{"version":1,"sections":[...]}` and terminated by `{"end":true}`. This lets the response stream via `ReadableStream` without ever materialising the full bundle in memory.
+- **Per-section keyset pagination** — every multi-row section (`security_events`, `sessions`, `connections`, `pulse.rsvps`, `pulse.events_hosted`, `zap.chats`) is fetched in batches of `LIMIT 500` ordered by `id` with `WHERE id > :cursor`. No `OFFSET` (degrades on large tables).
+- **ARC fan-out sub-bundles streamed** — `pulse.*` and `zap.*` sections are fetched via ARC and re-serialised line-by-line into the outer NDJSON; the bridge call uses chunked transfer too (see P-W2 below).
+- **Memory budget** — ≤32 MB resident per export. Exceeding the budget logs a warning + truncates with a tombstone record so the user gets a partial bundle + a notice rather than an OOM.
+
+Auth: bearer access token + step-up token. Rate-limit: 1 export per 24 h per account.
 
 ### Art. 16 — Rectification
 
@@ -81,6 +88,15 @@ Use `DELETE /account`. Two-phase:
    - Grafana logs: redacted at write time, no PII to scrub. Trace and metric retention windows handle the rest.
 
 Tombstone (deletion sentinel) retained 30 days then purged.
+
+**Fan-out reliability (locked before C-H2 implementation starts):**
+
+- **`deletion_jobs` table** — one row per soft-delete, with columns `account_id`, `soft_deleted_at`, `pulse_done_at`, `zap_done_at`, `hard_delete_at` (= `soft_deleted_at + 7 d`). The hard-delete sweeper refuses to fire until both `*_done_at` columns are non-null.
+- **Idempotent per-bridge** — `@pulse/api/internal/account-deleted` and `@zap/api/internal/account-deleted` accept the same `accountId` repeatedly; second call is a no-op. The C-M15 sweeper retries failed bridges every cycle until the row clears.
+- **Parallel fan-out** — `Effect.all([pulseCall, zapCall], { concurrency: "unbounded" })` with a per-bridge timeout of 10 s. A failing bridge does not block the soft-delete (which already returned 202); it just leaves the job row partially complete for the sweeper to retry.
+- **Per-bridge ARC rate-limit budget** — the deletion endpoints must be exempted from the standard ARC rate limit, OR sized to absorb a mass-deletion event without throttling. Pre-merge: agree on a 100 req/s ceiling per bridge with ARC token tagged `scope: "account-deletion"`.
+
+The export path uses the same `Effect.all` parallelism + 10 s per-bridge timeout. A failing bridge during export emits a partial bundle with a `{"degraded":"pulse|zap","reason":"..."}` line so the user can see the gap and re-request later.
 
 **Refusals permitted** under Art. 17(3):
 

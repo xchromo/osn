@@ -37,7 +37,11 @@ as "consumer-oriented services" once we have EU users.
 
 Tracked with `C-` IDs:
 
-1. **Axe-core in CI** — `@axe-core/playwright` running against `@osn/landing`, `@osn/social`, `@pulse/app` on every PR. Fail on serious / critical violations. ID: **C-M14**.
+1. **Axe-core in CI** — `@axe-core/playwright` running against `@osn/landing`, `@osn/social`, `@pulse/app` on every PR. Fail on serious / critical violations. ID: **C-M14**. Locked design constraints:
+   - **Per-app route allowlist** kept in each app's repo as `tests/a11y/routes.ts`. Initial set: landing `/`, `/legal/*`; social `/`, `/login`, `/account`, `/sessions`; pulse `/`, `/event/[id]`, `/explore`. Adding a new top-level route is the trigger to add it to the allowlist (enforced via a lint rule comparing top-level pages to the allowlist file).
+   - **Browser pinned** via `playwright install chromium --with-deps` cached by the Playwright version hash so CI cold-start stays under a minute.
+   - **Run-time budget** ≤90 s for the full PR suite, parallelised across the three apps via `playwright --workers`.
+   - **Severity gating** — PR job fails on `serious` + `critical` only; full WCAG 2.1 AA audit (incl. `moderate` + `minor`) runs nightly so PR latency stays low while drift is still caught.
 2. **Solid-aware a11y lint coverage** — `oxlintrc.json` already enables `jsx-a11y`; verify the rule set matches WCAG 2.1 AA (some rules may be off by default). ID: **C-L12**.
 3. **Manual screen-reader test** — pre-release checklist: VoiceOver on macOS Safari, NVDA on Windows Firefox, TalkBack on Android Chrome (when Android lands). ID: **C-L13**.
 4. **Pulse map keyboard parity** — ensure marker selection, zoom, pan, and detail expand all reachable by keyboard. ID: **C-L14**.

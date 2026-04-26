@@ -19,6 +19,14 @@ medium-platform threshold (50 employees / €10M turnover) — the **micro /
 SME exemption** lifts most transparency-reporting and risk-assessment
 burdens, but not the operational ones below.
 
+The micro / SME exemption is specifically **Art. 19**, which carves out
+the "additional obligations for online platforms" in Section 3 (Arts.
+20–28) for enterprises meeting the Recommendation 2003/361/EC employee /
+turnover thresholds. It does **not** exempt the operational obligations
+of Arts. 11–18 (Section 1 + 2), and Art. 15 transparency reporting for
+hosting services should be confirmed with counsel before relying on the
+exemption — the language is narrower than commonly summarised.
+
 ## Always-on obligations (no SME exemption)
 
 | Article | Obligation | Status | Action |
@@ -27,7 +35,7 @@ burdens, but not the operational ones below.
 | Art. 12 | Single point of contact for recipients (users) | **Gap** | Email alias `dsa@osn.example` + `@osn/social` Settings link. |
 | Art. 13 | Designated EU legal representative if not established in EU | **Conditional** | Required if we end up incorporated outside the EU. Decision deferred. |
 | Art. 14 | ToS in clear, plain language; explain content moderation rules, recourse, algorithmic recommendation criteria | **Gap** | Draft ToS lives at `wiki/compliance/legal-drafts/tos.md`; published copy at `osn/landing/src/pages/legal/tos.astro`. |
-| Art. 15 | Annual transparency report (content moderation actions, response times, resources) | **SME-exempt below 50 employees** | Skip until threshold; collect the data anyway. |
+| Art. 15 | Annual transparency report (content moderation actions, response times, resources) | **SME-exempt scope to confirm** — Art. 19 exempts Section 3 (Arts. 20–28) but the Art. 15 hosting-services report is in Section 2 and may still apply. | Confirm with counsel pre-launch. Collect the data either way (see C-L10). |
 | Art. 16 | Notice-and-action mechanism — anyone can report illegal content with the prescribed minimum information; we must process timely + diligently | **Gap** | Build `POST /reports` (Pulse + Zap) with the Art. 16 schema. |
 | Art. 17 | Statement of reasons — for every restriction (post removal, account suspension, demotion, RSVP rejection by host, etc.), we provide a structured explanation to the affected user | **Gap** | Build `moderation_actions` table + email template. |
 | Art. 18 | Notification of suspicions of criminal offences threatening life / safety to law enforcement | **Gap** | Add to [[breach-response]] with named legal contact. |
@@ -35,7 +43,7 @@ burdens, but not the operational ones below.
 | Art. 21 | Out-of-court dispute settlement — right of users to escalate to certified bodies | **Gap** | List options in ToS; no system change. |
 | Art. 22 | Trusted flaggers — priority handling for accredited flaggers | **Gap** | Tag-based queue priority in moderation tooling. |
 | Art. 23 | Misuse — suspend users / flaggers who repeatedly post manifestly illegal content / file unfounded notices | **Gap** | Strike-system in moderation tooling. |
-| Art. 24 | Transparency reporting (online platforms specifically) | **SME-exempt** | Same as Art. 15. |
+| Art. 24 | Transparency reporting (online platforms specifically) | **SME-exempt per Art. 19** (Section 3 carve-out) | Skip until threshold; data collected anyway via C-L10. |
 | Art. 25 | No "dark patterns" in interface design that distort autonomous choice | **Continuous** | Cover in design review checklist. |
 | Art. 26 | Online advertising transparency — show "ad", who paid, parameters used | **N/A today** | Activate when "promoted events" lands. |
 | Art. 27 | Recommender system transparency — main parameters disclosed in ToS | **Gap** | Pulse discovery uses friends + location + recency; Zap has no recommender; document in ToS. |
