@@ -267,32 +267,38 @@ export const listEvents = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Bounded concurrency: 5 is enough parallelism to hide DB round-trip
-    // latency but avoids unleashing a burst of N in-flight UPDATEs (and
-    // N child spans) against SQLite for a page-size of 100 results.
-    const transitioned = yield* Effect.forEach(results, applyTransition, {
-      concurrency: 5,
-    });
+    // Run the per-row transition stream and the viewer's close-friends
+    // lookup in parallel — neither depends on the other (P-W1).
+    // Bounded concurrency on transitions: 5 is enough parallelism to hide DB
+    // round-trip latency but avoids unleashing a burst of N in-flight
+    // UPDATEs (and N child spans) against SQLite for a page-size of 100
+    // results.
+    const [transitioned, closeFriendIds] = yield* Effect.all(
+      [
+        Effect.forEach(results, applyTransition, { concurrency: 5 }),
+        params.viewerId
+          ? getCloseFriendIdsForViewer(params.viewerId)
+          : Effect.succeed(new Set<string>()),
+      ] as const,
+      { concurrency: "unbounded" },
+    );
 
     // Feed boost: events organised by a close friend of the viewer surface
     // first. Stable partition preserves the underlying startTime ordering
     // within each bucket, so the feed remains chronological within each
-    // group rather than reshuffling the whole list. Skipped for anonymous
-    // viewers (close friends are a personal signal that doesn't apply).
-    const ranked =
-      params.viewerId == null
-        ? transitioned
-        : yield* Effect.gen(function* () {
-            const closeFriendIds = yield* getCloseFriendIdsForViewer(params.viewerId!);
-            if (closeFriendIds.size === 0) return transitioned;
-            const friends: Event[] = [];
-            const others: Event[] = [];
-            for (const event of transitioned) {
-              if (closeFriendIds.has(event.createdByProfileId)) friends.push(event);
-              else others.push(event);
-            }
-            return [...friends, ...others];
-          });
+    // group rather than reshuffling the whole list.
+    let ranked: Event[];
+    if (closeFriendIds.size === 0) {
+      ranked = transitioned;
+    } else {
+      const friends: Event[] = [];
+      const others: Event[] = [];
+      for (const event of transitioned) {
+        if (closeFriendIds.has(event.createdByProfileId)) friends.push(event);
+        else others.push(event);
+      }
+      ranked = [...friends, ...others];
+    }
 
     metricEventsListed("all", ranked.length);
     return ranked;

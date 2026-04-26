@@ -3,6 +3,7 @@ import { Db } from "@pulse/db/service";
 import { and, eq, inArray } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
+import { MAX_EVENT_GUESTS } from "../lib/limits";
 import {
   metricCloseFriendAdded,
   metricCloseFriendRemoved,
@@ -32,8 +33,13 @@ export class DatabaseError extends Data.TaggedError("CloseFriendDatabaseError")<
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Hard cap on `IN (...)` parameter counts to stay well under SQLite's variable limit. */
-const MAX_BATCH_SIZE = 1000;
+/**
+ * Hard cap on `IN (...)` parameter counts. Tied to `MAX_EVENT_GUESTS` because
+ * the only batch caller is the RSVP flow, which already caps attendance at
+ * that limit (P-I1). If the platform attendance ceiling rises, the batch
+ * clamp moves with it instead of silently dropping rows.
+ */
+const MAX_BATCH_SIZE = MAX_EVENT_GUESTS;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,35 +79,19 @@ export const addCloseFriend = (
     }
 
     const { db } = yield* Db;
-    const before = yield* Effect.tryPromise({
-      try: () =>
-        db
-          .select({ _: pulseCloseFriends.id })
-          .from(pulseCloseFriends)
-          .where(
-            and(
-              eq(pulseCloseFriends.profileId, profileId),
-              eq(pulseCloseFriends.friendId, friendId),
-            ),
-          )
-          .limit(1),
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-
-    if (before.length > 0) {
-      metricCloseFriendAdded("duplicate");
-      return;
-    }
-
-    yield* Effect.tryPromise({
+    // Single round-trip: ON CONFLICT DO NOTHING ... RETURNING returns rows
+    // only when the insert actually fires, which is exactly the
+    // duplicate-vs-new signal the metric needs (P-W2).
+    const inserted = yield* Effect.tryPromise({
       try: () =>
         db
           .insert(pulseCloseFriends)
           .values({ id: genId(), profileId, friendId, createdAt: new Date() })
-          .onConflictDoNothing(),
+          .onConflictDoNothing()
+          .returning({ id: pulseCloseFriends.id }),
       catch: (cause) => new DatabaseError({ cause }),
     });
-    metricCloseFriendAdded("ok");
+    metricCloseFriendAdded(inserted.length === 0 ? "duplicate" : "ok");
   }).pipe(Effect.withSpan("pulse.closeFriends.add"));
 
 /**
@@ -115,28 +105,25 @@ export const removeCloseFriend = (
 ): Effect.Effect<void, CloseFriendNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    const rows = yield* Effect.tryPromise({
+    // Single round-trip: DELETE ... RETURNING returns the deleted row, or
+    // empty when nothing matched — the not-found signal (P-W2).
+    const deleted = yield* Effect.tryPromise({
       try: () =>
         db
-          .select({ id: pulseCloseFriends.id })
-          .from(pulseCloseFriends)
+          .delete(pulseCloseFriends)
           .where(
             and(
               eq(pulseCloseFriends.profileId, profileId),
               eq(pulseCloseFriends.friendId, friendId),
             ),
           )
-          .limit(1),
+          .returning({ id: pulseCloseFriends.id }),
       catch: (cause) => new DatabaseError({ cause }),
     });
-    if (rows.length === 0) {
+    if (deleted.length === 0) {
       metricCloseFriendRemoved("not_found");
       return yield* Effect.fail(new CloseFriendNotFound({ profileId, friendId }));
     }
-    yield* Effect.tryPromise({
-      try: () => db.delete(pulseCloseFriends).where(eq(pulseCloseFriends.id, rows[0]!.id)),
-      catch: (cause) => new DatabaseError({ cause }),
-    });
     metricCloseFriendRemoved("ok");
   }).pipe(Effect.withSpan("pulse.closeFriends.remove"));
 

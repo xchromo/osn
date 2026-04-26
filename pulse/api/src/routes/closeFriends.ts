@@ -38,6 +38,10 @@ export const createCloseFriendsRoutes = (
           set.status = 401;
           return { message: "Unauthorized" } as const;
         }
+        // Short private cache: the list only mutates via the same
+        // POST/DELETE routes, and 30s absorbs repeat reads on rapid
+        // navigation without staleness that matters in practice (P-W3).
+        set.headers["cache-control"] = "private, max-age=30";
         const ids = await Effect.runPromise(
           listCloseFriendIds(claims.profileId).pipe(Effect.provide(dbLayer)),
         );
