@@ -2,115 +2,15 @@ import { Database } from "bun:sqlite";
 
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
+import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, it, expect } from "vitest";
 
 import * as schema from "../src/schema";
+import { applySchema } from "../src/testing";
 
 function createTestDb() {
   const sqlite = new Database(":memory:");
-  sqlite.run(`
-    CREATE TABLE event_series (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      location TEXT,
-      venue TEXT,
-      latitude REAL,
-      longitude REAL,
-      category TEXT,
-      image_url TEXT,
-      duration_minutes INTEGER,
-      visibility TEXT NOT NULL DEFAULT 'public',
-      guest_list_visibility TEXT NOT NULL DEFAULT 'public',
-      join_policy TEXT NOT NULL DEFAULT 'open',
-      allow_interested INTEGER NOT NULL DEFAULT 1,
-      comms_channels TEXT NOT NULL DEFAULT '["email"]',
-      rrule TEXT NOT NULL,
-      dtstart INTEGER NOT NULL,
-      until INTEGER,
-      materialized_through INTEGER NOT NULL,
-      timezone TEXT NOT NULL DEFAULT 'UTC',
-      status TEXT NOT NULL DEFAULT 'active',
-      chat_id TEXT,
-      created_by_profile_id TEXT NOT NULL,
-      created_by_name TEXT,
-      created_by_avatar TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  sqlite.run(`
-    CREATE TABLE events (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      location TEXT,
-      venue TEXT,
-      category TEXT,
-      start_time INTEGER NOT NULL,
-      end_time INTEGER,
-      status TEXT NOT NULL DEFAULT 'upcoming',
-      image_url TEXT,
-      price_amount INTEGER,
-      price_currency TEXT,
-      latitude REAL,
-      longitude REAL,
-      visibility TEXT NOT NULL DEFAULT 'public',
-      guest_list_visibility TEXT NOT NULL DEFAULT 'public',
-      join_policy TEXT NOT NULL DEFAULT 'open',
-      allow_interested INTEGER NOT NULL DEFAULT 1,
-      comms_channels TEXT NOT NULL DEFAULT '["email"]',
-      chat_id TEXT,
-      series_id TEXT REFERENCES event_series(id),
-      instance_override INTEGER NOT NULL DEFAULT 0,
-      created_by_profile_id TEXT NOT NULL,
-      created_by_name TEXT,
-      created_by_avatar TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  sqlite.run(`
-    CREATE TABLE event_rsvps (
-      id TEXT PRIMARY KEY,
-      event_id TEXT NOT NULL REFERENCES events(id),
-      profile_id TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'going',
-      invited_by_profile_id TEXT,
-      created_at INTEGER NOT NULL,
-      UNIQUE (event_id, profile_id)
-    )
-  `);
-  sqlite.run(`
-    CREATE TABLE pulse_users (
-      profile_id TEXT PRIMARY KEY,
-      attendance_visibility TEXT NOT NULL DEFAULT 'connections',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  sqlite.run(`
-    CREATE TABLE event_comms (
-      id TEXT PRIMARY KEY,
-      event_id TEXT NOT NULL REFERENCES events(id),
-      channel TEXT NOT NULL,
-      body TEXT NOT NULL,
-      sent_by_profile_id TEXT NOT NULL,
-      sent_at INTEGER,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  sqlite.run(`
-    CREATE TABLE pulse_close_friends (
-      id TEXT PRIMARY KEY,
-      profile_id TEXT NOT NULL,
-      friend_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      UNIQUE (profile_id, friend_id)
-    )
-  `);
-  sqlite.run(`CREATE INDEX pulse_close_friends_profile_idx ON pulse_close_friends (profile_id)`);
-  sqlite.run(`CREATE INDEX pulse_close_friends_friend_idx ON pulse_close_friends (friend_id)`);
+  applySchema(sqlite);
   return drizzle(sqlite, { schema });
 }
 
@@ -222,6 +122,17 @@ describe("events schema", () => {
     expect(row!.joinPolicy).toBe("open");
     expect(row!.allowInterested).toBe(true);
     expect(row!.commsChannels).toBe('["email"]');
+  });
+
+  it("declares indexes required by discovery", () => {
+    const { indexes } = getTableConfig(schema.events);
+    const indexNames = new Set(indexes.map((i) => i.config.name));
+    // Powers `visibility = ?` + `start_time BETWEEN ?` under a single seek.
+    expect(indexNames.has("events_visibility_start_time_idx")).toBe(true);
+    // Single-column category filter.
+    expect(indexNames.has("events_category_idx")).toBe(true);
+    // Bbox range-scan prefilter for radius search.
+    expect(indexNames.has("events_lat_lng_idx")).toBe(true);
   });
 
   it("stores non-default event visibility config", async () => {

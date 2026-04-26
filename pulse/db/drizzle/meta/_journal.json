@@ -19,8 +19,15 @@
     {
       "idx": 2,
       "version": "6",
-      "when": 1777000000000,
-      "tag": "0002_close_friends",
+      "when": 1777593600000,
+      "tag": "0002_event_discovery_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1778000000000,
+      "tag": "0003_close_friends",
       "breakpoints": true
     }
   ]

@@ -1,12 +1,13 @@
 {
   "name": "@pulse/db",
-  "version": "0.12.0",
+  "version": "0.12.2",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
-    "./service": "./src/service.ts"
+    "./service": "./src/service.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "db:migrate": "bunx drizzle-kit generate",
