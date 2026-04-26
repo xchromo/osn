@@ -109,9 +109,7 @@ function createTestDb() {
       UNIQUE (profile_id, friend_id)
     )
   `);
-  sqlite.run(
-    `CREATE INDEX pulse_close_friends_profile_idx ON pulse_close_friends (profile_id)`,
-  );
+  sqlite.run(`CREATE INDEX pulse_close_friends_profile_idx ON pulse_close_friends (profile_id)`);
   sqlite.run(`CREATE INDEX pulse_close_friends_friend_idx ON pulse_close_friends (friend_id)`);
   return drizzle(sqlite, { schema });
 }

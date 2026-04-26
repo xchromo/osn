@@ -77,7 +77,7 @@ export const createCloseFriendsRoutes = (
         const result = await Effect.runPromise(
           addCloseFriend(claims.profileId, params.friendId).pipe(
             Effect.match({
-              onSuccess: () => ({ ok: true } as const),
+              onSuccess: () => ({ ok: true }) as const,
               onFailure: (e) => {
                 if (e._tag === "NotEligibleForCloseFriend") {
                   return { _err: "not_eligible" as const, reason: e.reason };
@@ -117,7 +117,7 @@ export const createCloseFriendsRoutes = (
         const result = await Effect.runPromise(
           removeCloseFriend(claims.profileId, params.friendId).pipe(
             Effect.match({
-              onSuccess: () => ({ ok: true } as const),
+              onSuccess: () => ({ ok: true }) as const,
               onFailure: (e) => {
                 if (e._tag === "CloseFriendNotFound") return { _err: "not_found" as const };
                 return { _err: "db" as const };

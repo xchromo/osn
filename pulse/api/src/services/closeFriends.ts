@@ -145,9 +145,7 @@ export const removeCloseFriend = (
  * owns the join with profile display metadata — this service stays
  * focused on the local table.
  */
-export const listCloseFriendIds = (
-  profileId: string,
-): Effect.Effect<string[], DatabaseError, Db> =>
+export const listCloseFriendIds = (profileId: string): Effect.Effect<string[], DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const rows = yield* Effect.tryPromise({

@@ -6,13 +6,13 @@ import { Card } from "@osn/ui/ui/card";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
+import { OSN_ISSUER_URL } from "../lib/auth";
 import {
   addCloseFriend,
   listCloseFriends,
   removeCloseFriend,
   type CloseFriendEntry,
 } from "../lib/closeFriends";
-import { OSN_ISSUER_URL } from "../lib/auth";
 
 interface ConnectionsResponse {
   connections: ConnectionEntry[];
@@ -39,10 +39,7 @@ export function CloseFriendsPage() {
     async (tk) => listCloseFriends(tk),
     { initialValue: [] },
   );
-  const [connections, { refetch: refetchConnections }] = createResource<
-    ConnectionEntry[],
-    string
-  >(
+  const [connections, { refetch: refetchConnections }] = createResource<ConnectionEntry[], string>(
     () => token() ?? undefined,
     async (tk) => fetchConnections(tk),
     { initialValue: [] },
@@ -99,8 +96,8 @@ export function CloseFriendsPage() {
       <h1 class="text-foreground mb-2 text-2xl font-bold">Close friends</h1>
       <p class="text-muted-foreground mb-6 text-sm">
         Pulse uses your close-friends list to surface their events higher in your feed and to make
-        them quick to invite when you're hosting. This list is Pulse-only — other OSN apps don't
-        see it.
+        them quick to invite when you're hosting. This list is Pulse-only — other OSN apps don't see
+        it.
       </p>
 
       <Show

@@ -5,10 +5,7 @@ import { Data, Effect, Schema } from "effect";
 
 import { MAX_EVENT_GUESTS } from "../lib/limits";
 import { metricRsvpInviteBatch, metricRsvpListed, metricRsvpUpserted } from "../metrics";
-import {
-  getCloseFriendsOfBatch,
-  DatabaseError as CloseFriendsDatabaseError,
-} from "./closeFriends";
+import { getCloseFriendsOfBatch, DatabaseError as CloseFriendsDatabaseError } from "./closeFriends";
 import { EventNotFound, DatabaseError, ValidationError } from "./events";
 import {
   getConnectionIds,
@@ -195,7 +192,11 @@ const filterByAttendeePrivacy = (
   event: Event,
   rows: RsvpWithProfile[],
   viewerId: string | null,
-): Effect.Effect<RsvpWithProfile[], DatabaseError | GraphBridgeError | CloseFriendsDatabaseError, Db> =>
+): Effect.Effect<
+  RsvpWithProfile[],
+  DatabaseError | GraphBridgeError | CloseFriendsDatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const attendeeIds = Array.from(new Set(rows.map((r) => r.profileId)));
 
@@ -213,7 +214,9 @@ const filterByAttendeePrivacy = (
     // viewer-connections call is an S2S HTTP round-trip to OSN.
     const [closeFriendsOfViewer, viewerConnections] = yield* Effect.all(
       [
-        viewerId ? getCloseFriendsOfBatch(viewerId, attendeeIds) : Effect.succeed(new Set<string>()),
+        viewerId
+          ? getCloseFriendsOfBatch(viewerId, attendeeIds)
+          : Effect.succeed(new Set<string>()),
         needsConnections && viewerId
           ? getConnectionIds(viewerId)
           : Effect.succeed(new Set<string>()),
@@ -517,8 +520,7 @@ export const latestRsvps = (
   RsvpWithProfile[],
   EventNotFound | DatabaseError | GraphBridgeError | CloseFriendsDatabaseError,
   Db
-> =>
-  listRsvps(eventId, viewerId, { status: "going", limit });
+> => listRsvps(eventId, viewerId, { status: "going", limit });
 
 /**
  * Returns the counts per status. Counts are always visible (they don't

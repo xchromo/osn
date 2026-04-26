@@ -49,15 +49,17 @@ it.effect("addCloseFriend rejects self-add with NotEligibleForCloseFriend(self)"
   }).pipe(Effect.provide(createTestLayer())),
 );
 
-it.effect("addCloseFriend rejects non-connection with NotEligibleForCloseFriend(not_a_connection)", () =>
-  Effect.gen(function* () {
-    vi.mocked(bridge.getConnectionIds).mockReturnValue(Effect.succeed(new Set(["usr_carol"])));
-    const err = yield* Effect.flip(addCloseFriend("usr_alice", "usr_bob"));
-    expect(err._tag).toBe("NotEligibleForCloseFriend");
-    if (err._tag === "NotEligibleForCloseFriend") {
-      expect(err.reason).toBe("not_a_connection");
-    }
-  }).pipe(Effect.provide(createTestLayer())),
+it.effect(
+  "addCloseFriend rejects non-connection with NotEligibleForCloseFriend(not_a_connection)",
+  () =>
+    Effect.gen(function* () {
+      vi.mocked(bridge.getConnectionIds).mockReturnValue(Effect.succeed(new Set(["usr_carol"])));
+      const err = yield* Effect.flip(addCloseFriend("usr_alice", "usr_bob"));
+      expect(err._tag).toBe("NotEligibleForCloseFriend");
+      if (err._tag === "NotEligibleForCloseFriend") {
+        expect(err.reason).toBe("not_a_connection");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
 );
 
 it.effect("addCloseFriend is idempotent — duplicate add leaves a single row", () =>
@@ -148,9 +150,7 @@ it.effect("getCloseFriendsOfBatch returns the subset who marked viewer as close 
   Effect.gen(function* () {
     vi.mocked(bridge.getConnectionIds).mockImplementation((profileId) =>
       Effect.succeed(
-        profileId === "usr_bob" || profileId === "usr_carol"
-          ? new Set(["usr_dan"])
-          : new Set(),
+        profileId === "usr_bob" || profileId === "usr_carol" ? new Set(["usr_dan"]) : new Set(),
       ),
     );
     // Bob marked Dan; Carol did not.

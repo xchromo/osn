@@ -534,7 +534,8 @@ const closeFriendsRemoved = createCounter<CloseFriendsRemovedAttrs>({
 
 const closeFriendsListed = createCounter<CloseFriendsListedAttrs>({
   name: PULSE_METRICS.closeFriendsListed,
-  description: "Close-friend list reads on the Pulse-scoped list, by whether any rows were returned",
+  description:
+    "Close-friend list reads on the Pulse-scoped list, by whether any rows were returned",
   unit: "{query}",
 });
 

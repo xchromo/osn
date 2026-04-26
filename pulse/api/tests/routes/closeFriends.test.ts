@@ -32,33 +32,21 @@ async function makeToken(profileId: string): Promise<string> {
     .sign(testPrivateKey);
 }
 
-const post = (
-  app: ReturnType<typeof createCloseFriendsRoutes>,
-  path: string,
-  token?: string,
-) =>
+const post = (app: ReturnType<typeof createCloseFriendsRoutes>, path: string, token?: string) =>
   app.handle(
     new Request(`http://localhost${path}`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }),
   );
-const del = (
-  app: ReturnType<typeof createCloseFriendsRoutes>,
-  path: string,
-  token?: string,
-) =>
+const del = (app: ReturnType<typeof createCloseFriendsRoutes>, path: string, token?: string) =>
   app.handle(
     new Request(`http://localhost${path}`, {
       method: "DELETE",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }),
   );
-const get = (
-  app: ReturnType<typeof createCloseFriendsRoutes>,
-  path: string,
-  token?: string,
-) =>
+const get = (app: ReturnType<typeof createCloseFriendsRoutes>, path: string, token?: string) =>
   app.handle(
     new Request(`http://localhost${path}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -138,10 +126,7 @@ describe("close-friends routes", () => {
     const body = (await res.json()) as {
       closeFriends: Array<{ profileId: string; handle: string | null }>;
     };
-    expect(body.closeFriends.map((c) => c.profileId).toSorted()).toEqual([
-      "usr_bob",
-      "usr_carol",
-    ]);
+    expect(body.closeFriends.map((c) => c.profileId).toSorted()).toEqual(["usr_bob", "usr_carol"]);
     expect(body.closeFriends.find((c) => c.profileId === "usr_bob")?.handle).toBe("bob");
   });
 

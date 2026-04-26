@@ -45,10 +45,7 @@ export async function addCloseFriend(
   return { ok: false, error: "unknown" };
 }
 
-export async function removeCloseFriend(
-  friendId: string,
-  token: string,
-): Promise<{ ok: boolean }> {
+export async function removeCloseFriend(friendId: string, token: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${BASE_URL}/close-friends/${encodeURIComponent(friendId)}`, {
     method: "DELETE",
     headers: authHeaders(token),
