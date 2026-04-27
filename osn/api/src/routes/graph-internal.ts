@@ -16,8 +16,24 @@ const AUDIENCE = "osn-api";
 const SCOPE_GRAPH_READ = "graph:read";
 /** Max profile IDs per batch request — stays well under SQLite's variable limit (999). */
 const MAX_BATCH_PROFILE_IDS = 200;
-/** Exhaustive list of scopes this server will grant to any service. S-M101. */
-const PERMITTED_SCOPES = new Set(["graph:read"]);
+/**
+ * Exhaustive list of scopes this server will grant to any service. S-M101.
+ *
+ * `account:erase` — granted to Pulse / Zap on registration so osn-api can
+ * mint outbound ARC tokens addressed at them with this scope when fanning
+ * out a full-account deletion.
+ *
+ * `step-up:verify` + `app-enrollment:write` — granted to Pulse / Zap for the
+ * Flow B leave-app callbacks: Pulse validates a user's step-up token via
+ * `/internal/step-up/verify` and reports the leave via
+ * `/internal/app-enrollment/leave`.
+ */
+const PERMITTED_SCOPES = new Set([
+  "graph:read",
+  "account:erase",
+  "step-up:verify",
+  "app-enrollment:write",
+]);
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -50,6 +50,7 @@ describe("applySchema", () => {
       "event_series",
       "events",
       "pulse_close_friends",
+      "pulse_deletion_jobs",
       "pulse_users",
     ]);
   });

@@ -21,6 +21,7 @@ import type {
   SecurityEventKind,
   SecurityInvalidationTrigger,
   StepUpFactor,
+  StepUpPurpose,
   StepUpVerifyResult,
 } from "@shared/observability/metrics";
 import {
@@ -2702,7 +2703,17 @@ export function createAuthService(config: AuthConfig) {
 
   const STEP_UP_AUDIENCE = "osn-step-up";
 
-  const issueStepUpToken = (accountId: string, factor: StepUpFactor) =>
+  /**
+   * Mints a step-up (sudo) JWT bound to {@link accountId} via the `sub`
+   * claim. When {@link purpose} is supplied the token also carries a
+   * matching `purpose` claim that the verifier can require — used by
+   * sensitive operations (account delete, app delete) to defend against
+   * confused-deputy reuse of a token meant for a different action.
+   * Tokens minted without a purpose remain valid for any verifier that
+   * does not require one (back-compat with recovery / passkey / email
+   * change endpoints).
+   */
+  const issueStepUpToken = (accountId: string, factor: StepUpFactor, purpose?: StepUpPurpose) =>
     Effect.gen(function* () {
       // Map the ceremony factor onto RFC 8176 "amr" values the verifier reads.
       const amr = factor === "passkey" ? "webauthn" : factor === "otp" ? "otp" : "recovery";
@@ -2714,6 +2725,7 @@ export function createAuthService(config: AuthConfig) {
               aud: STEP_UP_AUDIENCE,
               amr: [amr],
               jti: crypto.randomUUID(),
+              ...(purpose ? { purpose } : {}),
             },
             config.jwtPrivateKey,
             config.jwtKid,
@@ -2735,7 +2747,8 @@ export function createAuthService(config: AuthConfig) {
     token: string,
     expectedAccountId: string,
     allowedAmr: ReadonlySet<string>,
-  ): Effect.Effect<{ amr: string[] }, AuthError> =>
+    expectedPurpose?: StepUpPurpose,
+  ): Effect.Effect<{ amr: string[]; purpose: StepUpPurpose | null }, AuthError> =>
     Effect.gen(function* () {
       const record = (result: StepUpVerifyResult) =>
         Effect.sync(() => metricStepUpVerified(result));
@@ -2768,6 +2781,19 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Step-up factor not permitted" }));
       }
 
+      // Confused-deputy guard: when the verifier requires a specific purpose,
+      // the token must carry a matching `purpose` claim. Tokens minted
+      // without a purpose are accepted only by verifiers that don't require
+      // one (preserves back-compat with the legacy recovery / passkey
+      // verifyStepUpFor* helpers).
+      const purposeClaim = payloadResult["purpose"];
+      const tokenPurpose: StepUpPurpose | null =
+        typeof purposeClaim === "string" ? (purposeClaim as StepUpPurpose) : null;
+      if (expectedPurpose && tokenPurpose !== expectedPurpose) {
+        yield* record("wrong_purpose");
+        return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
+      }
+
       // S-H1: cluster-safe single-use guard. First consumer wins; every
       // subsequent presentation — local, another pod, or a replay after a
       // Redis failover — lands on the jti-already-consumed branch.
@@ -2780,7 +2806,7 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Step-up token already used" }));
       }
       yield* record("ok");
-      return { amr };
+      return { amr, purpose: tokenPurpose };
     });
 
   /**
@@ -2995,6 +3021,40 @@ export function createAuthService(config: AuthConfig) {
   ): Effect.Effect<void, AuthError> =>
     Effect.gen(function* () {
       yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr);
+    });
+
+  /**
+   * Step-up verifier for `DELETE /account` (Flow A — full OSN account
+   * erasure). Reuses the recovery-AMR allowlist (passkey OR OTP) — the user
+   * may have already nuked their last passkey, in which case OTP-to-email
+   * is the only escape; a stricter passkey-only rule would lock out users
+   * who legitimately want to delete after losing their authenticator.
+   */
+  const verifyStepUpForAccountDelete = (
+    accountId: string,
+    stepUpToken: string,
+  ): Effect.Effect<void, AuthError> =>
+    Effect.gen(function* () {
+      yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr);
+    });
+
+  /**
+   * Cross-service step-up verifier — called by Pulse / Zap via the
+   * ARC-gated `/internal/step-up/verify` endpoint. Requires a matching
+   * {@link StepUpPurpose} so a token minted for one app cannot be
+   * replayed at another (confused-deputy guard).
+   *
+   * The purpose-bound minter must be invoked from the corresponding
+   * `/account/step-up/{begin,complete}` flow with the right purpose
+   * query param; this verifier simply enforces what was minted.
+   */
+  const verifyStepUpForExternalPurpose = (
+    accountId: string,
+    stepUpToken: string,
+    expectedPurpose: StepUpPurpose,
+  ): Effect.Effect<void, AuthError> =>
+    Effect.gen(function* () {
+      yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr, expectedPurpose);
     });
 
   // -------------------------------------------------------------------------
@@ -3935,6 +3995,9 @@ export function createAuthService(config: AuthConfig) {
     verifyStepUpForRecoveryGenerate,
     verifyStepUpForPasskeyDelete,
     verifyStepUpForPasskeyRegister,
+    verifyStepUpForAccountDelete,
+    verifyStepUpForExternalPurpose,
+    issueStepUpToken,
     listAccountSessions,
     revokeAccountSession,
     revokeAllOtherAccountSessions,
