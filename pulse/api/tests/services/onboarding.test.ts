@@ -1,4 +1,6 @@
 import { it, expect } from "@effect/vitest";
+import { pulseAccountOnboarding } from "@pulse/db/schema";
+import { Db } from "@pulse/db/service";
 import { Effect } from "effect";
 import { vi, beforeEach, describe } from "vitest";
 
@@ -169,6 +171,45 @@ describe("completeOnboarding", () => {
       expect(second.completedAt?.getTime()).toBe(first.completedAt?.getTime());
       expect(second.interests).toEqual(["music"]);
       expect(second.notificationsOptIn).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // S-L1: with `onConflictDoNothing` two concurrent first-time completes
+  // both pass the "no row exists" check, both attempt to insert, one
+  // wins. The loser's payload was historically returned to the client
+  // even though it wasn't persisted. After re-selecting before return,
+  // the loser sees the winner's state — UI and DB stay consistent.
+  it.effect("race-loser receives the persisted (winner's) state, not their own input (S-L1)", () =>
+    Effect.gen(function* () {
+      // Pre-seed the row directly to simulate the winner having already
+      // committed by the time the loser's "no row exists" read fires.
+      const { db } = yield* Db;
+      yield* Effect.tryPromise({
+        try: () =>
+          db.insert(pulseAccountOnboarding).values({
+            accountId: "acc_alice",
+            completedAt: new Date(Math.floor(Date.now() / 1000) * 1000),
+            interests: '["music"]',
+            notificationsOptIn: true,
+            eventRemindersOptIn: true,
+            notificationsPerm: "granted",
+            locationPerm: "granted",
+          }),
+        catch: () => new Error("seed failed"),
+      });
+      // Now call complete with a *different* payload — it should return
+      // the winner's state, not the input we passed.
+      const result = yield* completeOnboarding("usr_alice", {
+        interests: ["food", "arts"],
+        notificationsOptIn: false,
+        eventRemindersOptIn: false,
+        notificationsPerm: "denied",
+        locationPerm: "denied",
+      });
+      expect(result.interests).toEqual(["music"]);
+      expect(result.notificationsOptIn).toBe(true);
+      expect(result.notificationsPerm).toBe("granted");
+      expect(result.locationPerm).toBe("granted");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

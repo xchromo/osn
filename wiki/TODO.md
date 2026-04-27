@@ -221,6 +221,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [x] S-M100 — `peekClaims` used `atob()` which breaks on base64url (`-`/`_` in UUID kids). **Fixed** — `decodeJwtSegment` converts base64url → base64 before decode (RFC 7515 §2) — see [[arc-tokens]]
 - [x] S-M101 — `/register-service` stored arbitrary `allowedScopes` without server-side validation. **Fixed** — `PERMITTED_SCOPES` allowlist in `graph-internal.ts`; unknown scopes return 400 — see [[arc-tokens]]
 - [x] S-M102 — `resolvePublicKey` cache hit skipped scope check when `tokenScopes` empty. **Fixed** — cache entry now stores `allowedScopes`; scope validated on every cache hit — see [[arc-tokens]]
+- [ ] S-M1 (pulse-onboarding) — `/graph/internal/profile-account` is gated only by the generic `graph:read` scope, so any future ARC consumer of OSN's internal graph API could enumerate `profileId → accountId` and dissolve the multi-account privacy invariant ([[identity-model]] §"Privacy Rules"). Introduce a dedicated `graph:resolve-account` scope (extend `PERMITTED_SCOPES` in `osn/api/src/routes/graph-internal.ts`, grant only to `pulse-api` in its `service_accounts` row, and switch `pulse-api/src/services/graphBridge.ts:getAccountIdForProfile` to request that scope). Today only pulse-api consumes the endpoint, so impact is bounded to a service-key compromise — but principle of least privilege wants the constraint declarative — see [[pulse-onboarding]]
 - [ ] S-M1 (zap) — No rate limiting on Zap API endpoints — see [[rate-limiting]]
 - [ ] S-M2 (zap) — CORS wildcard on `@zap/api` — restrict to known client origins
 - [ ] S-M3 (zap) — `zapBridge.provisionEventChat` does not verify caller owns event
@@ -245,6 +246,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 
 - [ ] S-L1 — Seed data uses reserved handle `"me"` — reservation not DB-enforced
 - [ ] S-L2 — `Effect.orDie` in `requireAuth` swallows auth errors — replace with `Effect.either` + 401
+- [ ] S-L2 (pulse-onboarding) — `_testKey?: CryptoKey` positional argument on `createOnboardingRoutes` (and 3 other Pulse route factories: `createCloseFriendsRoutes`, `createEventsRoutes`, `createSeriesRoutes`). A misuse where a non-test caller passes a key would bypass JWKS rotation + kid-binding. Defence-in-depth fix: gate `_testKey` honouring on `process.env.NODE_ENV === "test"` inside `extractClaims` so production bundles can never honour it. Pre-existing pattern, called out by the security review of this branch — track as a Pulse-wide cleanup — see [[pulse-onboarding]]
 - [ ] S-L4 — `createdByAvatar` always null — no avatar claim in JWT
 - [ ] S-L3-follow-up (pulse) — Tauri CSP `connect-src` includes a transitional `https:` entry because production `@osn/api` + `@pulse/api` origins aren't pinned in-repo. Replace with the deployed origins once they land in env. See [[changelog/security-fixes]] entry "Pulse Tauri CSP allowlist (2026-04-25)"
 - [x] S-L7 — `jwtSecret` falls back to `"dev-secret"` — **Superseded**: symmetric `OSN_JWT_SECRET` removed entirely; replaced by ES256 key pair (`OSN_JWT_PRIVATE_KEY`/`OSN_JWT_PUBLIC_KEY`); startup guard uses `OSN_ENV` — see [[arc-tokens]]
@@ -308,6 +310,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W3 (zap) — `provisionEventChat` non-atomic cross-DB writes
 - [ ] P-W4 (zap) — `getChatMembers` returns all members without pagination
 - [ ] P-I1 (pulse-discovery) — cursor `(start_time, id)` ordering relies on the single-column `events_start_time_idx` for the tiebreak; cheap to add a compound index if series materialisation produces same-second collisions at scale — see `[[event-access]]`
+- [ ] P-I1 (pulse-onboarding) — `getOnboardingStatus` re-validates the JSON `interests` column on every read (defensive walk through `INTEREST_CATEGORIES`) even though `Schema.decodeUnknown(CompleteOnboardingSchema)` already enforced membership at write time. Sub-millisecond cost; flagged purely as Info — only worth changing if profiling later shows it. See [[pulse-onboarding]]
 - [x] P-W2 — `resolvePublicKey` hits DB when `tokenScopes` provided even if `kid` cache is warm. **Fixed** — cache entry now stores `CryptoKey` + `allowedScopes`; scope validated from cache on hit, no DB round-trip — see [[arc-tokens]]
 - [x] P-W100 — `publicKeyCache` unbounded under key rotation churn. **Fixed** — `MAX_CACHE_SIZE` cap with oldest-entry eviction on write — see [[arc-tokens]]
 - [x] P-W101 — `peekClaims` decoded payload before checking header validity. **Fixed** — header decoded first; payload decode gated on `kid` present — see [[arc-tokens]]

@@ -6,7 +6,7 @@ related:
   - "[[identity-model]]"
   - "[[arc-tokens]]"
   - "[[component-library]]"
-last-reviewed: 2026-04-26
+last-reviewed: 2026-04-27
 ---
 
 # Pulse Onboarding
@@ -76,8 +76,8 @@ ARC-protected (`graph:read` scope, audience `osn-api`) — the pattern matches t
 
 | Method | Path | Auth | Rate limit | Notes |
 |--------|------|------|------------|-------|
-| GET | `/me/onboarding` | Bearer (user access token) | — | Returns `{ completedAt, interests, *_opt_in, *_perm }`. Sets `Cache-Control: private, max-age=30`. Defaults when no row exists. |
-| POST | `/me/onboarding/complete` | Bearer | 10 / 5 min per IP | Idempotent — second call returns the original `completedAt` without overwriting captured prefs. Validates payload with Effect Schema (≤ 8 interests, closed-set categories + perm outcomes). |
+| GET | `/me/onboarding` | Bearer (user access token) | 60 / min per IP, fail-closed | Returns `{ completedAt, interests, *_opt_in, *_perm }`. Sets `Cache-Control: private, max-age=30`. Defaults when no row exists. |
+| POST | `/me/onboarding/complete` | Bearer | 10 / 5 min per IP, fail-closed | Idempotent — re-reads the row after `onConflictDoNothing` so the response always matches durable state (closes the race-loser TOCTOU). Validates payload with Effect Schema (≤ 8 interests, closed-set categories + perm outcomes). |
 
 **Privacy**: response shapes never carry accountId. Tested explicitly in `pulse/api/tests/routes/onboarding.test.ts`.
 
@@ -86,7 +86,7 @@ ARC-protected (`graph:read` scope, audience `osn-api`) — the pattern matches t
 - Route: `/welcome` (`pulse/app/src/pages/WelcomePage.tsx`), lazy-loaded.
 - Stepper: `pulse/app/src/pages/onboarding/OnboardingStepper.tsx` — owns step index + captured state, calls `/complete` on finish.
 - Step components: `Step1Welcome` … `Step6Finish` — one file per step, each composes the shared `StepShell`.
-- First-run gate: `OnboardingGate` in `pulse/app/src/App.tsx` — fetches status when an access token is available; if `completedAt === null` and the user isn't on `/welcome` and hasn't skipped this session, redirects to `/welcome`.
+- First-run gate: `OnboardingGate` in `pulse/app/src/components/OnboardingGate.tsx` — fetches status when an access token is available; if `completedAt === null` and the user isn't on `/welcome` and hasn't skipped this session, redirects to `/welcome`. **Fetch source is keyed only on the access token** (not the pathname) so the resource fires once per session and never re-fetches when the user navigates between routes — the pathname check moved into the redirect effect (P-W1 fix).
 - Skip-this-session: backed by `sessionStorage` so a tab that lands on the home feed after skip doesn't re-loop the redirect. Server-side state stays "not completed" so the next session re-prompts.
 
 ## Themed illustrations

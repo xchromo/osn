@@ -243,4 +243,25 @@ describe("onboarding routes", () => {
     const res = await post(denyApp, "/me/onboarding/complete", validBody, aliceToken);
     expect(res.status).toBe(429);
   });
+
+  it("GET 429 when the status rate limiter rejects (S-M2)", async () => {
+    const layer = createTestLayer();
+    const allowAll = { check: () => Promise.resolve(true), reset: () => Promise.resolve() };
+    const denyAll = { check: () => Promise.resolve(false), reset: () => Promise.resolve() };
+    const denyApp = createOnboardingRoutes(layer, "", testPublicKey, allowAll, denyAll);
+    const res = await get(denyApp, "/me/onboarding", aliceToken);
+    expect(res.status).toBe(429);
+  });
+
+  it("GET 429 fail-closed when the status rate limiter throws (S-M2)", async () => {
+    const layer = createTestLayer();
+    const allowAll = { check: () => Promise.resolve(true), reset: () => Promise.resolve() };
+    const throwing = {
+      check: () => Promise.reject(new Error("backend down")),
+      reset: () => Promise.resolve(),
+    };
+    const failApp = createOnboardingRoutes(layer, "", testPublicKey, allowAll, throwing);
+    const res = await get(failApp, "/me/onboarding", aliceToken);
+    expect(res.status).toBe(429);
+  });
 });

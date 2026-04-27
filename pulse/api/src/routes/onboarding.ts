@@ -30,6 +30,25 @@ export function createDefaultOnboardingCompleteRateLimiter(): RateLimiterBackend
   });
 }
 
+/**
+ * Per-IP cap on `GET /me/onboarding`. Each call traverses JWT verification
+ * and (on first call per profile) makes an ARC fetch + DB write to populate
+ * the `pulse_profile_accounts` mapping cache. Generous enough that
+ * legitimate boot-time fetches and React StrictMode double-invocation
+ * aren't affected, but tight enough to deflect a malformed-token flood
+ * paying the JWKS verify cost. Mirrors the discipline applied on POST and
+ * matches `[[wiki/systems/rate-limiting]]`. Addresses S-M2.
+ */
+const STATUS_RATE_LIMIT_MAX = 60;
+const STATUS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+
+export function createDefaultOnboardingStatusRateLimiter(): RateLimiterBackend {
+  return createRateLimiter({
+    maxRequests: STATUS_RATE_LIMIT_MAX,
+    windowMs: STATUS_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Wire shape
 // ---------------------------------------------------------------------------
@@ -97,9 +116,25 @@ export const createOnboardingRoutes = (
   jwksUrl: string = DEFAULT_JWKS_URL,
   _testKey?: CryptoKey,
   completeRateLimiter: RateLimiterBackend = createDefaultOnboardingCompleteRateLimiter(),
+  statusRateLimiter: RateLimiterBackend = createDefaultOnboardingStatusRateLimiter(),
 ) =>
   new Elysia({ prefix: "/me/onboarding" })
     .get("/", async ({ headers, set }) => {
+      // S-M2: per-IP throttle. The GET path runs JWT verification and may
+      // populate the profile→account cache via ARC; without throttling a
+      // malformed-token flood pays the JWKS verify cost on every request.
+      // Fail-closed mirrors the discovery posture in `routes/events.ts`.
+      const ip = getClientIp(headers);
+      let allowed: boolean;
+      try {
+        allowed = await statusRateLimiter.check(ip);
+      } catch {
+        allowed = false;
+      }
+      if (!allowed) {
+        set.status = 429;
+        return { error: "Too many requests" } as const;
+      }
       const claims = await extractClaims(headers["authorization"], jwksUrl, _testKey as CryptoKey);
       if (!claims) {
         set.status = 401;

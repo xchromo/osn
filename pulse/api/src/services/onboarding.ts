@@ -273,23 +273,36 @@ export const completeOnboarding = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
+    // S-L1: re-read the persisted row before returning. With
+    // `onConflictDoNothing`, two concurrent first-completions both see
+    // "no row" in the read above and both attempt to insert; one wins
+    // and the other's payload is silently discarded. Returning `validated`
+    // would tell the loser their preferences were saved when in fact the
+    // winner's were. Re-selecting guarantees the response matches durable
+    // state.
+    const finalRows = yield* Effect.tryPromise({
+      try: () =>
+        db
+          .select()
+          .from(pulseAccountOnboarding)
+          .where(eq(pulseAccountOnboarding.accountId, accountId))
+          .limit(1),
+      catch: (cause) => new DatabaseError({ cause }),
+    });
+    // The insert just ran with `onConflictDoNothing`, so a row must exist.
+    const finalRow = finalRows[0]!;
+    const finalStatus = rowToStatus(finalRow);
+
     metricOnboardingCompleted({
       result: "ok",
-      notificationsOptIn: validated.notificationsOptIn,
-      eventRemindersOptIn: validated.eventRemindersOptIn,
-      notificationsPerm: validated.notificationsPerm,
-      locationPerm: validated.locationPerm,
-      interestsCount: validated.interests.length,
+      notificationsOptIn: finalStatus.notificationsOptIn,
+      eventRemindersOptIn: finalStatus.eventRemindersOptIn,
+      notificationsPerm: finalStatus.notificationsPerm,
+      locationPerm: finalStatus.locationPerm,
+      interestsCount: finalStatus.interests.length,
     });
 
-    return {
-      completedAt: now,
-      interests: validated.interests,
-      notificationsOptIn: validated.notificationsOptIn,
-      eventRemindersOptIn: validated.eventRemindersOptIn,
-      notificationsPerm: validated.notificationsPerm,
-      locationPerm: validated.locationPerm,
-    };
+    return finalStatus;
   }).pipe(
     Effect.tapError((e) =>
       Effect.gen(function* () {

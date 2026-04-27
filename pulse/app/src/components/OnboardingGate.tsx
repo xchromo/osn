@@ -23,10 +23,16 @@ export function OnboardingGate() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // Only the access token controls whether we fetch — NOT the pathname.
+  // Including pathname in the source signal made `createResource` re-run
+  // every time the user navigated `/welcome` ↔ another route (because the
+  // source flipped to null and back), defeating the "once per session"
+  // guarantee in the docstring (P-W1). The pathname check stays, but it's
+  // moved into the redirect effect where it belongs — deciding whether to
+  // navigate, not whether to fetch.
   const fetchKey = () => {
     const token = session()?.accessToken ?? null;
     if (!token) return null;
-    if (location.pathname === "/welcome") return null;
     if (isOnboardingSkippedThisSession()) return null;
     return token;
   };
