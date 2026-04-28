@@ -49,7 +49,9 @@ describe("applySchema", () => {
       "event_rsvps",
       "event_series",
       "events",
+      "pulse_account_purges",
       "pulse_close_friends",
+      "pulse_deletion_jobs",
       "pulse_users",
     ]);
   });
