@@ -27,7 +27,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] **C-H2 — Account-level erasure endpoint** (`DELETE /account`, step-up gated, 7-day soft-delete tombstone, ARC fan-out for cross-service cleanup). Required for GDPR Art. 17 + CCPA right to delete. See `[[compliance/dsar]]`, `[[compliance/retention]]`.
 - [ ] **C-H4 — Privacy notice + ToS published on `@osn/landing`** in plain language, version-stamped, backlinked from every signup form. Required for GDPR Art. 12-14 + CCPA notice-at-collection + DSA Art. 14. See `[[compliance/gdpr]]`, `[[compliance/dsa]]`.
 - [ ] **C-H8 — Date-of-birth field + age gate on registration**, hard-rejecting under-13. Required for COPPA actual-knowledge defense. See `[[compliance/coppa]]`.
-- [ ] **V-M0 — Verified Identity foundations** (Yoti-style verified-attribute layer, AU first). DPIA + vendor RFP + schema (`verified_attributes`, `verification_runs`, `presentations`) + SD-JWT VC issuer reusing `[[arc-tokens]]` ES256 keys. Unlocks "verify once, present privately many times" across Pulse + Zap and gives a credible answer to AU social-media-minimum-age (10 Dec 2025). See `[[verified-identity]]`.
+- [ ] **V-M0 — Verified Identity foundations** (Yoti-style verified-attribute layer, AU first). DPIA + vendor RFP + schema (`verified_attributes`, `verification_runs`, `presentations`) + SD-JWT VC issuer on a **separate ES256 keypair** (same JWKS as `[[arc-tokens]]`, distinct `kid`, `aud: "osn-vc"`). Unlocks "verify once, present privately many times" across Pulse + Zap and gives a credible answer to AU social-media-minimum-age (10 Dec 2025). See `[[verified-identity]]`.
 
 ---
 
