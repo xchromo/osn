@@ -65,6 +65,7 @@ The `wiki/` directory contains detailed reference pages. Use this index to find 
 | Understand Pulse visual design (tokens, typography, Explore layout) | `pulse/DESIGN.md` |
 | Work on the social graph | `[[wiki/systems/social-graph]]` |
 | Work on Pulse close friends | `[[wiki/systems/pulse-close-friends]]` |
+| Work on the Pulse onboarding flow | `[[wiki/systems/pulse-onboarding]]` |
 | Gate a sensitive action behind step-up auth | `[[wiki/systems/step-up]]` |
 | Understand the passkey-only login model | `[[wiki/systems/passkey-primary]]` |
 | Plan/extend the Yoti-style verified-identity layer (AU DVS / mDL / myID, SD-JWT VC) | `[[wiki/systems/verified-identity]]` |
