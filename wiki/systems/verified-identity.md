@@ -123,6 +123,18 @@ catalogue) and step 3 for the local mDL issuer when one exists.
   pre-computed boolean attributes minted alongside the raw `dob`,
   so we don't ship range-proof crypto in v1.
 
+**Hard requirement: separate signing key for VCs.** Even though VC
+issuance reuses the JWS substrate, the actual ES256 keypair MUST be
+distinct from the ARC S2S key. Same JWKS, different `kid`. Rationale:
+ARC tokens are short-lived (seconds-to-minutes) and verified
+internally; VCs may live months and travel to third-party verifiers.
+Cross-purpose key use is a key-confusion / cross-protocol attack
+surface — a bug in `aud` enforcement on either side becomes a
+privilege-escalation across both. Separate keys also give independent
+rotation (rotating ARC key must not invalidate every outstanding VC)
+and independent revocation. Verifiers MUST pin `kid` + `aud`
+together. See `[[arc-tokens]]`.
+
 **Not chosen for v1**:
 
 - **BBS+ / unlinkable VC** — gives multi-presentation unlinkability
@@ -134,9 +146,17 @@ catalogue) and step 3 for the local mDL issuer when one exists.
   credential format on the holder side.
 
 Source document hashing: each verified attribute row stores
-`evidence_hash = SHA-256(provider, document_type, document_number,
-verified_at)`. Lets us refuse a second account claiming the same
-licence number without retaining the number itself.
+`document_number_hash = HMAC-SHA-256(pepper, provider ‖
+document_type ‖ document_number)` where `pepper` is held only in
+`@osn/api` env, never in the database, and is distinct per attribute
+kind. Plain SHA-256 is **not** sufficient — AU driver licence numbers
+are ~8 digits and AU passports ~9 alphanumeric, both well within
+brute-force range from a DB read. The HMAC + env-only pepper mirrors
+the IP-hash pattern in `[[sessions]]`. The schema MUST also enforce
+`UNIQUE(document_number_hash)` across providers; collision response
+is a generic refusal (no enumeration of which other account already
+holds the document) plus a `security_event` row of kind
+`identity_duplicate_document_attempted`.
 
 ## Data model
 
