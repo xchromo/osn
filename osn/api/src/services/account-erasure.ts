@@ -14,7 +14,7 @@ import {
 import type { DeletionJob } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import type { AppEnrollmentApp, DeletionFanoutService } from "@shared/observability/metrics";
-import { and, eq, isNull, lte, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { arcPostJsonEffect } from "../lib/outbound-arc";
@@ -157,21 +157,20 @@ export const requestErasure = (
           // 2. Redact identity on every profile owned by this account.
           //    Handle becomes `deleted_<usrId-suffix>` (preserves uniqueness),
           //    display name + avatar are nulled.
-          const profileRows = await tx
-            .select({ id: users.id })
-            .from(users)
+          //
+          //    P-W1: a single bulk UPDATE using a SQL expression instead of
+          //    a per-row loop. Constant statement count regardless of
+          //    `accounts.maxProfiles`; the previous loop held the write
+          //    lock across N round-trips.
+          await tx
+            .update(users)
+            .set({
+              handle: sql`'deleted_' || replace(${users.id}, 'usr_', '')`,
+              displayName: null,
+              avatarUrl: null,
+              updatedAt: new Date(),
+            })
             .where(eq(users.accountId, accountId));
-          for (const row of profileRows) {
-            await tx
-              .update(users)
-              .set({
-                handle: `deleted_${row.id.replace(/^usr_/, "")}`,
-                displayName: null,
-                avatarUrl: null,
-                updatedAt: new Date(),
-              })
-              .where(eq(users.id, row.id));
-          }
 
           // 3. Nuke credentials immediately. A stolen session/access/recovery
           //    cannot be used to re-authenticate during the grace window.
@@ -418,24 +417,30 @@ export const runHardDeleteSweep = (
     const batchSize = opts.batchSize ?? 100;
     const nowSec = Math.floor((opts.nowMs ?? Date.now()) / 1_000);
 
+    // P-C1: gating predicate is in SQL, not JS post-filter. A handful of
+    // permanently-stuck bridges (NULL `*_done_at`) would otherwise fill the
+    // batch slot and starve fan-out-complete rows. SQLite uses the
+    // `deletion_jobs_hard_delete_idx` for `hard_delete_at` and falls back to
+    // a sequential scan over the small NULL-checks — the candidate set is
+    // tiny (only in-flight deletions).
     const ready = yield* Effect.tryPromise({
       try: () =>
         db
-          .select({
-            accountId: deletionJobs.accountId,
-            pulseDoneAt: deletionJobs.pulseDoneAt,
-            zapDoneAt: deletionJobs.zapDoneAt,
-          })
+          .select({ accountId: deletionJobs.accountId })
           .from(deletionJobs)
-          .where(lte(deletionJobs.hardDeleteAt, nowSec))
+          .where(
+            and(
+              lte(deletionJobs.hardDeleteAt, nowSec),
+              sql`${deletionJobs.pulseDoneAt} IS NOT NULL`,
+              sql`${deletionJobs.zapDoneAt} IS NOT NULL`,
+            ),
+          )
           .limit(batchSize),
       catch: (cause) => new AccountErasureDbError({ cause }),
     });
 
     let purged = 0;
     for (const row of ready) {
-      if (row.pulseDoneAt === null || row.zapDoneAt === null) continue;
-
       yield* hardDeleteAccount(row.accountId).pipe(
         Effect.tap(() => Effect.sync(() => metricAccountDeletionCompleted("hard", "sweeper"))),
       );
@@ -445,17 +450,20 @@ export const runHardDeleteSweep = (
   }).pipe(withAccountDeletion("hard"));
 
 /**
- * Removes all rows referencing this account, then the account itself.
- * Audit rows (security_events, email_changes) have their account_id NULLed
- * to preserve the trail under Art. 6(1)(c) legal-obligation retention; we
- * keep the rows in-place rather than detaching to a sentinel string because
- * the FK is enforced at the column level (not a literal string).
+ * Removes all PII-bearing rows referencing this account, then the account
+ * itself. Audit rows in `security_events` and `email_changes` are
+ * intentionally preserved to satisfy GDPR Art. 6(1)(c) legal-obligation
+ * retention (12 mo / 90 d windows defined in `wiki/compliance/retention.md`).
  *
- * Implementation note: the `accounts.id` FK on security_events / email_changes
- * is "no action" — keeping the audit rows requires DROP-and-recreate
- * (overkill) OR removing the rows here. We choose to DELETE the rows here;
- * the operational audit signal still lives in the metric counters
- * (`account_deletion_completed{result=hard}`) and trace history.
+ * The `account_id` FK is non-enforcing (sqlite without `PRAGMA foreign_keys=ON`,
+ * `ON DELETE no action`), so the surviving audit rows remain queryable by
+ * accountId until their own retention sweepers (C-M2) age them out. The
+ * `users.handle` was already redacted to `deleted_<id>` at soft-delete time
+ * so the surviving accountId no longer correlates to a person.
+ *
+ * P-W4: cascade deletes use a single `inArray` per child table instead of
+ * looping per profile so the transaction holds the write lock for one
+ * round-trip per table regardless of profile count.
  */
 const hardDeleteAccount = (accountId: string): Effect.Effect<void, AccountErasureDbError, Db> =>
   Effect.gen(function* () {
@@ -463,34 +471,45 @@ const hardDeleteAccount = (accountId: string): Effect.Effect<void, AccountErasur
     yield* Effect.tryPromise({
       try: () =>
         db.transaction(async (tx) => {
-          // Delete in FK-safe order. users.id is referenced by connections,
-          // blocks, organisation_members.
           const profileIds = (
             await tx.select({ id: users.id }).from(users).where(eq(users.accountId, accountId))
           ).map((r) => r.id);
 
           if (profileIds.length > 0) {
-            for (const pid of profileIds) {
-              await tx
-                .delete(connections)
-                .where(or(eq(connections.requesterId, pid), eq(connections.addresseeId, pid)));
-              await tx
-                .delete(blocks)
-                .where(or(eq(blocks.blockerId, pid), eq(blocks.blockedId, pid)));
-              await tx.delete(organisationMembers).where(eq(organisationMembers.profileId, pid));
-            }
+            await tx
+              .delete(connections)
+              .where(
+                or(
+                  inArray(connections.requesterId, profileIds),
+                  inArray(connections.addresseeId, profileIds),
+                ),
+              );
+            await tx
+              .delete(blocks)
+              .where(
+                or(inArray(blocks.blockerId, profileIds), inArray(blocks.blockedId, profileIds)),
+              );
+            await tx
+              .delete(organisationMembers)
+              .where(inArray(organisationMembers.profileId, profileIds));
             await tx.delete(users).where(eq(users.accountId, accountId));
           }
 
           await tx.delete(sessions).where(eq(sessions.accountId, accountId));
           await tx.delete(passkeys).where(eq(passkeys.accountId, accountId));
           await tx.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId));
-          await tx.delete(securityEvents).where(eq(securityEvents.accountId, accountId));
           await tx.delete(deletionJobs).where(eq(deletionJobs.accountId, accountId));
           await tx
             .update(appEnrollments)
             .set({ leftAt: Math.floor(Date.now() / 1_000) })
             .where(and(eq(appEnrollments.accountId, accountId), isNull(appEnrollments.leftAt)));
+
+          // INTENTIONALLY KEPT (S-H5 / C-H1):
+          //   - security_events   — Art. 6(1)(c), 12-month retention sweeper (C-M2)
+          //   - email_changes     — Art. 6(1)(c), 90-day retention sweeper  (C-M2)
+          // Both retain the now-orphaned `account_id`. PII linkage is broken
+          // because `users.handle` was redacted at soft-delete and the
+          // `accounts.email` row is gone here.
           await tx.delete(accounts).where(eq(accounts.id, accountId));
         }),
       catch: (cause) => new AccountErasureDbError({ cause }),
@@ -525,16 +544,21 @@ export const runFanOutRetrySweep = (
       catch: (cause) => new AccountErasureDbError({ cause }),
     });
 
-    let retried = 0;
-    for (const row of pending) {
-      const age = nowSec - row.softDeletedAt;
-      if (row.pulseDoneAt === null) metricAccountDeletionFanoutPendingAge("pulse", age);
-      if (row.zapDoneAt === null) metricAccountDeletionFanoutPendingAge("zap", age);
-
-      yield* runFanOut(row);
-      retried += 1;
-    }
-    return { retried };
+    // P-W3: bounded concurrency. Sequential `for ... yield*` would take
+    // 100 × 20s = ~33 minutes per cycle worst-case (each row dispatches
+    // two 10s-timeout HTTP calls). Per-row failures are already isolated
+    // inside `runFanOut` via `Effect.catchAll`, so concurrency is safe.
+    yield* Effect.forEach(
+      pending,
+      (row) => {
+        const age = nowSec - row.softDeletedAt;
+        if (row.pulseDoneAt === null) metricAccountDeletionFanoutPendingAge("pulse", age);
+        if (row.zapDoneAt === null) metricAccountDeletionFanoutPendingAge("zap", age);
+        return runFanOut(row);
+      },
+      { concurrency: 8, discard: true },
+    );
+    return { retried: pending.length };
   });
 
 // ---------------------------------------------------------------------------

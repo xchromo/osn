@@ -229,6 +229,31 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
           }
           try {
             const now = new Date();
+            // S-L1: refuse to overwrite a kid that's already registered to
+            // a different serviceId. The shared INTERNAL_SERVICE_SECRET is
+            // a single trust anchor — without this guard, any holder could
+            // pivot across services laterally by reusing another service's
+            // kid. (kids are random UUIDs so collisions don't happen by
+            // chance; rejecting protects against a deliberate one.)
+            const existing = await run(
+              Effect.gen(function* () {
+                const { db } = yield* Db;
+                const rows = yield* Effect.tryPromise({
+                  try: () =>
+                    db
+                      .select({ serviceId: serviceAccountKeys.serviceId })
+                      .from(serviceAccountKeys)
+                      .where(eq(serviceAccountKeys.keyId, body.keyId))
+                      .limit(1),
+                  catch: (cause) => new Error("DB error checking service_account_keys", { cause }),
+                });
+                return rows[0] ?? null;
+              }),
+            );
+            if (existing && existing.serviceId !== body.serviceId) {
+              set.status = 409;
+              return { error: "kid_serviceid_mismatch" };
+            }
             await run(
               Effect.gen(function* () {
                 const { db } = yield* Db;

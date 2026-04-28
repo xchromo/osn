@@ -54,27 +54,13 @@ export const createAccountRoutes = (
           return { error: "step_up_required" } as const;
         }
 
-        // accountId comes from the access-token claims; pulse trusts the
-        // JWT-issued sub (= profileId) and we look up the corresponding
-        // accountId by way of the step-up token verification round-trip.
-        // The step-up token's `sub` claim already binds it to the right
-        // accountId; we accept whichever account the verify endpoint
-        // confirms. We pass the access-token-asserted profileId through
-        // accountId-binding in the verify body — but the JWT's claims
-        // don't carry accountId directly. To bridge this, the step-up
-        // token's `sub` IS the accountId, so we just have to pass what the
-        // user supplied as account_id... but the user shouldn't be telling
-        // us their own accountId. Instead: we ask osn-api to resolve the
-        // step-up token end-to-end without specifying an expected
-        // account_id, OR (cleaner) we encode the accountId in the access
-        // token's claims. For Phase 1 we use the latter — the OSN access
-        // token will need an `accountId` claim. As a pragmatic interim,
-        // accept the body-supplied account_id and let osn-api reject any
-        // mismatch.
-        const accountId = body.account_id;
-
+        // S-H2: pulse-api derives the accountId server-to-server from
+        // osn-api's verified `sub` claim on the step-up token rather than
+        // accepting one in the request body. The accountId is never
+        // visible client-side (P6 invariant — no external observer can
+        // correlate two profiles to the same account).
         const verify = await Effect.runPromise(
-          verifyStepUp(accountId, stepUpToken, "pulse_app_delete").pipe(
+          verifyStepUp(stepUpToken, "pulse_app_delete").pipe(
             Effect.catchAll(() => Effect.succeed({ ok: false } as const)),
           ),
         );
@@ -83,6 +69,7 @@ export const createAccountRoutes = (
           metricPulseAccountDeletionRequested("step_up_failed");
           return { error: "step_up_required" } as const;
         }
+        const accountId = verify.accountId;
 
         try {
           const result = await Effect.runPromise(
@@ -102,7 +89,9 @@ export const createAccountRoutes = (
 
           // ARC callback to osn-api flipping app_enrollments.left_at.
           // Failure is swallowed and retried by the leave-app retry
-          // sweeper — the user still gets 202.
+          // sweeper — the user still gets 202. accountId is the
+          // server-derived value from the verifyStepUp response above —
+          // never client-controlled (P6 invariant).
           void Effect.runPromise(
             notifyAppLeft(accountId).pipe(
               Effect.tap(() => Effect.sync(() => metricPulseEnrollmentNotify("ok"))),
@@ -131,8 +120,9 @@ export const createAccountRoutes = (
         }
       },
       {
+        // accountId is read server-side from the access-token claim (S-H2);
+        // the request body only carries the step-up token.
         body: t.Object({
-          account_id: t.String({ minLength: 1 }),
           step_up_token: t.Optional(t.String()),
         }),
       },

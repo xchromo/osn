@@ -101,7 +101,7 @@ export function createAccountErasureRoutes(
               metricAccountDeletionRequested("error");
               return { error: "unauthorized" };
             }
-            const profile = await run(auth.findProfileById(claims.profileId));
+            const profile = await run(auth.findProfileByIdIncludingTombstoned(claims.profileId));
             if (!profile) {
               set.status = 401;
               metricAccountDeletionRequested("error");
@@ -202,7 +202,7 @@ export function createAccountErasureRoutes(
             set.status = 401;
             return { error: "unauthorized" };
           }
-          const profile = await run(auth.findProfileById(claims.profileId));
+          const profile = await run(auth.findProfileByIdIncludingTombstoned(claims.profileId));
           if (!profile) {
             set.status = 401;
             return { error: "unauthorized" };
@@ -230,7 +230,7 @@ export function createAccountErasureRoutes(
             set.status = 401;
             return { error: "unauthorized" };
           }
-          const profile = await run(auth.findProfileById(claims.profileId));
+          const profile = await run(auth.findProfileByIdIncludingTombstoned(claims.profileId));
           if (!profile) {
             set.status = 401;
             return { error: "unauthorized" };

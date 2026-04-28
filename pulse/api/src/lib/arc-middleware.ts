@@ -31,7 +31,24 @@ export interface RegisterServiceKeyInput {
   readonly expiresAt?: number;
 }
 
+export class ServiceKeyMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServiceKeyMismatchError";
+  }
+}
+
 export async function registerServiceKey(input: RegisterServiceKeyInput): Promise<void> {
+  // S-L1: refuse to overwrite a kid registered to a different serviceId.
+  // The single INTERNAL_SERVICE_SECRET is the trust root for both Pulse
+  // and Zap; without this guard, a holder could pivot across services
+  // by reusing another's kid.
+  const existing = keyRegistry.get(input.keyId);
+  if (existing && existing.issuer !== input.serviceId) {
+    throw new ServiceKeyMismatchError(
+      `kid ${input.keyId} is already bound to service ${existing.issuer}`,
+    );
+  }
   const publicKey = await importKeyFromJwk(input.publicKeyJwk);
   const scopes = new Set(
     input.allowedScopes

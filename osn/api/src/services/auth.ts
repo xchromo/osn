@@ -707,7 +707,40 @@ export function createAuthService(config: AuthConfig) {
       return { ...row.profile, email: row.account.email };
     });
 
+  /**
+   * S-H4: tombstoned accounts (`accounts.deleted_at IS NOT NULL`) return
+   * `null` so all authenticated routes that gate on this lookup refuse to
+   * mutate state during the 7-day grace window. The cancellation /
+   * deletion-status routes use {@link findProfileByIdIncludingTombstoned}
+   * to read the same row without the gate, so the user can still cancel.
+   */
   const findProfileById = (
+    profileId: string,
+  ): Effect.Effect<ProfileWithEmail | null, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ profile: users, account: accounts })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(and(eq(users.id, profileId), isNull(accounts.deletedAt)))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const row = result[0];
+      if (!row) return null;
+      return { ...row.profile, email: row.account.email };
+    });
+
+  /**
+   * Variant of `findProfileById` that ignores the soft-delete tombstone.
+   * Only the cancellation + deletion-status routes should use this; every
+   * other route should use `findProfileById` so tombstoned accounts cannot
+   * mutate state during the grace window.
+   */
+  const findProfileByIdIncludingTombstoned = (
     profileId: string,
   ): Effect.Effect<ProfileWithEmail | null, DatabaseError, Db> =>
     Effect.gen(function* () {
@@ -725,6 +758,36 @@ export function createAuthService(config: AuthConfig) {
       const row = result[0];
       if (!row) return null;
       return { ...row.profile, email: row.account.email };
+    });
+
+  /**
+   * Looks up an account row by id. Used by the tombstone gate
+   * (S-H4 — `isAccountTombstoned`) to refuse mutating routes when
+   * `deletedAt` is set.
+   */
+  const findAccountById = (
+    accountId: string,
+  ): Effect.Effect<
+    { id: string; deletedAt: number | null; processingRestrictedAt: number | null } | null,
+    DatabaseError,
+    Db
+  > =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({
+              id: accounts.id,
+              deletedAt: accounts.deletedAt,
+              processingRestrictedAt: accounts.processingRestrictedAt,
+            })
+            .from(accounts)
+            .where(eq(accounts.id, accountId))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return rows[0] ?? null;
     });
 
   /**
@@ -1093,6 +1156,13 @@ export function createAuthService(config: AuthConfig) {
   ) =>
     Effect.tryPromise({
       try: () => {
+        // P6 invariant: `accountId` is intentionally absent from the
+        // access-token payload. Including it would allow any external
+        // observer (a downstream service, a JWT decoder in the browser,
+        // a leaked log line) to correlate two profiles as belonging to
+        // the same account. S-H2 is solved server-to-server instead —
+        // `/internal/step-up/verify` re-issues the verified accountId
+        // back to the calling service over an ARC-authenticated channel.
         const payload: Record<string, unknown> = {
           sub: profileId,
           aud: ACCESS_TOKEN_AUDIENCE,
@@ -2743,12 +2813,24 @@ export function createAuthService(config: AuthConfig) {
    * the error message is intentionally generic so the wire doesn't leak
    * whether it was a wrong sub or a replayed jti.
    */
+  /**
+   * Verifies a step-up token and returns the amr + purpose it carries
+   * along with the verified accountId (the token's `sub` claim). Pass
+   * `expectedAccountId` to enforce a sub equality check (most callers do);
+   * pass `null` to accept any account — used by cross-service verifiers
+   * like `/internal/step-up/verify` where the calling service derives the
+   * accountId from the token's verified sub rather than asserting one
+   * up front.
+   */
   const verifyStepUpToken = (
     token: string,
-    expectedAccountId: string,
+    expectedAccountId: string | null,
     allowedAmr: ReadonlySet<string>,
     expectedPurpose?: StepUpPurpose,
-  ): Effect.Effect<{ amr: string[]; purpose: StepUpPurpose | null }, AuthError> =>
+  ): Effect.Effect<
+    { amr: string[]; purpose: StepUpPurpose | null; accountId: string },
+    AuthError
+  > =>
     Effect.gen(function* () {
       const record = (result: StepUpVerifyResult) =>
         Effect.sync(() => metricStepUpVerified(result));
@@ -2762,10 +2844,15 @@ export function createAuthService(config: AuthConfig) {
         yield* record("wrong_audience");
         return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
       }
-      if (typeof payloadResult["sub"] !== "string" || payloadResult["sub"] !== expectedAccountId) {
+      if (typeof payloadResult["sub"] !== "string") {
         yield* record("wrong_subject");
         return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
       }
+      if (expectedAccountId !== null && payloadResult["sub"] !== expectedAccountId) {
+        yield* record("wrong_subject");
+        return yield* Effect.fail(new AuthError({ message: "Invalid step-up token" }));
+      }
+      const accountId = payloadResult["sub"];
       const jti = payloadResult["jti"];
       if (typeof jti !== "string") {
         yield* record("invalid");
@@ -2806,7 +2893,7 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Step-up token already used" }));
       }
       yield* record("ok");
-      return { amr, purpose: tokenPurpose };
+      return { amr, purpose: tokenPurpose, accountId };
     });
 
   /**
@@ -2859,10 +2946,17 @@ export function createAuthService(config: AuthConfig) {
    * Step-up passkey: complete. Verifies the assertion against the account's
    * own challenge (not an identifier-keyed one — defence against a stolen
    * session being used to step up as somebody else) and mints the token.
+   *
+   * `purpose` binds the resulting JWT to a specific destructive operation
+   * (S-C1) — verifiers that require a matching purpose (e.g.
+   * `verifyStepUpForAccountDelete`) reject tokens minted for any other
+   * purpose. Tokens minted without a purpose remain valid for legacy
+   * callers that don't enforce one.
    */
   const completeStepUpPasskey = (
     accountId: string,
     assertion: AuthenticationResponseJSON,
+    purpose?: StepUpPurpose,
   ): Effect.Effect<{ stepUpToken: string; expiresIn: number }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = stepUpPasskeyChallenges.get(accountId);
@@ -2919,7 +3013,7 @@ export function createAuthService(config: AuthConfig) {
         catch: (cause) => new DatabaseError({ cause }),
       });
 
-      const stepUpToken = yield* issueStepUpToken(accountId, "passkey");
+      const stepUpToken = yield* issueStepUpToken(accountId, "passkey", purpose);
       return { stepUpToken, expiresIn: stepUpTokenTtl };
     }).pipe(withStepUp("complete"));
 
@@ -2970,6 +3064,7 @@ export function createAuthService(config: AuthConfig) {
   const completeStepUpOtp = (
     accountId: string,
     code: string,
+    purpose?: StepUpPurpose,
   ): Effect.Effect<{ stepUpToken: string; expiresIn: number }, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const entry = stepUpOtpStore.get(accountId);
@@ -2982,7 +3077,7 @@ export function createAuthService(config: AuthConfig) {
         return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
       }
       stepUpOtpStore.delete(accountId);
-      const stepUpToken = yield* issueStepUpToken(accountId, "otp");
+      const stepUpToken = yield* issueStepUpToken(accountId, "otp", purpose);
       return { stepUpToken, expiresIn: stepUpTokenTtl };
     }).pipe(withStepUp("complete"));
 
@@ -3029,13 +3124,22 @@ export function createAuthService(config: AuthConfig) {
    * may have already nuked their last passkey, in which case OTP-to-email
    * is the only escape; a stricter passkey-only rule would lock out users
    * who legitimately want to delete after losing their authenticator.
+   *
+   * S-C1: requires the token's `purpose` claim to be `"account_delete"`.
+   * Tokens minted for any other ceremony (recovery, passkey, email change)
+   * are rejected, defending against confused-deputy reuse.
    */
   const verifyStepUpForAccountDelete = (
     accountId: string,
     stepUpToken: string,
   ): Effect.Effect<void, AuthError> =>
     Effect.gen(function* () {
-      yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr);
+      yield* verifyStepUpToken(
+        stepUpToken,
+        accountId,
+        recoveryGenerateAllowedAmr,
+        "account_delete",
+      );
     });
 
   /**
@@ -3044,17 +3148,24 @@ export function createAuthService(config: AuthConfig) {
    * {@link StepUpPurpose} so a token minted for one app cannot be
    * replayed at another (confused-deputy guard).
    *
-   * The purpose-bound minter must be invoked from the corresponding
-   * `/account/step-up/{begin,complete}` flow with the right purpose
-   * query param; this verifier simply enforces what was minted.
+   * S-H2: returns the verified accountId from the token's `sub` claim so
+   * the calling service can use it server-to-server without requiring
+   * the user to supply it in a body field. The accountId is never
+   * exposed to the user (P6 invariant) — only to ARC-authenticated
+   * downstream services.
    */
   const verifyStepUpForExternalPurpose = (
-    accountId: string,
     stepUpToken: string,
     expectedPurpose: StepUpPurpose,
-  ): Effect.Effect<void, AuthError> =>
+  ): Effect.Effect<{ accountId: string }, AuthError> =>
     Effect.gen(function* () {
-      yield* verifyStepUpToken(stepUpToken, accountId, recoveryGenerateAllowedAmr, expectedPurpose);
+      const result = yield* verifyStepUpToken(
+        stepUpToken,
+        null,
+        recoveryGenerateAllowedAmr,
+        expectedPurpose,
+      );
+      return { accountId: result.accountId };
     });
 
   // -------------------------------------------------------------------------
@@ -3954,6 +4065,8 @@ export function createAuthService(config: AuthConfig) {
     findProfileByEmail,
     findProfileByHandle,
     findProfileById,
+    findProfileByIdIncludingTombstoned,
+    findAccountById,
     findDefaultProfile,
     resolveIdentifier,
     registerProfile,

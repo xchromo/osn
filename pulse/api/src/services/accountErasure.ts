@@ -2,6 +2,7 @@ import {
   events,
   eventComms,
   eventRsvps,
+  pulseAccountPurges,
   pulseCloseFriends,
   pulseDeletionJobs,
   pulseUsers,
@@ -12,7 +13,7 @@ import type {
   DeletionCompletedResult,
   DeletionCompletedSource,
 } from "@shared/observability/metrics";
-import { and, eq, lte, ne, or } from "drizzle-orm";
+import { and, eq, inArray, lte, ne, or } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { metricPulseAccountDeletionCompleted, withPulseAccountDeletion } from "../metrics";
@@ -64,11 +65,19 @@ const recordCompletion = (result: DeletionCompletedResult, source: DeletionCompl
   Effect.sync(() => metricPulseAccountDeletionCompleted(result, source));
 
 /**
- * Soft-delete the user's Pulse data:
- *   - hard-delete RSVPs, close-friends entries, comms, pulse_users
- *   - flip hosted events to `cancelled_at = now`,
+ * Soft-delete the user's Pulse identity. **Personal data (RSVPs,
+ * close-friends, comms, pulse_users) is NOT deleted at this stage** —
+ * cancellation within the 7-day grace must be fully reversible per the
+ * user-facing contract. Only:
+ *
+ *   - flips hosted events to `cancelled_at = now`,
  *     `hard_delete_at = now + 14d`, `cancellation_reason = "host_left"`
- *   - insert pulse_deletion_jobs row
+ *     (this is reversible too — `cancelErasure` un-cancels them)
+ *   - inserts the `pulse_deletion_jobs` row
+ *
+ * The 7-day hard-delete sweeper (`runHardDeleteSweep`) is what actually
+ * purges RSVPs, close-friends, comms, and `pulse_users` rows. If the
+ * user cancels in the grace window, none of this data was ever lost.
  *
  * `enrollment_notify_done_at` is left NULL — the route handler runs the
  * ARC callback to osn-api (`/internal/app-enrollment/leave`) outside the
@@ -105,25 +114,12 @@ export const requestErasure = (
     yield* Effect.tryPromise({
       try: () =>
         db.transaction(async (tx) => {
-          // Hard-delete personal Pulse data.
-          await tx.delete(eventRsvps).where(eq(eventRsvps.profileId, profileId));
-          await tx
-            .delete(pulseCloseFriends)
-            .where(
-              or(
-                eq(pulseCloseFriends.profileId, profileId),
-                eq(pulseCloseFriends.friendId, profileId),
-              ),
-            );
-          await tx.delete(eventComms).where(eq(eventComms.sentByProfileId, profileId));
-          await tx.delete(pulseUsers).where(eq(pulseUsers.profileId, profileId));
-
           // Cancel hosted events that aren't already finished or cancelled.
           // The 14-day public-cancellation window starts now; the
           // event-cancellation sweeper hard-deletes them when the window
-          // closes. Status is also flipped to "cancelled" so the existing
-          // status-aware UI surfaces the right copy without needing to
-          // read `cancelled_at` everywhere.
+          // closes (or the user-restore path un-cancels them). Status is
+          // also flipped to "cancelled" so the status-aware UI surfaces
+          // the right copy without reading `cancelled_at` everywhere.
           await tx
             .update(events)
             .set({
@@ -160,10 +156,11 @@ export const requestErasure = (
 
 /**
  * Cancellation: removes the pulse_deletion_jobs row + un-cancels events
- * that are still within their 14-day cancellation window. RSVPs /
- * close-friends are NOT restored (they were hard-deleted at soft-delete
- * time — the user re-engages with Pulse from a clean slate, matching the
- * "fresh Pulse experience" rule for re-joins).
+ * that are still within their 14-day cancellation window. RSVPs,
+ * close-friends, comms, and pulse_users are NOT touched here because
+ * `requestErasure` no longer deletes them at soft-delete time — they
+ * stay in place during the 7-day grace and are only purged by the hard-
+ * delete sweeper, which means cancellation is fully reversible.
  */
 export const cancelErasure = (
   profileId: string,
@@ -269,12 +266,14 @@ export const markEnrollmentNotifyDone = (
 
 /**
  * Hard-delete sweeper for the Pulse-side leave-app jobs. Runs after the
- * 7-day grace window. At this point the events created by this profile
- * still live (they're under the 14-day public-cancellation window — that
- * window is independent and longer to honour audience commitment).
+ * 7-day grace window. **Purges the user's personal Pulse data here, not
+ * at soft-delete time** — RSVPs, close-friends, comms, and `pulse_users`
+ * are removed atomically with the deletion_jobs row in a single tx so
+ * cancellation during the grace window is fully reversible.
  *
- * Removes the deletion_jobs row only — events stay until their own
- * hard_delete_at is reached.
+ * Hosted events stay until their own `hard_delete_at` is reached (the
+ * 14-day public-cancellation window for audience commitment) — handled
+ * by the separate `runEventCancellationSweep`.
  */
 export const runHardDeleteSweep = (
   opts: { batchSize?: number; nowMs?: number } = {},
@@ -298,7 +297,23 @@ export const runHardDeleteSweep = (
     for (const row of ready) {
       yield* Effect.tryPromise({
         try: () =>
-          db.delete(pulseDeletionJobs).where(eq(pulseDeletionJobs.profileId, row.profileId)),
+          db.transaction(async (tx) => {
+            // Personal-data purge (the work that requestErasure deferred).
+            await tx.delete(eventRsvps).where(eq(eventRsvps.profileId, row.profileId));
+            await tx
+              .delete(pulseCloseFriends)
+              .where(
+                or(
+                  eq(pulseCloseFriends.profileId, row.profileId),
+                  eq(pulseCloseFriends.friendId, row.profileId),
+                ),
+              );
+            await tx.delete(eventComms).where(eq(eventComms.sentByProfileId, row.profileId));
+            await tx.delete(pulseUsers).where(eq(pulseUsers.profileId, row.profileId));
+            await tx
+              .delete(pulseDeletionJobs)
+              .where(eq(pulseDeletionJobs.profileId, row.profileId));
+          }),
         catch: (cause) => new PulseErasureDbError({ cause }),
       });
       yield* recordCompletion("hard", "sweeper");
@@ -358,51 +373,93 @@ export const runEventCancellationSweep = (
 export const purgeAccount = (
   accountId: string,
   profileIds: string[],
-): Effect.Effect<{ purged: number }, PulseErasureDbError, Db> =>
+): Effect.Effect<{ purged: number; alreadyProcessed: boolean }, PulseErasureDbError, Db> =>
   Effect.gen(function* () {
-    if (profileIds.length === 0) return { purged: 0 };
     const { db } = yield* Db;
 
+    // S-H1: replay-protection ledger. The first call for an accountId
+    // commits the work + ledger row in one tx; subsequent calls find the
+    // row and return a no-op response. This prevents a captured
+    // `account:erase` ARC token from being replayed against arbitrary
+    // accounts to nuke their Pulse data.
+    const existing = yield* Effect.tryPromise({
+      try: () =>
+        db
+          .select({ accountId: pulseAccountPurges.accountId })
+          .from(pulseAccountPurges)
+          .where(eq(pulseAccountPurges.accountId, accountId))
+          .limit(1),
+      catch: (cause) => new PulseErasureDbError({ cause }),
+    });
+    if (existing[0]) {
+      return { purged: 0, alreadyProcessed: true };
+    }
+
+    if (profileIds.length === 0) {
+      // Empty profile list still records a ledger entry so a follow-up
+      // call with an unexpected non-empty list can't sneak through.
+      yield* Effect.tryPromise({
+        try: () =>
+          db.insert(pulseAccountPurges).values({
+            accountId,
+            processedAt: Math.floor(Date.now() / 1_000),
+            profileCount: 0,
+          }),
+        catch: (cause) => new PulseErasureDbError({ cause }),
+      });
+      return { purged: 0, alreadyProcessed: false };
+    }
+
+    // P-W2: bulk DELETEs via inArray instead of looping per profile/event.
+    // Three statements per child table regardless of profile count, which
+    // keeps the transaction's write-lock window bounded and well under
+    // FANOUT_TIMEOUT_MS = 10s as the host-event count grows.
     yield* Effect.tryPromise({
       try: () =>
         db.transaction(async (tx) => {
-          for (const profileId of profileIds) {
-            await tx.delete(eventRsvps).where(eq(eventRsvps.profileId, profileId));
+          await tx.delete(eventRsvps).where(inArray(eventRsvps.profileId, profileIds));
+          await tx
+            .delete(pulseCloseFriends)
+            .where(
+              or(
+                inArray(pulseCloseFriends.profileId, profileIds),
+                inArray(pulseCloseFriends.friendId, profileIds),
+              ),
+            );
+          await tx.delete(eventComms).where(inArray(eventComms.sentByProfileId, profileIds));
+          await tx.delete(pulseUsers).where(inArray(pulseUsers.profileId, profileIds));
+
+          // Drop hosted events + their cascading rows for the deleted profiles.
+          const hostedEventIds = (
             await tx
-              .delete(pulseCloseFriends)
-              .where(
-                or(
-                  eq(pulseCloseFriends.profileId, profileId),
-                  eq(pulseCloseFriends.friendId, profileId),
-                ),
-              );
-            await tx.delete(eventComms).where(eq(eventComms.sentByProfileId, profileId));
-            await tx.delete(pulseUsers).where(eq(pulseUsers.profileId, profileId));
-
-            // For full-account-delete, drop hosted events outright.
-            const hostedEventIds = (
-              await tx
-                .select({ id: events.id })
-                .from(events)
-                .where(eq(events.createdByProfileId, profileId))
-            ).map((r) => r.id);
-            for (const eid of hostedEventIds) {
-              await tx.delete(eventRsvps).where(eq(eventRsvps.eventId, eid));
-              await tx.delete(eventComms).where(eq(eventComms.eventId, eid));
-              await tx.delete(events).where(eq(events.id, eid));
-            }
-
-            // Drop any in-flight Pulse leave-app job for this profile —
-            // the full-account purge supersedes it.
-            await tx.delete(pulseDeletionJobs).where(eq(pulseDeletionJobs.profileId, profileId));
+              .select({ id: events.id })
+              .from(events)
+              .where(inArray(events.createdByProfileId, profileIds))
+          ).map((r) => r.id);
+          if (hostedEventIds.length > 0) {
+            await tx.delete(eventRsvps).where(inArray(eventRsvps.eventId, hostedEventIds));
+            await tx.delete(eventComms).where(inArray(eventComms.eventId, hostedEventIds));
+            await tx.delete(events).where(inArray(events.id, hostedEventIds));
           }
+
+          // Drop any in-flight Pulse leave-app jobs for these profiles.
+          await tx
+            .delete(pulseDeletionJobs)
+            .where(inArray(pulseDeletionJobs.profileId, profileIds));
+
+          // Replay-protection ledger entry — same tx so partial completion
+          // doesn't leave a half-purged account marked as "done".
+          await tx.insert(pulseAccountPurges).values({
+            accountId,
+            processedAt: Math.floor(Date.now() / 1_000),
+            profileCount: profileIds.length,
+          });
         }),
       catch: (cause) => new PulseErasureDbError({ cause }),
     });
 
-    yield* recordCompletion("hard", "minor_runbook");
-    void accountId; // accountId is logged via span attrs; not needed for delete keys.
-    return { purged: profileIds.length };
+    yield* recordCompletion("hard", "admin");
+    return { purged: profileIds.length, alreadyProcessed: false };
   });
 
 /**

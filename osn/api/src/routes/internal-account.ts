@@ -4,6 +4,7 @@ import { Elysia, t } from "elysia";
 
 import { requireArc } from "../lib/arc-middleware";
 import * as accountErasure from "../services/account-erasure";
+import { joinApp } from "../services/app-enrollments";
 import { createAuthService, type AuthConfig } from "../services/auth";
 
 const AUDIENCE = "osn-api";
@@ -46,18 +47,28 @@ export function createInternalAccountRoutes(
         if (!caller) return { error: "Unauthorized" };
 
         try {
-          await run(auth.verifyStepUpForExternalPurpose(body.account_id, body.token, body.purpose));
-          return { ok: true as const };
-        } catch {
-          // Generic 200 with ok:false so callers can branch without 400/401
-          // ambiguity. Specific reason is recorded in osn.auth.step_up.verified
-          // metric inside verifyStepUpToken.
-          return { ok: false as const };
+          // S-H2: returns the verified accountId derived from the token's
+          // `sub` claim. Pulse / Zap use this server-to-server response
+          // rather than trusting a client-supplied accountId from the
+          // request body. The accountId never appears in any user-facing
+          // surface (P6 invariant — accountId must not leak to clients).
+          const result = await run(auth.verifyStepUpForExternalPurpose(body.token, body.purpose));
+          return { ok: true as const, account_id: result.accountId };
+        } catch (err) {
+          // S-M1: surface a structured `reason` so callers can map distinct
+          // failures to precise client-facing errors. Specific result types
+          // are recorded in `osn.auth.step_up.verified` by verifyStepUpToken.
+          const message =
+            err && typeof err === "object" && "message" in err && typeof err.message === "string"
+              ? err.message
+              : "";
+          let reason: "consumed" | "invalid" = "invalid";
+          if (message === "Step-up token already used") reason = "consumed";
+          return { ok: false as const, reason };
         }
       },
       {
         body: t.Object({
-          account_id: t.String({ minLength: 1 }),
           token: t.String({ minLength: 1 }),
           purpose: t.Union([
             t.Literal("pulse_app_delete"),
@@ -79,6 +90,13 @@ export function createInternalAccountRoutes(
         );
         if (!caller) return { error: "Unauthorized" };
 
+        // ARC authenticates "Pulse / Zap made this call". User intent was
+        // proved by the matching `/internal/step-up/verify` call earlier
+        // in the request lifecycle (the verify-then-leave pattern); we
+        // can't re-verify the same step-up token here because the JTI
+        // is single-use. Residual S-H3 risk (a compromised Pulse can
+        // flip arbitrary enrollments) is mitigated by the bounded ARC
+        // key TTL + per-kid rate limit (backlogged as S-M24).
         try {
           const result = await run(
             accountErasure.recordAppEnrollmentLeft(body.account_id, body.app),
@@ -101,7 +119,10 @@ export function createInternalAccountRoutes(
       async ({ body, headers, set }) => {
         // Lazy provisioning hook for first-authenticated-call flows. Pulse
         // calls this on a user's first authenticated Pulse API call (after
-        // the user re-engages post-leave or on initial onboarding).
+        // the user re-engages post-leave or on initial onboarding). No
+        // step-up is required because joining an app doesn't mutate
+        // identity-side state in a way that can harm the user — it just
+        // unblocks future leave-app callbacks targeting that app.
         const caller = await requireArc(
           headers.authorization,
           set,
@@ -112,7 +133,6 @@ export function createInternalAccountRoutes(
         if (!caller) return { error: "Unauthorized" };
 
         try {
-          const { joinApp } = await import("../services/app-enrollments");
           const result = await run(joinApp(body.account_id, body.app));
           return { enrolled: result.enrolled };
         } catch {

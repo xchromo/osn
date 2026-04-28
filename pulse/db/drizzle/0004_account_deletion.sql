@@ -22,4 +22,13 @@ CREATE TABLE `pulse_deletion_jobs` (
 	`reason` text DEFAULT 'user_request' NOT NULL
 );--> statement-breakpoint
 CREATE INDEX `pulse_deletion_jobs_hard_delete_idx` ON `pulse_deletion_jobs` (`hard_delete_at`);--> statement-breakpoint
-CREATE INDEX `pulse_deletion_jobs_account_idx` ON `pulse_deletion_jobs` (`account_id`);
+CREATE INDEX `pulse_deletion_jobs_account_idx` ON `pulse_deletion_jobs` (`account_id`);--> statement-breakpoint
+
+-- 3. `pulse_account_purges` — S-H1 replay-protection ledger for the
+--    ARC-gated `/internal/account-deleted` endpoint. One row per accountId
+--    seen; subsequent calls with the same accountId short-circuit to no-op.
+CREATE TABLE `pulse_account_purges` (
+	`account_id` text PRIMARY KEY NOT NULL,
+	`processed_at` integer NOT NULL,
+	`profile_count` integer NOT NULL
+);

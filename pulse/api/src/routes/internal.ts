@@ -4,6 +4,7 @@ import { Elysia, t } from "elysia";
 
 import {
   PERMITTED_INBOUND_SCOPES,
+  ServiceKeyMismatchError,
   registerServiceKey,
   requireArc,
   revokeServiceKey,
@@ -67,7 +68,11 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) =>
             expiresAt: body.expiresAt,
           });
           return { ok: true };
-        } catch {
+        } catch (e) {
+          if (e instanceof ServiceKeyMismatchError) {
+            set.status = 409;
+            return { error: "kid_serviceid_mismatch" };
+          }
           set.status = 400;
           return { error: "Invalid public key JWK" };
         }

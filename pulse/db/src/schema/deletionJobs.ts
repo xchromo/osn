@@ -44,3 +44,25 @@ export const pulseDeletionJobs = sqliteTable(
 
 export type PulseDeletionJob = typeof pulseDeletionJobs.$inferSelect;
 export type NewPulseDeletionJob = typeof pulseDeletionJobs.$inferInsert;
+
+/**
+ * Replay-protection ledger for the ARC-gated `/internal/account-deleted`
+ * endpoint (S-H1). Without this, a captured `account:erase` ARC token (or
+ * a compromised osn-api key) could be replayed against pulse-api with
+ * arbitrary `accountId`/`profileIds[]` to nuke any user's Pulse data.
+ *
+ * The endpoint inserts a row keyed by `accountId` on first call; subsequent
+ * calls short-circuit to a no-op `{ ok: true, purged: 0 }`. Rows are kept
+ * indefinitely — they're 32 bytes each and the row count is bounded by
+ * the lifetime number of full-account deletions across the platform.
+ */
+export const pulseAccountPurges = sqliteTable("pulse_account_purges", {
+  accountId: text("account_id").primaryKey(),
+  /** Unix seconds. */
+  processedAt: integer("processed_at").notNull(),
+  /** Number of profile rows purged on this call (logging / audit). */
+  profileCount: integer("profile_count").notNull(),
+});
+
+export type PulseAccountPurge = typeof pulseAccountPurges.$inferSelect;
+export type NewPulseAccountPurge = typeof pulseAccountPurges.$inferInsert;
