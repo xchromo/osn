@@ -57,6 +57,13 @@ export const PULSE_METRICS = {
   closeFriendsListed: "pulse.close_friends.listed",
   closeFriendsListSize: "pulse.close_friends.list.size",
   closeFriendsBatchSize: "pulse.close_friends.batch.size",
+  // Share-attribution surface — outbound share intents, inbound exposures
+  // (event-page loads via a sourced URL), and the per-source RSVP
+  // attribution counters that organisers use to compare platforms.
+  shareInvoked: "pulse.events.share.invoked",
+  shareExposure: "pulse.events.share.exposure",
+  rsvpAttributionFirst: "pulse.rsvps.attribution.first",
+  rsvpAttributionLast: "pulse.rsvps.attribution.last",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -276,6 +283,41 @@ type CloseFriendRemoveResult = "ok" | "not_found" | "error";
 type CloseFriendsAddedAttrs = { result: CloseFriendAddResult };
 type CloseFriendsRemovedAttrs = { result: CloseFriendRemoveResult };
 type CloseFriendsListedAttrs = { result_empty: "true" | "false" };
+
+// --- Share attribution ---
+
+/**
+ * Bounded share-source union. MUST stay in sync with `SHARE_SOURCES` in
+ * `lib/shareSource.ts` — duplicated here (rather than imported) so the
+ * metric attribute type is statically resolvable at compile time without
+ * coupling the metrics file to the Effect Schema layer.
+ */
+type ShareSource = "instagram" | "facebook" | "tiktok" | "x" | "whatsapp" | "copy_link" | "other";
+
+/**
+ * Surface that emitted the share / exposure event. Single value today
+ * (`event_detail`) but kept as an enum so future surfaces — e.g. an
+ * Explore-card share — slot in without widening cardinality.
+ */
+type ShareSurface = "event_detail";
+
+type ShareInvokedAttrs = {
+  source: ShareSource;
+  surface: ShareSurface;
+};
+
+type ShareExposureAttrs = {
+  source: ShareSource;
+  surface: ShareSurface;
+};
+
+type RsvpAttributionFirstAttrs = {
+  source: ShareSource;
+};
+
+type RsvpAttributionLastAttrs = {
+  source: ShareSource;
+};
 
 // ---------------------------------------------------------------------------
 // Counters / histograms
@@ -622,3 +664,43 @@ export const metricCloseFriendsListed = (size: number): void => {
 
 export const metricCloseFriendsBatchSize = (size: number): void =>
   closeFriendsBatchSize.record(size, {});
+
+// --- Share / attribution instruments ---
+
+const shareInvoked = createCounter<ShareInvokedAttrs>({
+  name: PULSE_METRICS.shareInvoked,
+  description: "Outbound share intents fired from a Pulse surface, by destination platform",
+  unit: "{share}",
+});
+
+const shareExposure = createCounter<ShareExposureAttrs>({
+  name: PULSE_METRICS.shareExposure,
+  description:
+    "Inbound event-page exposures via a sourced URL (?source=…), by platform — counts views, not RSVPs",
+  unit: "{view}",
+});
+
+const rsvpAttributionFirst = createCounter<RsvpAttributionFirstAttrs>({
+  name: PULSE_METRICS.rsvpAttributionFirst,
+  description: "First-touch RSVP attribution — incs once per RSVP when share_source_first is set",
+  unit: "{rsvp}",
+});
+
+const rsvpAttributionLast = createCounter<RsvpAttributionLastAttrs>({
+  name: PULSE_METRICS.rsvpAttributionLast,
+  description:
+    "Last-touch RSVP attribution — incs every time share_source_last changes (per-source most-recent touch)",
+  unit: "{touch}",
+});
+
+export const metricShareInvoked = (source: ShareSource, surface: ShareSurface): void =>
+  shareInvoked.inc({ source, surface });
+
+export const metricShareExposure = (source: ShareSource, surface: ShareSurface): void =>
+  shareExposure.inc({ source, surface });
+
+export const metricRsvpAttributionFirst = (source: ShareSource): void =>
+  rsvpAttributionFirst.inc({ source });
+
+export const metricRsvpAttributionLast = (source: ShareSource): void =>
+  rsvpAttributionLast.inc({ source });

@@ -6,10 +6,13 @@ import { Elysia, t } from "elysia";
 import { DEFAULT_JWKS_URL, extractClaims } from "../lib/auth";
 import { MAX_PRICE_MAJOR } from "../lib/currency";
 import { MAX_EVENT_GUESTS } from "../lib/limits";
+import { shareSourceTypeBoxUnion, type ShareSource } from "../lib/shareSource";
 import {
   metricCalendarIcsGenerated,
   metricEventAccessDenied,
   metricSettingsUpdated,
+  metricShareExposure,
+  metricShareInvoked,
 } from "../metrics";
 import { buildIcs } from "../services/calendar";
 import { listBlasts, parseCommsChannels, sendBlast } from "../services/comms";
@@ -137,6 +140,33 @@ export function createDefaultDiscoveryRateLimiter(): RateLimiterBackend {
   });
 }
 
+// Per-IP rate limits for the unauthenticated share-attribution surface.
+//
+// `share` records outbound share intents — modest cap because a single
+// user shouldn't legitimately fire many in a minute. `exposure` records
+// inbound page loads that arrived through a sourced URL; the ceiling is
+// higher because legitimate page reloads, link previews, and bot scans
+// all register here. Without these, the share / exposure counters would
+// be trivially poisonable by anyone refreshing a sourced URL in a loop.
+const SHARE_RATE_LIMIT_MAX = 60;
+const SHARE_RATE_LIMIT_WINDOW_MS = 60_000;
+const EXPOSURE_RATE_LIMIT_MAX = 120;
+const EXPOSURE_RATE_LIMIT_WINDOW_MS = 60_000;
+
+export function createDefaultShareRateLimiter(): RateLimiterBackend {
+  return createRateLimiter({
+    maxRequests: SHARE_RATE_LIMIT_MAX,
+    windowMs: SHARE_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
+export function createDefaultExposureRateLimiter(): RateLimiterBackend {
+  return createRateLimiter({
+    maxRequests: EXPOSURE_RATE_LIMIT_MAX,
+    windowMs: EXPOSURE_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
 export const createEventsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
   jwksUrl: string = DEFAULT_JWKS_URL,
@@ -146,6 +176,18 @@ export const createEventsRoutes = (
    * backend; production wires the Redis backend at composition time.
    */
   discoveryRateLimiter: RateLimiterBackend = createDefaultDiscoveryRateLimiter(),
+  /**
+   * Per-IP rate limiter for `POST /events/:id/share`. Same fail-closed
+   * posture as discovery — a metric counter fed by an unauthenticated
+   * endpoint is trivially poisonable without a cap.
+   */
+  shareRateLimiter: RateLimiterBackend = createDefaultShareRateLimiter(),
+  /**
+   * Per-IP rate limiter for `POST /events/:id/exposure`. Higher ceiling
+   * than the share limiter because legitimate page reloads of a sourced
+   * URL register here.
+   */
+  exposureRateLimiter: RateLimiterBackend = createDefaultExposureRateLimiter(),
 ) => {
   return (
     new Elysia({ prefix: "/events" })
@@ -637,7 +679,94 @@ export const createEventsRoutes = (
         },
         {
           params: t.Object({ id: t.String() }),
-          body: t.Object({ status: rsvpStatusEnum }),
+          body: t.Object({
+            status: rsvpStatusEnum,
+            shareSource: t.Optional(shareSourceTypeBoxUnion()),
+          }),
+        },
+      )
+      // ── Share-attribution telemetry ─────────────────────────────────────
+      // Two unauthenticated endpoints used by the frontend to record
+      // outbound share intents and inbound exposures. Both are
+      // rate-limited per IP (fail-closed). Neither writes to the DB —
+      // the only state they touch is the metric counters.
+      .post(
+        "/:id/share",
+        async ({ params, body, headers, set }) => {
+          const ip = getClientIp(headers);
+          let allowed: boolean;
+          try {
+            allowed = await shareRateLimiter.check(ip);
+          } catch {
+            allowed = false;
+          }
+          if (!allowed) {
+            set.status = 429;
+            return { error: "Too many requests" } as const;
+          }
+          // Visibility gate: we don't want a private event's share count
+          // to be derivable by anyone with the URL — same posture as
+          // every other direct-fetch surface on this controller.
+          const claims = await extractClaims(
+            headers["authorization"],
+            jwksUrl,
+            _testKey as CryptoKey,
+          );
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, claims?.profileId ?? null).pipe(Effect.provide(dbLayer)),
+          );
+          if (event === null) {
+            set.status = 404;
+            return { message: "Event not found" } as const;
+          }
+          metricShareInvoked(body.source as ShareSource, "event_detail");
+          set.status = 204;
+          return null;
+        },
+        {
+          params: t.Object({ id: t.String() }),
+          body: t.Object({ source: shareSourceTypeBoxUnion() }),
+        },
+      )
+      .post(
+        "/:id/exposure",
+        async ({ params, body, headers, set }) => {
+          const ip = getClientIp(headers);
+          let allowed: boolean;
+          try {
+            allowed = await exposureRateLimiter.check(ip);
+          } catch {
+            allowed = false;
+          }
+          if (!allowed) {
+            set.status = 429;
+            return { error: "Too many requests" } as const;
+          }
+          const claims = await extractClaims(
+            headers["authorization"],
+            jwksUrl,
+            _testKey as CryptoKey,
+          );
+          const event = await Effect.runPromise(
+            loadVisibleEvent(params.id, claims?.profileId ?? null).pipe(Effect.provide(dbLayer)),
+          );
+          if (event === null) {
+            set.status = 404;
+            return { message: "Event not found" } as const;
+          }
+          // Organisers viewing their own event don't pollute exposure
+          // analytics — same rule as the RSVP attribution short-circuit.
+          if (claims?.profileId && claims.profileId === event.createdByProfileId) {
+            set.status = 204;
+            return null;
+          }
+          metricShareExposure(body.source as ShareSource, "event_detail");
+          set.status = 204;
+          return null;
+        },
+        {
+          params: t.Object({ id: t.String() }),
+          body: t.Object({ source: shareSourceTypeBoxUnion() }),
         },
       )
       .post(

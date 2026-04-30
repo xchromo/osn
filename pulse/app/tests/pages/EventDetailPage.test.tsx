@@ -34,7 +34,13 @@ vi.mock("../../src/components/MapPreview", () => ({
 vi.mock("../../src/components/RsvpSection", () => ({
   RsvpSection: () => <div data-testid="rsvp-stub" />,
 }));
-vi.mock("../../src/lib/rsvps", () => ({ apiBaseUrl: "http://localhost:3001" }));
+vi.mock("../../src/components/ShareEventButton", () => ({
+  ShareEventButton: () => <div data-testid="share-stub" />,
+}));
+vi.mock("../../src/lib/rsvps", () => ({
+  apiBaseUrl: "http://localhost:3001",
+  recordShareExposure: vi.fn(() => Promise.resolve()),
+}));
 
 type EventShape = {
   id: string;
