@@ -23,6 +23,11 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [ ] Configure Cloudflare Email Service — onboard sender domain in dashboard, set `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_EMAIL_API_TOKEN` + `OSN_EMAIL_FROM` in staging, watch `osn.email.send.attempts{outcome="sent"}` for a week before flipping in prod — see [[email]]
 - [x] **Migrate close friends from OSN to Pulse** — Pulse-scoped `pulse_close_friends` table, feed boost in `listEvents`, hosting-side avatar ring, OSN core teardown (services, routes, metrics, SDK, ConnectionsPage tab). See [[pulse-close-friends]]. (Move to `[[changelog/completed-features]]` on merge.)
 - [ ] **Cross-device login → opportunistic device-passkey enrollment.** When a user signs in on device B using a passkey stored on device A (the WebAuthn hybrid / CaBLE flow surfaced by the password manager / OS), and device B has no passkey of its own for this account, post-success prompt the user to enroll a device-bound passkey on B. Without this, a user with only a phone passkey who signs in to a laptop has to re-do the QR ceremony every session — and a lost phone is a hard lockout despite the laptop being authenticated. Implementation sketch: after `/login/passkey/complete`, the server returns a `device_passkey_suggested: true` flag when the assertion came in via a hybrid transport (`response.authenticatorAttachment === "cross-platform"` is the wire signal) AND the account has no passkey already enrolled for the current device's platform authenticator. Client SDK surfaces the flag; `<SignIn>` opens an "Add a passkey on this device" modal that drives `/passkey/register/{begin,complete}` with the just-issued access token. Easily dismissible, never blocking — see `[[passkey-primary]]`.
+- [ ] **C-H1 — Account-level data export endpoint** (`GET /account/export`, step-up gated, JSON bundle including ARC fan-out to Pulse + Zap). Required for GDPR Art. 15 + Art. 20 + CCPA. See `[[compliance/dsar]]`, `[[compliance/data-map]]`.
+- [ ] **C-H2 — Account-level erasure endpoint** (`DELETE /account`, step-up gated, 7-day soft-delete tombstone, ARC fan-out for cross-service cleanup). Required for GDPR Art. 17 + CCPA right to delete. See `[[compliance/dsar]]`, `[[compliance/retention]]`.
+- [ ] **C-H4 — Privacy notice + ToS published on `@osn/landing`** in plain language, version-stamped, backlinked from every signup form. Required for GDPR Art. 12-14 + CCPA notice-at-collection + DSA Art. 14. See `[[compliance/gdpr]]`, `[[compliance/dsa]]`.
+- [ ] **C-H8 — Date-of-birth field + age gate on registration**, hard-rejecting under-13. Required for COPPA actual-knowledge defense. See `[[compliance/coppa]]`.
+- [ ] **V-M0 — Verified Identity foundations** (Yoti-style verified-attribute layer, AU first). DPIA + vendor RFP + schema (`verified_attributes`, `verification_runs`, `presentations`) + SD-JWT VC issuer on a **separate ES256 keypair** (same JWKS as `[[arc-tokens]]`, distinct `kid`, `aud: "osn-vc"`). Unlocks "verify once, present privately many times" across Pulse + Zap and gives a credible answer to AU social-media-minimum-age (10 Dec 2025). See `[[verified-identity]]`.
 
 ---
 
@@ -140,6 +145,169 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 ---
 
+## Verified Identity (`@osn/api` + `@osn/db` + `@shared/crypto` + `@osn/social`)
+
+Yoti-style reusable verified-attribute layer. **Australia first** —
+driver's licence (DVS), mobile driver's licence (ISO 18013-5), and
+myID once AGDIS opens to private-sector relying parties (30 Nov
+2026). Other countries layer onto the same provider abstraction.
+Cryptography: SD-JWT VC (RFC 9901 + draft-ietf-oauth-sd-jwt-vc) over
+the existing OSN ES256 ARC key. See [[verified-identity]] for the
+design doc, threat model snapshot, and vendor shortlist.
+
+### V-M0 — Foundations (no provider yet)
+
+- [ ] DPIA filing under GDPR Art. 35 — biometric template hashes +
+      identity-document data are Special Category Personal Data
+      (Art. 9). Block all later milestones until filed. Add to
+      [[compliance/gdpr]] and link from C-M3.
+- [ ] Data map + retention + subprocessor entries: new categories
+      (biometric template hash, document number hash), default
+      retention 24 months from `verified_at` or until document
+      expiry whichever sooner, KYC vendor as a new subprocessor
+      with signed DPA. See [[compliance/data-map]],
+      [[compliance/retention]], [[compliance/subprocessors]].
+- [ ] Vendor RFP: Persona (M1 facial age estimation, top-scoring AU
+      trial vendor), idvPacific vs Equifax IDMatrix (M2 DVS
+      gateway), MATTR/GBG (M3 mDL acceptance). Trade-off matrix
+      lives at `wiki/verified-identity/vendor-rfp.md`.
+- [ ] DB schema in `@osn/db`: `verification_providers`,
+      `verification_runs`, `verified_attributes` (encrypted
+      `value` column), `presentations`. New `security_events`
+      kinds: `identity_verified`, `identity_presentation_issued`.
+- [ ] SD-JWT VC issuer in `@shared/crypto/vc` — salted-hash
+      disclosures, `aud`-bound presentations, `jti` single-use
+      store mirroring [[step-up]]. ES256 key reused from ARC
+      issuer; new credential audience `osn-vc`.
+- [ ] `/.well-known/openid-credential-issuer` metadata + JWKS
+      reuse from existing `/.well-known/jwks.json`.
+- [ ] Observability: `osn.identity.verification.runs{kind, outcome}`
+      counter, `osn.identity.verification.duration{kind, provider}`
+      histogram, `osn.identity.presentation.issued{audience, claims}`
+      counter (claims as bounded enum, not free-form).
+
+### V-M1 — Facial age estimation
+
+Lowest regulatory bar; closes the social-media-minimum-age (10 Dec
+2025) compliance gap before harder document flows are wired.
+
+- [ ] Persona (or chosen vendor) integration in
+      `osn/api/src/services/identity/age-estimate.ts`. Pure HTTP +
+      vendor SDK; selfie capture via WebAuthn-style platform API.
+- [ ] `POST /identity/verify/begin { kind: "age_estimate" }` +
+      `POST /identity/verify/complete` (step-up gated). On
+      success, mint `age_band` + (if estimate ≥ 16 with margin)
+      `age_over_16: true` attributes. Source image discarded after
+      vendor returns the estimate.
+- [ ] **Under-13 termination branch**: if facial-age-estimate
+      returns ≤ 13 with confidence margin, abort the flow,
+      do **not** persist the estimate value, do **not** log
+      the value, write a generic `age_estimate_below_threshold`
+      `security_event`, and return a fixed-shape failure to the
+      client. This is COPPA "actual knowledge" — the moment OSN
+      learns of a likely under-13 user it must not retain the
+      signal that triggered the inference. See [[compliance/coppa]].
+- [ ] `@osn/social` Settings → Identity tab: entry-point card
+      "Confirm you're old enough" + selfie ceremony UI.
+- [ ] Tighten C-H8 (registration age gate): if a verified
+      `age_over_16` attribute exists, skip the self-declared
+      birthdate path entirely. See [[compliance/coppa]].
+- [ ] Tests: provider mock layer; refusal on margin-of-error
+      bands; revocation on `DELETE /identity/attributes/age_band`.
+
+### V-M2 — AU document verification (DVS + selfie + face-match)
+
+- [ ] Department of Home Affairs DVS registration paperwork +
+      DVS-approved consent statement (verbatim) shown before each
+      DVS call; consent record retained.
+- [ ] DVS gateway provider integration (idvPacific or Equifax
+      IDMatrix). Document capture + OCR client-side; submit
+      extracted fields to DVS for yes/no match.
+- [ ] Liveness selfie + face-match against the licence photo.
+      Provider returns face-match score; OSN refuses below
+      configurable threshold.
+- [ ] Mint attributes: `dob`, `given_name`, `family_name`,
+      `country=AU`, `document_type`, `document_expires_at`,
+      `document_number_hash` (SHA-256 + per-attribute pepper —
+      lets us refuse Sybil re-use without retaining the number).
+      Pre-compute boolean predicates `age_over_16`, `age_over_18`
+      alongside `dob`.
+- [ ] Settings → Identity: list verified attributes with
+      provenance ("Verified 12 Jan 2026 via NSW driver licence")
+      and per-attribute revoke.
+- [ ] Tests: DVS no-match path returns generic failure (no
+      enumeration oracle); face-match below threshold; replay of
+      same document number across accounts blocked.
+
+### V-M3 — mDL acceptance (ISO 18013-5 / 18013-7)
+
+- [ ] CBOR/COSE verifier for state-issued mDL presentations
+      (NSW + QLD live; others as they roll out late 2026). MATTR
+      SDK or hand-rolled — decide in V-M0 vendor RFP.
+- [ ] Re-issue mDL claims as OSN SD-JWT VCs so downstream
+      relying parties see one credential format on the holder
+      side.
+- [ ] Settings → Identity: "Verify with your phone's digital
+      driver licence" entry alongside the document upload flow.
+
+### V-M4 — Relying-party API (Pulse, Zap, third-party)
+
+- [ ] `POST /identity/presentation/request` (RP-facing) — accepts
+      claim set + audience + nonce, returns OAuth-style consent
+      URL.
+- [ ] `POST /identity/presentation/issue` (user-facing) — after
+      consent + step-up, releases SD-JWT VC for **only** the
+      requested claims with the audience binding.
+- [ ] OpenID4VP wire format so external apps can integrate
+      against a published spec rather than an OSN-bespoke one.
+- [ ] Pulse: optional "verified attendees only" event setting +
+      "host requires verified given-name" gate on RSVP.
+- [ ] Zap M3: trader-traceability flow (DSA Art. 30, C-M12)
+      consumes verified `given_name` / `country` / business
+      registration ID.
+- [ ] Per-RP audit trail in `presentations` + user-facing
+      "Connected apps" view showing every prior presentation.
+
+### V-M5 — myID / AGDIS
+
+Unblocked 30 Nov 2026 when private-sector relying parties become
+eligible under the Digital ID Act 2024.
+
+- [ ] AGDIS accreditation paperwork (relying-party tier).
+- [ ] Accept myID assertion as a verification source — yields
+      higher-assurance attributes than DVS for the same fields,
+      plus reduces vendor lock-in to a single KYC provider.
+- [ ] Settings → Identity: "Verify with myID" surface.
+
+### V-M6 — Other countries
+
+- [ ] UK: DIATF-accredited provider (Yoti, Onfido, Persona) for
+      passport / driving-licence verification.
+- [ ] EU: eIDAS 2.0 / EUDI Wallet acceptance (SD-JWT VC
+      interoperable on the wire — same verifier code).
+- [ ] US: state mDL acceptance (Apple / Google wallet) as it
+      rolls out; plus document-verification provider for
+      driver's licence + state ID.
+
+### Cross-cutting / open questions
+
+- [ ] Which verified attributes are "always public" once minted
+      (e.g. `country` for compliance routing) vs always
+      consent-gated (DOB, full name)?
+- [ ] BBS+ unlinkable VC vs SD-JWT-per-audience for cross-RP
+      correlation defence — defer to v2 unless a documented
+      threat lands.
+- [ ] How does verified identity interact with multi-account
+      profiles (P3-P6)? Verification is account-level; profile
+      switching exposes the same attributes — is that the right
+      ergonomic, or should profile-A be able to present `age_over_18`
+      while profile-B presents nothing?
+- [ ] Step-up requirement on every presentation vs cached
+      consent (e.g. "Pulse can re-use my `age_over_16` for 30
+      days without prompting") — UX vs privacy trade-off.
+
+---
+
 ## Platform
 
 ### Pulse events API (`pulse/api`)
@@ -240,6 +408,10 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [x] S-M2 (passkey) — `PATCH /passkeys/:id` had no step-up gate; XSS-captured access token could swap labels to mislead the user before a delete. **Fixed** — rename now uses the same step-up gate as delete (`passkeyDeleteAllowedAmr`); client + UI thread the token through — see [[identity-model]]
 - [x] S-M3 (passkey) — Discoverable login did not cross-check assertion `userHandle` against the credential row's `accountId`. **Fixed** — verifier decodes the base64url userHandle and compares to `accounts.passkeyUserId` before completing the ceremony — see [[identity-model]]
 - [ ] S-M1 (series) — `GET /series/:id/instances` leaks existence of private series (404 on missing id vs 200 `[]` on private unviewable). Align with [[event-access]] — return 200 `[]` when series exists-but-invisible (or 404 for both) — `pulse/api/src/routes/series.ts:149`, `pulse/api/src/services/series.ts:494`
+- [ ] S-M1 (vid) — Unbounded presentation issuance / no rate limit on `POST /identity/presentation/issue`. Spec a per-(user, audience) limit (~10/hr) + global per-user cap before V-M4 — see [[verified-identity]], [[rate-limiting]]
+- [ ] S-M2 (vid) — Selfie / biometric raw-image retention boundary owned by vendor, not OSN. Spec direct browser→vendor upload (signed URL or vendor SDK); `osn/api` only sees `runId` + redacted response. Add biometric to `redact.test.ts` denylist — block V-M1 — see [[verified-identity]]
+- [ ] S-M3 (vid) — `presentations.requested_claims` / `released_claims` JSON unbounded in current schema spec. Constrain to bounded enum of attribute kinds, cap row size; mirror the bounded-enum rule for the `presentation.issued{claims}` metric — see [[verified-identity]]
+- [ ] S-M4 (vid) — `verified_attributes.value` encryption-key custody underspecified. Move from "key in env" to envelope encryption (KEK in KMS, per-row DEK, AES-256-GCM, AAD = `account_id ‖ attribute_kind`). Document in [[compliance/data-map]]. Block V-M2 — see [[verified-identity]]
 - [ ] S-M2 (series) — `listInstances` ignores the invited-RSVP branch in `canViewEvent` ([[event-access]]). Invited non-organiser viewers are wrongly 404'd on the private-series gate, and a single promoted-to-public instance leaks the parent series to anonymous callers. Replace inline visibility filter with per-row `canViewEvent` (or a parallel RSVP-join predicate) — `pulse/api/src/services/series.ts:500-502`
 
 ### Low
@@ -288,6 +460,9 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L2 (security-events) — `notifyRecovery` logs a stable `"notify_dispatch_failed"` message, but if `AuthError.message` ever embeds the mailer-provider response body a future refactor could leak the recipient email past the key-based redactor. Pin the log message shape with a test and assert the raw cause only appears on the span — see [[recovery-codes]]
 - [ ] S-L3 (security-events) — `securityEventList` + `securityEventAck` limiters are keyed per-IP via `getClientIp` (`osn/api/src/routes/auth.ts`), but both endpoints are authenticated. Key by `claims.profileId` to strengthen the CGNAT / botnet-fan-out threat model (same pattern as `/recommendations/connections`) — see [[rate-limiting]]
 - [ ] S-L1 (series) — No rate limit on `POST /series`, `PATCH /series/:id`, `DELETE /series/:id`. Each POST materialises up to 260 rows. Add per-user limits (e.g. 10/hour create, 60/hour patch) — see [[rate-limiting]]
+- [ ] S-L1 (vid) — `DELETE /identity/attributes/:kind` revokes locally but outstanding SD-JWT VCs minted from that attribute remain cryptographically valid until expiry. Add an OAuth Status List endpoint at `/.well-known/`; require verifiers to consult it; document TTL trade-off — see [[verified-identity]]
+- [ ] S-L2 (vid) — Threat-model snapshot in [[verified-identity]] is missing: holder device compromise (stolen session can mint presentations — call out step-up gating explicitly), issuer-side internal abuse (`@osn/api` operator silently minting VCs without user consent → `admin_actions` audit, ties to C-M16), `nonce`/`jti` clock skew + replay window, and downgrade attacks where an RP requests `age_band` instead of `age_over_18` to learn more than needed (consent UX should warn on over-broad asks). Expand before V-M0 STRIDE pass
+- [ ] S-L3 (vid) — `verification_runs.failure_reason` and "redacted provider response" are undefined. Spec a vendor-response-redactor module with explicit allowlist (status, score, run id, error code) and denylist for everything else; mirror [[observability/overview]] redaction pattern — see [[verified-identity]]
 - [ ] S-L2 (series) — `expandRRule` safety valve (`weekIdx > 10_000`) permits ~70k `Date` allocations when `UNTIL < dtstart`. Reject `UNTIL < dtstart` in `parseRRule` and lower the valve to ~520 weeks / 120 months — `pulse/api/src/services/series.ts:187-237`
 - [ ] T-M (series) — Coverage gaps from review: `listInstances` `scope: "all"`; `updateSeries` `this_and_following` with/without `from`; `parseRRule` happy paths for `UNTIL`/`INTERVAL`/`BYDAY`; `expandRRule` `UNTIL` + `BYDAY` fanout; `materializeInstances` `extend_window` trigger; `GET /series/:id` 200 happy path + private-visibility 404 masking; `PATCH /series/:id` 200/422/404 paths
 - [ ] S-L1 (pulse-close-friends) — `POST /close-friends/:friendId` is unrate-limited and the 422-vs-201 distinction makes it a connection-existence oracle. Caller can only probe their own connections (already enumerable via OSN `/graph/connections`), but the asymmetry bypasses OSN's 60/min limit. Defer to a Pulse-wide rate-limiter when one lands; mirror the OSN `GRAPH_RATE_LIMIT_MAX` (60/min/user) — see [[rate-limiting]], [[pulse-close-friends]]
@@ -361,6 +536,9 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W2 (series) — `updateSeries` SELECT-then-UPDATE leaves a race window (an `instanceOverride=true` flip between read and write is overwritten) and adds two extra round-trips. Collapse to `db.update(events).set(…).where(and(seriesId, !override, gte(startTime, cutoff))).returning({ id })` — `pulse/api/src/services/series.ts:581-609`
 - [ ] P-W3 (series) — `cancelSeries` same pattern as P-W2. Replace with single `UPDATE … RETURNING { id }` to remove the race and halve the round-trips — `pulse/api/src/services/series.ts:631-668`
 - [ ] P-I (series) — `SeriesDetailPage` refetches on every scope tab switch (no cache); `summariseRRule` recomputes on every render — `createMemo` + a `Map<scope, SeriesInstance[]>` cache
+- [ ] P-I1 (vid) — `presentations` table grows unbounded per account. When V-M4 lands, add retention to [[compliance/retention]] (e.g. 12 months), index `(account_id, issued_at desc)`, cursor-paginated history view — see [[verified-identity]]
+- [ ] P-I2 (vid) — Sybil dedupe will sequential-scan `verified_attributes` without an index. Add a unique partial index on `verified_attributes(document_number_hash) WHERE document_number_hash IS NOT NULL` and a covering `(provider_id, document_number_hash)` index in V-M2 schema migration — see [[verified-identity]]
+- [ ] P-I3 (vid) — Per-request AES decrypt for `age_over_16` / `age_over_18` predicates is wasted CPU on hot paths. Store boolean predicates plaintext alongside the encrypted JSON `value` — booleans alone are not Special Category data, only DOB/name need Art. 9 protection — see [[verified-identity]], [[compliance/gdpr]]
 - [ ] P-I4 — Deprecated `bx()` still exported from `@osn/ui` — remove once no external consumers remain — see [[component-library]]
 - [ ] P-I5 — Auth Dialog components always mounted in EventList (vs conditional `<Show>`) — negligible for two forms but revisit if dialogs grow heavier
 - [ ] P-I4 — `AuthProvider` reconstructs Effect `Layer` on every render — wrap with `createMemo`
@@ -381,6 +559,75 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I15 — `rsvpCounts` calls `loadEvent(eventId)` redundantly (route already gates via `loadVisibleEvent`)
 - [ ] P-I1 (client) — Duplicated `authGet`/`authPost`/`authPatch`/`authDelete` helpers across `graph.ts`, `organisations.ts`, `recommendations.ts`. Factor to `@osn/client/src/lib/auth-fetch.ts` parameterised by error-class constructor — see [[component-library]]
 - [ ] P-I4 (social) — List pages (`ConnectionsPage`, `OrganisationsPage`) have no pagination UI. Server supports `limit`/`offset` but users with &gt;50 connections silently lose visibility. Add infinite-scroll via `IntersectionObserver` or paginator
+
+---
+
+## Compliance Backlog
+
+Open compliance findings only. Closed items will be archived in a future `wiki/changelog/compliance-fixes.md` (created on first close). See `[[compliance/index]]` for the programme overview and `[[compliance/scope-matrix]]` for the in-scope-laws map. ID format documented in `[[review-findings]]`.
+
+### High
+
+- [ ] **C-H1** — Account-level data export endpoint (`GET /account/export`, step-up gated). GDPR Art. 15 + Art. 20 + CCPA right to know. JSON bundle including ARC fan-out to `@pulse/api` (RSVPs, hosted events, close-friends) and `@zap/api` (chat membership, NOT message ciphertext). Streaming JSON, rate-limit 1/day/account. See `[[compliance/dsar]]`, `[[compliance/data-map]]`.
+- [ ] **C-H2** — Account-level erasure endpoint (`DELETE /account`, step-up gated). GDPR Art. 17 + CCPA right to delete. Two-phase: 7-day soft-delete tombstone, then hard delete; ARC fan-out for cross-service cleanup; replaces public handle with `deleted_<id>` sentinel; cascades to all FK-related tables. See `[[compliance/dsar]]`, `[[compliance/retention]]`.
+- [ ] **C-H3** — Photon geocoder keystroke leak (S-M13 follow-up). GDPR Art. 5(1)(c) data minimisation + Art. 7 consent. Proxy through `@pulse/api` so Photon never sees user IP, debounce server-side, add one-time consent dialog on first use. See `[[compliance/data-map]]`, S-M13 in Security Backlog.
+- [ ] **C-H4** — Privacy notice + ToS published on `@osn/landing`. GDPR Art. 12-14 + CCPA notice-at-collection + DSA Art. 14. Plain language, version-stamped (`/legal/privacy?v=2026-04`), backlinked from every signup form. Drafts under `wiki/compliance/legal-drafts/`. See `[[compliance/gdpr]]`, `[[compliance/dsa]]`, `[[compliance/ccpa]]`.
+- [ ] **C-H5** — DPA + SCC pack signed for active processors. GDPR Art. 28 + Art. 44-49. Cloudflare DPA, Grafana Labs DPA + SCCs, chosen Redis provider DPA, Komoot/Photon DPA. File under `wiki/compliance/dpa/<vendor>.md` with execution date + scope. See `[[compliance/subprocessors]]`.
+- [ ] **C-H6** — DSA notice-and-action endpoint (`POST /reports`). DSA Art. 16. Lands in both `@pulse/api` and `@zap/api` with shared `@shared/moderation` package. Accepts the Art. 16 minimum schema (substantiated explanation, exact location, notifier identity, good-faith statement). See `[[compliance/dsa]]`.
+- [ ] **C-H7** — DSA statement-of-reasons system. DSA Art. 17. `moderation_actions` table + email template + `GET /account/moderation-actions` for the affected user. Mandatory for every restriction (post removal, account suspension, demotion, RSVP rejection by host). See `[[compliance/dsa]]`.
+- [ ] **C-H8** — Date-of-birth field + age gate on registration. COPPA actual-knowledge defense. TypeBox `birthdate: Date` schema; reject under-13 before email OTP send; rejected DOB not retained. See `[[compliance/coppa]]`. **Note**: the V-M2 verified-identity flow can short-circuit this self-declared path with a verified `age_over_16` attribute — see [[verified-identity]].
+- [ ] **C-H9** — DPIA for Verified Identity (V-M0 prerequisite). GDPR Art. 35. Biometric template hashes + identity-document data are Special Category Personal Data under Art. 9; DPIA must be filed before the first KYC vendor is wired. See [[verified-identity]], [[compliance/gdpr]].
+- [ ] **C-H10** — DVS access registration with the Department of Home Affairs (V-M2 prerequisite). Australian Privacy Act 1988 + APP 11 + DVS-approved consent statement displayed verbatim before each call. See [[verified-identity]], [[compliance/data-map]].
+- [ ] **C-H11** — Art. 9 explicit-consent capture for Verified Identity. Each verification ceremony must capture timestamp + version + locale + SHA-256 of the exact wording shown, stored in a `consent_records` table (likely scaffolds C-L1 ahead of schedule). Withdrawal path documented. Block V-M1 — see [[verified-identity]], [[compliance/gdpr]].
+
+### Medium
+
+- [ ] **C-M1** — DSAR runbook operationalised (`dsar_requests` audit table, `dsar@osn.example` email alias + automated acknowledgement, postal address on landing legal page, internal triage doc, SLA monitoring alerting at 25 d). GDPR + CCPA + state-law DSARs. See `[[compliance/dsar]]`.
+- [ ] **C-M2** — Sweeper jobs for retention windows: `security_events` >12 months, `email_changes` >90 days, expired `sessions` rows, deletion tombstones >30 days. GDPR Art. 5(1)(e). Single cron-style worker in `@osn/api` using Bun `setInterval`. See `[[compliance/retention]]`.
+- [ ] **C-M3** — DPIA template + first three filings: Pulse special-category event exposure, Zap M3 org-chat transcripts (before M3 ships), Zap M4 locality channels (before M4 ships). GDPR Art. 35. See `[[compliance/gdpr]]`.
+- [ ] **C-M4** — Continuous-control monitoring tool selected (Vanta / Drata / Secureframe) before SOC 2 Type I prep. SOC 2 evidence-collection lifecycle. See `[[compliance/soc2]]`.
+- [ ] **C-M5** — Production access control matrix (`wiki/compliance/access-matrix/<YYYY>-<Q>.md`) — first cycle 2026-Q3. SOC 2 CC6. See `[[compliance/access-control]]`.
+- [ ] **C-M6** — Backup + DR plan finalised + first restore drill (Q3 2026 dry run). SOC 2 A1. RTO 4h / RPO 24h initial targets. See `[[compliance/backup-dr]]`.
+- [ ] **C-M7** — Dependency CVE scanning in CI (`osv-scanner` or equivalent). Fail on critical, warn on high. SOC 2 CC7 + supply-chain hygiene. See `[[compliance/soc2]]`.
+- [ ] **C-M8** — `security.txt` + Vulnerability Disclosure Policy (`/.well-known/security.txt` on `@osn/landing`; VDP at `wiki/compliance/vdp.md`). SOC 2 CC2 + breach-detection channel. See `[[compliance/soc2]]`, `[[compliance/breach-response]]`.
+- [ ] **C-M9** — "Do Not Sell or Share My Personal Information" + "Limit Use of My Sensitive Personal Information" footer links on `@osn/landing`. CCPA + state-privacy laws. We do not sell/share but the link is mandatory. See `[[compliance/ccpa]]`.
+- [ ] **C-M10** — DSA points of contact (Art. 11 authority + Art. 12 user) + ToS draft published. See `[[compliance/dsa]]`.
+- [ ] **C-M11** — Internal complaint / appeal endpoint (`POST /moderation/appeals`) routing to a human reviewer; 6-month availability per DSA Art. 20. See `[[compliance/dsa]]`.
+- [ ] **C-M12** — Trader-traceability flow built into Zap M3 verification (Art. 30 — name, address, phone, email, registration ID, self-declaration). Block trader from interacting until verified. See `[[compliance/dsa]]`.
+- [ ] **C-M13** — Under-13 detected account-deletion runbook for support-discovered minors. Immediate delete + parent notification. COPPA. See `[[compliance/coppa]]`.
+- [ ] **C-M14** — Axe-core in CI (`@axe-core/playwright`) running against `@osn/landing`, `@osn/social`, `@pulse/app` on every PR. Fail on serious / critical violations. EAA / WCAG 2.1 AA. See `[[compliance/eaa]]`.
+- [ ] **C-M15** — Sweeper-job framework (cron-style worker in `@osn/api`). Foundation for C-M2. See `[[compliance/retention]]`.
+- [ ] **C-M16** — `admin_actions` audit log table (append-only) + Grafana log mirror. SOC 2 CC6 attribution requirement. See `[[compliance/access-control]]`.
+- [ ] **C-M17** — KYC vendor RFP must enumerate per-vendor data residency (storage region), SCC required (Y/N), DPA template available (Y/N), and sub-sub-processors disclosed (Y/N). Block vendor selection on these columns. See `[[verified-identity]]`, `[[compliance/subprocessors]]`.
+
+### Low
+
+- [ ] **C-L1** — `consents (id, account_id, purpose, given_at, withdrawn_at, evidence)` table. Required once first consent-based purpose lands (geocoder, marketing email, analytics). GDPR Art. 7. See `[[compliance/gdpr]]`.
+- [ ] **C-L2** — DPO designated and named on `@osn/landing/legal/contact`. Even if not strictly required, simplifies enterprise customer DPAs. See `[[compliance/gdpr]]`, `[[compliance/breach-response]]`.
+- [ ] **C-L3** — Quarterly access review process (calendar + checklist + record under `wiki/compliance/access-reviews/`). First cycle 2026-Q3. SOC 2 CC6. See `[[compliance/access-control]]`.
+- [ ] **C-L4** — GitHub org hardening: required hardware-key MFA, required signed commits, branch protection, codeowners on prod paths. SOC 2 CC6 + CC8. See `[[compliance/access-control]]`.
+- [ ] **C-L5** — Annual third-party penetration test before SOC 2 Type II. Budget allocation. See `[[compliance/soc2]]`.
+- [ ] **C-L6** — Cyber + E&O insurance quote before first paying customer. Claim contact listed in `[[compliance/breach-response]]`. See `[[compliance/soc2]]`, `[[compliance/breach-response]]`.
+- [ ] **C-L7** — Global Privacy Control (`Sec-GPC: 1` header) recognition middleware in `@osn/api`. CCPA + Connecticut + Colorado universal-opt-out signal. See `[[compliance/ccpa]]`.
+- [ ] **C-L8** — Recommender-transparency disclosure in ToS (Pulse discovery factors documented in plain language). DSA Art. 27. See `[[compliance/dsa]]`.
+- [ ] **C-L9** — Strike system + misuse safeguards: counter on accounts; auto-suspend at threshold; auto-rate-limit unfounded reporters. DSA Art. 23. See `[[compliance/dsa]]`.
+- [ ] **C-L10** — Annual transparency-report data collection scaffold (we are SME-exempt today but the data should be collected anyway, ready to publish if threshold crossed). DSA Art. 15 / 24. See `[[compliance/dsa]]`.
+- [ ] **C-L11** — Annual COPPA self-assessment (30-min doc confirming the design has not drifted toward a child audience). See `[[compliance/coppa]]`.
+- [ ] **C-L12** — Verify `oxlintrc.json` `jsx-a11y` rules match WCAG 2.1 AA (some are off by default). EAA. See `[[compliance/eaa]]`.
+- [ ] **C-L13** — Manual screen-reader pre-release checklist (VoiceOver on macOS Safari, NVDA on Windows Firefox, TalkBack on Android Chrome). EAA. See `[[compliance/eaa]]`.
+- [ ] **C-L14** — Pulse map keyboard parity (marker selection, zoom, pan, detail expand). EAA. See `[[compliance/eaa]]`.
+- [ ] **C-L15** — Pulse calendar non-colour state cues (icons / text labels for "Not Started / Started / Ongoing / Finished"). EAA. See `[[compliance/eaa]]`.
+- [ ] **C-L16** — Accessibility statement on `@osn/landing/legal/accessibility` listing supported AT, known gaps, contact. EAA Art. 13. See `[[compliance/eaa]]`.
+- [ ] **C-L17** — Captions / transcripts for any video content on `@osn/landing`. EAA Art. 4. See `[[compliance/eaa]]`.
+- [ ] **C-L18** — Lint rule blocking new third-party script tags in HTML / Astro templates. Forces explicit decision before flipping us into "ePrivacy consent required". See `[[compliance/eprivacy]]`.
+- [ ] **C-L19** — Cookie banner scaffold built into `@osn/landing` (built but not mounted). Mounting requires DPO sign-off. ePrivacy. See `[[compliance/eprivacy]]`.
+- [ ] **C-L20** — Pulse event archival flow (`endTime + 90 d` → archived view or status flag). Retention. See `[[compliance/retention]]`.
+- [ ] **C-L21** — Tailscale (or equivalent bastion) for direct DB access; no public DB endpoint. SOC 2 CC6. See `[[compliance/access-control]]`.
+- [ ] **C-L22** — Departure runbook formalised (the access-revocation checklist). SOC 2 CC6. See `[[compliance/access-control]]`.
+- [ ] **C-L23** — GitHub mirror to a second host (Codeberg / Gitlab.com / private S3) for code-catastrophic-loss scenarios. SOC 2 A1. See `[[compliance/backup-dr]]`.
+- [ ] **C-L24** — Encryption-at-rest documentation (Supabase / R2 / Redis-provider defaults captured). SOC 2 C1. See `[[compliance/backup-dr]]`.
+- [ ] **C-L25** — Backup integrity verification (per-snapshot checksum; reject restores from corrupted snapshots). SOC 2 A1. See `[[compliance/backup-dr]]`.
+- [ ] **C-L26** — Cross-link DSA Art. 28 (minor protections) to ToS recommender-transparency disclosure. Verified Identity unlocks credible age-gating; ToS update should ship same PR as V-M1. See `[[verified-identity]]`, `[[compliance/dsa]]`.
 
 ---
 
@@ -445,6 +692,9 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 | Email provider behind the Cloudflare Worker — see [[email]] | Resend today; SendGrid / Postmark / SES are swap-ins at the Worker level. Pick based on deliverability + transactional-email pricing | Before staging deploy |
 | Email Worker per-recipient rate-limit bound — see [[email]] | Prevents OSN from flooding an inbox under bug / abuse. Tune once we have send-rate telemetry | After first week of real traffic |
 | Dry-run flag for email — see [[email]] | `OSN_EMAIL_DRY_RUN` env knob that short-circuits before Worker dispatch; useful for staging smoke tests | When we need it |
+| KYC vendor for V-M1 / V-M2 — see [[verified-identity]] | Persona (top AU age-assurance trial scorer; combined estimation + verification) vs idvPacific (AU-domiciled DVS gateway, OCR-first) vs Equifax IDMatrix (heavyweight gateway) vs MATTR/GBG (mDL-native; mDL roadmap partner) | V-M0 vendor RFP |
+| BBS+ vs SD-JWT-per-audience for verified presentations — see [[verified-identity]] | SD-JWT-per-audience is the v1 default (mint a fresh credential per RP); BBS+ adds true unlinkable presentations at higher operational cost | If a documented cross-RP correlation threat lands |
+| Verified attributes scope: account-level vs profile-level — see [[verified-identity]], [[identity-model]] | Verification ceremony is per-account; multi-account P3-P6 lets one account hold multiple profiles. Should profile-A be able to present `age_over_18` while profile-B presents nothing, or are attributes always inherited? | Before V-M4 ships consent UX |
 
 ---
 
@@ -463,3 +713,4 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 - [ ] Self-hosting capabilities
 - [ ] Third-party API ecosystem
 - [ ] Supabase migration (from SQLite)
+- [ ] Verified Identity expansion to UK / EU / US (V-M6) — see [[verified-identity]]

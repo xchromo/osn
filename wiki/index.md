@@ -28,6 +28,7 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[arc-tokens]] — S2S authentication protocol (ES256, scoped JWTs)
 - [[rate-limiting]] — per-IP fixed-window rate limiting on auth endpoints
 - [[identity-model]] — accounts, profiles (users), organisations, multi-account
+- [[verified-identity]] — Yoti-style verified-attribute layer (Australian DVS / mDL / myID; SD-JWT VC) — design doc, not yet implemented
 - [[passkey-primary]] — passkey-only login contract (the only primary factor)
 - [[recovery-codes]] — single-use account-recovery tokens (Copenhagen Book M2)
 - [[step-up]] — short-lived sudo tokens gating sensitive endpoints (M-PK1)
@@ -61,6 +62,25 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[commands]] — CLI commands reference
 - [[review-findings]] — finding ID format (S-H1, P-W2, T-M1)
 - [[contributing]] — PR workflow, changesets, branching
+
+## Compliance
+
+- [[compliance/index]] — map of content for the compliance programme
+- [[compliance/scope-matrix]] — which laws apply to which user / surface
+- [[compliance/gdpr]] — GDPR + UK GDPR controls, gaps, and project changes
+- [[compliance/soc2]] — SOC 2 Trust Services Criteria, control inventory, audit prep
+- [[compliance/ccpa]] — CCPA / CPRA + state privacy law deltas
+- [[compliance/dsa]] — EU Digital Services Act notice-and-action + transparency
+- [[compliance/coppa]] — under-13 hard-gate strategy
+- [[compliance/eaa]] — European Accessibility Act / WCAG 2.1 AA
+- [[compliance/eprivacy]] — cookie law posture (compliant by absence)
+- [[compliance/data-map]] — Article 30 record of processing activities
+- [[compliance/subprocessors]] — third-party processor register + DPA status
+- [[compliance/retention]] — per-table retention schedule
+- [[compliance/dsar]] — DSAR runbook (access / erasure / portability / rectification)
+- [[compliance/breach-response]] — 72-hour notification clock + incident runbook
+- [[compliance/access-control]] — SOC 2 CC6 production access matrix
+- [[compliance/backup-dr]] — SOC 2 A1 backup + DR plan + restore drills
 
 ## Changelog
 
