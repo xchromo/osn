@@ -2,6 +2,7 @@ import { useAuth } from "@osn/client/solid";
 import { useNavigate } from "@solidjs/router";
 import { createMemo, Show } from "solid-js";
 
+import { markOnboardingResolvedThisSession } from "../lib/onboarding";
 import { getDisplayNameFromToken } from "../lib/utils";
 import { OnboardingStepper } from "./onboarding/OnboardingStepper";
 
@@ -20,6 +21,11 @@ export function WelcomePage() {
   const displayName = createMemo(() => getDisplayNameFromToken(accessToken()));
 
   const handleCompleted = () => {
+    // Suppress the gate's cached pre-complete status for the rest of this
+    // session — the createResource in OnboardingGate is keyed on access
+    // token and won't refetch without a reload. Server-side state is
+    // authoritative; next session boot will fetch and see completedAt set.
+    markOnboardingResolvedThisSession();
     navigate("/", { replace: true });
   };
 

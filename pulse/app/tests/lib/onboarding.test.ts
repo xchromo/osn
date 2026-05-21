@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   completeOnboarding,
   fetchOnboardingStatus,
-  isOnboardingSkippedThisSession,
-  markOnboardingSkippedThisSession,
+  isOnboardingResolvedThisSession,
+  markOnboardingResolvedThisSession,
   requestLocationPermission,
   requestNotificationPermission,
 } from "../../src/lib/onboarding";
@@ -140,9 +140,9 @@ describe("session-skip helpers", () => {
   });
 
   it("round-trips the skip flag through sessionStorage", () => {
-    expect(isOnboardingSkippedThisSession()).toBe(false);
-    markOnboardingSkippedThisSession();
-    expect(isOnboardingSkippedThisSession()).toBe(true);
+    expect(isOnboardingResolvedThisSession()).toBe(false);
+    markOnboardingResolvedThisSession();
+    expect(isOnboardingResolvedThisSession()).toBe(true);
   });
 
   it("does not throw when sessionStorage is unavailable", () => {
@@ -159,8 +159,8 @@ describe("session-skip helpers", () => {
       writable: true,
       configurable: true,
     });
-    expect(() => markOnboardingSkippedThisSession()).not.toThrow();
-    expect(isOnboardingSkippedThisSession()).toBe(false);
+    expect(() => markOnboardingResolvedThisSession()).not.toThrow();
+    expect(isOnboardingResolvedThisSession()).toBe(false);
     Object.defineProperty(globalThis, "sessionStorage", {
       value: orig,
       writable: true,

@@ -2,7 +2,7 @@ import { useAuth } from "@osn/client/solid";
 import { useLocation, useNavigate } from "@solidjs/router";
 import { createEffect, createResource } from "solid-js";
 
-import { fetchOnboardingStatus, isOnboardingSkippedThisSession } from "../lib/onboarding";
+import { fetchOnboardingStatus, isOnboardingResolvedThisSession } from "../lib/onboarding";
 
 /**
  * First-run gate. While a session exists, fetch onboarding status. If the
@@ -33,7 +33,7 @@ export function OnboardingGate() {
   const fetchKey = () => {
     const token = session()?.accessToken ?? null;
     if (!token) return null;
-    if (isOnboardingSkippedThisSession()) return null;
+    if (isOnboardingResolvedThisSession()) return null;
     return token;
   };
 

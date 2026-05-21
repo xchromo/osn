@@ -6,7 +6,7 @@ import {
   completeOnboarding,
   type CompleteOnboardingPayload,
   type InterestCategory,
-  markOnboardingSkippedThisSession,
+  markOnboardingResolvedThisSession,
   type PermOutcome,
   requestLocationPermission,
   requestNotificationPermission,
@@ -54,7 +54,7 @@ export function OnboardingStepper(props: OnboardingStepperProps) {
     // Server-side state stays "not completed" — onboarding will re-prompt
     // next session. The session-level hint stops the same tab from
     // looping the redirect after the user lands on the home feed.
-    markOnboardingSkippedThisSession();
+    markOnboardingResolvedThisSession();
     navigate("/", { replace: true });
   };
 

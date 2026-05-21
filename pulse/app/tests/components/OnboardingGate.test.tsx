@@ -22,7 +22,7 @@ vi.mock("../../src/lib/onboarding", async () => {
   return {
     ...actual,
     fetchOnboardingStatus: (...a: unknown[]) => mockFetchStatus(...a),
-    isOnboardingSkippedThisSession: (...a: unknown[]) => mockIsSkipped(...a),
+    isOnboardingResolvedThisSession: (...a: unknown[]) => mockIsSkipped(...a),
   };
 });
 

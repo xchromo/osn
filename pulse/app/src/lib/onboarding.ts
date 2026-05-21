@@ -143,20 +143,24 @@ export async function requestNotificationPermission(): Promise<PermOutcome> {
 // authoritative state is server-side via POST /me/onboarding/complete.
 // ---------------------------------------------------------------------------
 
-const SKIP_KEY = "pulse:onboarding-skipped";
+// Session-level "the user has dealt with onboarding this tab" flag.
+// Set when the user either skips or completes — the gate uses it to stop
+// the createResource cache from looping the redirect. Server state stays
+// authoritative across sessions.
+const RESOLVED_KEY = "pulse:onboarding-resolved";
 
-export function markOnboardingSkippedThisSession(): void {
+export function markOnboardingResolvedThisSession(): void {
   try {
-    sessionStorage.setItem(SKIP_KEY, "1");
+    sessionStorage.setItem(RESOLVED_KEY, "1");
   } catch {
     /* sessionStorage unavailable (e.g. private mode) — onboarding will
      * just re-prompt on next mount; that's acceptable. */
   }
 }
 
-export function isOnboardingSkippedThisSession(): boolean {
+export function isOnboardingResolvedThisSession(): boolean {
   try {
-    return sessionStorage.getItem(SKIP_KEY) === "1";
+    return sessionStorage.getItem(RESOLVED_KEY) === "1";
   } catch {
     return false;
   }

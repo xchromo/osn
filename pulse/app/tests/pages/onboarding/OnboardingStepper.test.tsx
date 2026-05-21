@@ -33,7 +33,7 @@ vi.mock("../../../src/lib/onboarding", async () => {
   return {
     ...actual,
     completeOnboarding: (...a: unknown[]) => mockComplete(...a),
-    markOnboardingSkippedThisSession: (...a: unknown[]) => mockMarkSkipped(...a),
+    markOnboardingResolvedThisSession: (...a: unknown[]) => mockMarkSkipped(...a),
     requestLocationPermission: (...a: unknown[]) => mockReqLocation(...a),
     requestNotificationPermission: (...a: unknown[]) => mockReqNotifications(...a),
   };
