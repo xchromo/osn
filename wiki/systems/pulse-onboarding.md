@@ -6,7 +6,7 @@ related:
   - "[[identity-model]]"
   - "[[arc-tokens]]"
   - "[[component-library]]"
-last-reviewed: 2026-04-27
+last-reviewed: 2026-05-21
 ---
 
 # Pulse Onboarding
@@ -86,8 +86,8 @@ ARC-protected (`graph:read` scope, audience `osn-api`) — the pattern matches t
 - Route: `/welcome` (`pulse/app/src/pages/WelcomePage.tsx`), lazy-loaded.
 - Stepper: `pulse/app/src/pages/onboarding/OnboardingStepper.tsx` — owns step index + captured state, calls `/complete` on finish.
 - Step components: `Step1Welcome` … `Step6Finish` — one file per step, each composes the shared `StepShell`.
-- First-run gate: `OnboardingGate` in `pulse/app/src/components/OnboardingGate.tsx` — fetches status when an access token is available; if `completedAt === null` and the user isn't on `/welcome` and hasn't skipped this session, redirects to `/welcome`. **Fetch source is keyed only on the access token** (not the pathname) so the resource fires once per session and never re-fetches when the user navigates between routes — the pathname check moved into the redirect effect (P-W1 fix).
-- Skip-this-session: backed by `sessionStorage` so a tab that lands on the home feed after skip doesn't re-loop the redirect. Server-side state stays "not completed" so the next session re-prompts.
+- First-run gate: `OnboardingGate` in `pulse/app/src/components/OnboardingGate.tsx` — fetches status when an access token is available; if `completedAt === null` and the user isn't on `/welcome` and the session isn't already resolved, redirects to `/welcome`. **Fetch source is keyed only on the access token** (not the pathname) so the resource fires once per session and never re-fetches when the user navigates between routes — the pathname check moved into the redirect effect (P-W1 fix).
+- Resolved-this-session: `markOnboardingResolvedThisSession()` / `isOnboardingResolvedThisSession()` in `pulse/app/src/lib/onboarding.ts`, backed by `sessionStorage` (key `pulse:onboarding-resolved`). Set on BOTH skip and completion — the gate's `createResource` is token-keyed and caches the pre-complete status, so without this flag a successful `POST /me/onboarding/complete` followed by `navigate("/")` would bounce the user back to `/welcome` (the redirect-loop fix). Server-side state stays authoritative — next session boot fetches fresh and sees `completedAt` set.
 
 ## Themed illustrations
 
