@@ -1,7 +1,7 @@
-import { events } from "@pulse/db/schema";
+import { events, eventRsvps } from "@pulse/db/schema";
 import type { Event } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
-import { and, eq, gte, lte, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, ne, or, type SQL } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
 import {
@@ -16,6 +16,7 @@ import {
   MAYBE_FINISHED_AFTER_HOURS,
 } from "../lib/limits";
 import {
+  metricCalendarListed,
   metricEventCreated,
   metricEventDeleted,
   metricEventStatusTransition,
@@ -323,6 +324,81 @@ export const listTodayEvents: Effect.Effect<Event[], DatabaseError, Db> = Effect
   metricEventsListed("today", transitioned.length);
   return transitioned;
 }).pipe(Effect.withSpan("events.list_today"));
+
+/**
+ * One row of the personal calendar: an event the viewer is going to /
+ * marked maybe / is hosting, plus the viewer's own RSVP status so the UI
+ * can prompt "maybe" replies to confirm.
+ */
+export interface CalendarEntry {
+  event: Event;
+  /** Viewer's own RSVP status, narrowed to the two attending states. */
+  myStatus: "going" | "maybe" | null;
+  isHost: boolean;
+}
+
+/**
+ * The viewer's forward-looking agenda: every non-cancelled event starting
+ * today or later that they are hosting OR have RSVP'd going / maybe to,
+ * ordered chronologically. No visibility filter is needed — a host or an
+ * RSVP'd attendee can always see the event by definition (see
+ * `canViewEvent`). Today's already-finished events still belong on the
+ * day's agenda, so we bound only on `startTime`, not the derived status.
+ */
+export const listMyCalendarEvents = (
+  viewerId: string,
+  options: { limit?: number } = {},
+): Effect.Effect<CalendarEntry[], DatabaseError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const limit = Math.min(Math.max(1, options.limit ?? 50), 100);
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<{ event: Event; rsvpStatus: string | null }[]> =>
+        db
+          .select({ event: events, rsvpStatus: eventRsvps.status })
+          .from(events)
+          .leftJoin(
+            eventRsvps,
+            and(eq(eventRsvps.eventId, events.id), eq(eventRsvps.profileId, viewerId)),
+          )
+          .where(
+            and(
+              gte(events.startTime, startOfDay),
+              ne(events.status, "cancelled"),
+              or(
+                eq(events.createdByProfileId, viewerId),
+                inArray(eventRsvps.status, ["going", "maybe"]),
+              ),
+            ),
+          )
+          .orderBy(asc(events.startTime), asc(events.id))
+          .limit(limit) as Promise<{ event: Event; rsvpStatus: string | null }[]>,
+      catch: (cause) => new DatabaseError({ cause }),
+    });
+
+    // Apply lifecycle transitions so the calendar shows accurate
+    // ongoing/finished labels (bounded concurrency — see listEvents).
+    const entries = yield* Effect.forEach(
+      rows,
+      (row) =>
+        Effect.map(
+          applyTransition(row.event),
+          (event): CalendarEntry => ({
+            event,
+            myStatus:
+              row.rsvpStatus === "going" || row.rsvpStatus === "maybe" ? row.rsvpStatus : null,
+            isHost: event.createdByProfileId === viewerId,
+          }),
+        ),
+      { concurrency: 5 },
+    );
+
+    metricCalendarListed(entries.length);
+    return entries;
+  }).pipe(Effect.withSpan("pulse.calendar.list_mine"));
 
 export const getEvent = (id: string): Effect.Effect<Event, EventNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
