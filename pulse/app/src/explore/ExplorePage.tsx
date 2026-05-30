@@ -6,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { api } from "../lib/api";
 import { showCreateForm, setShowCreateForm } from "../lib/createEventSignal";
 import type { EventItem } from "../lib/types";
+import { fetchAllVenues } from "../lib/venues";
 import {
   DiscoveryFilters,
   emptyFilters,
@@ -142,6 +143,10 @@ export function ExplorePage() {
   const [discovery, { refetch }] = createResource(fetchSource, ({ token, q }) =>
     fetchDiscovery(token, q),
   );
+
+  // Venues feed the Explore map's clickable venue layer. Public surface,
+  // no auth needed.
+  const [venues] = createResource(fetchAllVenues);
 
   const [searchQuery, setSearchQuery] = createSignal("");
   const [hoveredId, setHoveredId] = createSignal<string | null>(null);
@@ -330,7 +335,12 @@ export function ExplorePage() {
 
         {/* Map pane */}
         <aside class="explore-map-pane border-border bg-background sticky top-0 h-screen border-l">
-          <ExploreMap events={filtered()} hoveredId={hoveredId()} onHoverEvent={setHoveredId} />
+          <ExploreMap
+            events={filtered()}
+            venues={venues() ?? []}
+            hoveredId={hoveredId()}
+            onHoverEvent={setHoveredId}
+          />
         </aside>
       </div>
     </div>
