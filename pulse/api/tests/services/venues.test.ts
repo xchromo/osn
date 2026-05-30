@@ -17,6 +17,8 @@ const seedVenue = Effect.gen(function* () {
   yield* Effect.promise(() =>
     db.insert(venues).values({
       id: "the-club",
+      orgHandle: "the-org",
+      handle: "the-club",
       name: "The Club",
       kind: "club",
       timezone: "Europe/London",
@@ -72,7 +74,7 @@ it.effect("getVenue returns the row when it exists", () =>
   provide(
     Effect.gen(function* () {
       yield* seedVenue;
-      const row = yield* getVenue("the-club");
+      const row = yield* getVenue("the-org", "the-club");
       expect(row.id).toBe("the-club");
       expect(row.name).toBe("The Club");
       expect(row.kind).toBe("club");
@@ -83,7 +85,7 @@ it.effect("getVenue returns the row when it exists", () =>
 it.effect("getVenue fails with VenueNotFound for unknown id", () =>
   provide(
     Effect.gen(function* () {
-      const err = yield* Effect.flip(getVenue("does-not-exist"));
+      const err = yield* Effect.flip(getVenue("the-org", "does-not-exist"));
       expect(err._tag).toBe("VenueNotFound");
     }),
   ),
@@ -101,7 +103,7 @@ it.effect("listVenueEvents defaults to upcoming + only returns the venue's event
       yield* seedEvent("evt_b", { startTime: future(3), venueId: "the-club" });
       yield* seedEvent("evt_other", { startTime: future(2), venueId: null });
 
-      const list = yield* listVenueEvents("the-club");
+      const list = yield* listVenueEvents("the-org", "the-club");
       expect(list.map((e) => e.id).toSorted()).toEqual(["evt_a", "evt_b"]);
     }),
   ),
@@ -117,7 +119,7 @@ it.effect("listVenueEvents excludes private events", () =>
         venueId: "the-club",
         visibility: "private",
       });
-      const list = yield* listVenueEvents("the-club");
+      const list = yield* listVenueEvents("the-org", "the-club");
       expect(list.map((e) => e.id)).toEqual(["evt_pub"]);
     }),
   ),
@@ -129,7 +131,7 @@ it.effect("listVenueEvents scope=past returns finished events", () =>
       yield* seedVenue;
       yield* seedEvent("evt_old", { startTime: future(-7), venueId: "the-club" });
       yield* seedEvent("evt_new", { startTime: future(1), venueId: "the-club" });
-      const past = yield* listVenueEvents("the-club", { scope: "past" });
+      const past = yield* listVenueEvents("the-org", "the-club", { scope: "past" });
       expect(past.map((e) => e.id)).toEqual(["evt_old"]);
     }),
   ),
@@ -138,7 +140,7 @@ it.effect("listVenueEvents scope=past returns finished events", () =>
 it.effect("listVenueEvents fails with VenueNotFound for unknown id", () =>
   provide(
     Effect.gen(function* () {
-      const err = yield* Effect.flip(listVenueEvents("does-not-exist"));
+      const err = yield* Effect.flip(listVenueEvents("the-org", "does-not-exist"));
       expect(err._tag).toBe("VenueNotFound");
     }),
   ),

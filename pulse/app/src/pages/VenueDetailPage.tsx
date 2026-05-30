@@ -2,13 +2,16 @@ import { Card } from "@osn/ui/ui/card";
 import { A, useParams } from "@solidjs/router";
 import { createMemo, createResource, For, Show } from "solid-js";
 
+import { Icon } from "../components/Icon";
 import { VenueEventCarousel } from "../components/VenueEventCarousel";
 import { VenueLineupTimeline } from "../components/VenueLineupTimeline";
 import {
+  computeOpenStatus,
   fetchEventLineup,
   fetchVenue,
   fetchVenueEvents,
   parseVenueHours,
+  venueMapsUrl,
   type VenueEvent,
 } from "../lib/venues";
 
@@ -58,12 +61,15 @@ function formatNightDate(iso: string, timezone: string): string {
 }
 
 export function VenueDetailPage() {
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ orgHandle: string; venueHandle: string }>();
 
-  const [venue] = createResource(() => params.id, fetchVenue);
-  const [events] = createResource(
-    () => params.id,
-    (id) => fetchVenueEvents(id, "all"),
+  const handles = () => ({ orgHandle: params.orgHandle, venueHandle: params.venueHandle });
+
+  const [venue] = createResource(handles, ({ orgHandle, venueHandle }) =>
+    fetchVenue(orgHandle, venueHandle),
+  );
+  const [events] = createResource(handles, ({ orgHandle, venueHandle }) =>
+    fetchVenueEvents(orgHandle, venueHandle, "all"),
   );
 
   const featuredEvent = createMemo(() => {
@@ -89,16 +95,23 @@ export function VenueDetailPage() {
     const v = venue();
     const e = featuredEvent();
     if (!v || !e) return null;
-    return { venueId: v.id, eventId: e.id };
+    return { orgHandle: v.orgHandle, venueHandle: v.handle, eventId: e.id };
   });
 
   const [lineup] = createResource(lineupSource, (s) =>
-    s ? fetchEventLineup(s.venueId, s.eventId) : Promise.resolve([]),
+    s ? fetchEventLineup(s.orgHandle, s.venueHandle, s.eventId) : Promise.resolve([]),
   );
 
   const hours = createMemo(() => {
     const v = venue();
     return v ? parseVenueHours(v.hours) : null;
+  });
+
+  const openStatus = createMemo(() => {
+    const v = venue();
+    const h = hours();
+    if (!v || !h) return null;
+    return computeOpenStatus(h, v.timezone);
   });
 
   return (
@@ -120,53 +133,121 @@ export function VenueDetailPage() {
       <Show when={venue()}>
         {(v) => (
           <article class="flex flex-col gap-6">
-            {/* Hero */}
+            {/* Hero — identity + location + open status + quick links */}
             <Card class="overflow-hidden">
               <Show when={v().heroImageUrl}>
                 <img class="h-64 w-full object-cover" src={v().heroImageUrl!} alt={v().name} />
               </Show>
-              <div class="p-5">
-                <p class="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
-                  {v().kind}
-                  <Show when={v().capacity}>{(c) => <> · Capacity {c()}</>}</Show>
-                </p>
-                <h1 class="mt-1 text-3xl">{v().name}</h1>
-                <Show when={[v().address, v().city, v().country].filter(Boolean).join(", ")}>
-                  {(loc) => <p class="text-muted-foreground mt-1 text-sm">{loc()}</p>}
-                </Show>
-                <Show when={v().description}>
-                  <p class="text-foreground mt-3 text-sm whitespace-pre-wrap">{v().description}</p>
-                </Show>
-                <div class="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                  <Show when={v().websiteUrl}>
-                    {(url) => (
-                      <a
-                        href={url()}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="text-primary hover:underline"
-                      >
-                        Website
-                      </a>
-                    )}
-                  </Show>
-                  <Show when={v().instagramHandle}>
-                    {(handle) => (
-                      <a
-                        href={`https://instagram.com/${handle()}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="text-primary hover:underline"
-                      >
-                        @{handle()}
-                      </a>
-                    )}
-                  </Show>
+              <div class="flex flex-col gap-4 p-5">
+                <div>
+                  <p class="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+                    {v().kind}
+                    <Show when={v().capacity}>{(c) => <> · Capacity {c()}</>}</Show>
+                  </p>
+                  <h1 class="mt-1 text-3xl">{v().name}</h1>
                 </div>
+
+                <Show when={[v().address, v().city, v().country].filter(Boolean).join(", ")}>
+                  {(loc) => (
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <p class="text-muted-foreground text-sm">{loc()}</p>
+                      <Show when={venueMapsUrl(v())}>
+                        {(url) => (
+                          <a
+                            href={url()}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="border-border bg-background hover:bg-muted inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-xs font-medium"
+                          >
+                            Open in Maps →
+                          </a>
+                        )}
+                      </Show>
+                    </div>
+                  )}
+                </Show>
+
+                <Show when={openStatus()}>
+                  {(s) => (
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="inline-block size-2 rounded-full"
+                        classList={{
+                          "bg-emerald-500": s().isOpen,
+                          "bg-muted-foreground": !s().isOpen,
+                        }}
+                      />
+                      <span
+                        class="text-sm"
+                        classList={{
+                          "text-foreground font-medium": s().isOpen,
+                          "text-muted-foreground": !s().isOpen,
+                        }}
+                      >
+                        {s().label}
+                      </span>
+                    </div>
+                  )}
+                </Show>
+
+                <Show when={v().websiteUrl || v().instagramHandle}>
+                  <div class="flex items-center gap-2">
+                    <Show when={v().websiteUrl}>
+                      {(url) => (
+                        <a
+                          href={url()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="Website"
+                          title="Website"
+                          class="border-border text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-9 items-center justify-center rounded-md border"
+                        >
+                          <Icon name="globe" size={16} />
+                        </a>
+                      )}
+                    </Show>
+                    <Show when={v().instagramHandle}>
+                      {(handle) => (
+                        <a
+                          href={`https://instagram.com/${handle()}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`Instagram @${handle()}`}
+                          title={`@${handle()}`}
+                          class="border-border text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-9 items-center justify-center rounded-md border"
+                        >
+                          <Icon name="instagram" size={16} />
+                        </a>
+                      )}
+                    </Show>
+                  </div>
+                </Show>
               </div>
             </Card>
 
-            {/* Hours */}
+            {/* Tonight's lineup */}
+            <Show when={featuredEvent()}>
+              {(e) => (
+                <section class="flex flex-col gap-2">
+                  <p class="text-muted-foreground text-xs">
+                    {e().status === "ongoing" ? "Tonight" : "Next night"} ·{" "}
+                    {formatNightDate(e().startTime, v().timezone)}
+                  </p>
+                  <VenueLineupTimeline
+                    slots={lineup() ?? []}
+                    timezone={v().timezone}
+                    heading={e().title}
+                  />
+                </section>
+              )}
+            </Show>
+
+            {/* Programme carousel */}
+            <Show when={!events.loading}>
+              <VenueEventCarousel events={upcomingEvents()} heading={`Upcoming at ${v().name}`} />
+            </Show>
+
+            {/* Full hours */}
             <Show when={hours()}>
               {(h) => (
                 <Card class="p-5">
@@ -194,26 +275,14 @@ export function VenueDetailPage() {
               )}
             </Show>
 
-            {/* Tonight's lineup */}
-            <Show when={featuredEvent()}>
-              {(e) => (
-                <section class="flex flex-col gap-2">
-                  <p class="text-muted-foreground text-xs">
-                    {e().status === "ongoing" ? "Tonight" : "Next night"} ·{" "}
-                    {formatNightDate(e().startTime, v().timezone)}
-                  </p>
-                  <VenueLineupTimeline
-                    slots={lineup() ?? []}
-                    timezone={v().timezone}
-                    heading={e().title}
-                  />
-                </section>
-              )}
-            </Show>
-
-            {/* Programme carousel */}
-            <Show when={!events.loading}>
-              <VenueEventCarousel events={upcomingEvents()} heading={`Upcoming at ${v().name}`} />
+            {/* About */}
+            <Show when={v().description}>
+              <Card class="p-5">
+                <p class="text-muted-foreground font-mono text-[11px] tracking-[0.18em] uppercase">
+                  About
+                </p>
+                <p class="text-foreground mt-2 text-sm whitespace-pre-wrap">{v().description}</p>
+              </Card>
             </Show>
           </article>
         )}

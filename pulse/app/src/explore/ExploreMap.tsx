@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
+import { Icon } from "../components/Icon";
 import type { EventItem } from "../lib/types";
-import { Icon } from "./icons";
 
 // NYC bounding box for coordinate projection
 const BBOX = { minLng: -74.03, maxLng: -73.88, minLat: 40.63, maxLat: 40.76 };

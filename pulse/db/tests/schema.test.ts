@@ -418,6 +418,8 @@ describe("venues schema", () => {
     const now = new Date("2030-06-01T10:00:00.000Z");
     await db.insert(schema.venues).values({
       id: "the-pickle-factory",
+      orgHandle: "tpf-collective",
+      handle: "the-pickle-factory",
       name: "The Pickle Factory",
       createdAt: now,
       updatedAt: now,
@@ -439,6 +441,8 @@ describe("venues schema", () => {
     const hours = JSON.stringify({ "5": { open: "22:00", close: "04:00" } });
     await db.insert(schema.venues).values({
       id: "v-hours",
+      orgHandle: "o1",
+      handle: "v-hours",
       name: "V",
       hours,
       createdAt: now,
@@ -453,6 +457,7 @@ describe("venues schema", () => {
     const indexNames = new Set(indexes.map((i) => i.config.name));
     expect(indexNames.has("venues_kind_idx")).toBe(true);
     expect(indexNames.has("venues_lat_lng_idx")).toBe(true);
+    expect(indexNames.has("venues_org_handle_idx")).toBe(true);
   });
 });
 
@@ -466,6 +471,8 @@ describe("events.venueId", () => {
     const now = new Date();
     await db.insert(schema.venues).values({
       id: "v-link",
+      orgHandle: "o1",
+      handle: "v-link",
       name: "Linked Venue",
       createdAt: now,
       updatedAt: now,
@@ -499,6 +506,8 @@ describe("event_lineup schema", () => {
     const now = new Date();
     await db.insert(schema.venues).values({
       id: "v-club",
+      orgHandle: "o1",
+      handle: "v-club",
       name: "Club",
       createdAt: now,
       updatedAt: now,

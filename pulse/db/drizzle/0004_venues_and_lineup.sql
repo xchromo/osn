@@ -1,5 +1,7 @@
 CREATE TABLE `venues` (
 	`id` text PRIMARY KEY NOT NULL,
+	`org_handle` text NOT NULL,
+	`handle` text NOT NULL,
 	`name` text NOT NULL,
 	`kind` text DEFAULT 'club' NOT NULL,
 	`description` text,
@@ -20,6 +22,7 @@ CREATE TABLE `venues` (
 --> statement-breakpoint
 CREATE INDEX `venues_kind_idx` ON `venues` (`kind`);--> statement-breakpoint
 CREATE INDEX `venues_lat_lng_idx` ON `venues` (`latitude`,`longitude`);--> statement-breakpoint
+CREATE UNIQUE INDEX `venues_org_handle_idx` ON `venues` (`org_handle`,`handle`);--> statement-breakpoint
 CREATE TABLE `event_lineup` (
 	`id` text PRIMARY KEY NOT NULL,
 	`event_id` text NOT NULL,

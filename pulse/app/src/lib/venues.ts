@@ -10,6 +10,8 @@ const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 export interface VenueSummary {
   id: string;
+  orgHandle: string;
+  handle: string;
   name: string;
   kind: string;
   description: string | null;
@@ -68,25 +70,155 @@ export function parseVenueHours(raw: string | null): VenueHours | null {
   }
 }
 
-export async function fetchVenue(id: string): Promise<VenueSummary | null> {
-  const res = await fetch(`${BASE_URL}/venues/${id}`);
+/**
+ * Pulls every venue. Feeds the Explore map's venue layer.
+ *
+ * TODO(venue-bbox-search): swap for a viewport-scoped fetch (pass
+ * minLat/maxLat/minLng/maxLng) once the API supports it — tracked in
+ * wiki/TODO.md → Performance Backlog P-W6.
+ */
+export async function fetchAllVenues(): Promise<VenueSummary[]> {
+  const res = await fetch(`${BASE_URL}/venues`);
+  if (!res.ok) return [];
+  const body = (await res.json()) as { venues?: VenueSummary[] };
+  return body.venues ?? [];
+}
+
+export async function fetchVenue(
+  orgHandle: string,
+  venueHandle: string,
+): Promise<VenueSummary | null> {
+  const res = await fetch(`${BASE_URL}/venues/${orgHandle}/${venueHandle}`);
   if (!res.ok) return null;
   const body = (await res.json()) as { venue?: VenueSummary };
   return body.venue ?? null;
 }
 
 export async function fetchVenueEvents(
-  id: string,
+  orgHandle: string,
+  venueHandle: string,
   scope: "upcoming" | "past" | "all" = "upcoming",
 ): Promise<VenueEvent[]> {
-  const res = await fetch(`${BASE_URL}/venues/${id}/events?scope=${scope}`);
+  const res = await fetch(`${BASE_URL}/venues/${orgHandle}/${venueHandle}/events?scope=${scope}`);
   if (!res.ok) return [];
   const body = (await res.json()) as { events?: VenueEvent[] };
   return body.events ?? [];
 }
 
-export async function fetchEventLineup(venueId: string, eventId: string): Promise<LineupSlot[]> {
-  const res = await fetch(`${BASE_URL}/venues/${venueId}/events/${eventId}/lineup`);
+export function venueMapsUrl(v: VenueSummary): string | null {
+  if (v.latitude !== null && v.longitude !== null) {
+    return `https://www.google.com/maps/search/?api=1&query=${v.latitude},${v.longitude}`;
+  }
+  const addr = [v.address, v.city, v.country].filter(Boolean).join(", ");
+  if (!addr) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
+}
+
+const WEEKDAY_FROM_SHORT: Record<string, string> = {
+  Mon: "1",
+  Tue: "2",
+  Wed: "3",
+  Thu: "4",
+  Fri: "5",
+  Sat: "6",
+  Sun: "7",
+};
+
+const WEEKDAY_SHORT_FROM_ISO: Record<string, string> = {
+  "1": "Mon",
+  "2": "Tue",
+  "3": "Wed",
+  "4": "Thu",
+  "5": "Fri",
+  "6": "Sat",
+  "7": "Sun",
+};
+
+function toMin(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+function prevIsoDay(iso: string): string {
+  return String(((Number(iso) - 2 + 7) % 7) + 1);
+}
+
+function venueLocalNow(now: Date, tz: string): { weekday: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hh = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const mm = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return { weekday: WEEKDAY_FROM_SHORT[wd] ?? "1", minutes: hh * 60 + mm };
+}
+
+export interface OpenStatus {
+  isOpen: boolean;
+  label: string;
+}
+
+export function computeOpenStatus(
+  hours: VenueHours,
+  timezone: string,
+  now: Date = new Date(),
+): OpenStatus {
+  const { weekday, minutes } = venueLocalNow(now, timezone);
+
+  const prev = hours[prevIsoDay(weekday)];
+  if (prev) {
+    const open = toMin(prev.open);
+    const close = toMin(prev.close);
+    if (close <= open && minutes < close) {
+      return { isOpen: true, label: `Open · closes ${prev.close}` };
+    }
+  }
+
+  const today = hours[weekday];
+  if (today) {
+    const open = toMin(today.open);
+    const close = toMin(today.close);
+    const sameDay = close > open;
+    if (sameDay && minutes >= open && minutes < close) {
+      return { isOpen: true, label: `Open · closes ${today.close}` };
+    }
+    if (!sameDay && minutes >= open) {
+      return { isOpen: true, label: `Open · closes ${today.close}` };
+    }
+  }
+
+  for (let i = 0; i < 7; i++) {
+    const checkDay = String(((Number(weekday) - 1 + i) % 7) + 1);
+    const slot = hours[checkDay];
+    if (!slot) continue;
+    const open = toMin(slot.open);
+    if (i === 0 && open <= minutes) continue;
+    const minutesUntil = i * 24 * 60 + open - minutes;
+    if (i === 0) {
+      const h = Math.floor(minutesUntil / 60);
+      const m = minutesUntil % 60;
+      if (minutesUntil < 60) return { isOpen: false, label: `Opens in ${minutesUntil}m` };
+      if (minutesUntil < 6 * 60) return { isOpen: false, label: `Opens in ${h}h ${m}m` };
+      return { isOpen: false, label: `Opens at ${slot.open}` };
+    }
+    if (i === 1) return { isOpen: false, label: `Opens tomorrow ${slot.open}` };
+    return { isOpen: false, label: `Opens ${WEEKDAY_SHORT_FROM_ISO[checkDay]} ${slot.open}` };
+  }
+  return { isOpen: false, label: "Closed" };
+}
+
+export async function fetchEventLineup(
+  orgHandle: string,
+  venueHandle: string,
+  eventId: string,
+): Promise<LineupSlot[]> {
+  const res = await fetch(
+    `${BASE_URL}/venues/${orgHandle}/${venueHandle}/events/${eventId}/lineup`,
+  );
   if (!res.ok) return [];
   const body = (await res.json()) as { slots?: LineupSlot[] };
   return body.slots ?? [];

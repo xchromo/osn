@@ -7,7 +7,10 @@ import { wrapRouter } from "../helpers/router";
 
 vi.mock("@solidjs/router", async () => {
   const actual = await vi.importActual<typeof import("@solidjs/router")>("@solidjs/router");
-  return { ...actual, useParams: () => ({ id: "the-pickle-factory" }) };
+  return {
+    ...actual,
+    useParams: () => ({ orgHandle: "tpf-collective", venueHandle: "the-pickle-factory" }),
+  };
 });
 
 const fetchVenue = vi.fn();
@@ -31,7 +34,9 @@ const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;
 
 const VENUE = {
-  id: "the-pickle-factory",
+  id: "ven_pf",
+  orgHandle: "tpf-collective",
+  handle: "the-pickle-factory",
   name: "The Pickle Factory",
   kind: "club",
   description: "A 250-cap basement room.",
@@ -59,7 +64,7 @@ const EVENT_UPCOMING = {
   category: "nightlife",
   priceAmount: 1500,
   priceCurrency: "GBP",
-  venueId: "the-pickle-factory",
+  venueId: "ven_pf",
   createdByName: "Alice",
 };
 

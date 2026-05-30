@@ -8,29 +8,57 @@ import { metricVenueDetail, metricVenueEventsListed, metricVenueLineupListed } f
 import { applyTransition, DatabaseError } from "./events";
 
 export class VenueNotFound extends Data.TaggedError("VenueNotFound")<{
-  readonly id: string;
+  readonly orgHandle: string;
+  readonly venueHandle: string;
 }> {}
 
 /**
- * Fetch a single venue by slug-id.
+ * Fetch a single venue by (orgHandle, venueHandle).
  *
  * Venues are public — no viewer-scoped filtering. The metric records
  * the kind so we can spot a sudden spike in 404s on a particular venue
- * type (someone scraping ids).
+ * type (someone scraping handles).
  */
-export const getVenue = (id: string): Effect.Effect<Venue, VenueNotFound | DatabaseError, Db> =>
+/**
+ * List every venue. Public surface — feeds the Explore map.
+ *
+ * TODO(P-perf, venue-bbox-search): Replace with a bbox/geohash-aware
+ * query so the map only loads venues within the visible viewport. This
+ * unbounded scan is fine while the catalogue is tiny but will break
+ * once we ingest real venue data. Same applies to events — both
+ * surfaces want the same `(minLat, maxLat, minLng, maxLng)` filter.
+ * Tracked in wiki/TODO.md → Performance Backlog.
+ */
+export const listAllVenues = (): Effect.Effect<Venue[], DatabaseError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<Venue[]> => db.select().from(venues) as Promise<Venue[]>,
+      catch: (cause) => new DatabaseError({ cause }),
+    }).pipe(Effect.tapError((e) => Effect.logError("venue.list_all failed", e)));
+    return rows;
+  }).pipe(Effect.withSpan("pulse.venue.list_all"));
+
+export const getVenue = (
+  orgHandle: string,
+  venueHandle: string,
+): Effect.Effect<Venue, VenueNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
     const start = performance.now();
     const { db } = yield* Db;
     const rows = yield* Effect.tryPromise({
       try: (): Promise<Venue[]> =>
-        db.select().from(venues).where(eq(venues.id, id)).limit(1) as Promise<Venue[]>,
+        db
+          .select()
+          .from(venues)
+          .where(and(eq(venues.orgHandle, orgHandle), eq(venues.handle, venueHandle)))
+          .limit(1) as Promise<Venue[]>,
       catch: (cause) => new DatabaseError({ cause }),
     }).pipe(Effect.tapError((e) => Effect.logError("venue.get failed", e)));
 
     if (rows.length === 0) {
       metricVenueDetail(null, "error", (performance.now() - start) / 1000);
-      return yield* Effect.fail(new VenueNotFound({ id }));
+      return yield* Effect.fail(new VenueNotFound({ orgHandle, venueHandle }));
     }
     const row = rows[0]!;
     metricVenueDetail(row.kind, "ok", (performance.now() - start) / 1000);
@@ -44,21 +72,23 @@ export const getVenue = (id: string): Effect.Effect<Venue, VenueNotFound | Datab
  * signed-in viewer browsing the venue's URL.
  */
 export const listVenueEvents = (
-  id: string,
+  orgHandle: string,
+  venueHandle: string,
   opts: { scope?: "upcoming" | "past" | "all"; limit?: number } = {},
 ): Effect.Effect<Event[], VenueNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
     // 404 the whole list when the venue does not exist so the frontend
-    // can render "Venue not found" without a second request.
-    yield* getVenue(id);
+    // can render "Venue not found" without a second request. Also gives
+    // us the venue's internal id for the FK filter.
+    const venue = yield* getVenue(orgHandle, venueHandle);
 
     const now = new Date();
     const scope = opts.scope ?? "upcoming";
     const limit = opts.limit ? Math.min(Math.max(1, opts.limit), 200) : 50;
 
-    const filters = [eq(events.venueId, id), eq(events.visibility, "public")];
+    const filters = [eq(events.venueId, venue.id), eq(events.visibility, "public")];
     if (scope === "upcoming") filters.push(gte(events.startTime, now));
     else if (scope === "past") filters.push(lt(events.startTime, now));
 

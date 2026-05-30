@@ -32,12 +32,12 @@ describe("venue routes", () => {
   }
   void seedAll;
 
-  it("GET /venues/:id returns 404 for an unknown venue", async () => {
-    const res = await get(app, "/venues/does-not-exist");
+  it("GET /venues/:org/:venue returns 404 for an unknown venue", async () => {
+    const res = await get(app, "/venues/org-one/does-not-exist");
     expect(res.status).toBe(404);
   });
 
-  it("GET /venues/:id returns the venue when it exists", async () => {
+  it("GET /venues/:org/:venue returns the venue when it exists", async () => {
     // Seed via direct DB access on the layer's underlying drizzle instance.
     // We use `app.handle` for the venue read so that the same Db Tag
     // resolves on both sides.
@@ -49,6 +49,8 @@ describe("venue routes", () => {
       yield* E.promise(() =>
         db.insert(venues).values({
           id: "the-spot",
+          orgHandle: "org-one",
+          handle: "the-spot",
           name: "The Spot",
           kind: "club",
           timezone: "Europe/London",
@@ -62,14 +64,14 @@ describe("venue routes", () => {
     app = createVenuesRoutes(layer);
     void Layer;
 
-    const res = await get(app, "/venues/the-spot");
+    const res = await get(app, "/venues/org-one/the-spot");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { venue: { id: string; name: string } };
     expect(body.venue.id).toBe("the-spot");
     expect(body.venue.name).toBe("The Spot");
   });
 
-  it("GET /venues/:id/events returns the venue's upcoming public events", async () => {
+  it("GET /venues/:org/:venue/events returns the venue's upcoming public events", async () => {
     const { Effect: E } = await import("effect");
     const { Db } = await import("@pulse/db/service");
     const layer = createTestLayer();
@@ -80,6 +82,8 @@ describe("venue routes", () => {
         yield* E.promise(() =>
           db.insert(venues).values({
             id: "the-spot",
+            orgHandle: "org-one",
+            handle: "the-spot",
             name: "The Spot",
             createdAt: now,
             updatedAt: now,
@@ -112,18 +116,18 @@ describe("venue routes", () => {
     );
     app = createVenuesRoutes(layer);
 
-    const res = await get(app, "/venues/the-spot/events");
+    const res = await get(app, "/venues/org-one/the-spot/events");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: { id: string }[] };
     expect(body.events.map((e) => e.id)).toEqual(["evt_pub"]);
   });
 
-  it("GET /venues/:id/events returns 404 for an unknown venue", async () => {
-    const res = await get(app, "/venues/does-not-exist/events");
+  it("GET /venues/:org/:venue/events returns 404 for an unknown venue", async () => {
+    const res = await get(app, "/venues/org-one/does-not-exist/events");
     expect(res.status).toBe(404);
   });
 
-  it("GET /venues/:id/events/:eventId/lineup returns the slots for that event", async () => {
+  it("GET /venues/:org/:venue/events/:eventId/lineup returns the slots for that event", async () => {
     const { Effect: E } = await import("effect");
     const { Db } = await import("@pulse/db/service");
     const layer = createTestLayer();
@@ -134,6 +138,8 @@ describe("venue routes", () => {
         yield* E.promise(() =>
           db.insert(venues).values({
             id: "the-spot",
+            orgHandle: "org-one",
+            handle: "the-spot",
             name: "The Spot",
             createdAt: now,
             updatedAt: now,
@@ -178,7 +184,7 @@ describe("venue routes", () => {
     );
     app = createVenuesRoutes(layer);
 
-    const res = await get(app, "/venues/the-spot/events/evt_lu/lineup");
+    const res = await get(app, "/venues/org-one/the-spot/events/evt_lu/lineup");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { slots: { artistName: string; role: string }[] };
     expect(body.slots.map((s) => s.artistName)).toEqual(["Opener", "Headliner"]);

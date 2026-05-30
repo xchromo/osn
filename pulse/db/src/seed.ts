@@ -48,24 +48,26 @@ class SeedError extends Data.TaggedError("SeedError")<{ cause: unknown }> {}
 // ---------------------------------------------------------------------------
 
 /**
- * Seed venues. Slug ids so they double as the public URL segment
- * (`/venues/the-pickle-factory`). One full club with a programmed week
- * of nights + lineups, plus a quieter bar to exercise the "no lineup"
- * rendering path.
+ * Seed venues. Opaque `ven_*` ids for FK targets; `(orgHandle, handle)`
+ * is what the public URL `/venues/:orgHandle/:venueHandle` resolves on.
+ * Both venues sit under the same fictional org so the seed exercises
+ * the "one collective, two rooms" case.
  */
 export function buildSeedVenues(now: Date): NewVenue[] {
   return [
     {
-      id: "the-pickle-factory",
+      id: "ven_pf",
+      orgHandle: "tpf-collective",
+      handle: "the-pickle-factory",
       name: "The Pickle Factory",
       kind: "club",
       description:
-        "A 250-cap basement room in Bethnal Green known for vinyl-only sets, an unforgiving Funktion-One rig, and a Friday residency that has launched more than a few careers.",
-      address: "13–14 The Oval, Bethnal Green",
-      city: "London",
-      country: "United Kingdom",
-      latitude: 51.5326,
-      longitude: -0.0561,
+        "A 250-cap basement room in Bushwick known for vinyl-only sets, an unforgiving Funktion-One rig, and a Friday residency that has launched more than a few careers.",
+      address: "55 Knickerbocker Ave, Bushwick",
+      city: "Brooklyn, NY",
+      country: "United States",
+      latitude: 40.705,
+      longitude: -73.93,
       capacity: 250,
       hours: JSON.stringify({
         // Mon–Wed closed, Thu–Sat 22:00 → 04:00 next day, Sun 22:00 → 03:00.
@@ -81,21 +83,23 @@ export function buildSeedVenues(now: Date): NewVenue[] {
         "https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?auto=format&fit=crop&w=1600&q=80",
       websiteUrl: "https://example.com/the-pickle-factory",
       instagramHandle: "thepicklefactory",
-      timezone: "Europe/London",
+      timezone: "America/New_York",
       createdAt: now,
       updatedAt: now,
     },
     {
-      id: "blue-room",
+      id: "ven_blueroom",
+      orgHandle: "tpf-collective",
+      handle: "blue-room",
       name: "Blue Room",
       kind: "bar",
       description:
         "Listening bar serving negronis and Japanese hi-fi. Programming leans ambient, leftfield, and the slower half of the BPM dial.",
-      address: "44 Kingsland Road",
-      city: "London",
-      country: "United Kingdom",
-      latitude: 51.5314,
-      longitude: -0.0775,
+      address: "152 Orchard St",
+      city: "New York, NY",
+      country: "United States",
+      latitude: 40.7197,
+      longitude: -73.9879,
       capacity: 80,
       hours: JSON.stringify({
         "1": null,
@@ -109,8 +113,8 @@ export function buildSeedVenues(now: Date): NewVenue[] {
       heroImageUrl:
         "https://images.unsplash.com/photo-1485872299712-a85ea08c5c4d?auto=format&fit=crop&w=1600&q=80",
       websiteUrl: null,
-      instagramHandle: "blueroom.london",
-      timezone: "Europe/London",
+      instagramHandle: "blueroom.nyc",
+      timezone: "America/New_York",
       createdAt: now,
       updatedAt: now,
     },
@@ -135,17 +139,17 @@ export function buildSeedVenueEvents(now: Date): NewEvent[] {
     extras: Partial<NewEvent> = {},
   ): NewEvent => {
     const start = new Date(dMs(dayOffset));
-    start.setUTCHours(21, 0, 0, 0); // 22:00 BST in summer ≈ 21:00 UTC
+    start.setUTCHours(3, 0, 0, 0); // 23:00 EDT (NYC, summer) — late-night slot
     const end = new Date(start.getTime() + 7 * 3_600_000);
     return {
       id,
       title,
       description: extras.description ?? null,
-      location: "Bethnal Green, London",
+      location: "Bushwick, Brooklyn",
       venue: "The Pickle Factory",
-      venueId: "the-pickle-factory",
-      latitude: 51.5326,
-      longitude: -0.0561,
+      venueId: "ven_pf",
+      latitude: 40.705,
+      longitude: -73.93,
       category: "nightlife",
       startTime: start,
       endTime: end,
@@ -212,7 +216,7 @@ export function buildSeedLineup(now: Date): NewEventLineupSlot[] {
     artists: { name: string; role: NewEventLineupSlot["role"] }[],
   ): NewEventLineupSlot[] => {
     const base = new Date(dMs(dayOffset));
-    base.setUTCHours(21, 0, 0, 0);
+    base.setUTCHours(3, 0, 0, 0); // 23:00 EDT, matches clubNight start
     return artists.map((a, i) => {
       const start = new Date(base.getTime() + i * 90 * 60_000);
       const end = new Date(start.getTime() + 90 * 60_000);

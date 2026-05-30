@@ -55,7 +55,7 @@ export default function App() {
         <Route path="/" component={ExplorePage} />
         <Route path="/events/:id" component={EventDetailPage} />
         <Route path="/series/:id" component={SeriesDetailPage} />
-        <Route path="/venues/:id" component={VenueDetailPage} />
+        <Route path="/venues/:orgHandle/:venueHandle" component={VenueDetailPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/close-friends" component={CloseFriendsPage} />
       </Router>

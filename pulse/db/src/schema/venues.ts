@@ -1,13 +1,15 @@
-import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * Venue — a physical place that hosts events. Currently scoped to clubs
  * (the first surface to use this), but the shape is generic enough to
  * extend to other venue types.
  *
- * Slug-keyed because the venue page is a public, shareable URL
- * (`/venues/:slug`) — opaque ids would surface in every link. The slug
- * is also the primary key to avoid a second index for slug lookups.
+ * Venues belong to an OSN organisation. The public URL is
+ * `/venues/:orgHandle/:venueHandle` — the org handle namespaces the
+ * venue handle so two venues across the network can share a handle (or
+ * even a name) without collision. The `id` column is opaque and used
+ * for foreign-key targets (events, lineup); never surfaced in URLs.
  *
  * Hours are stored as JSON keyed by ISO weekday number ("1".."7", Mon=1)
  * for compactness. The frontend parses + renders. Free-form null when
@@ -16,8 +18,12 @@ import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core
 export const venues = sqliteTable(
   "venues",
   {
-    /** URL-safe slug, e.g. "the-pickle-factory". Doubles as the route param. */
+    /** Opaque PK, e.g. `ven_basement_room`. Not URL-addressable. */
     id: text("id").primaryKey(),
+    /** Owning OSN organisation handle (e.g. "underground-collective"). */
+    orgHandle: text("org_handle").notNull(),
+    /** URL handle, unique within the owning org (e.g. "basement-room"). */
+    handle: text("handle").notNull(),
     name: text("name").notNull(),
     /** "club" | "bar" | "warehouse" | …. Free-form for now; bucket at metric time. */
     kind: text("kind").notNull().default("club"),
@@ -53,6 +59,9 @@ export const venues = sqliteTable(
     // Reuse the events bbox pattern — same JS-haversine prefilter when we
     // surface "venues near me".
     index("venues_lat_lng_idx").on(t.latitude, t.longitude),
+    // Lookup target for `/venues/:orgHandle/:venueHandle`. Also enforces
+    // uniqueness of (org_handle, handle).
+    uniqueIndex("venues_org_handle_idx").on(t.orgHandle, t.handle),
   ],
 );
 
