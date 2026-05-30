@@ -32,6 +32,51 @@ describe("venue routes", () => {
   }
   void seedAll;
 
+  it("GET /venues returns every venue", async () => {
+    const { Effect: E } = await import("effect");
+    const { Db } = await import("@pulse/db/service");
+    const layer = createTestLayer();
+    await E.runPromise(
+      E.gen(function* () {
+        const { db } = yield* Db;
+        const now = new Date();
+        yield* E.promise(() =>
+          db.insert(venues).values([
+            {
+              id: "v1",
+              orgHandle: "org-a",
+              handle: "alpha",
+              name: "Alpha",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: "v2",
+              orgHandle: "org-b",
+              handle: "beta",
+              name: "Beta",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ]),
+        );
+      }).pipe(E.provide(layer)),
+    );
+    app = createVenuesRoutes(layer);
+
+    const res = await get(app, "/venues");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { venues: { id: string }[] };
+    expect(body.venues.map((v) => v.id).toSorted()).toEqual(["v1", "v2"]);
+  });
+
+  it("GET /venues returns an empty list when there are no venues", async () => {
+    const res = await get(app, "/venues");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { venues: unknown[] };
+    expect(body.venues).toEqual([]);
+  });
+
   it("GET /venues/:org/:venue returns 404 for an unknown venue", async () => {
     const res = await get(app, "/venues/org-one/does-not-exist");
     expect(res.status).toBe(404);
