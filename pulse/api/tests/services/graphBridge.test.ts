@@ -16,6 +16,7 @@ vi.mock("@shared/crypto", () => ({
 
 import { MAX_EVENT_GUESTS } from "../../src/lib/limits";
 import {
+  getAccountIdForProfile,
   getConnectionIds,
   getProfileDisplays,
   startKeyRotation,
@@ -120,6 +121,41 @@ describe("getProfileDisplays", () => {
   });
 });
 
+// ── getAccountIdForProfile ──────────────────────────────────────────────────
+
+describe("getAccountIdForProfile", () => {
+  it("returns the accountId from the API response", async () => {
+    mockFetch({ accountId: "acc_alice" });
+    const result = await Effect.runPromise(getAccountIdForProfile("usr_alice"));
+    expect(result).toBe("acc_alice");
+  });
+
+  it("URI-encodes the profileId in the query string (defends against reserved chars)", async () => {
+    const spy = mockFetch({ accountId: "acc_x" });
+    await Effect.runPromise(getAccountIdForProfile("usr/with&special?chars"));
+    const url = spy.mock.calls[0]![0] as string;
+    expect(url).toContain("profileId=usr%2Fwith%26special%3Fchars");
+  });
+
+  it("fails with ProfileNotFoundError on 404 (distinct from infra failures)", async () => {
+    mockFetch({ error: "Profile not found" }, 404);
+    const err = await Effect.runPromise(Effect.flip(getAccountIdForProfile("usr_ghost")));
+    expect(err._tag).toBe("ProfileNotFoundError");
+  });
+
+  it("fails with GraphBridgeError on 5xx (preserves the infra-failure signal)", async () => {
+    mockFetch({ error: "Internal" }, 500);
+    const err = await Effect.runPromise(Effect.flip(getAccountIdForProfile("usr_alice")));
+    expect(err._tag).toBe("GraphBridgeError");
+  });
+
+  it("fails with GraphBridgeError on 401 (treats auth failure as infra)", async () => {
+    mockFetch({ error: "Unauthorized" }, 401);
+    const err = await Effect.runPromise(Effect.flip(getAccountIdForProfile("usr_alice")));
+    expect(err._tag).toBe("GraphBridgeError");
+  });
+});
+
 // ── startKeyRotation (T-U2) ──────────────────────────────────────────────────
 
 describe("startKeyRotation", () => {
@@ -135,14 +171,21 @@ describe("startKeyRotation", () => {
     vi.useRealTimers();
   });
 
+  // "Unset" is simulated with an explicit empty-string stub (the code
+  // treats `!secret` as unset) rather than vi.unstubAllEnvs() alone —
+  // unstubbing only removes stubs, so a developer's pulse/api/.env
+  // (auto-loaded by `bun run`) would leak its real secret into these
+  // tests and make them fail locally while CI stays green.
   it("throws when INTERNAL_SERVICE_SECRET is unset in a non-local environment", async () => {
-    vi.unstubAllEnvs(); // undo beforeEach stub so the env var is absent
+    vi.unstubAllEnvs(); // undo beforeEach stub
+    vi.stubEnv("INTERNAL_SERVICE_SECRET", "");
     vi.stubEnv("OSN_ENV", "production");
     await expect(startKeyRotation()).rejects.toThrow("INTERNAL_SERVICE_SECRET must be set");
   });
 
   it("returns skipped-secret-unset (and makes no HTTP call) when the secret is unset in local dev", async () => {
     vi.unstubAllEnvs(); // remove the SECRET stub
+    vi.stubEnv("INTERNAL_SERVICE_SECRET", "");
     // OSN_ENV unset → treated as local
     const spy = vi.spyOn(globalThis, "fetch");
     await expect(startKeyRotation()).resolves.toBe("skipped-secret-unset");
@@ -151,6 +194,7 @@ describe("startKeyRotation", () => {
 
   it("returns skipped-secret-unset when OSN_ENV=local and the secret is unset", async () => {
     vi.unstubAllEnvs();
+    vi.stubEnv("INTERNAL_SERVICE_SECRET", "");
     vi.stubEnv("OSN_ENV", "local");
     const spy = vi.spyOn(globalThis, "fetch");
     await expect(startKeyRotation()).resolves.toBe("skipped-secret-unset");

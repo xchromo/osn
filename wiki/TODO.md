@@ -27,6 +27,7 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [x] **C-H2 — Account-level erasure endpoint** — `DELETE /account` (Flow A, full OSN account) + Pulse `DELETE /account` (Flow B, leave-Pulse). Both step-up gated, 7-day soft-delete tombstone with manual fast-track, ARC fan-out for cross-service cleanup. Hosted Pulse events get a 14-day public cancellation window (audience-commitment, independent of account grace). New `app_enrollments` tracks which apps a user is opted into; OSN delete only fans out to currently-enrolled apps. (Move to `[[changelog/completed-features]]` on merge.)
 - [ ] **C-H4 — Privacy notice + ToS published on `@osn/landing`** in plain language, version-stamped, backlinked from every signup form. Required for GDPR Art. 12-14 + CCPA notice-at-collection + DSA Art. 14. See `[[compliance/gdpr]]`, `[[compliance/dsa]]`.
 - [ ] **C-H8 — Date-of-birth field + age gate on registration**, hard-rejecting under-13. Required for COPPA actual-knowledge defense. See `[[compliance/coppa]]`.
+- [ ] **V-M0 — Verified Identity foundations** (Yoti-style verified-attribute layer, AU first). DPIA + vendor RFP + schema (`verified_attributes`, `verification_runs`, `presentations`) + SD-JWT VC issuer on a **separate ES256 keypair** (same JWKS as `[[arc-tokens]]`, distinct `kid`, `aud: "osn-vc"`). Unlocks "verify once, present privately many times" across Pulse + Zap and gives a credible answer to AU social-media-minimum-age (10 Dec 2025). See `[[verified-identity]]`.
 
 ---
 
@@ -35,13 +36,19 @@ Progress tracking and deferred decisions. Completed items archived in `[[changel
 - [x] "What's on today" default view — unified into the discovery feed on `ExplorePage`; default view is `from = now` with the chip rail + more-filters drawer layered on top
 - [x] Prompt for max event duration when creating events without an endTime — duration presets + `maybe_finished` status at 8h, auto-close at 12h, 48h defence-in-depth cap on explicit endTimes (moved to `[[changelog/completed-features]]`)
 - [x] Event discovery (location, category, datetime, friends, price) — `GET /events/discover` with cursor pagination; bbox + haversine for radius; friends branch unions organiser ∈ connections and RSVP ∈ connections (positive engagement only — `going` / `interested`) and respects `attendanceVisibility=no_one`; per-IP rate limit; interests deferred until the Pulse interest profile onboarding lands. See `[[event-access]]` for the shared visibility-filter helper consumed by `listEvents` and `discoverEvents`.
-- [ ] Pulse interest profile (onboarding) — populate `pulseUsers.interests` (new column), surface as an onboarding step, wire into the discovery feed's "For you" chip
+- [x] **Pulse new-user onboarding flow** — six-step `/welcome` flow with themed coral illustrations (welcome rings, editorial map, interest constellation, location pin drop, notifications ember, finish date stamp). Account-keyed via new `pulse_account_onboarding` table + `pulse_profile_accounts` mapping cache + `GET /graph/internal/profile-account` ARC endpoint (preserves the multi-account privacy invariant in `[[identity-model]]`). Captures interests (≤8), `notifications_perm`/`location_perm` outcomes, and reminder opt-in. Idempotent `POST /me/onboarding/complete`. Server-side first-run gate redirects to `/welcome`. See `[[pulse-onboarding]]`. (Move to `[[changelog/completed-features]]` on merge.)
+- [x] **Pulse calendar agenda page** — `/calendar` route in `@pulse/app` rendering a vertical-timeline agenda (continuous left rail with per-day dated markers; events listed to the right). Lists events the viewer is hosting OR has RSVP'd Going/Maybe to; "Maybe" entries surface an inline reminder to confirm (I'm going) or drop (Can't make it). Backed by a new auth-gated `GET /events/calendar` endpoint + `listMyCalendarEvents` service (UNION-of-two-arms shape so cost scales with per-user data, not global event volume — see P-W1 fix below). Also a full end-to-end rename of the RSVP status value `interested` → `maybe` (DB enum value, API wire value, metrics, UI; no legacy alias). New `pulse.calendar.events.fetched` counter + `pulse.calendar.list_mine` span. (Move to `[[changelog/completed-features]]` on merge.)
+- [ ] Wire captured interests into the discovery feed — add a "For you" chip to `ExplorePage` that filters/boosts events by the account's onboarding interests (data lives in `pulse_account_onboarding.interests` — see `[[pulse-onboarding]]`)
 - [ ] Pulse user preferred currency — add a currency field to `pulse_users`, drive the discovery drawer's price filter from it (today the client uses a USD default)
 - [ ] Discovery v2 — AI prompt filter surfaced after extended scrolling, server-side free-text search (currently client-side over the returned page)
 - [x] Recurring events (series + instances) — shipped on `claude/add-recurring-events-11qp9`: `event_series` schema, RRULE expander, `/series` routes, seed fixtures, `SeriesDetailPage`
 - [ ] Event group chats (via Zap once M2 lands — placeholder shipped)
 - [ ] Organizer tools (moderation, blacklists)
-- [ ] Venue pages
+- [x] Venue pages — org-scoped venue detail page (`/venues/:orgHandle/:venueHandle`) with lineup timeline, event carousel, open/closed badge + clickable venue layer on the Explore map; `venues` + `event_lineup` tables. See [[venues]]. (Move to [[changelog/completed-features]] on merge.)
+- [x] **Share button with RSVP source attribution** — event detail picker (Popover desktop / Dialog mobile) covering Instagram/Facebook/TikTok/X/WhatsApp/copy-link/system-share-sheet, injects `?source=…` into shared URLs. New `event_rsvps.share_source_first` (sticky) + `share_source_last` (overwriting) columns + `*_seen_at` timestamps. Two unauthenticated rate-limited endpoints (`POST /events/:id/share`, `/exposure`) gated by a lightweight `checkEventVisibility`. Four new bounded-cardinality counters: `pulse.events.share.invoked`, `pulse.events.share.exposure`, `pulse.rsvps.attribution.first`, `pulse.rsvps.attribution.last`. Organiser self-RSVPs and self-views excluded from attribution. See `[[event-access]]`. (Move to `[[changelog/completed-features]]` on merge.)
+- [ ] Venue discovery links beyond the Explore map — link into venue pages from event detail + search surfaces (deferred from the venue-pages branch — see [[venues]])
+- [ ] **Organiser attribution-analytics surface** — read path that aggregates `event_rsvps.share_source_first` / `share_source_last` into a per-event funnel (exposures → first-touch RSVPs → last-touch RSVPs by platform). Will need the composite indexes called out in `P-I3 (share-attribution)`. See `[[event-access]]`.
+- [ ] **Wire Zap + future OSN-native share targets** into the share-source enum (`pulse/api/src/lib/shareSource.ts` + `pulse/app/src/lib/shareSource.ts`) once those surfaces exist. Cardinality stays bounded; today's `other` bucket absorbs them in the interim.
 - [ ] Real SMS/email comms providers — `sendBlast` is stubbed (writes to `event_comms`); plug in actual delivery
 - [x] Drizzle: extract shared `createSchemaSql()` helper so adding a column is a one-file change — shipped on `claude/drizzle-pulse-todo-cX5ps`: `@pulse/db/testing` export with `createSchemaSql()` + `applySchema()`, derived from the live Drizzle schema in FK-respecting order; replaces four hand-rolled DDL blocks across `pulse/db` and `pulse/api` tests; drift-guard regression test in `pulse/db/tests/testing.test.ts`
 - [ ] Verified-organisation tier (Phase 2): org accounts can run events over `MAX_EVENT_GUESTS` (1000) via per-event support flow
@@ -136,10 +143,185 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 
 ---
 
+## Cire (`cire/web` + `cire/organiser` + `cire/api` + `cire/db`)
+
+Wedding-invite stack merged from cire.git (2026-06). Cire-internal feature work tracks in `cire/wiki/todo/` shards; this section holds the OSN-facing integration work. See [[cire]] and [[cire-auth]].
+
+- [ ] **`diffAgainstDb` wedding-scoping — MUST land before any second wedding exists.** `cire/api/src/services/import.ts` reads events/families/guests/links UNSCOPED by wedding; import writes are scoped, but the diff would cross-contaminate with a second wedding's rows. Needs join-based scoping — a naive `WHERE wedding_id = ?` on each table would mis-detect foreign guest-event links as removals. See [[cire-auth]] for the ownership model.
+- [ ] Pulse event-feed integration — surface cire weddings in Pulse's discovery/feed. Blocked on the mechanism decision (ARC-token pull from `cire/api` vs push-on-publish into `pulse/db`) — see Deferred Decisions.
+- [ ] Multi-owner weddings — replace `weddings.owner_osn_profile_id` with a `wedding_owners(wedding_id, osn_profile_id, role owner/editor/viewer)` join table so both partners (and a planner) can administer one wedding. See [[cire-auth]].
+- [ ] Evaluate `cire/api` Hono → Elysia migration to match platform convention; on migration, drop the Hono adapter usage in favour of the shared Elysia adapter in `@shared/osn-auth-client`.
+- [ ] Guest claim-code → optional OSN account linking — let a claimed family optionally attach to an OSN account later; must stay optional (guests are deliberately account-free — see [[cire-auth]]).
+
+---
+
 ## Landing (`osn/landing`)
 
 - [ ] Design and build landing page content
 - [ ] Deploy (Vercel/Cloudflare)
+
+---
+
+## Verified Identity (`@osn/api` + `@osn/db` + `@shared/crypto` + `@osn/social`)
+
+Yoti-style reusable verified-attribute layer. **Australia first** —
+driver's licence (DVS), mobile driver's licence (ISO 18013-5), and
+myID once AGDIS opens to private-sector relying parties (30 Nov
+2026). Other countries layer onto the same provider abstraction.
+Cryptography: SD-JWT VC (RFC 9901 + draft-ietf-oauth-sd-jwt-vc) over
+the existing OSN ES256 ARC key. See [[verified-identity]] for the
+design doc, threat model snapshot, and vendor shortlist.
+
+### V-M0 — Foundations (no provider yet)
+
+- [ ] DPIA filing under GDPR Art. 35 — biometric template hashes +
+      identity-document data are Special Category Personal Data
+      (Art. 9). Block all later milestones until filed. Add to
+      [[compliance/gdpr]] and link from C-M3.
+- [ ] Data map + retention + subprocessor entries: new categories
+      (biometric template hash, document number hash), default
+      retention 24 months from `verified_at` or until document
+      expiry whichever sooner, KYC vendor as a new subprocessor
+      with signed DPA. See [[compliance/data-map]],
+      [[compliance/retention]], [[compliance/subprocessors]].
+- [ ] Vendor RFP: Persona (M1 facial age estimation, top-scoring AU
+      trial vendor), idvPacific vs Equifax IDMatrix (M2 DVS
+      gateway), MATTR/GBG (M3 mDL acceptance). Trade-off matrix
+      lives at `wiki/verified-identity/vendor-rfp.md`.
+- [ ] DB schema in `@osn/db`: `verification_providers`,
+      `verification_runs`, `verified_attributes` (encrypted
+      `value` column), `presentations`. New `security_events`
+      kinds: `identity_verified`, `identity_presentation_issued`.
+- [ ] SD-JWT VC issuer in `@shared/crypto/vc` — salted-hash
+      disclosures, `aud`-bound presentations, `jti` single-use
+      store mirroring [[step-up]]. ES256 key reused from ARC
+      issuer; new credential audience `osn-vc`.
+- [ ] `/.well-known/openid-credential-issuer` metadata + JWKS
+      reuse from existing `/.well-known/jwks.json`.
+- [ ] Observability: `osn.identity.verification.runs{kind, outcome}`
+      counter, `osn.identity.verification.duration{kind, provider}`
+      histogram, `osn.identity.presentation.issued{audience, claims}`
+      counter (claims as bounded enum, not free-form).
+
+### V-M1 — Facial age estimation
+
+Lowest regulatory bar; closes the social-media-minimum-age (10 Dec
+2025) compliance gap before harder document flows are wired.
+
+- [ ] Persona (or chosen vendor) integration in
+      `osn/api/src/services/identity/age-estimate.ts`. Pure HTTP +
+      vendor SDK; selfie capture via WebAuthn-style platform API.
+- [ ] `POST /identity/verify/begin { kind: "age_estimate" }` +
+      `POST /identity/verify/complete` (step-up gated). On
+      success, mint `age_band` + (if estimate ≥ 16 with margin)
+      `age_over_16: true` attributes. Source image discarded after
+      vendor returns the estimate.
+- [ ] **Under-13 termination branch**: if facial-age-estimate
+      returns ≤ 13 with confidence margin, abort the flow,
+      do **not** persist the estimate value, do **not** log
+      the value, write a generic `age_estimate_below_threshold`
+      `security_event`, and return a fixed-shape failure to the
+      client. This is COPPA "actual knowledge" — the moment OSN
+      learns of a likely under-13 user it must not retain the
+      signal that triggered the inference. See [[compliance/coppa]].
+- [ ] `@osn/social` Settings → Identity tab: entry-point card
+      "Confirm you're old enough" + selfie ceremony UI.
+- [ ] Tighten C-H8 (registration age gate): if a verified
+      `age_over_16` attribute exists, skip the self-declared
+      birthdate path entirely. See [[compliance/coppa]].
+- [ ] Tests: provider mock layer; refusal on margin-of-error
+      bands; revocation on `DELETE /identity/attributes/age_band`.
+
+### V-M2 — AU document verification (DVS + selfie + face-match)
+
+- [ ] Department of Home Affairs DVS registration paperwork +
+      DVS-approved consent statement (verbatim) shown before each
+      DVS call; consent record retained.
+- [ ] DVS gateway provider integration (idvPacific or Equifax
+      IDMatrix). Document capture + OCR client-side; submit
+      extracted fields to DVS for yes/no match.
+- [ ] Liveness selfie + face-match against the licence photo.
+      Provider returns face-match score; OSN refuses below
+      configurable threshold.
+- [ ] Mint attributes: `dob`, `given_name`, `family_name`,
+      `country=AU`, `document_type`, `document_expires_at`,
+      `document_number_hash` (SHA-256 + per-attribute pepper —
+      lets us refuse Sybil re-use without retaining the number).
+      Pre-compute boolean predicates `age_over_16`, `age_over_18`
+      alongside `dob`.
+- [ ] Settings → Identity: list verified attributes with
+      provenance ("Verified 12 Jan 2026 via NSW driver licence")
+      and per-attribute revoke.
+- [ ] Tests: DVS no-match path returns generic failure (no
+      enumeration oracle); face-match below threshold; replay of
+      same document number across accounts blocked.
+
+### V-M3 — mDL acceptance (ISO 18013-5 / 18013-7)
+
+- [ ] CBOR/COSE verifier for state-issued mDL presentations
+      (NSW + QLD live; others as they roll out late 2026). MATTR
+      SDK or hand-rolled — decide in V-M0 vendor RFP.
+- [ ] Re-issue mDL claims as OSN SD-JWT VCs so downstream
+      relying parties see one credential format on the holder
+      side.
+- [ ] Settings → Identity: "Verify with your phone's digital
+      driver licence" entry alongside the document upload flow.
+
+### V-M4 — Relying-party API (Pulse, Zap, third-party)
+
+- [ ] `POST /identity/presentation/request` (RP-facing) — accepts
+      claim set + audience + nonce, returns OAuth-style consent
+      URL.
+- [ ] `POST /identity/presentation/issue` (user-facing) — after
+      consent + step-up, releases SD-JWT VC for **only** the
+      requested claims with the audience binding.
+- [ ] OpenID4VP wire format so external apps can integrate
+      against a published spec rather than an OSN-bespoke one.
+- [ ] Pulse: optional "verified attendees only" event setting +
+      "host requires verified given-name" gate on RSVP.
+- [ ] Zap M3: trader-traceability flow (DSA Art. 30, C-M12)
+      consumes verified `given_name` / `country` / business
+      registration ID.
+- [ ] Per-RP audit trail in `presentations` + user-facing
+      "Connected apps" view showing every prior presentation.
+
+### V-M5 — myID / AGDIS
+
+Unblocked 30 Nov 2026 when private-sector relying parties become
+eligible under the Digital ID Act 2024.
+
+- [ ] AGDIS accreditation paperwork (relying-party tier).
+- [ ] Accept myID assertion as a verification source — yields
+      higher-assurance attributes than DVS for the same fields,
+      plus reduces vendor lock-in to a single KYC provider.
+- [ ] Settings → Identity: "Verify with myID" surface.
+
+### V-M6 — Other countries
+
+- [ ] UK: DIATF-accredited provider (Yoti, Onfido, Persona) for
+      passport / driving-licence verification.
+- [ ] EU: eIDAS 2.0 / EUDI Wallet acceptance (SD-JWT VC
+      interoperable on the wire — same verifier code).
+- [ ] US: state mDL acceptance (Apple / Google wallet) as it
+      rolls out; plus document-verification provider for
+      driver's licence + state ID.
+
+### Cross-cutting / open questions
+
+- [ ] Which verified attributes are "always public" once minted
+      (e.g. `country` for compliance routing) vs always
+      consent-gated (DOB, full name)?
+- [ ] BBS+ unlinkable VC vs SD-JWT-per-audience for cross-RP
+      correlation defence — defer to v2 unless a documented
+      threat lands.
+- [ ] How does verified identity interact with multi-account
+      profiles (P3-P6)? Verification is account-level; profile
+      switching exposes the same attributes — is that the right
+      ergonomic, or should profile-A be able to present `age_over_18`
+      while profile-B presents nothing?
+- [ ] Step-up requirement on every presentation vs cached
+      consent (e.g. "Pulse can re-use my `age_over_16` for 30
+      days without prompting") — UX vs privacy trade-off.
 
 ---
 
@@ -153,6 +335,11 @@ OSN's messaging app. Stack matches Pulse (Bun, Tauri+Solid, Elysia+Eden, Drizzle
 - [ ] OSN/messaging domain modules
 - [ ] WebSocket setup for real-time
 - [ ] REST endpoints for third-party consumers
+- [ ] Dead JWKS-cache metric cleanup — `metricJwksCacheLookup` + `authJwksCacheLookups` counter + `JwksCacheLookupAttrs` type in `pulse/api/src/metrics.ts` are no longer emitted since the JWKS cache moved to `@shared/osn-auth-client` (not instrumented there). Delete them, or re-instrument the shared cache and keep them — see [[observability/overview]]
+
+### Client SDK (`osn/client`)
+
+- [ ] Export an `isAuthExpiredError()` helper from `@osn/client` — Effect's FiberFailure wrapping defeats `instanceof AuthExpiredError`, so consumers string-match the error printout today (see `cire/organiser/src/lib/api.ts:isAuthExpired`). Ship a tag/printout-aware predicate next to the error class — see [[cire-auth]]
 
 ### Database (`osn/db`, `pulse/db`)
 
@@ -228,6 +415,7 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [x] S-M100 — `peekClaims` used `atob()` which breaks on base64url (`-`/`_` in UUID kids). **Fixed** — `decodeJwtSegment` converts base64url → base64 before decode (RFC 7515 §2) — see [[arc-tokens]]
 - [x] S-M101 — `/register-service` stored arbitrary `allowedScopes` without server-side validation. **Fixed** — `PERMITTED_SCOPES` allowlist in `graph-internal.ts`; unknown scopes return 400 — see [[arc-tokens]]
 - [x] S-M102 — `resolvePublicKey` cache hit skipped scope check when `tokenScopes` empty. **Fixed** — cache entry now stores `allowedScopes`; scope validated on every cache hit — see [[arc-tokens]]
+- [ ] S-M1 (pulse-onboarding) — `/graph/internal/profile-account` is gated only by the generic `graph:read` scope, so any future ARC consumer of OSN's internal graph API could enumerate `profileId → accountId` and dissolve the multi-account privacy invariant ([[identity-model]] §"Privacy Rules"). Introduce a dedicated `graph:resolve-account` scope (extend `PERMITTED_SCOPES` in `osn/api/src/routes/graph-internal.ts`, grant only to `pulse-api` in its `service_accounts` row, and switch `pulse-api/src/services/graphBridge.ts:getAccountIdForProfile` to request that scope). Today only pulse-api consumes the endpoint, so impact is bounded to a service-key compromise — but principle of least privilege wants the constraint declarative — see [[pulse-onboarding]]
 - [ ] S-M1 (zap) — No rate limiting on Zap API endpoints — see [[rate-limiting]]
 - [ ] S-M2 (zap) — CORS wildcard on `@zap/api` — restrict to known client origins
 - [ ] S-M3 (zap) — `zapBridge.provisionEventChat` does not verify caller owns event
@@ -246,12 +434,17 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [x] S-M2 (passkey) — `PATCH /passkeys/:id` had no step-up gate; XSS-captured access token could swap labels to mislead the user before a delete. **Fixed** — rename now uses the same step-up gate as delete (`passkeyDeleteAllowedAmr`); client + UI thread the token through — see [[identity-model]]
 - [x] S-M3 (passkey) — Discoverable login did not cross-check assertion `userHandle` against the credential row's `accountId`. **Fixed** — verifier decodes the base64url userHandle and compares to `accounts.passkeyUserId` before completing the ceremony — see [[identity-model]]
 - [ ] S-M1 (series) — `GET /series/:id/instances` leaks existence of private series (404 on missing id vs 200 `[]` on private unviewable). Align with [[event-access]] — return 200 `[]` when series exists-but-invisible (or 404 for both) — `pulse/api/src/routes/series.ts:149`, `pulse/api/src/services/series.ts:494`
+- [ ] S-M1 (vid) — Unbounded presentation issuance / no rate limit on `POST /identity/presentation/issue`. Spec a per-(user, audience) limit (~10/hr) + global per-user cap before V-M4 — see [[verified-identity]], [[rate-limiting]]
+- [ ] S-M2 (vid) — Selfie / biometric raw-image retention boundary owned by vendor, not OSN. Spec direct browser→vendor upload (signed URL or vendor SDK); `osn/api` only sees `runId` + redacted response. Add biometric to `redact.test.ts` denylist — block V-M1 — see [[verified-identity]]
+- [ ] S-M3 (vid) — `presentations.requested_claims` / `released_claims` JSON unbounded in current schema spec. Constrain to bounded enum of attribute kinds, cap row size; mirror the bounded-enum rule for the `presentation.issued{claims}` metric — see [[verified-identity]]
+- [ ] S-M4 (vid) — `verified_attributes.value` encryption-key custody underspecified. Move from "key in env" to envelope encryption (KEK in KMS, per-row DEK, AES-256-GCM, AAD = `account_id ‖ attribute_kind`). Document in [[compliance/data-map]]. Block V-M2 — see [[verified-identity]]
 - [ ] S-M2 (series) — `listInstances` ignores the invited-RSVP branch in `canViewEvent` ([[event-access]]). Invited non-organiser viewers are wrongly 404'd on the private-series gate, and a single promoted-to-public instance leaks the parent series to anonymous callers. Replace inline visibility filter with per-row `canViewEvent` (or a parallel RSVP-join predicate) — `pulse/api/src/services/series.ts:500-502`
 
 ### Low
 
 - [ ] S-L1 — Seed data uses reserved handle `"me"` — reservation not DB-enforced
 - [ ] S-L2 — `Effect.orDie` in `requireAuth` swallows auth errors — replace with `Effect.either` + 401
+- [ ] S-L2 (pulse-onboarding) — `_testKey?: CryptoKey` positional argument on `createOnboardingRoutes` (and 3 other Pulse route factories: `createCloseFriendsRoutes`, `createEventsRoutes`, `createSeriesRoutes`). A misuse where a non-test caller passes a key would bypass JWKS rotation + kid-binding. Defence-in-depth fix: gate `_testKey` honouring on `process.env.NODE_ENV === "test"` inside `extractClaims` so production bundles can never honour it. Pre-existing pattern, called out by the security review of this branch — track as a Pulse-wide cleanup — see [[pulse-onboarding]]
 - [ ] S-L4 — `createdByAvatar` always null — no avatar claim in JWT
 - [ ] S-L5 (account-deletion) — Adaptive AMR for `*_app_delete` purposes: when an account has at least one passkey, refuse OTP-only step-ups for app-deletion ceremonies. Today both flows accept passkey OR OTP via `recoveryGenerateAllowedAmr` — tighter posture available but conflicts with the "user with lost passkey can still leave" UX. Consider once recovery-flow UX matures — see [[passkey-primary]]
 - [ ] S-L6 (account-deletion) — Emit `osn.arc.verify{result=...}` metric in `pulse/api/src/lib/arc-middleware.ts requireArc` so kid-unknown / kid-revoked / scope-denied / sig-fail are distinguishable on dashboards. Today every failure returns 401 with no breakdown. Mirrors osn-api's existing pattern — see [[observability/overview]]
@@ -295,10 +488,19 @@ Open findings only. Completed fixes archived in [[changelog/security-fixes]].
 - [ ] S-L2 (security-events) — `notifyRecovery` logs a stable `"notify_dispatch_failed"` message, but if `AuthError.message` ever embeds the mailer-provider response body a future refactor could leak the recipient email past the key-based redactor. Pin the log message shape with a test and assert the raw cause only appears on the span — see [[recovery-codes]]
 - [ ] S-L3 (security-events) — `securityEventList` + `securityEventAck` limiters are keyed per-IP via `getClientIp` (`osn/api/src/routes/auth.ts`), but both endpoints are authenticated. Key by `claims.profileId` to strengthen the CGNAT / botnet-fan-out threat model (same pattern as `/recommendations/connections`) — see [[rate-limiting]]
 - [ ] S-L1 (series) — No rate limit on `POST /series`, `PATCH /series/:id`, `DELETE /series/:id`. Each POST materialises up to 260 rows. Add per-user limits (e.g. 10/hour create, 60/hour patch) — see [[rate-limiting]]
+- [ ] S-L1 (vid) — `DELETE /identity/attributes/:kind` revokes locally but outstanding SD-JWT VCs minted from that attribute remain cryptographically valid until expiry. Add an OAuth Status List endpoint at `/.well-known/`; require verifiers to consult it; document TTL trade-off — see [[verified-identity]]
+- [ ] S-L2 (vid) — Threat-model snapshot in [[verified-identity]] is missing: holder device compromise (stolen session can mint presentations — call out step-up gating explicitly), issuer-side internal abuse (`@osn/api` operator silently minting VCs without user consent → `admin_actions` audit, ties to C-M16), `nonce`/`jti` clock skew + replay window, and downgrade attacks where an RP requests `age_band` instead of `age_over_18` to learn more than needed (consent UX should warn on over-broad asks). Expand before V-M0 STRIDE pass
+- [ ] S-L3 (vid) — `verification_runs.failure_reason` and "redacted provider response" are undefined. Spec a vendor-response-redactor module with explicit allowlist (status, score, run id, error code) and denylist for everything else; mirror [[observability/overview]] redaction pattern — see [[verified-identity]]
 - [ ] S-L2 (series) — `expandRRule` safety valve (`weekIdx > 10_000`) permits ~70k `Date` allocations when `UNTIL < dtstart`. Reject `UNTIL < dtstart` in `parseRRule` and lower the valve to ~520 weeks / 120 months — `pulse/api/src/services/series.ts:187-237`
 - [ ] T-M (series) — Coverage gaps from review: `listInstances` `scope: "all"`; `updateSeries` `this_and_following` with/without `from`; `parseRRule` happy paths for `UNTIL`/`INTERVAL`/`BYDAY`; `expandRRule` `UNTIL` + `BYDAY` fanout; `materializeInstances` `extend_window` trigger; `GET /series/:id` 200 happy path + private-visibility 404 masking; `PATCH /series/:id` 200/422/404 paths
 - [ ] S-L1 (pulse-close-friends) — `POST /close-friends/:friendId` is unrate-limited and the 422-vs-201 distinction makes it a connection-existence oracle. Caller can only probe their own connections (already enumerable via OSN `/graph/connections`), but the asymmetry bypasses OSN's 60/min limit. Defer to a Pulse-wide rate-limiter when one lands; mirror the OSN `GRAPH_RATE_LIMIT_MAX` (60/min/user) — see [[rate-limiting]], [[pulse-close-friends]]
 - [ ] S-L2 (pulse-close-friends) — Cross-DB hygiene: `pulse_close_friends.friendId` references an OSN profile but Pulse has no S2S notification or reconciliation hook for OSN profile deletion. Stale rows render as ghost entries (null handle/displayName) on the close-friends page. Add an internal Pulse endpoint OSN can ARC-call post-deletion, or a periodic reconciliation job — see [[pulse-close-friends]], [[s2s-patterns]]
+- [ ] S-L1 (cire) — Verify `ORGANISER_TOKEN` is not set as a CF secret on the deployed cire-api worker; the `X-Organiser-Token` auth path is deleted from code, but a secret set during the interim would linger as stale config. If present: `wrangler secret delete ORGANISER_TOKEN` (manual, from `cire/api`) — see [[cire-auth]]
+- [ ] S-L3 (cire) — No Origin-header validation on cire's state-changing routes (`POST /api/claim`, `/api/rsvp`). Relies solely on `SameSite=Lax` for CSRF defence; OSN convention (origin-guard M1) additionally rejects POST/PUT/PATCH/DELETE whose `Origin` is present and not in the CORS allowlist. Apply the origin-guard equivalent on cire/api — see [[cire-auth]], `osn/api/src/lib/origin-guard.ts`
+- [ ] S-L2 (share-attribution) — `getClientIp` shared `"unknown"` bucket. When `x-forwarded-for` is absent, `shared/rate-limit/src/index.ts` keys everyone under the literal `"unknown"`, collapsing the per-IP guarantee that the share/exposure (60/120 req/min) limits depend on. Pre-existing helper, but the new unauthenticated `pulse.events.share.invoked` / `pulse.events.share.exposure` counters are the most sensitive consumers. Fold into the planned Redis-backed limiter so per-IP buckets can pull from the connection address — see [[rate-limiting]]
+- [ ] T-S1 (cire) — Mechanically enforce the DDL lockstep contract: a test that applies `cire/db/migrations/*.sql` (journal order) to one in-memory DB and the `setup.ts` DDL to another, then diffs normalised `sqlite_master`. Today the three-way mirror (schema.ts / migrations / setup.ts DDL) is comment-enforced only — a future migration that skips the mirror passes the whole cire/api suite against a shape D1 rejects
+- [ ] T-S2 (cire) — `weddingsService.listForOwner` has no co-located unit test (only route-level coverage); add `services/weddings.test.ts` asserting oldest-first ordering, the one behaviour route tests don't pin
+- [ ] T-M2 (cire) — `cire/organiser` ships the OSN sign-in flow with zero tests (workspace `test` script is still the `echo 'No tests yet'` stub). Add vitest + unit-test `isAuthExpired` (tagged `AuthExpiredError`, Effect FiberFailure string form, unrelated error) — its string-match fallback is fragile and a misclassification means redirect loops or a dead dashboard on token expiry. Mirror `cire/web`'s vitest setup
 
 ### Recovery / passkey-primary (Phase 5 prerequisites)
 - [x] M-PK1b — Out-of-band recovery-code regeneration + consumption notification. `security_events` audit table covers both recovery code kinds; `/account/security-events[/:id/ack | /ack-all]` routes require step-up (S-M1) and the Settings banner uses optimistic local removal (P-I3). **Shipped** — see [[recovery-codes]] and `[[changelog/completed-features]]`
@@ -317,6 +519,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-W3 (zap) — `provisionEventChat` non-atomic cross-DB writes
 - [ ] P-W4 (zap) — `getChatMembers` returns all members without pagination
 - [ ] P-I1 (pulse-discovery) — cursor `(start_time, id)` ordering relies on the single-column `events_start_time_idx` for the tiebreak; cheap to add a compound index if series materialisation produces same-second collisions at scale — see `[[event-access]]`
+- [ ] P-I1 (pulse-onboarding) — `getOnboardingStatus` re-validates the JSON `interests` column on every read (defensive walk through `INTEREST_CATEGORIES`) even though `Schema.decodeUnknown(CompleteOnboardingSchema)` already enforced membership at write time. Sub-millisecond cost; flagged purely as Info — only worth changing if profiling later shows it. See [[pulse-onboarding]]
 - [x] P-W2 — `resolvePublicKey` hits DB when `tokenScopes` provided even if `kid` cache is warm. **Fixed** — cache entry now stores `CryptoKey` + `allowedScopes`; scope validated from cache on hit, no DB round-trip — see [[arc-tokens]]
 - [x] P-W100 — `publicKeyCache` unbounded under key rotation churn. **Fixed** — `MAX_CACHE_SIZE` cap with oldest-entry eviction on write — see [[arc-tokens]]
 - [x] P-W101 — `peekClaims` decoded payload before checking header validity. **Fixed** — header decoded first; payload decode gated on `kid` present — see [[arc-tokens]]
@@ -330,7 +533,10 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I4 (auth) — `/login/magic/verify` has no rate limiter — add `magicVerify: RateLimiterBackend` (10/60s per-IP, mirror `/login/otp/complete`). Pre-existing, not a regression; parity with the rest of `/login/*` — see [[rate-limiting]]
 - [ ] P-W1 (pulse) — Duplicate event DB load per RSVP route: `loadVisibleEvent` fetches the row for the access gate; `listRsvps`/`rsvpCounts` re-fetch the same row internally. Thread the loaded `Event` into service functions — see [[s2s-patterns]]
 - [ ] P-W3 (pulse) — `listTodayEvents` has no `LIMIT` clause; fetches all matching rows for the day into memory — see [[event-access]]
-- [ ] P-W5 — Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (N individual writes)
+- [ ] P-I2 (cire) — `events_sort_order_idx` (migration 0004) is dead after wedding scoping: every events read is now `WHERE wedding_id = ? ORDER BY sort_order` (uses `events_wedding_idx`, sorts in memory) or `WHERE id IN (...)` (JS sort). Replace `events_wedding_idx` + `events_sort_order_idx` with a composite `(wedding_id, sort_order)` in a follow-up migration — serves filter + order in one B-tree, drops a dead index's write cost on the import path. Mirrors the `guests_family_id_sort_idx` pattern — see [[cire]]
+- [ ] P-I3 (cire) — `GuestTable` over-fetches the full `/events` payload only to build an id→name chip map, and `DashboardTabs` `<Show>`-mounts tables so a tab switch destroys `GuestTable` and refires both guests + events fetches. Lift the guests/events fetches to the dashboard shell (`createResource` at `DashboardTabs` level) so tab state doesn't own fetch lifetime; sibling of the already-tracked ImportPanel tab-switch refetch in `cire/wiki/todo/perf.md` — see [[cire]]
+- [ ] P-W5 — Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (N individual writes). Now also reachable from the anonymous `GET /venues/:org/:venue/events` surface (`listVenueEvents` runs the same per-row `applyTransition`) — rate-limited per-IP since the venue branch, but batching by `(from, to)` group should cover all three call sites — see [[venues]]
+- [ ] P-I17 (venues) — a venue page view re-reads the venue row up to 3× (detail route, inside `listVenueEvents`, lineup gate) and the client lineup fetch waits on venue + events (two-hop waterfall). Consider joining the lineup gate's event check to the venue row and embedding the featured event's lineup in the `/events` response (`?include=featured_lineup`) to drop the serial RTT — see [[venues]]
 - [ ] P-W10 — `RegistrationClient.checkHandle` has no `AbortController` — debounced bursts leave multiple in-flight requests
 - [ ] P-W11 — `beginRegistration` issues two parallel queries instead of single `WHERE email = ? OR handle = ?`
 - [ ] P-W22 — Two `Effect.runPromise` calls per internal graph request — consolidate when S2S throughput grows — see [[arc-tokens]]
@@ -341,6 +547,7 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [x] P-W1 (explore) — `ExplorePage` not lazy-loaded despite being the heaviest route. **Fixed** — wrapped in `lazy()` for route-level code splitting
 - [x] P-W2 (explore) — Render-blocking Google Fonts `@import` in CSS. **Fixed** — moved to `<link>` tags in `index.html` with `preconnect` hints
 - [ ] P-W3 (explore) — Canvas heatmap + SVG map redraw on every `ResizeObserver` frame without throttle — debounce `setSize` ~100ms
+- [ ] P-W28 (explore) — `GET /venues` (`listAllVenues`) does an unbounded table scan to feed the Explore map; replace with a bbox-aware query (`WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`, viewport derived from the map) and an in-memory haversine refine. Same shape needed for events (`listEvents` accepts no bbox today either) — both surfaces should share a `(minLat, maxLat, minLng, maxLng, limit)` contract. Pre-req: compound index on `(latitude, longitude)` (already present on `venues_lat_lng_idx`, `events_lat_lng_idx`). When built, select a thin pin projection (`id, orgHandle, handle, name, kind, capacity, latitude, longitude`) instead of `SELECT *` — the map renders none of the heavy fields (description, hours JSON, image/website URLs). Owner: Pulse — see [[venues]], [[event-access]]
 - [ ] P-W4 (explore) — `StyleMap` SVG recalculates grid lines on every resize — throttle or cache
 - [ ] P-W5 (explore) — `isDark()` reads DOM classList on every access without reactive signal — use `MutationObserver` + `createMemo`
 - [ ] P-W23 — `tailwind-merge` (~12-14 KB) in initial bundle — see [[component-library]]
@@ -364,9 +571,13 @@ Open findings only. Completed fixes archived in [[changelog/performance-fixes]].
 - [ ] P-I1 (pulse) — `Register`/`SignIn` eagerly imported in `Header.tsx` — lazy-load for authenticated users — see [[component-library]]
 - [ ] P-I2 (pulse) — Module-level `createSignal` in `createEventSignal.ts` outside reactive owner — wrap in `createRoot` if effects added later
 - [ ] P-W1 (series) — `listInstances` fires one `UPDATE events SET status=…` per row via `applyTransition` inside `Effect.forEach` (up to 500 writes per GET). Batch to a single `UPDATE … WHERE id IN (…)` grouped per target status, or move derivation to read-only + background sweep — `pulse/api/src/services/series.ts:526`, `pulse/api/src/services/events.ts:126`
+- [ ] P-I3 (share-attribution) — Once an organiser attribution-analytics endpoint lands (the consumer of `share_source_first` / `share_source_last`), add a composite index on `event_rsvps (event_id, share_source_first)` and `(event_id, share_source_last)` to keep the per-event aggregation off a table scan. No-op until that read path exists — see [[event-access]]
 - [ ] P-W2 (series) — `updateSeries` SELECT-then-UPDATE leaves a race window (an `instanceOverride=true` flip between read and write is overwritten) and adds two extra round-trips. Collapse to `db.update(events).set(…).where(and(seriesId, !override, gte(startTime, cutoff))).returning({ id })` — `pulse/api/src/services/series.ts:581-609`
 - [ ] P-W3 (series) — `cancelSeries` same pattern as P-W2. Replace with single `UPDATE … RETURNING { id }` to remove the race and halve the round-trips — `pulse/api/src/services/series.ts:631-668`
 - [ ] P-I (series) — `SeriesDetailPage` refetches on every scope tab switch (no cache); `summariseRRule` recomputes on every render — `createMemo` + a `Map<scope, SeriesInstance[]>` cache
+- [ ] P-I1 (vid) — `presentations` table grows unbounded per account. When V-M4 lands, add retention to [[compliance/retention]] (e.g. 12 months), index `(account_id, issued_at desc)`, cursor-paginated history view — see [[verified-identity]]
+- [ ] P-I2 (vid) — Sybil dedupe will sequential-scan `verified_attributes` without an index. Add a unique partial index on `verified_attributes(document_number_hash) WHERE document_number_hash IS NOT NULL` and a covering `(provider_id, document_number_hash)` index in V-M2 schema migration — see [[verified-identity]]
+- [ ] P-I3 (vid) — Per-request AES decrypt for `age_over_16` / `age_over_18` predicates is wasted CPU on hot paths. Store boolean predicates plaintext alongside the encrypted JSON `value` — booleans alone are not Special Category data, only DOB/name need Art. 9 protection — see [[verified-identity]], [[compliance/gdpr]]
 - [ ] P-I4 — Deprecated `bx()` still exported from `@osn/ui` — remove once no external consumers remain — see [[component-library]]
 - [ ] P-I5 — Auth Dialog components always mounted in EventList (vs conditional `<Show>`) — negligible for two forms but revisit if dialogs grow heavier
 - [ ] P-I4 — `AuthProvider` reconstructs Effect `Layer` on every render — wrap with `createMemo`
@@ -405,7 +616,10 @@ Open compliance findings only. Closed items will be archived in a future `wiki/c
 - [ ] **C-H5** — DPA + SCC pack signed for active processors. GDPR Art. 28 + Art. 44-49. Cloudflare DPA, Grafana Labs DPA + SCCs, chosen Redis provider DPA, Komoot/Photon DPA. File under `wiki/compliance/dpa/<vendor>.md` with execution date + scope. See `[[compliance/subprocessors]]`.
 - [ ] **C-H6** — DSA notice-and-action endpoint (`POST /reports`). DSA Art. 16. Lands in both `@pulse/api` and `@zap/api` with shared `@shared/moderation` package. Accepts the Art. 16 minimum schema (substantiated explanation, exact location, notifier identity, good-faith statement). See `[[compliance/dsa]]`.
 - [ ] **C-H7** — DSA statement-of-reasons system. DSA Art. 17. `moderation_actions` table + email template + `GET /account/moderation-actions` for the affected user. Mandatory for every restriction (post removal, account suspension, demotion, RSVP rejection by host). See `[[compliance/dsa]]`.
-- [ ] **C-H8** — Date-of-birth field + age gate on registration. COPPA actual-knowledge defense. TypeBox `birthdate: Date` schema; reject under-13 before email OTP send; rejected DOB not retained. See `[[compliance/coppa]]`.
+- [ ] **C-H8** — Date-of-birth field + age gate on registration. COPPA actual-knowledge defense. TypeBox `birthdate: Date` schema; reject under-13 before email OTP send; rejected DOB not retained. See `[[compliance/coppa]]`. **Note**: the V-M2 verified-identity flow can short-circuit this self-declared path with a verified `age_over_16` attribute — see [[verified-identity]].
+- [ ] **C-H9** — DPIA for Verified Identity (V-M0 prerequisite). GDPR Art. 35. Biometric template hashes + identity-document data are Special Category Personal Data under Art. 9; DPIA must be filed before the first KYC vendor is wired. See [[verified-identity]], [[compliance/gdpr]].
+- [ ] **C-H10** — DVS access registration with the Department of Home Affairs (V-M2 prerequisite). Australian Privacy Act 1988 + APP 11 + DVS-approved consent statement displayed verbatim before each call. See [[verified-identity]], [[compliance/data-map]].
+- [ ] **C-H11** — Art. 9 explicit-consent capture for Verified Identity. Each verification ceremony must capture timestamp + version + locale + SHA-256 of the exact wording shown, stored in a `consent_records` table (likely scaffolds C-L1 ahead of schedule). Withdrawal path documented. Block V-M1 — see [[verified-identity]], [[compliance/gdpr]].
 
 ### Medium
 
@@ -425,6 +639,7 @@ Open compliance findings only. Closed items will be archived in a future `wiki/c
 - [ ] **C-M14** — Axe-core in CI (`@axe-core/playwright`) running against `@osn/landing`, `@osn/social`, `@pulse/app` on every PR. Fail on serious / critical violations. EAA / WCAG 2.1 AA. See `[[compliance/eaa]]`.
 - [ ] **C-M15** — Sweeper-job framework (cron-style worker in `@osn/api`). Foundation for C-M2. See `[[compliance/retention]]`.
 - [ ] **C-M16** — `admin_actions` audit log table (append-only) + Grafana log mirror. SOC 2 CC6 attribution requirement. See `[[compliance/access-control]]`.
+- [ ] **C-M17** — KYC vendor RFP must enumerate per-vendor data residency (storage region), SCC required (Y/N), DPA template available (Y/N), and sub-sub-processors disclosed (Y/N). Block vendor selection on these columns. See `[[verified-identity]]`, `[[compliance/subprocessors]]`.
 
 ### Low
 
@@ -453,6 +668,7 @@ Open compliance findings only. Closed items will be archived in a future `wiki/c
 - [ ] **C-L23** — GitHub mirror to a second host (Codeberg / Gitlab.com / private S3) for code-catastrophic-loss scenarios. SOC 2 A1. See `[[compliance/backup-dr]]`.
 - [ ] **C-L24** — Encryption-at-rest documentation (Supabase / R2 / Redis-provider defaults captured). SOC 2 C1. See `[[compliance/backup-dr]]`.
 - [ ] **C-L25** — Backup integrity verification (per-snapshot checksum; reject restores from corrupted snapshots). SOC 2 A1. See `[[compliance/backup-dr]]`.
+- [ ] **C-L26** — Cross-link DSA Art. 28 (minor protections) to ToS recommender-transparency disclosure. Verified Identity unlocks credible age-gating; ToS update should ship same PR as V-M1. See `[[verified-identity]]`, `[[compliance/dsa]]`.
 
 ---
 
@@ -517,6 +733,11 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 | Email provider behind the Cloudflare Worker — see [[email]] | Resend today; SendGrid / Postmark / SES are swap-ins at the Worker level. Pick based on deliverability + transactional-email pricing | Before staging deploy |
 | Email Worker per-recipient rate-limit bound — see [[email]] | Prevents OSN from flooding an inbox under bug / abuse. Tune once we have send-rate telemetry | After first week of real traffic |
 | Dry-run flag for email — see [[email]] | `OSN_EMAIL_DRY_RUN` env knob that short-circuits before Worker dispatch; useful for staging smoke tests | When we need it |
+| KYC vendor for V-M1 / V-M2 — see [[verified-identity]] | Persona (top AU age-assurance trial scorer; combined estimation + verification) vs idvPacific (AU-domiciled DVS gateway, OCR-first) vs Equifax IDMatrix (heavyweight gateway) vs MATTR/GBG (mDL-native; mDL roadmap partner) | V-M0 vendor RFP |
+| BBS+ vs SD-JWT-per-audience for verified presentations — see [[verified-identity]] | SD-JWT-per-audience is the v1 default (mint a fresh credential per RP); BBS+ adds true unlinkable presentations at higher operational cost | If a documented cross-RP correlation threat lands |
+| Verified attributes scope: account-level vs profile-level — see [[verified-identity]], [[identity-model]] | Verification ceremony is per-account; multi-account P3-P6 lets one account hold multiple profiles. Should profile-A be able to present `age_over_18` while profile-B presents nothing, or are attributes always inherited? | Before V-M4 ships consent UX |
+| Pulse–cire integration mechanism — see [[cire]] | ARC-token pull (Pulse fetches weddings from `cire/api` at feed time) vs push-on-publish (cire writes into `pulse/db` when a wedding goes live) | When Pulse surfaces cire weddings in its feed |
+| Cire test-idiom alignment — see [[cire]] | `cire/api` uses bare `bun:test`-style co-located tests; platform convention is `it.effect` + `createTestLayer()` ([[testing-patterns]]) | Alongside (or after) the cire/api Hono → Elysia migration |
 
 ---
 
@@ -535,3 +756,4 @@ Findings from auditing OSN auth against [The Copenhagen Book](https://thecopenha
 - [ ] Self-hosting capabilities
 - [ ] Third-party API ecosystem
 - [ ] Supabase migration (from SQLite)
+- [ ] Verified Identity expansion to UK / EU / US (V-M6) — see [[verified-identity]]

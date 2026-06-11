@@ -33,8 +33,29 @@
     {
       "idx": 4,
       "version": "6",
-      "when": 1779494400000,
-      "tag": "0004_account_deletion",
+      "when": 1782000000000,
+      "tag": "0004_pulse_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1782100000000,
+      "tag": "0005_venues_and_lineup",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1782200000000,
+      "tag": "0006_rsvp_share_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1782300000000,
+      "tag": "0007_account_deletion",
       "breakpoints": true
     }
   ]

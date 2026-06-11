@@ -10,6 +10,7 @@ import {
   type Rsvp,
   type RsvpCounts,
 } from "../lib/rsvps";
+import type { ShareSource } from "../lib/shareSource";
 import { RsvpAvatar } from "./RsvpAvatar";
 import { RsvpModal } from "./RsvpModal";
 
@@ -25,6 +26,13 @@ export function RsvpSection(props: {
   event: Event;
   accessToken: string | null;
   currentProfileId: string | null;
+  /**
+   * Inbound `?source=` value latched from the URL on this mount. Sent
+   * through on the next RSVP POST and then cleared via
+   * `onSourceConsumed` so subsequent status changes don't re-attribute.
+   */
+  inboundSource?: ShareSource | null;
+  onSourceConsumed?: () => void;
 }) {
   const tokenSource = () => ({
     eventId: props.event.id,
@@ -42,18 +50,29 @@ export function RsvpSection(props: {
   const isOrganiser = () => props.currentProfileId === props.event.createdByProfileId;
   const isPrivateList = () => props.event.guestListVisibility === "private" && !isOrganiser();
 
-  async function handleRsvp(status: "going" | "interested" | "not_going") {
+  async function handleRsvp(status: "going" | "maybe" | "not_going") {
     if (!props.accessToken) {
       toast.error("Sign in to RSVP");
       return;
     }
     setSubmitting(true);
+    const sourceForThisCall = props.inboundSource ?? null;
     try {
-      const result = await upsertMyRsvp(props.event.id, status, props.accessToken);
+      const result = await upsertMyRsvp(
+        props.event.id,
+        status,
+        props.accessToken,
+        sourceForThisCall,
+      );
       if (!result.ok) {
         toast.error(result.error ?? "Failed to RSVP");
         return;
       }
+      // Clear the latched source the moment a sourced RSVP succeeds —
+      // subsequent status flips (going → not_going, etc.) shouldn't
+      // re-attribute. The parent owns the latch so it can also clear
+      // the URL when it wants to.
+      if (sourceForThisCall) props.onSourceConsumed?.();
       toast.success("RSVP updated");
       refetchLatest();
       refetchCounts();
@@ -96,7 +115,7 @@ export function RsvpSection(props: {
       <div class="text-muted-foreground mb-3 flex gap-3 text-xs">
         <span>{counts()?.going ?? 0} going</span>
         <Show when={props.event.allowInterested}>
-          <span>{counts()?.interested ?? 0} maybe</span>
+          <span>{counts()?.maybe ?? 0} maybe</span>
         </Show>
         <span>{counts()?.not_going ?? 0} can't make it</span>
         <Show when={props.event.joinPolicy === "guest_list"}>
@@ -113,7 +132,7 @@ export function RsvpSection(props: {
             variant="secondary"
             size="sm"
             disabled={submitting()}
-            onClick={() => handleRsvp("interested")}
+            onClick={() => handleRsvp("maybe")}
           >
             Maybe
           </Button>

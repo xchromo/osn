@@ -6,7 +6,10 @@ related:
   - "[[gdpr]]"
   - "[[retention]]"
   - "[[subprocessors]]"
-last-reviewed: 2026-04-26
+  - "[[cire]]"
+  - "[[cire-auth]]"
+  - "[[dpia/cire-guest-data]]"
+last-reviewed: 2026-06-11
 ---
 
 # Data Map
@@ -63,7 +66,7 @@ the compliance checklist.
 | `organisations.ownerId` | Permission boundary | Art. 6(1)(b) | While org active | `@osn/api` only | [[identity-model]] |
 | `organisation_members.profileId`, `role` | Membership + permissions | Art. 6(1)(b) | While membership active | `@osn/api` + member-only views | [[identity-model]] |
 
-## Pulse (`@pulse/api` — `events`, `event_rsvps`, `event_series`, `pulse_users`, `pulse_close_friends`, `event_comms`)
+## Pulse (`@pulse/api` — `events`, `event_rsvps`, `event_series`, `pulse_users`, `pulse_close_friends`, `event_comms`, `venues`, `event_lineup`)
 
 | Field | Purpose | Lawful basis | Retention | Recipients | System page |
 |---|---|---|---|---|---|
@@ -71,10 +74,13 @@ the compliance checklist.
 | `events.createdByProfileId` | Host attribution | Art. 6(1)(b) | Same | Same | [[event-access]] |
 | `events.attendanceVisibility` | Privacy control | Art. 6(1)(a) — explicit consent for the choice | Same | `@pulse/api` only | [[event-access]] |
 | `event_rsvps.profileId`, `status` (going/interested/not_going) | RSVP tracking | Art. 6(1)(b) | While event active + 90 d | Visibility-gated | [[event-access]] |
+| `event_rsvps.shareSourceFirst` / `shareSourceLast` (+ `*SeenAt`) | Share attribution — which platform (instagram/facebook/tiktok/x/whatsapp/copy_link/other) the attendee discovered the event through, first- and last-touch | Art. 6(1)(f) — legitimate interest. Balancing note: value is a **platform name only**, never a third-party identifier, cookie, or cross-site token; the attendee is not tracked off-platform; data is visible to the organiser of *this* event only. Organiser self-RSVPs are excluded. | Deleted alongside the parent RSVP row (while event active + 90 d) | Organiser of the event only (via planned attribution analytics) | [[event-access]] |
 | **Indirect special-category** — events that reveal health, sexuality, religion, politics by topic | Same as above | Art. 9(2)(e) — manifestly made public by data subject (the host) — but RSVP'ing reveals it about the attendee, who has *not* manifestly made it public. **Treat with extra care: explicit consent banner on RSVP for events tagged with sensitive categories.** | Same | Same | [[event-access]] |
 | `pulse_close_friends.profileId`, `friendId` | Pulse-scoped close friends list | Art. 6(1)(b) | While both profiles active | `@pulse/api` only | [[pulse-close-friends]] |
 | `pulse_users.interests` (planned) | Personalisation | Art. 6(1)(a) — opt-in via onboarding | While account active; user-resettable | `@pulse/api` only | TODO row |
 | `event_comms.recipientProfileId`, `kind` (email/sms), `payload` | Host-to-attendee comms log | Art. 6(1)(b) — event service contract | 90 d | `@pulse/api` + comms providers (planned) | TODO row |
+| `venues.instagram_handle`, `website_url`, `address` + lat/lng | Public venue contact/location — identifies a person for sole-trader venues | Art. 6(1)(f) — legit interest in public business listings | While venue listed; removed on org request | `@pulse/api` + public web (anonymous venue pages) | [[venues]] |
+| `event_lineup.artist_name` | Publicly billed performer names (incl. stage names of natural persons) | Art. 6(1)(f) — performance publicly billed by the host | While parent event retained (event + 90 d) | `@pulse/api` + public web via lineup endpoint | [[venues]] |
 
 ## Zap (`@zap/api` — planned: `chats`, `chat_members`, `messages`, `org_chats`, `org_agents`, `localities`, `locality_subscriptions`)
 
@@ -86,6 +92,42 @@ the compliance checklist.
 | `org_chats` transcripts (M3) | Customer support | Controller = the org. OSN is **processor** under DPA. Lawful basis is the org's responsibility; we provide the technical means. | Per org's retention setting; default 24 months | Org agents; the consumer who initiated; `@zap/api` storage | [[zap]] |
 | `org_agents.profileId`, `orgId`, `role` | Agent assignment | Art. 6(1)(b) | While employed | `@zap/api` + org admin | [[zap]] |
 | `localities` + `locality_subscriptions` (M4) | Locality-broadcast routing | Art. 6(1)(a) — opt-in | User-resettable | `@zap/api` + locality-org broadcasters | [[zap]] |
+
+## Cire (`@cire/api` — wedding invites, separate Cloudflare D1 + R2)
+
+Cire is a wedding-invite app merged into the monorepo as the `cire/*`
+workspace. It runs its **own** Cloudflare D1 and R2, separate from `osn/db`
+(see [[cire]], [[cire-auth]]). The **controller** for guest data is the
+wedding organiser (the couple) who uploads the guest list; OSN/cire is the
+**platform / processor** providing the technical means. The wedding owner
+is identified by `weddings.owner_osn_profile_id` — an opaque OSN profile id
+(`usr_*` string, cross-DB reference, **no FK**). Lawful basis is
+organiser-initiated wedding administration.
+
+| Field | Purpose | Lawful basis | Retention | Recipients | System page |
+|---|---|---|---|---|---|
+| `families.family_name` | Guest household label on the invite + organiser guest table | Art. 6(1)(f) — legit interest in wedding administration (organiser-controlled) | Tied to wedding lifecycle — no automated purge yet (C-H1) | `@cire/api` + the wedding owner (organiser) | [[cire-auth]] |
+| `families.public_id` (claim CODE, e.g. `SHARMA-IVY-QM42`) | **Credential** — exchanged at `POST /api/claim` for a guest session; not a public identifier | Art. 6(1)(b) — contract (the access mechanism for the guest's RSVP) | Tied to wedding lifecycle (C-H1) | `@cire/api` only (treated as a secret — redacted in logs, C-M2) | [[cire-auth]] |
+| `guests.first_name`, `last_name` | Per-guest identity on the invite + RSVP attribution | Art. 6(1)(f) — wedding administration (organiser-controlled) | Tied to wedding lifecycle (C-H1) | `@cire/api` + wedding owner | [[cire-auth]] |
+| `rsvps.status` (attending/declined/pending) | RSVP tracking for the organiser | Art. 6(1)(f) — wedding administration | Tied to wedding lifecycle (C-H1) | `@cire/api` + wedding owner | [[cire-auth]] |
+| `rsvps.dietary` (FREE TEXT) | Cater for dietary needs | **Special-category — Art. 9(2)(a) explicit consent.** Free text reveals religion (halal/kosher) + health (allergies/coeliac). Consent affordance + consent-record capture **REQUIRED at the RSVP form — NOT yet implemented; blocking backlog item C-H2.** Underlying Art. 6 basis: Art. 6(1)(a) consent. | Tied to wedding lifecycle (C-H1); consent records once captured (C-H2) | `@cire/api` + wedding owner | [[cire-auth]], [[dpia/cire-guest-data]] |
+| `sessions` (SHA-256 hash of `cire_session` token) | Guest session validation after claim; gates `/api/rsvp` | Art. 6(1)(b) — contract | 30-day cookie TTL; **expired rows never purged — no sweeper yet (C-H1)** | `@cire/api` only | [[cire-auth]] |
+| `imports` table rows (organiser spreadsheet import metadata + parsed guest/event data) | Bulk guest-list onboarding | Art. 6(1)(f) — wedding administration | **Retained indefinitely, including across reverts — no purge (C-H1)** | `@cire/api` + wedding owner | [[cire]] |
+| R2 `imports/<id>/{events,guests}.csv` (raw organiser uploads) | Source-of-truth for re-import / audit of an import | Art. 6(1)(f) — wedding administration | **Retained indefinitely, including across reverts — no lifecycle/TTL (C-H1)** | `@cire/api` (R2 bucket `cire-sheets`) + wedding owner | [[cire]] |
+
+**Controller / processor note.** For guest data the organiser is the
+controller (they decide to upload the list, set the field contents); cire
+is the processor. The organiser is themselves an OSN data subject (their
+`owner_osn_profile_id` ties the wedding to an OSN account — see
+[[identity-model]]). DSAR reachability + the cross-DB deletion orphan are
+covered in [[dsar]] (C-M1).
+
+**Age-gate note (C-L1).** The guest flow is **family/household-mediated** —
+claim codes are issued to households by the organiser, and the guest site is
+a general-adult-audience wedding page (no signup, no DOB collection). There
+is no direct child-account creation surface. Guest age handling folds into
+the platform-wide age-gate rollout when it lands ([[coppa]] C-H8); no
+cire-specific gate is required in the interim. Light-touch by design.
 
 ## Observability (`@shared/observability` → Grafana Cloud)
 

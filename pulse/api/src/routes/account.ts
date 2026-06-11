@@ -1,8 +1,9 @@
 import { DbLive, type Db } from "@pulse/db/service";
+import { extractClaims } from "@shared/osn-auth-client/verify";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 
-import { DEFAULT_JWKS_URL, extractClaims } from "../lib/auth";
+import { DEFAULT_JWKS_URL } from "../lib/jwks";
 import { notifyAppLeft, verifyStepUp } from "../lib/osn-bridge";
 import {
   metricPulseAccountDeletionRequested,
@@ -36,11 +37,10 @@ export const createAccountRoutes = (
     .delete(
       "",
       async ({ body, headers, set }) => {
-        const claims = await extractClaims(
-          headers["authorization"],
-          jwksUrl,
-          _testKey as CryptoKey,
-        );
+        const claims = await extractClaims(headers["authorization"], jwksUrl, {
+          testKey: _testKey as CryptoKey,
+          audience: "osn-access",
+        });
         if (!claims) {
           set.status = 401;
           metricPulseAccountDeletionRequested("error");
@@ -128,7 +128,10 @@ export const createAccountRoutes = (
       },
     )
     .post("/restore", async ({ headers, set }) => {
-      const claims = await extractClaims(headers["authorization"], jwksUrl, _testKey as CryptoKey);
+      const claims = await extractClaims(headers["authorization"], jwksUrl, {
+        testKey: _testKey as CryptoKey,
+        audience: "osn-access",
+      });
       if (!claims) {
         set.status = 401;
         return { error: "unauthorized" } as const;
@@ -150,7 +153,10 @@ export const createAccountRoutes = (
       }
     })
     .get("/deletion-status", async ({ headers, set }) => {
-      const claims = await extractClaims(headers["authorization"], jwksUrl, _testKey as CryptoKey);
+      const claims = await extractClaims(headers["authorization"], jwksUrl, {
+        testKey: _testKey as CryptoKey,
+        audience: "osn-access",
+      });
       if (!claims) {
         set.status = 401;
         return { error: "unauthorized" } as const;

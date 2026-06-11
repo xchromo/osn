@@ -4,6 +4,7 @@ import { lazy, Show } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import { Header } from "./components/Header";
+import { OnboardingGate } from "./components/OnboardingGate";
 import { OSN_ISSUER_URL } from "./lib/auth";
 
 import "./App.css";
@@ -25,6 +26,15 @@ const SeriesDetailPage = lazy(() =>
 const CloseFriendsPage = lazy(() =>
   import("./pages/CloseFriendsPage").then((m) => ({ default: m.CloseFriendsPage })),
 );
+const VenueDetailPage = lazy(() =>
+  import("./pages/VenueDetailPage").then((m) => ({ default: m.VenueDetailPage })),
+);
+const CalendarPage = lazy(() =>
+  import("./pages/CalendarPage").then((m) => ({ default: m.CalendarPage })),
+);
+const WelcomePage = lazy(() =>
+  import("./pages/WelcomePage").then((m) => ({ default: m.WelcomePage })),
+);
 
 /**
  * Root layout. The Explore home page provides its own ExploreNav, so we
@@ -33,10 +43,12 @@ const CloseFriendsPage = lazy(() =>
 function Layout(props: { children?: unknown }) {
   const location = useLocation();
   const isHome = () => location.pathname === "/";
+  const isWelcome = () => location.pathname === "/welcome";
 
   return (
     <>
-      <Show when={!isHome()}>
+      <OnboardingGate />
+      <Show when={!isHome() && !isWelcome()}>
         <Header />
       </Show>
       {props.children}
@@ -51,9 +63,12 @@ export default function App() {
       <Router root={Layout}>
         <Route path="/" component={ExplorePage} />
         <Route path="/events/:id" component={EventDetailPage} />
+        <Route path="/calendar" component={CalendarPage} />
         <Route path="/series/:id" component={SeriesDetailPage} />
+        <Route path="/venues/:orgHandle/:venueHandle" component={VenueDetailPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/close-friends" component={CloseFriendsPage} />
+        <Route path="/welcome" component={WelcomePage} />
       </Router>
     </AuthProvider>
   );

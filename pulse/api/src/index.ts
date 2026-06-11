@@ -9,7 +9,9 @@ import { accountRoutes } from "./routes/account";
 import { closeFriendsRoutes } from "./routes/closeFriends";
 import { eventsRoutes, settingsRoutes } from "./routes/events";
 import { internalRoutes } from "./routes/internal";
+import { onboardingRoutes } from "./routes/onboarding";
 import { seriesRoutes } from "./routes/series";
+import { venuesRoutes } from "./routes/venues";
 import * as accountErasure from "./services/accountErasure";
 import { startKeyRotation } from "./services/graphBridge";
 
@@ -25,8 +27,10 @@ const app = new Elysia()
   .get("/", () => ({ status: "ok", service: "osn-api" }))
   .use(eventsRoutes)
   .use(seriesRoutes)
+  .use(venuesRoutes)
   .use(settingsRoutes)
   .use(closeFriendsRoutes)
+  .use(onboardingRoutes)
   .use(accountRoutes)
   .use(internalRoutes);
 

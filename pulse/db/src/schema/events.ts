@@ -1,6 +1,7 @@
 import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
 import { eventSeries } from "./eventSeries";
+import { venues } from "./venues";
 
 export const events = sqliteTable(
   "events",
@@ -10,6 +11,15 @@ export const events = sqliteTable(
     description: text("description"),
     location: text("location"),
     venue: text("venue"),
+    /**
+     * Optional FK into the `venues` table. When set, the venue page at
+     * `/venues/:venueId` aggregates this event into its programme. The
+     * legacy free-text `venue` column above stays populated for events
+     * that aren't tied to a registered venue (one-off pop-ups,
+     * out-of-network spaces); we'll backfill + tighten this to NOT NULL
+     * in a later migration once every active venue has a row.
+     */
+    venueId: text("venue_id").references(() => venues.id),
     latitude: real("latitude"),
     longitude: real("longitude"),
     category: text("category"),
@@ -53,14 +63,14 @@ export const events = sqliteTable(
       .notNull()
       .default("public"),
     // ── Join policy ───────────────────────────────────────────────────────
-    // "open"       → anyone with the link can RSVP going/interested/not_going
+    // "open"       → anyone with the link can RSVP going/maybe/not_going
     // "guest_list" → only users explicitly invited (rsvp.status = "invited")
     //                can transition to going. Non-invited users are rejected.
     joinPolicy: text("join_policy", { enum: ["open", "guest_list"] })
       .notNull()
       .default("open"),
     // ── RSVP options ──────────────────────────────────────────────────────
-    // When false, the service rejects rsvp.status = "interested"/"maybe".
+    // When false, the service rejects rsvp.status = "maybe".
     // Some organisers want a binary Going / Not going decision.
     allowInterested: integer("allow_interested", { mode: "boolean" }).notNull().default(true),
     // ── Communications ────────────────────────────────────────────────────
@@ -117,6 +127,8 @@ export const events = sqliteTable(
     index("events_series_id_idx").on(t.seriesId, t.startTime),
     // Sweeper scan for events that have crossed their hard-delete deadline.
     index("events_hard_delete_idx").on(t.hardDeleteAt),
+    // Powers `GET /venues/:id/events` — walk a single venue's programme by start time.
+    index("events_venue_id_idx").on(t.venueId, t.startTime),
   ],
 );
 

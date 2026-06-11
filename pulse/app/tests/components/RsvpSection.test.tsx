@@ -40,7 +40,7 @@ const baseEvent = {
 describe("RsvpSection", () => {
   beforeEach(() => {
     mockFetchLatest.mockResolvedValue([]);
-    mockFetchCounts.mockResolvedValue({ going: 0, interested: 0, not_going: 0, invited: 0 });
+    mockFetchCounts.mockResolvedValue({ going: 0, maybe: 0, not_going: 0, invited: 0 });
     mockUpsert.mockResolvedValue({ ok: true });
   });
 
@@ -123,7 +123,7 @@ describe("RsvpSection", () => {
   it("shows the 'invited' count only for guest_list events", async () => {
     mockFetchCounts.mockResolvedValueOnce({
       going: 0,
-      interested: 0,
+      maybe: 0,
       not_going: 0,
       invited: 3,
     });
@@ -140,7 +140,7 @@ describe("RsvpSection", () => {
     // Open-policy events never show the invited count.
     mockFetchCounts.mockResolvedValueOnce({
       going: 0,
-      interested: 0,
+      maybe: 0,
       not_going: 0,
       invited: 3,
     });
@@ -174,8 +174,26 @@ describe("RsvpSection", () => {
     ));
     fireEvent.click(getByText("I'm going"));
     await waitFor(() => {
-      expect(mockUpsert).toHaveBeenCalledWith("evt_1", "going", "tok");
+      expect(mockUpsert).toHaveBeenCalledWith("evt_1", "going", "tok", null);
       expect(mockToastSuccess).toHaveBeenCalled();
+    });
+  });
+
+  it("forwards inboundSource to upsertMyRsvp and clears via onSourceConsumed after success", async () => {
+    const onSourceConsumed = vi.fn();
+    const { getByText } = render(() => (
+      <RsvpSection
+        event={baseEvent}
+        accessToken="tok"
+        currentProfileId="usr_dan"
+        inboundSource="instagram"
+        onSourceConsumed={onSourceConsumed}
+      />
+    ));
+    fireEvent.click(getByText("I'm going"));
+    await waitFor(() => {
+      expect(mockUpsert).toHaveBeenCalledWith("evt_1", "going", "tok", "instagram");
+      expect(onSourceConsumed).toHaveBeenCalledTimes(1);
     });
   });
 

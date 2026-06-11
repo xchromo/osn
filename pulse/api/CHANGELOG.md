@@ -1,5 +1,104 @@
 # @osn/api
 
+## 0.20.0
+
+### Minor Changes
+
+- 5d2e145: Add a Share button to event detail with source attribution. The picker
+  covers Instagram, Facebook, TikTok, X, WhatsApp, copy link, and a system
+  share-sheet fallback. Shared URLs carry a `?source=…` param so when the
+  recipient lands on the event we can record both first-touch (sticky) and
+  last-touch attribution on the RSVP row, plus per-platform share-invoked
+  and exposure metrics. Organisers' own self-RSVPs and self-views skip
+  attribution. Share and exposure endpoints are unauthenticated and
+  rate-limited per IP.
+
+### Patch Changes
+
+- Updated dependencies [5d2e145]
+  - @pulse/db@0.16.0
+
+## 0.19.0
+
+### Minor Changes
+
+- 34a912f: Pulse calendar page: a vertical-timeline agenda (`/calendar`) listing the events you're hosting or have RSVP'd Going / Maybe to, grouped by day with a continuous timeline axis on the left. Maybe RSVPs surface an inline reminder to confirm (I'm going) or drop (Can't make it). Backed by a new auth-gated `GET /events/calendar` endpoint + `listMyCalendarEvents` service (instrumented with the `pulse.calendar.events.fetched` metric and a `pulse.calendar.list_mine` span). The Calendar tab in the Explore nav now routes here.
+
+  Also renames the RSVP "interested" status to "maybe" end-to-end (DB enum value, API wire value, metrics, and UI) — no legacy alias, as nothing is deployed yet. The per-event `allowInterested` toggle column keeps its name.
+
+### Patch Changes
+
+- Updated dependencies [34a912f]
+  - @pulse/db@0.15.0
+
+## 0.18.0
+
+### Minor Changes
+
+- 1f61fc4: Add a venue detail page (initially scoped to clubs) plus a clickable
+  venue layer on the Explore map. Venues are namespaced under OSN
+  organisations so the same handle (and name) can recur across orgs.
+
+  - DB: new `venues` and `event_lineup` tables and a nullable
+    `events.venue_id` FK. `venues` rows carry `org_handle` + `handle`
+    with a unique `(org_handle, handle)` index; `id` is opaque (`ven_*`)
+    and not URL-addressable.
+  - API: routes nest under `/venues/:orgHandle/:venueHandle` —
+    `GET /venues` (index, feeds the map; tracked for bbox-aware
+    replacement), `GET /venues/:orgHandle/:venueHandle`, `/events`, and
+    `/events/:eventId/lineup`. Effect services with `pulse.venue.*`
+    spans and bounded-cardinality metrics for the detail, events list,
+    and lineup surfaces.
+  - Frontend page at `/venues/:orgHandle/:venueHandle` with a vertical
+    mono-time lineup timeline, a snap-scroll event carousel, a real-time
+    open/closed badge (computed in the venue's timezone, handles slots
+    crossing midnight), an "Open in Maps" button, and icon links to
+    website + Instagram. Discovery routes linking _into_ the page are
+    intentionally deferred — the Explore map is the first such surface.
+  - Explore map: new venue pin layer wrapped in `<A>` to the venue page.
+    When a visible event pin sits at the same venue, the diamond is
+    hidden and the event-pin popover gains a "See venue →" CTA. Popover
+    is now pointer-event aware with a hover-grace timer so the button is
+    reachable. `Icon` component promoted from `explore/` to `components/`
+    with `globe` + `instagram` glyphs added.
+
+### Patch Changes
+
+- Updated dependencies [1f61fc4]
+  - @pulse/db@0.14.0
+
+## 0.17.1
+
+### Patch Changes
+
+- 1a4e9d5: Harden the shared OSN access-token verifier: treat expired/invalid
+  tokens as terminal (no JWKS refetch), negative-cache unknown kids,
+  coalesce concurrent JWKS fetches, and add a fetch timeout — removing a
+  per-request upstream-fetch amplifier on every consumer. Fold the
+  audience check into the single jwtVerify pass. Pulse routes now enforce
+  aud=osn-access (previously any OSN-issued token authenticated).
+- 051daa8: Extract OSN access-token verification + JWKS cache into a new shared
+  package, `@shared/osn-auth-client`, with per-framework middleware
+  adapters (Hono + Elysia). Pulse switches to consuming the shared
+  verifier; cire will follow in a later phase.
+- Updated dependencies [9f6874b]
+- Updated dependencies [1a4e9d5]
+- Updated dependencies [051daa8]
+  - @shared/observability@0.9.2
+  - @shared/osn-auth-client@0.1.0
+  - @shared/crypto@0.6.11
+
+## 0.17.0
+
+### Minor Changes
+
+- dd742dd: Pulse first-run onboarding: six-step `/welcome` flow with themed coral illustrations (welcome rings, editorial map, interest constellation, location pin drop, notifications ember, finish date stamp). Captures interests, location/notifications permissions, and reminder opt-in. Account-keyed server-side via a new `pulse_account_onboarding` table + `pulse_profile_accounts` mapping cache + new `GET /graph/internal/profile-account` ARC endpoint on `osn/api` — preserves the multi-account privacy invariant (accountId never on the wire). Server-side first-run gate redirects new users to `/welcome` and is idempotent on the completion POST. See `wiki/systems/pulse-onboarding.md`.
+
+### Patch Changes
+
+- Updated dependencies [dd742dd]
+  - @pulse/db@0.13.0
+
 ## 0.16.1
 
 ### Patch Changes

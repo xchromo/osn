@@ -24,6 +24,8 @@ import type {
 } from "@shared/observability/metrics";
 import { Effect } from "effect";
 
+import type { ShareSource } from "./lib/shareSource";
+
 /** Canonical metric name consts — grep-able, refactor-safe. */
 export const PULSE_METRICS = {
   eventsCreated: "pulse.events.created",
@@ -43,6 +45,7 @@ export const PULSE_METRICS = {
   commsBlastBodySize: "pulse.comms.blast.body.size",
   // Calendar / ICS
   calendarIcsGenerated: "pulse.calendar.ics.generated",
+  calendarEventsFetched: "pulse.calendar.events.fetched",
   // Visibility + access
   eventAccessDenied: "pulse.events.access.denied",
   // Pulse user settings
@@ -65,6 +68,23 @@ export const PULSE_METRICS = {
   closeFriendsListed: "pulse.close_friends.listed",
   closeFriendsListSize: "pulse.close_friends.list.size",
   closeFriendsBatchSize: "pulse.close_friends.batch.size",
+  // Share-attribution surface — outbound share intents, inbound exposures
+  // (event-page loads via a sourced URL), and the per-source RSVP
+  // attribution counters that organisers use to compare platforms.
+  shareInvoked: "pulse.events.share.invoked",
+  shareExposure: "pulse.events.share.exposure",
+  rsvpAttributionFirst: "pulse.rsvps.attribution.first",
+  rsvpAttributionLast: "pulse.rsvps.attribution.last",
+  // Venue surfaces (programme + lineup)
+  venueDetailRequests: "pulse.venue.detail.requests",
+  venueDetailDuration: "pulse.venue.detail.duration",
+  venueEventsListed: "pulse.venue.events.listed",
+  venueLineupListed: "pulse.venue.lineup.listed",
+  // First-run onboarding (account-keyed; see services/onboarding.ts)
+  onboardingStatusFetched: "pulse.onboarding.status.fetched",
+  onboardingCompleted: "pulse.onboarding.completed",
+  onboardingInterestsSelected: "pulse.onboarding.interests.selected",
+  onboardingProfileAccountResolved: "pulse.onboarding.profile_account.resolved",
   // C-H2 Flow B — leave-Pulse account erasure
   accountDeletionRequested: "pulse.account.deletion.requested",
   accountDeletionCompleted: "pulse.account.deletion.completed",
@@ -147,7 +167,7 @@ type EventsValidationFailureAttrs = {
 // --- RSVP ---
 
 /** Bounded RSVP status union — matches `RsvpStatus` + the organiser-side `"invited"` row. */
-type RsvpStatus = "going" | "interested" | "not_going" | "invited";
+type RsvpStatus = "going" | "maybe" | "not_going" | "invited";
 
 type RsvpUpsertedAttrs = {
   /** Terminal status after the upsert. */
@@ -191,6 +211,11 @@ type CalendarIcsAttrs = {
   result: Result;
 };
 
+type CalendarEventsFetchedAttrs = {
+  /** Whether the viewer's agenda came back empty. */
+  result_empty: "true" | "false";
+};
+
 // --- Access gate (visibility enforcement) ---
 
 /**
@@ -202,7 +227,7 @@ type EventAccessDeniedReason = "not_found" | "private_anonymous" | "private_no_r
 
 type EventAccessDeniedAttrs = {
   /** Which direct-fetch surface the denial happened on. */
-  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts";
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts" | "lineup";
   reason: EventAccessDeniedReason;
 };
 
@@ -291,6 +316,103 @@ type CloseFriendRemoveResult = "ok" | "not_found" | "error";
 type CloseFriendsAddedAttrs = { result: CloseFriendAddResult };
 type CloseFriendsRemovedAttrs = { result: CloseFriendRemoveResult };
 type CloseFriendsListedAttrs = { result_empty: "true" | "false" };
+
+// --- Share attribution ---
+
+// Bounded share-source union — imported type-only so the metric attribute
+// type stays the single source of truth in `lib/shareSource.ts` without
+// pulling that module's runtime (Effect Schema / TypeBox) into metrics.
+// `import type` is erased at compile time, so there is no runtime coupling.
+
+/**
+ * Surface that emitted the share / exposure event. Single value today
+ * (`event_detail`) but kept as an enum so future surfaces — e.g. an
+ * Explore-card share — slot in without widening cardinality.
+ */
+type ShareSurface = "event_detail";
+
+type ShareInvokedAttrs = {
+  source: ShareSource;
+  surface: ShareSurface;
+};
+
+type ShareExposureAttrs = {
+  source: ShareSource;
+  surface: ShareSurface;
+};
+
+type RsvpAttributionFirstAttrs = {
+  source: ShareSource;
+};
+
+type RsvpAttributionLastAttrs = {
+  source: ShareSource;
+};
+
+// --- Venues ---
+
+/**
+ * Venue kinds bucketed for cardinality control. Free-text `venues.kind`
+ * values outside this list collapse to `"other"` — same pattern as
+ * `bucketCategory()` above.
+ */
+const ALLOWED_VENUE_KINDS = ["club", "bar", "warehouse", "outdoor", "theatre", "other"] as const;
+type AllowedVenueKind = (typeof ALLOWED_VENUE_KINDS)[number];
+const VENUE_KIND_SET: ReadonlySet<string> = new Set(ALLOWED_VENUE_KINDS);
+
+/**
+ * Map a raw venues.kind value to the closed `AllowedVenueKind` union so
+ * an attacker (or a careless seed) can't inflate metric cardinality with
+ * crafted kind values.
+ */
+const bucketVenueKind = (raw: string | null): AllowedVenueKind => {
+  if (raw === null) return "other";
+  const normalised = raw.toLowerCase();
+  return (VENUE_KIND_SET.has(normalised) ? normalised : "other") as AllowedVenueKind;
+};
+
+type VenueDetailAttrs = {
+  /** Bounded venue-kind bucket — see `bucketVenueKind`. Use "unknown" for not-found. */
+  kind: AllowedVenueKind | "unknown";
+  result: Result;
+};
+
+type VenueEventsListedAttrs = {
+  scope: "upcoming" | "past" | "all";
+  result_empty: "true" | "false";
+};
+
+type VenueLineupListedAttrs = {
+  result_empty: "true" | "false";
+};
+
+// --- Onboarding ---
+
+/** Bucketed permission outcome. Mirrors `notifications_perm` / `location_perm`. */
+type PermOutcome = "granted" | "denied" | "prompt" | "unsupported";
+
+/** Bucketed selection size for the interest-picker step. */
+type InterestsBucket = "0" | "1-3" | "4-6" | "7-8";
+
+type OnboardingStatusFetchedAttrs = {
+  /** Whether this account had ever finished onboarding before this fetch. */
+  completed: "true" | "false";
+};
+
+type OnboardingCompletedAttrs = {
+  result: Result;
+  notifications_opt_in: "true" | "false";
+  event_reminders_opt_in: "true" | "false";
+  notifications_perm: PermOutcome;
+  location_perm: PermOutcome;
+  interests_bucket: InterestsBucket;
+};
+
+type OnboardingProfileAccountResolvedAttrs = {
+  /** `cache` = mapping table hit; `bridge` = S2S call to osn/api. */
+  source: "cache" | "bridge";
+  result: Result;
+};
 
 // ---------------------------------------------------------------------------
 // Counters / histograms
@@ -392,6 +514,12 @@ const calendarIcsGenerated = createCounter<CalendarIcsAttrs>({
   unit: "{file}",
 });
 
+const calendarEventsFetched = createCounter<CalendarEventsFetchedAttrs>({
+  name: PULSE_METRICS.calendarEventsFetched,
+  description: "Personal calendar agenda reads, by whether any events were returned",
+  unit: "{query}",
+});
+
 // --- Access gate ---
 
 const eventAccessDenied = createCounter<EventAccessDeniedAttrs>({
@@ -480,10 +608,13 @@ export const metricCommsBlastSent = (
 export const metricCalendarIcsGenerated = (result: Result): void =>
   calendarIcsGenerated.inc({ result });
 
+export const metricCalendarListed = (resultCount: number): void =>
+  calendarEventsFetched.inc({ result_empty: resultCount === 0 ? "true" : "false" });
+
 // --- Access gate recording helper ---
 
 export const metricEventAccessDenied = (
-  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts",
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts" | "lineup",
   reason: EventAccessDeniedReason,
 ): void => eventAccessDenied.inc({ surface, reason });
 
@@ -637,6 +768,162 @@ export const metricCloseFriendsListed = (size: number): void => {
 
 export const metricCloseFriendsBatchSize = (size: number): void =>
   closeFriendsBatchSize.record(size, {});
+
+// --- Share / attribution instruments ---
+
+const shareInvoked = createCounter<ShareInvokedAttrs>({
+  name: PULSE_METRICS.shareInvoked,
+  description: "Outbound share intents fired from a Pulse surface, by destination platform",
+  unit: "{share}",
+});
+
+const shareExposure = createCounter<ShareExposureAttrs>({
+  name: PULSE_METRICS.shareExposure,
+  description:
+    "Inbound event-page exposures via a sourced URL (?source=…), by platform — counts views, not RSVPs",
+  unit: "{view}",
+});
+
+const rsvpAttributionFirst = createCounter<RsvpAttributionFirstAttrs>({
+  name: PULSE_METRICS.rsvpAttributionFirst,
+  description: "First-touch RSVP attribution — incs once per RSVP when share_source_first is set",
+  unit: "{rsvp}",
+});
+
+const rsvpAttributionLast = createCounter<RsvpAttributionLastAttrs>({
+  name: PULSE_METRICS.rsvpAttributionLast,
+  description:
+    "Last-touch RSVP attribution — incs every time share_source_last changes (per-source most-recent touch)",
+  unit: "{touch}",
+});
+
+export const metricShareInvoked = (source: ShareSource, surface: ShareSurface): void =>
+  shareInvoked.inc({ source, surface });
+
+export const metricShareExposure = (source: ShareSource, surface: ShareSurface): void =>
+  shareExposure.inc({ source, surface });
+
+export const metricRsvpAttributionFirst = (source: ShareSource): void =>
+  rsvpAttributionFirst.inc({ source });
+
+export const metricRsvpAttributionLast = (source: ShareSource): void =>
+  rsvpAttributionLast.inc({ source });
+
+// --- Venue instruments ---
+
+const venueDetailRequests = createCounter<VenueDetailAttrs>({
+  name: PULSE_METRICS.venueDetailRequests,
+  description: "Venue detail page (GET /venues/:id) requests, by kind + outcome",
+  unit: "{request}",
+});
+
+const venueDetailDuration = createHistogram<VenueDetailAttrs>({
+  name: PULSE_METRICS.venueDetailDuration,
+  description: "getVenue service latency",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+const venueEventsListed = createCounter<VenueEventsListedAttrs>({
+  name: PULSE_METRICS.venueEventsListed,
+  description: "Venue programme list reads, by scope + whether any rows were returned",
+  unit: "{query}",
+});
+
+const venueLineupListed = createCounter<VenueLineupListedAttrs>({
+  name: PULSE_METRICS.venueLineupListed,
+  description: "Event lineup list reads, by whether any slots were returned",
+  unit: "{query}",
+});
+
+export const metricVenueDetail = (
+  kind: string | null,
+  result: Result,
+  durationSeconds: number,
+): void => {
+  const bucketed = result === "ok" ? bucketVenueKind(kind) : ("unknown" as const);
+  const attrs = { kind: bucketed, result } satisfies VenueDetailAttrs;
+  venueDetailRequests.inc(attrs);
+  venueDetailDuration.record(durationSeconds, attrs);
+};
+
+export const metricVenueEventsListed = (
+  scope: "upcoming" | "past" | "all",
+  resultCount: number,
+): void =>
+  venueEventsListed.inc({
+    scope,
+    result_empty: resultCount === 0 ? "true" : "false",
+  });
+
+export const metricVenueLineupListed = (resultCount: number): void =>
+  venueLineupListed.inc({
+    result_empty: resultCount === 0 ? "true" : "false",
+  });
+
+// --- Onboarding instruments ---
+
+const onboardingStatusFetched = createCounter<OnboardingStatusFetchedAttrs>({
+  name: PULSE_METRICS.onboardingStatusFetched,
+  description: "Onboarding status reads (GET /me/onboarding) by completion state",
+  unit: "{fetch}",
+});
+
+const onboardingCompleted = createCounter<OnboardingCompletedAttrs>({
+  name: PULSE_METRICS.onboardingCompleted,
+  description: "POST /me/onboarding/complete outcomes",
+  unit: "{completion}",
+});
+
+const onboardingInterestsSelected = createHistogram<Record<never, never>>({
+  name: PULSE_METRICS.onboardingInterestsSelected,
+  description: "Number of interest categories selected at onboarding completion",
+  unit: "{interest}",
+  boundaries: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+});
+
+const onboardingProfileAccountResolved = createCounter<OnboardingProfileAccountResolvedAttrs>({
+  name: PULSE_METRICS.onboardingProfileAccountResolved,
+  description: "profileId → accountId resolutions, by source (cache or S2S bridge)",
+  unit: "{resolution}",
+});
+
+/** Bucket a raw count into the closed `InterestsBucket` union (S-C3 pattern). */
+const bucketInterests = (count: number): InterestsBucket => {
+  if (count <= 0) return "0";
+  if (count <= 3) return "1-3";
+  if (count <= 6) return "4-6";
+  return "7-8";
+};
+
+export const metricOnboardingStatusFetched = (completed: boolean): void =>
+  onboardingStatusFetched.inc({ completed: completed ? "true" : "false" });
+
+export const metricOnboardingCompleted = (params: {
+  result: Result;
+  notificationsOptIn: boolean;
+  eventRemindersOptIn: boolean;
+  notificationsPerm: PermOutcome;
+  locationPerm: PermOutcome;
+  interestsCount: number;
+}): void => {
+  onboardingCompleted.inc({
+    result: params.result,
+    notifications_opt_in: params.notificationsOptIn ? "true" : "false",
+    event_reminders_opt_in: params.eventRemindersOptIn ? "true" : "false",
+    notifications_perm: params.notificationsPerm,
+    location_perm: params.locationPerm,
+    interests_bucket: bucketInterests(params.interestsCount),
+  });
+  if (params.result === "ok") {
+    onboardingInterestsSelected.record(params.interestsCount, {});
+  }
+};
+
+export const metricOnboardingProfileAccountResolved = (
+  source: "cache" | "bridge",
+  result: Result,
+): void => onboardingProfileAccountResolved.inc({ source, result });
 
 // ---------------------------------------------------------------------------
 // Account deletion (C-H2 Flow B — leave Pulse)

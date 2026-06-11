@@ -2,7 +2,7 @@
 title: OSN Wiki
 aliases: [home, map of content, MOC]
 tags: [index]
-last-reviewed: 2026-04-23
+last-reviewed: 2026-06-11
 ---
 
 # OSN Wiki
@@ -28,13 +28,17 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[arc-tokens]] — S2S authentication protocol (ES256, scoped JWTs)
 - [[rate-limiting]] — per-IP fixed-window rate limiting on auth endpoints
 - [[identity-model]] — accounts, profiles (users), organisations, multi-account
+- [[verified-identity]] — Yoti-style verified-attribute layer (Australian DVS / mDL / myID; SD-JWT VC) — design doc, not yet implemented
 - [[passkey-primary]] — passkey-only login contract (the only primary factor)
 - [[recovery-codes]] — single-use account-recovery tokens (Copenhagen Book M2)
 - [[step-up]] — short-lived sudo tokens gating sensitive endpoints (M-PK1)
 - [[sessions]] — session introspection, per-device revocation, "sign out everywhere else"
 - [[social-graph]] — connections, blocks
 - [[pulse-close-friends]] — Pulse-scoped close-friends list (feed boost + hosting affordance)
+- [[pulse-onboarding]] — Pulse first-run onboarding flow (account-keyed, themed illustrations)
+- [[cire-auth]] — Cire's two-system auth (guest claim-code sessions + organiser OSN passkeys)
 - [[event-access]] — loadVisibleEvent, public/private visibility gate
+- [[venues]] — org-scoped venues, event lineups, venue detail page + Explore map layer
 - [[platform-limits]] — MAX_EVENT_GUESTS and other caps
 - [[redis]] — Redis-backed rate limiters + cluster-safe auth state stores
 
@@ -52,6 +56,7 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[social]] — identity & social-graph management UI (`@osn/social`)
 - [[pulse]] — events app (`@pulse/app` + `@pulse/api` + `@pulse/db`)
 - [[zap]] — messaging app (`@zap/api` + `@zap/db` scaffolded; client app planned)
+- [[cire]] — wedding-invite stack (`@cire/web` + `@cire/organiser` + `@cire/api` + `@cire/db`)
 - [[landing]] — marketing site (`@osn/landing`)
 
 ## Conventions

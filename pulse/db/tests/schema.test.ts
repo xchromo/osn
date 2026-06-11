@@ -307,6 +307,51 @@ describe("event_rsvps schema", () => {
     expect(row!.createdAt).toBeInstanceOf(Date);
     expect(row!.createdAt.getTime()).toBe(ts.getTime());
   });
+
+  it("share-source columns default to null", async () => {
+    const db = createTestDb();
+    await seedEvent(db);
+    await db.insert(schema.eventRsvps).values({
+      id: "rsvp_no_share",
+      eventId: "evt_rsvp_test",
+      profileId: "usr_no_share",
+      createdAt: new Date(),
+    });
+    const [row] = await db
+      .select()
+      .from(schema.eventRsvps)
+      .where(eq(schema.eventRsvps.id, "rsvp_no_share"));
+    expect(row!.shareSourceFirst).toBeNull();
+    expect(row!.shareSourceFirstSeenAt).toBeNull();
+    expect(row!.shareSourceLast).toBeNull();
+    expect(row!.shareSourceLastSeenAt).toBeNull();
+  });
+
+  it("round-trips share-source attribution columns", async () => {
+    const db = createTestDb();
+    await seedEvent(db);
+    const firstSeen = new Date("2030-02-01T10:00:00.000Z");
+    const lastSeen = new Date("2030-02-05T14:30:00.000Z");
+    await db.insert(schema.eventRsvps).values({
+      id: "rsvp_with_share",
+      eventId: "evt_rsvp_test",
+      profileId: "usr_share",
+      shareSourceFirst: "instagram",
+      shareSourceFirstSeenAt: firstSeen,
+      shareSourceLast: "tiktok",
+      shareSourceLastSeenAt: lastSeen,
+      createdAt: new Date(),
+    });
+    const [row] = await db
+      .select()
+      .from(schema.eventRsvps)
+      .where(eq(schema.eventRsvps.id, "rsvp_with_share"));
+    expect(row!.shareSourceFirst).toBe("instagram");
+    expect(row!.shareSourceFirstSeenAt).toBeInstanceOf(Date);
+    expect(row!.shareSourceFirstSeenAt!.getTime()).toBe(firstSeen.getTime());
+    expect(row!.shareSourceLast).toBe("tiktok");
+    expect(row!.shareSourceLastSeenAt!.getTime()).toBe(lastSeen.getTime());
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -405,6 +450,176 @@ describe("pulse_close_friends schema", () => {
       .from(schema.pulseCloseFriends)
       .where(eq(schema.pulseCloseFriends.friendId, "usr_carol"));
     expect(rows).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// venues schema
+// ---------------------------------------------------------------------------
+
+describe("venues schema", () => {
+  it("inserts and retrieves a venue with defaults", async () => {
+    const db = createTestDb();
+    const now = new Date("2030-06-01T10:00:00.000Z");
+    await db.insert(schema.venues).values({
+      id: "the-pickle-factory",
+      orgHandle: "tpf-collective",
+      handle: "the-pickle-factory",
+      name: "The Pickle Factory",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const [row] = await db
+      .select()
+      .from(schema.venues)
+      .where(eq(schema.venues.id, "the-pickle-factory"));
+    expect(row!.name).toBe("The Pickle Factory");
+    expect(row!.kind).toBe("club");
+    expect(row!.timezone).toBe("UTC");
+    expect(row!.address).toBeNull();
+    expect(row!.capacity).toBeNull();
+  });
+
+  it("round-trips JSON hours", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    const hours = JSON.stringify({ "5": { open: "22:00", close: "04:00" } });
+    await db.insert(schema.venues).values({
+      id: "v-hours",
+      orgHandle: "o1",
+      handle: "v-hours",
+      name: "V",
+      hours,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const [row] = await db.select().from(schema.venues).where(eq(schema.venues.id, "v-hours"));
+    expect(row!.hours).toBe(hours);
+  });
+
+  it("declares the bbox + kind indexes", () => {
+    const { indexes } = getTableConfig(schema.venues);
+    const indexNames = new Set(indexes.map((i) => i.config.name));
+    expect(indexNames.has("venues_kind_idx")).toBe(true);
+    expect(indexNames.has("venues_lat_lng_idx")).toBe(true);
+    expect(indexNames.has("venues_org_handle_idx")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// events.venueId FK
+// ---------------------------------------------------------------------------
+
+describe("events.venueId", () => {
+  it("links an event to a venue", async () => {
+    const db = createTestDb();
+    const now = new Date();
+    await db.insert(schema.venues).values({
+      id: "v-link",
+      orgHandle: "o1",
+      handle: "v-link",
+      name: "Linked Venue",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(schema.events).values({
+      id: "evt_linked",
+      title: "Linked",
+      startTime: now,
+      venueId: "v-link",
+      createdByProfileId: "usr_alice",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const [row] = await db.select().from(schema.events).where(eq(schema.events.id, "evt_linked"));
+    expect(row!.venueId).toBe("v-link");
+  });
+
+  it("declares the events_venue_id_idx", () => {
+    const { indexes } = getTableConfig(schema.events);
+    const indexNames = new Set(indexes.map((i) => i.config.name));
+    expect(indexNames.has("events_venue_id_idx")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// event_lineup schema
+// ---------------------------------------------------------------------------
+
+describe("event_lineup schema", () => {
+  async function seedClubNight(db: ReturnType<typeof createTestDb>) {
+    const now = new Date();
+    await db.insert(schema.venues).values({
+      id: "v-club",
+      orgHandle: "o1",
+      handle: "v-club",
+      name: "Club",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(schema.events).values({
+      id: "evt_night",
+      title: "Friday Night",
+      startTime: new Date("2030-06-07T21:00:00.000Z"),
+      venueId: "v-club",
+      createdByProfileId: "usr_alice",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  it("inserts and retrieves a lineup slot with defaults", async () => {
+    const db = createTestDb();
+    await seedClubNight(db);
+    const start = new Date("2030-06-07T22:00:00.000Z");
+    const end = new Date("2030-06-07T23:30:00.000Z");
+    await db.insert(schema.eventLineup).values({
+      id: "lnp_1",
+      eventId: "evt_night",
+      artistName: "Headliner X",
+      slotStart: start,
+      slotEnd: end,
+      createdAt: new Date(),
+    });
+    const [row] = await db
+      .select()
+      .from(schema.eventLineup)
+      .where(eq(schema.eventLineup.id, "lnp_1"));
+    expect(row!.eventId).toBe("evt_night");
+    expect(row!.artistName).toBe("Headliner X");
+    expect(row!.role).toBe("support");
+    expect(row!.orderIndex).toBe(0);
+    expect(row!.slotStart).toBeInstanceOf(Date);
+    expect(row!.slotStart.getTime()).toBe(start.getTime());
+  });
+
+  it("accepts a midnight-crossing slot (slotEnd > slotStart on the next day)", async () => {
+    const db = createTestDb();
+    await seedClubNight(db);
+    const start = new Date("2030-06-07T23:30:00.000Z");
+    const end = new Date("2030-06-08T01:00:00.000Z");
+    await db.insert(schema.eventLineup).values({
+      id: "lnp_xmid",
+      eventId: "evt_night",
+      artistName: "Closer",
+      role: "headliner",
+      slotStart: start,
+      slotEnd: end,
+      orderIndex: 3,
+      createdAt: new Date(),
+    });
+    const [row] = await db
+      .select()
+      .from(schema.eventLineup)
+      .where(eq(schema.eventLineup.id, "lnp_xmid"));
+    expect(row!.slotEnd.getTime()).toBeGreaterThan(row!.slotStart.getTime());
+    expect(row!.role).toBe("headliner");
+  });
+
+  it("declares the event_id+slot_start lookup index", () => {
+    const { indexes } = getTableConfig(schema.eventLineup);
+    const indexNames = new Set(indexes.map((i) => i.config.name));
+    expect(indexNames.has("event_lineup_event_id_idx")).toBe(true);
   });
 });
 
