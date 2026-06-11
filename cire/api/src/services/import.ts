@@ -1,8 +1,10 @@
 import { events, families, guests, guestEvents, rsvps, weddings } from "@cire/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { Effect, Data } from "effect";
 
 import { DbService, dbQuery } from "../db";
+import type { Db } from "../db";
 import type {
   EventCreate,
   EventLink,
@@ -322,6 +324,31 @@ export function diffAgainstDb(
 
 // ── Apply ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Commit the import write set, which is built in FK-dependency order.
+ *  - D1 (production): a single atomic `db.batch([...])` — one Workers↔D1
+ *    round-trip, all-or-nothing. D1 has no interactive transaction, but a
+ *    batch IS a transaction, so this also closes the partial-apply gap.
+ *  - bun:sqlite (tests/local): awaited sequentially in the same order
+ *    (bun:sqlite exposes no `.batch()`; awaiting a Drizzle builder executes it).
+ *
+ * `batch` exists only on the D1 driver, so feature-detection picks the path.
+ */
+async function commitWriteSet(db: Db, statements: BatchItem<"sqlite">[]): Promise<void> {
+  if (statements.length === 0) return;
+  const batchable = db as {
+    batch?: (s: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]) => Promise<unknown>;
+  };
+  if (typeof batchable.batch === "function") {
+    await batchable.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    return;
+  }
+  // Sequential FK order is required and bun:sqlite has no batch; these run
+  // in-process (no network round-trip) so awaiting each in turn is fine.
+  // eslint-disable-next-line no-await-in-loop
+  for (const stmt of statements) await stmt;
+}
+
 export function applyImport(
   importId: string,
   plan: ImportPlan,
@@ -331,150 +358,140 @@ export function applyImport(
     const db = yield* DbService;
     const now = new Date();
 
-    // Statements run in FK-dependency order. Each is awaited so the same code
-    // path works on both drivers: bun:sqlite (tests/local) resolves
-    // synchronously, D1 (production) returns a Promise. NOTE: D1 has no
-    // interactive transaction, so this is a non-atomic sequence — a mid-way
-    // failure can leave a partial apply, exactly as the prior synchronous
-    // bun:sqlite version did (no BEGIN/COMMIT either). Wrapping the dependency
-    // chain in `db.batch([...])` for D1 atomicity is tracked as a follow-up
-    // (it can't share this code path — bun:sqlite has no `.batch()`).
+    // Build the write set in FK-dependency order, then commit it as one atomic
+    // D1 batch (prod) or a sequential bun:sqlite run (tests) — see commitWriteSet.
+    const statements: BatchItem<"sqlite">[] = [];
+
+    // 1. event removes (cascade rsvps + guest_events on those events)
+    for (const er of plan.eventRemoves) {
+      statements.push(
+        db.delete(rsvps).where(eq(rsvps.eventId, er.id)),
+        db.delete(guestEvents).where(eq(guestEvents.eventId, er.id)),
+        db.delete(events).where(eq(events.id, er.id)),
+      );
+    }
+
+    // 2. event creates
+    for (const ec of plan.eventCreates) {
+      statements.push(
+        db.insert(events).values({
+          id: ec.id,
+          weddingId,
+          slug: mintEventSlug(ec.event.name),
+          name: ec.event.name,
+          date: ec.event.startAt.slice(0, 10),
+          location: ec.event.location ?? "",
+          description: "",
+          startAt: ec.event.startAt,
+          endAt: ec.event.endAt,
+          timezone: ec.event.timezone,
+          address: ec.event.address,
+          dressCodeDescription: ec.event.dressCodeDescription,
+          dressCodePalette: JSON.stringify(ec.event.dressCodePalette),
+          pinterestUrl: ec.event.pinterestUrl,
+          mapsUrl: ec.event.mapsUrl,
+          sortOrder: ec.event.sortOrder,
+        }),
+      );
+    }
+
+    // 3. event updates
+    for (const eu of plan.eventUpdates) {
+      statements.push(
+        db
+          .update(events)
+          .set({
+            name: eu.event.name,
+            date: eu.event.startAt.slice(0, 10),
+            location: eu.event.location ?? "",
+            startAt: eu.event.startAt,
+            endAt: eu.event.endAt,
+            timezone: eu.event.timezone,
+            address: eu.event.address,
+            dressCodeDescription: eu.event.dressCodeDescription,
+            dressCodePalette: JSON.stringify(eu.event.dressCodePalette),
+            pinterestUrl: eu.event.pinterestUrl,
+            mapsUrl: eu.event.mapsUrl,
+            sortOrder: eu.event.sortOrder,
+          })
+          .where(eq(events.id, eu.id)),
+      );
+    }
+
+    // 4. family removes (cascade guests, rsvps, sessions)
+    for (const fr of plan.familyRemoves) {
+      statements.push(db.delete(families).where(eq(families.id, fr.id)));
+    }
+
+    // 5. family creates
+    for (const fc of plan.familyCreates) {
+      statements.push(
+        db.insert(families).values({
+          id: fc.id,
+          weddingId,
+          publicId: fc.publicId,
+          familyName: fc.familyName,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+    }
+
+    // 6. guest removes (cascade rsvps + guest_events for that guest)
+    for (const gr of plan.guestRemoves) {
+      statements.push(db.delete(guests).where(eq(guests.id, gr.id)));
+    }
+
+    // 7. guest creates
+    for (const gc of plan.guestCreates) {
+      statements.push(
+        db.insert(guests).values({
+          id: gc.id,
+          familyId: gc.familyId,
+          firstName: gc.firstName,
+          lastName: gc.lastName,
+          sortOrder: gc.sortOrder,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+    }
+
+    // 8. guest updates
+    for (const gu of plan.guestUpdates) {
+      statements.push(
+        db
+          .update(guests)
+          .set({
+            lastName: gu.lastName,
+            sortOrder: gu.sortOrder,
+            updatedAt: now,
+          })
+          .where(eq(guests.id, gu.id)),
+      );
+    }
+
+    // 9. guest_events: per-pair removes then creates. The diff already emitted
+    // only the (guestId, eventId) pairs that should disappear, so we delete each
+    // pair individually rather than wiping a whole guest's link set.
+    for (const link of plan.eventLinkRemoves) {
+      statements.push(
+        db
+          .delete(guestEvents)
+          .where(and(eq(guestEvents.guestId, link.guestId), eq(guestEvents.eventId, link.eventId))),
+      );
+    }
+    for (const link of plan.eventLinkCreates) {
+      statements.push(
+        db
+          .insert(guestEvents)
+          .values({ guestId: link.guestId, eventId: link.eventId })
+          .onConflictDoNothing(),
+      );
+    }
 
     yield* Effect.tryPromise({
-      try: async () => {
-        // no-await-in-loop is disabled for this block: statements MUST run in FK
-        // order (removes→creates→links); parallelising via Promise.all would
-        // violate referential integrity, and D1 has no interactive transaction.
-        /* eslint-disable no-await-in-loop */
-        // 1. event removes (cascade rsvps + guest_events on those events)
-        for (const er of plan.eventRemoves) {
-          await db.delete(rsvps).where(eq(rsvps.eventId, er.id)).run();
-          await db.delete(guestEvents).where(eq(guestEvents.eventId, er.id)).run();
-          await db.delete(events).where(eq(events.id, er.id)).run();
-        }
-
-        // 2. event creates
-        for (const ec of plan.eventCreates) {
-          await db
-            .insert(events)
-            .values({
-              id: ec.id,
-              weddingId,
-              slug: mintEventSlug(ec.event.name),
-              name: ec.event.name,
-              date: ec.event.startAt.slice(0, 10),
-              location: ec.event.location ?? "",
-              description: "",
-              startAt: ec.event.startAt,
-              endAt: ec.event.endAt,
-              timezone: ec.event.timezone,
-              address: ec.event.address,
-              dressCodeDescription: ec.event.dressCodeDescription,
-              dressCodePalette: JSON.stringify(ec.event.dressCodePalette),
-              pinterestUrl: ec.event.pinterestUrl,
-              mapsUrl: ec.event.mapsUrl,
-              sortOrder: ec.event.sortOrder,
-            })
-            .run();
-        }
-
-        // 3. event updates
-        for (const eu of plan.eventUpdates) {
-          await db
-            .update(events)
-            .set({
-              name: eu.event.name,
-              date: eu.event.startAt.slice(0, 10),
-              location: eu.event.location ?? "",
-              startAt: eu.event.startAt,
-              endAt: eu.event.endAt,
-              timezone: eu.event.timezone,
-              address: eu.event.address,
-              dressCodeDescription: eu.event.dressCodeDescription,
-              dressCodePalette: JSON.stringify(eu.event.dressCodePalette),
-              pinterestUrl: eu.event.pinterestUrl,
-              mapsUrl: eu.event.mapsUrl,
-              sortOrder: eu.event.sortOrder,
-            })
-            .where(eq(events.id, eu.id))
-            .run();
-        }
-
-        // 4. family removes (cascade guests, rsvps, sessions)
-        for (const fr of plan.familyRemoves) {
-          await db.delete(families).where(eq(families.id, fr.id)).run();
-        }
-
-        // 5. family creates
-        for (const fc of plan.familyCreates) {
-          await db
-            .insert(families)
-            .values({
-              id: fc.id,
-              weddingId,
-              publicId: fc.publicId,
-              familyName: fc.familyName,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .run();
-        }
-
-        // 6. guest removes (cascade rsvps + guest_events for that guest)
-        for (const gr of plan.guestRemoves) {
-          await db.delete(guests).where(eq(guests.id, gr.id)).run();
-        }
-
-        // 7. guest creates
-        for (const gc of plan.guestCreates) {
-          await db
-            .insert(guests)
-            .values({
-              id: gc.id,
-              familyId: gc.familyId,
-              firstName: gc.firstName,
-              lastName: gc.lastName,
-              sortOrder: gc.sortOrder,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .run();
-        }
-
-        // 8. guest updates
-        for (const gu of plan.guestUpdates) {
-          await db
-            .update(guests)
-            .set({
-              lastName: gu.lastName,
-              sortOrder: gu.sortOrder,
-              updatedAt: now,
-            })
-            .where(eq(guests.id, gu.id))
-            .run();
-        }
-
-        // 9. guest_events: per-pair removes then creates. The diff already
-        // emitted only the (guestId, eventId) pairs that should disappear, so
-        // we delete each pair individually rather than wiping a whole guest's
-        // link set.
-        for (const link of plan.eventLinkRemoves) {
-          await db
-            .delete(guestEvents)
-            .where(
-              and(eq(guestEvents.guestId, link.guestId), eq(guestEvents.eventId, link.eventId)),
-            )
-            .run();
-        }
-        for (const link of plan.eventLinkCreates) {
-          await db
-            .insert(guestEvents)
-            .values({ guestId: link.guestId, eventId: link.eventId })
-            .onConflictDoNothing()
-            .run();
-        }
-        /* eslint-enable no-await-in-loop */
-      },
+      try: () => commitWriteSet(db, statements),
       catch: (cause) => new ImportError({ reason: "apply failed", cause }),
     });
 

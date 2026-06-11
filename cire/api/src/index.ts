@@ -20,11 +20,20 @@ const handler: ExportedHandler<Env> = {
   // inside `fetch`, so the Drizzle client and the Hono app are built per
   // request. Construction is cheap (no connection pool — D1 is a binding).
   async fetch(request, env, ctx) {
-    if (!env.DB) {
-      return new Response(JSON.stringify({ error: "D1 binding (DB) is not configured" }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
+    // Fail closed at the edge if any required binding/var is missing, rather
+    // than letting createApp fall back to its localhost dev defaults for the
+    // OSN issuer/audience in a misconfigured production deployment (S-M1).
+    const missing = [
+      !env.DB && "DB",
+      !env.WEB_ORIGIN && "WEB_ORIGIN",
+      !env.OSN_JWKS_URL && "OSN_JWKS_URL",
+      !env.OSN_AUDIENCE && "OSN_AUDIENCE",
+    ].filter(Boolean);
+    if (missing.length > 0 || !env.DB) {
+      return new Response(
+        JSON.stringify({ error: `Worker misconfigured: missing ${missing.join(", ")}` }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
     }
 
     const db = createD1Db(env.DB);

@@ -25,6 +25,16 @@ build and deploy (previously a 503 stub that only ran locally via
   `@shared/crypto/jwk` instead of the barrel — this severs the
   `arc.ts → @osn/db → bun:sqlite` chain from the JWKS-verification path so
   the cire Worker (which runs `osnAuth`) bundles without `bun:sqlite`.
+- `applyImport` commits its write set as a single atomic `db.batch([...])`
+  on D1 (one round-trip, all-or-nothing) rather than N sequential
+  statements; bun:sqlite keeps the sequential path (no `.batch()`). This
+  also closes the partial-apply atomicity gap.
+- The Workers entry fails closed (503) when any required binding/var
+  (`DB`, `WEB_ORIGIN`, `OSN_JWKS_URL`, `OSN_AUDIENCE`) is missing, instead
+  of falling back to localhost dev defaults for the OSN issuer.
+- New D1 integration tests (`src/db/d1-integration.test.ts`) exercise the
+  async driver path and the atomic batch apply against a real workerd D1
+  via Miniflare (added as a devDependency).
 
-Local dev and the test suite still use `bun:sqlite` in-memory — no change
-to that workflow.
+Local dev and the existing test suite still use `bun:sqlite` in-memory — no
+change to that workflow.
