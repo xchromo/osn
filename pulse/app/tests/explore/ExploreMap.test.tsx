@@ -240,8 +240,8 @@ describe("ExploreMap", () => {
     const { container, findByText } = renderWithRouter(() => (
       <ExploreMap events={events} venues={venues} />
     ));
-    // EventPin renders <div><svg>; the outer positioned div with the
-    // onMouseEnter handler is one level above that inner wrapper.
+    // EventPin renders <div><svg>; the outer positioned <button> with
+    // the onMouseEnter handler is one level above that inner wrapper.
     const innerPinDiv = container
       .querySelector("svg[viewBox='0 0 34 42']")
       ?.closest("div") as HTMLElement;
@@ -250,5 +250,69 @@ describe("ExploreMap", () => {
     const link = (await findByText(/See venue/i)) as HTMLElement;
     const anchor = link.tagName === "A" ? link : link.closest("a");
     expect(anchor?.getAttribute("href")).toBe("/venues/tpf/factory");
+  });
+
+  // -------------------------------------------------------------------------
+  // Keyboard access to the event-pin popover (C-M2 / WCAG 2.1.1)
+  // -------------------------------------------------------------------------
+
+  const coLocatedFixtures = () => ({
+    venues: [
+      venueRow({
+        id: "ven_dup",
+        orgHandle: "tpf",
+        handle: "factory",
+        latitude: 40.705,
+        longitude: -73.93,
+      }),
+    ],
+    events: [
+      {
+        id: "evt_at_venue",
+        title: "Friday Residency",
+        status: "upcoming" as const,
+        startTime: "2030-06-07T22:00:00.000Z",
+        category: "music",
+        venue: "The Factory",
+        venueId: "ven_dup",
+        latitude: 40.705,
+        longitude: -73.93,
+      },
+    ],
+  });
+
+  it("renders event pins as focusable buttons labelled with the event title", () => {
+    const { venues, events } = coLocatedFixtures();
+    const { container } = renderWithRouter(() => <ExploreMap events={events} venues={venues} />);
+    const pin = container.querySelector("button[aria-label='Friday Residency']");
+    expect(pin).toBeTruthy();
+  });
+
+  it("opens the popover with the 'See venue' link on focus", async () => {
+    const { venues, events } = coLocatedFixtures();
+    const { container, findByText } = renderWithRouter(() => (
+      <ExploreMap events={events} venues={venues} />
+    ));
+    const pin = container.querySelector(
+      "button[aria-label='Friday Residency']",
+    ) as HTMLButtonElement;
+    fireEvent.focus(pin);
+    const link = (await findByText(/See venue/i)) as HTMLElement;
+    const anchor = link.tagName === "A" ? link : link.closest("a");
+    expect(anchor?.getAttribute("href")).toBe("/venues/tpf/factory");
+  });
+
+  it("dismisses the popover on Escape", async () => {
+    const { venues, events } = coLocatedFixtures();
+    const { container, findByText, queryByText } = renderWithRouter(() => (
+      <ExploreMap events={events} venues={venues} />
+    ));
+    const pin = container.querySelector(
+      "button[aria-label='Friday Residency']",
+    ) as HTMLButtonElement;
+    fireEvent.focus(pin);
+    await findByText(/See venue/i);
+    fireEvent.keyDown(pin, { key: "Escape" });
+    expect(queryByText(/See venue/i)).toBeNull();
   });
 });

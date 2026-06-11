@@ -11,6 +11,7 @@ import {
   fetchVenue,
   fetchVenueEvents,
   parseVenueHours,
+  safeHttpUrl,
   venueMapsUrl,
   type VenueEvent,
 } from "../lib/venues";
@@ -68,9 +69,16 @@ export function VenueDetailPage() {
   const [venue] = createResource(handles, ({ orgHandle, venueHandle }) =>
     fetchVenue(orgHandle, venueHandle),
   );
-  const [events] = createResource(handles, ({ orgHandle, venueHandle }) =>
-    fetchVenueEvents(orgHandle, venueHandle, "all"),
-  );
+  // Upcoming-first: the timeline + carousel only render upcoming/ongoing
+  // nights, so asking for scope=all would let a long venue history crowd
+  // them out of the server's LIMIT window. The single most-recent past
+  // night is fetched only as a fallback so the page never goes blank
+  // when the next night isn't announced yet.
+  const [events] = createResource(handles, async ({ orgHandle, venueHandle }) => {
+    const upcoming = await fetchVenueEvents(orgHandle, venueHandle, "upcoming");
+    if (upcoming.length > 0) return upcoming;
+    return fetchVenueEvents(orgHandle, venueHandle, "past", 1);
+  });
 
   const featuredEvent = createMemo(() => {
     const all = events();
@@ -135,8 +143,8 @@ export function VenueDetailPage() {
           <article class="flex flex-col gap-6">
             {/* Hero — identity + location + open status + quick links */}
             <Card class="overflow-hidden">
-              <Show when={v().heroImageUrl}>
-                <img class="h-64 w-full object-cover" src={v().heroImageUrl!} alt={v().name} />
+              <Show when={safeHttpUrl(v().heroImageUrl)}>
+                {(src) => <img class="h-64 w-full object-cover" src={src()} alt={v().name} />}
               </Show>
               <div class="flex flex-col gap-4 p-5">
                 <div>
@@ -190,9 +198,9 @@ export function VenueDetailPage() {
                   )}
                 </Show>
 
-                <Show when={v().websiteUrl || v().instagramHandle}>
+                <Show when={safeHttpUrl(v().websiteUrl) || v().instagramHandle}>
                   <div class="flex items-center gap-2">
-                    <Show when={v().websiteUrl}>
+                    <Show when={safeHttpUrl(v().websiteUrl)}>
                       {(url) => (
                         <a
                           href={url()}

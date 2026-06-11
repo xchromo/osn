@@ -75,7 +75,7 @@ export function parseVenueHours(raw: string | null): VenueHours | null {
  *
  * TODO(venue-bbox-search): swap for a viewport-scoped fetch (pass
  * minLat/maxLat/minLng/maxLng) once the API supports it — tracked in
- * wiki/TODO.md → Performance Backlog P-W6.
+ * wiki/TODO.md → Performance Backlog P-W28.
  */
 export async function fetchAllVenues(): Promise<VenueSummary[]> {
   const res = await fetch(`${BASE_URL}/venues`);
@@ -88,7 +88,9 @@ export async function fetchVenue(
   orgHandle: string,
   venueHandle: string,
 ): Promise<VenueSummary | null> {
-  const res = await fetch(`${BASE_URL}/venues/${orgHandle}/${venueHandle}`);
+  const res = await fetch(
+    `${BASE_URL}/venues/${encodeURIComponent(orgHandle)}/${encodeURIComponent(venueHandle)}`,
+  );
   if (!res.ok) return null;
   const body = (await res.json()) as { venue?: VenueSummary };
   return body.venue ?? null;
@@ -98,11 +100,31 @@ export async function fetchVenueEvents(
   orgHandle: string,
   venueHandle: string,
   scope: "upcoming" | "past" | "all" = "upcoming",
+  limit?: number,
 ): Promise<VenueEvent[]> {
-  const res = await fetch(`${BASE_URL}/venues/${orgHandle}/${venueHandle}/events?scope=${scope}`);
+  const query = `scope=${scope}${limit === undefined ? "" : `&limit=${limit}`}`;
+  const res = await fetch(
+    `${BASE_URL}/venues/${encodeURIComponent(orgHandle)}/${encodeURIComponent(venueHandle)}/events?${query}`,
+  );
   if (!res.ok) return [];
   const body = (await res.json()) as { events?: VenueEvent[] };
   return body.events ?? [];
+}
+
+/**
+ * Allow a URL onto an `href`/`src` attribute only when it parses with an
+ * http(s) scheme. Venue rows are seed-only today, but `website_url` /
+ * `hero_image_url` are destined for org self-service — a `javascript:`
+ * value must never reach the DOM (S-M2).
+ */
+export function safeHttpUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:" ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 export function venueMapsUrl(v: VenueSummary): string | null {
@@ -217,7 +239,7 @@ export async function fetchEventLineup(
   eventId: string,
 ): Promise<LineupSlot[]> {
   const res = await fetch(
-    `${BASE_URL}/venues/${orgHandle}/${venueHandle}/events/${eventId}/lineup`,
+    `${BASE_URL}/venues/${encodeURIComponent(orgHandle)}/${encodeURIComponent(venueHandle)}/events/${encodeURIComponent(eventId)}/lineup`,
   );
   if (!res.ok) return [];
   const body = (await res.json()) as { slots?: LineupSlot[] };

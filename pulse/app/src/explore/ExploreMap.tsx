@@ -438,8 +438,23 @@ export function ExploreMap(props: {
       <For each={geoEvents()}>
         {(e) => {
           const pos = () => proj(e.latitude!, e.longitude!, size().w, size().h);
+          const showPopover = () => {
+            cancelDismiss();
+            setHoveredPin({ event: e, x: pos()[0], y: pos()[1] });
+            props.onHoverEvent?.(e.id);
+          };
+          const hidePopover = () => {
+            scheduleDismiss();
+            props.onHoverEvent?.(null);
+          };
+          // A real <button> so keyboard + touch users can reach the
+          // popover (and its "See venue" link) \u2014 the hover-only div made
+          // venues with a co-located event pin unreachable without a
+          // pointer (C-M2 / WCAG 2.1.1).
           return (
-            <div
+            <button
+              type="button"
+              aria-label={e.title}
               style={{
                 position: "absolute",
                 left: pos()[0] + "px",
@@ -447,22 +462,27 @@ export function ExploreMap(props: {
                 transform: "translate(-50%, -100%)",
                 "z-index": "4",
                 cursor: "pointer",
+                background: "none",
+                border: "none",
+                padding: "0",
               }}
-              onMouseEnter={() => {
-                cancelDismiss();
-                setHoveredPin({ event: e, x: pos()[0], y: pos()[1] });
-                props.onHoverEvent?.(e.id);
-              }}
-              onMouseLeave={() => {
-                scheduleDismiss();
-                props.onHoverEvent?.(null);
+              onMouseEnter={showPopover}
+              onMouseLeave={hidePopover}
+              onFocus={showPopover}
+              onBlur={hidePopover}
+              onKeyDown={(ev) => {
+                if (ev.key === "Escape") {
+                  cancelDismiss();
+                  setHoveredPin(null);
+                  props.onHoverEvent?.(null);
+                }
               }}
             >
               <EventPin
                 category={e.category ?? ""}
                 glyph={CATEGORY_GLYPH[e.category ?? ""] ?? "\u25C9"}
               />
-            </div>
+            </button>
           );
         }}
       </For>
@@ -539,6 +559,14 @@ export function ExploreMap(props: {
               }}
               onMouseEnter={cancelDismiss}
               onMouseLeave={scheduleDismiss}
+              onFocusIn={cancelDismiss}
+              onFocusOut={scheduleDismiss}
+              onKeyDown={(ev) => {
+                if (ev.key === "Escape") {
+                  cancelDismiss();
+                  setHoveredPin(null);
+                }
+              }}
             >
               <div>
                 <div class="font-semibold">

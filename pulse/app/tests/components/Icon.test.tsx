@@ -43,6 +43,9 @@ describe("Icon", () => {
     "layers",
     "heart",
     "zap",
+    "globe",
+    "instagram",
+    "repeat",
   ];
 
   for (const name of knownIcons) {

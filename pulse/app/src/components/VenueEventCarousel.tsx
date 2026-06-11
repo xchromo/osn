@@ -1,7 +1,7 @@
 import { Badge } from "@osn/ui/ui/badge";
 import { Card } from "@osn/ui/ui/card";
 import { A } from "@solidjs/router";
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import { formatPrice } from "../lib/formatPrice";
 import type { VenueEvent } from "../lib/venues";
@@ -53,6 +53,7 @@ export function VenueEventCarousel(props: Props) {
     if (typeof ResizeObserver !== "undefined" && scrollerEl) {
       const ro = new ResizeObserver(recomputeNeedsScroll);
       ro.observe(scrollerEl);
+      onCleanup(() => ro.disconnect());
     }
   });
 

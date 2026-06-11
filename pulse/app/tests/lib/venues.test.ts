@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeOpenStatus,
   fetchAllVenues,
+  fetchEventLineup,
+  fetchVenue,
+  fetchVenueEvents,
   parseVenueHours,
+  safeHttpUrl,
   venueMapsUrl,
   type VenueSummary,
 } from "../../src/lib/venues";
@@ -147,5 +151,124 @@ describe("fetchAllVenues", () => {
     });
     const result = await fetchAllVenues();
     expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchVenue / fetchVenueEvents / fetchEventLineup
+// ---------------------------------------------------------------------------
+
+describe("venue fetchers", () => {
+  const realFetch = globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  describe("fetchVenue", () => {
+    it("returns the venue on a 200 response", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ venue: baseVenue }) });
+      expect(await fetchVenue("org", "venue")).toEqual(baseVenue);
+    });
+
+    it("returns null on a non-OK response (fail-soft)", async () => {
+      fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+      expect(await fetchVenue("org", "venue")).toBeNull();
+    });
+
+    it("returns null when the body has no venue key", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      expect(await fetchVenue("org", "venue")).toBeNull();
+    });
+
+    it("URL-encodes path segments (S-L2)", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      await fetchVenue("org/with?chars", "venue#frag");
+      const url = fetchMock.mock.calls[0]![0] as string;
+      expect(url).toContain("/venues/org%2Fwith%3Fchars/venue%23frag");
+    });
+  });
+
+  describe("fetchVenueEvents", () => {
+    it("returns the events array on a 200 response", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ events: [{ id: "e1" }] }) });
+      expect(await fetchVenueEvents("org", "venue")).toEqual([{ id: "e1" }]);
+    });
+
+    it("returns an empty array on a non-OK response (fail-soft)", async () => {
+      fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+      expect(await fetchVenueEvents("org", "venue")).toEqual([]);
+    });
+
+    it("returns an empty array when the body has no events key", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      expect(await fetchVenueEvents("org", "venue")).toEqual([]);
+    });
+
+    it("passes scope and an optional limit as query params", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      await fetchVenueEvents("org", "venue", "past", 1);
+      const url = fetchMock.mock.calls[0]![0] as string;
+      expect(url).toContain("scope=past");
+      expect(url).toContain("limit=1");
+    });
+  });
+
+  describe("fetchEventLineup", () => {
+    it("returns the slots array on a 200 response", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({ slots: [{ id: "s1" }] }) });
+      expect(await fetchEventLineup("org", "venue", "evt")).toEqual([{ id: "s1" }]);
+    });
+
+    it("returns an empty array on a non-OK response (fail-soft)", async () => {
+      fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+      expect(await fetchEventLineup("org", "venue", "evt")).toEqual([]);
+    });
+
+    it("returns an empty array when the body has no slots key", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      expect(await fetchEventLineup("org", "venue", "evt")).toEqual([]);
+    });
+
+    it("URL-encodes the eventId segment (S-L2)", async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+      await fetchEventLineup("org", "venue", "evt/../../sneaky");
+      const url = fetchMock.mock.calls[0]![0] as string;
+      expect(url).toContain("/events/evt%2F..%2F..%2Fsneaky/lineup");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// safeHttpUrl (S-M2)
+// ---------------------------------------------------------------------------
+
+describe("safeHttpUrl", () => {
+  it("passes https URLs through", () => {
+    expect(safeHttpUrl("https://example.com/x")).toBe("https://example.com/x");
+  });
+
+  it("passes http URLs through", () => {
+    expect(safeHttpUrl("http://example.com")).toBe("http://example.com");
+  });
+
+  it("rejects javascript: URLs", () => {
+    expect(safeHttpUrl("javascript:alert(1)")).toBeNull();
+  });
+
+  it("rejects data: URLs", () => {
+    expect(safeHttpUrl("data:text/html,<script>1</script>")).toBeNull();
+  });
+
+  it("rejects unparseable values", () => {
+    expect(safeHttpUrl("not a url")).toBeNull();
+  });
+
+  it("returns null for null", () => {
+    expect(safeHttpUrl(null)).toBeNull();
   });
 });

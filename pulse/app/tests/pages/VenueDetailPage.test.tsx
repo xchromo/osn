@@ -134,4 +134,79 @@ describe("VenueDetailPage", () => {
     const { findByText } = render(() => <VenueDetailPage />);
     expect(await findByText(/Lineup to be announced/)).toBeTruthy();
   });
+
+  it("fetches scope=upcoming and skips the past fallback when nights exist (P-W1)", async () => {
+    fetchVenue.mockResolvedValue(VENUE);
+    fetchVenueEvents.mockResolvedValue([EVENT_UPCOMING]);
+    fetchEventLineup.mockResolvedValue(SLOTS);
+
+    const { findByText } = render(() => <VenueDetailPage />);
+    await findByText("The Pickle Factory");
+
+    expect(fetchVenueEvents).toHaveBeenCalledTimes(1);
+    expect(fetchVenueEvents).toHaveBeenCalledWith(
+      "tpf-collective",
+      "the-pickle-factory",
+      "upcoming",
+    );
+  });
+
+  it("falls back to the most recent past night when upcoming is empty (P-W1)", async () => {
+    const pastEvent = {
+      ...EVENT_UPCOMING,
+      id: "evt_past",
+      title: "Last Friday",
+      status: "finished" as const,
+      startTime: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    };
+    fetchVenue.mockResolvedValue(VENUE);
+    fetchVenueEvents.mockImplementation((_org, _venue, scope) =>
+      Promise.resolve(scope === "upcoming" ? [] : [pastEvent]),
+    );
+    fetchEventLineup.mockResolvedValue([]);
+
+    const { findAllByText } = render(() => <VenueDetailPage />);
+    expect((await findAllByText(/Last Friday/)).length).toBeGreaterThan(0);
+    expect(fetchVenueEvents).toHaveBeenCalledWith(
+      "tpf-collective",
+      "the-pickle-factory",
+      "past",
+      1,
+    );
+  });
+
+  it("shows the loading state before the venue resolves (T-S1)", async () => {
+    let resolveVenue!: (v: typeof VENUE) => void;
+    fetchVenue.mockReturnValue(
+      new Promise((resolve) => {
+        resolveVenue = resolve;
+      }),
+    );
+    fetchVenueEvents.mockResolvedValue([]);
+    fetchEventLineup.mockResolvedValue([]);
+
+    const { findByText, getByText } = render(() => <VenueDetailPage />);
+    expect(getByText("Loading…")).toBeTruthy();
+
+    resolveVenue(VENUE);
+    expect(await findByText("The Pickle Factory")).toBeTruthy();
+  });
+
+  it("does not render hero image or website link for non-http(s) URLs (S-M2)", async () => {
+    fetchVenue.mockResolvedValue({
+      ...VENUE,
+      heroImageUrl: "javascript:alert(1)",
+      websiteUrl: "javascript:alert(2)",
+    });
+    fetchVenueEvents.mockResolvedValue([]);
+    fetchEventLineup.mockResolvedValue([]);
+
+    const { findByText, container, queryByLabelText } = render(() => <VenueDetailPage />);
+    await findByText("The Pickle Factory");
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(queryByLabelText("Website")).toBeNull();
+    // The Instagram link is unaffected.
+    expect(queryByLabelText(/Instagram/)).toBeTruthy();
+  });
 });
