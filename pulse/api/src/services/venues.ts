@@ -1,7 +1,7 @@
 import { events, eventLineup, venues } from "@pulse/db/schema";
 import type { Event, EventLineupSlot, Venue } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { metricVenueDetail, metricVenueEventsListed, metricVenueLineupListed } from "../metrics";
@@ -12,13 +12,6 @@ export class VenueNotFound extends Data.TaggedError("VenueNotFound")<{
   readonly venueHandle: string;
 }> {}
 
-/**
- * Fetch a single venue by (orgHandle, venueHandle).
- *
- * Venues are public — no viewer-scoped filtering. The metric records
- * the kind so we can spot a sudden spike in 404s on a particular venue
- * type (someone scraping handles).
- */
 /**
  * List every venue. Public surface — feeds the Explore map.
  *
@@ -39,9 +32,23 @@ export const listAllVenues = (): Effect.Effect<Venue[], DatabaseError, Db> =>
     return rows;
   }).pipe(Effect.withSpan("pulse.venue.list_all"));
 
+/**
+ * Fetch a single venue by (orgHandle, venueHandle).
+ *
+ * Venues are public — no viewer-scoped filtering. The metric records
+ * the kind so we can spot a sudden spike in 404s on a particular venue
+ * type (someone scraping handles).
+ *
+ * `recordMetric` defaults to false because this is also an internal
+ * building block (`listVenueEvents`, the lineup gate) — only the
+ * detail route passes true, so `pulse.venue.detail.*` counts page
+ * views, not sub-queries. Internal callers stay observable via the
+ * `pulse.venue.get` span.
+ */
 export const getVenue = (
   orgHandle: string,
   venueHandle: string,
+  opts: { recordMetric?: boolean } = {},
 ): Effect.Effect<Venue, VenueNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
     const start = performance.now();
@@ -57,11 +64,15 @@ export const getVenue = (
     }).pipe(Effect.tapError((e) => Effect.logError("venue.get failed", e)));
 
     if (rows.length === 0) {
-      metricVenueDetail(null, "error", (performance.now() - start) / 1000);
+      if (opts.recordMetric) {
+        metricVenueDetail(null, "error", (performance.now() - start) / 1000);
+      }
       return yield* Effect.fail(new VenueNotFound({ orgHandle, venueHandle }));
     }
     const row = rows[0]!;
-    metricVenueDetail(row.kind, "ok", (performance.now() - start) / 1000);
+    if (opts.recordMetric) {
+      metricVenueDetail(row.kind, "ok", (performance.now() - start) / 1000);
+    }
     return row;
   }).pipe(Effect.withSpan("pulse.venue.get"));
 
@@ -98,7 +109,9 @@ export const listVenueEvents = (
           .select()
           .from(events)
           .where(and(...filters))
-          .orderBy(scope === "past" ? events.startTime : asc(events.startTime))
+          // Past nights read most-recent-first so LIMIT keeps the end of
+          // the history callers actually want; upcoming reads soonest-first.
+          .orderBy(scope === "past" ? desc(events.startTime) : asc(events.startTime))
           .limit(limit) as Promise<Event[]>,
       catch: (cause) => new DatabaseError({ cause }),
     }).pipe(Effect.tapError((e) => Effect.logError("venue.list_events failed", e)));

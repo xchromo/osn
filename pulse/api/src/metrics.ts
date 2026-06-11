@@ -197,7 +197,7 @@ type EventAccessDeniedReason = "not_found" | "private_anonymous" | "private_no_r
 
 type EventAccessDeniedAttrs = {
   /** Which direct-fetch surface the denial happened on. */
-  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts";
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts" | "lineup";
   reason: EventAccessDeniedReason;
 };
 
@@ -543,7 +543,7 @@ export const metricCalendarIcsGenerated = (result: Result): void =>
 // --- Access gate recording helper ---
 
 export const metricEventAccessDenied = (
-  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts",
+  surface: "get" | "ics" | "comms" | "rsvps" | "rsvps_counts" | "lineup",
   reason: EventAccessDeniedReason,
 ): void => eventAccessDenied.inc({ surface, reason });
 
