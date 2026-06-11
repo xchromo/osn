@@ -1,11 +1,20 @@
+import { Database } from "bun:sqlite";
+
 import { it, expect } from "@effect/vitest";
+import * as schema from "@pulse/db/schema";
 import { eventRsvps } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
-import { Effect } from "effect";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { Effect, Layer } from "effect";
 
 import { listMyCalendarEvents } from "../../src/services/events";
 import { upsertRsvp } from "../../src/services/rsvps";
 import { createTestLayer, seedEvent } from "../helpers/db";
+
+// Db layer over a schema-less SQLite — every query fails at execution
+// ("no such table"), exercising the DatabaseError channel.
+const noSchemaLayer = () =>
+  Layer.succeed(Db, { db: drizzle(new Database(":memory:"), { schema }) });
 
 const VIEWER = "usr_me";
 const OTHER = "usr_alice";
@@ -125,4 +134,44 @@ it.effect("excludes past events", () =>
     const entries = yield* listMyCalendarEvents(VIEWER);
     expect(entries).toEqual([]);
   }).pipe(Effect.provide(createTestLayer())),
+);
+
+it.effect("returns a single entry when the viewer hosts AND RSVP'd their own event", () =>
+  Effect.gen(function* () {
+    const event = yield* seedEvent({
+      title: "My Own Party",
+      startTime: inDays(2),
+      createdByProfileId: VIEWER,
+    });
+    yield* upsertRsvp(event.id, VIEWER, { status: "going" });
+
+    const entries = yield* listMyCalendarEvents(VIEWER);
+    // Both UNION arms surface this row; dedupe collapses them while
+    // preserving the attending row's myStatus.
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.isHost).toBe(true);
+    expect(entries[0]!.myStatus).toBe("going");
+  }).pipe(Effect.provide(createTestLayer())),
+);
+
+it.effect("clamps the result count to the requested limit", () =>
+  Effect.gen(function* () {
+    for (let i = 0; i < 3; i++) {
+      const event = yield* seedEvent({
+        title: `E${i}`,
+        startTime: inDays(i + 1),
+        createdByProfileId: OTHER,
+      });
+      yield* upsertRsvp(event.id, VIEWER, { status: "going" });
+    }
+    const entries = yield* listMyCalendarEvents(VIEWER, { limit: 2 });
+    expect(entries).toHaveLength(2);
+  }).pipe(Effect.provide(createTestLayer())),
+);
+
+it.effect("fails with DatabaseError when the underlying query errors", () =>
+  Effect.gen(function* () {
+    const err = yield* Effect.flip(listMyCalendarEvents(VIEWER));
+    expect(err._tag).toBe("DatabaseError");
+  }).pipe(Effect.provide(noSchemaLayer())),
 );

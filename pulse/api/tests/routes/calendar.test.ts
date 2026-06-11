@@ -1,11 +1,20 @@
+import { Database } from "bun:sqlite";
+
+import * as schema from "@pulse/db/schema";
+import { Db } from "@pulse/db/service";
 import { generateArcKeyPair } from "@shared/crypto";
-import { Effect } from "effect";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { Effect, Layer } from "effect";
 import { SignJWT } from "jose";
 import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 
 import { createEventsRoutes } from "../../src/routes/events";
 import type { ProfileDisplay } from "../../src/services/graphBridge";
 import { createTestLayer } from "../helpers/db";
+
+// Db layer over a schema-less SQLite — every query fails, so the calendar
+// route hits its catch-all → 500 branch.
+const brokenLayer = () => Layer.succeed(Db, { db: drizzle(new Database(":memory:"), { schema }) });
 
 vi.mock("../../src/services/graphBridge", () => ({
   GraphBridgeError: class GraphBridgeError {
@@ -33,6 +42,7 @@ beforeAll(async () => {
 const makeToken = (profileId: string) =>
   new SignJWT({ sub: profileId })
     .setProtectedHeader({ alg: "ES256", kid: "test-kid" })
+    .setAudience("osn-access")
     .sign(testPrivateKey);
 
 const post = (
@@ -113,5 +123,32 @@ describe("GET /events/calendar", () => {
     const party = body.entries.find((e) => e.event.title === "Alice's Party")!;
     expect(party.isHost).toBe(false);
     expect(party.myStatus).toBe("going");
+  });
+
+  it("honours the ?limit query param", async () => {
+    await post(app, "/events", { title: "First", startTime: FUTURE }, meToken);
+    await post(app, "/events", { title: "Second", startTime: LATER }, meToken);
+
+    const res = await get(app, "/events/calendar?limit=1", meToken);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CalendarBody;
+    expect(body.entries).toHaveLength(1);
+  });
+
+  it("falls back to the default limit on a non-numeric ?limit", async () => {
+    await post(app, "/events", { title: "First", startTime: FUTURE }, meToken);
+    await post(app, "/events", { title: "Second", startTime: LATER }, meToken);
+
+    const res = await get(app, "/events/calendar?limit=abc", meToken);
+    // NaN must not reach the SQL LIMIT — the route falls back to the default.
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CalendarBody;
+    expect(body.entries).toHaveLength(2);
+  });
+
+  it("returns 500 when the calendar query fails", async () => {
+    const brokenApp = createEventsRoutes(brokenLayer(), "", testPublicKey);
+    const res = await get(brokenApp, "/events/calendar", meToken);
+    expect(res.status).toBe(500);
   });
 });

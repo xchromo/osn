@@ -3,7 +3,7 @@ import { A } from "@solidjs/router";
 import { createSignal, Show } from "solid-js";
 import { toast } from "solid-toast";
 
-import { Icon } from "../explore/icons";
+import { Icon } from "../components/Icon";
 import { type CalendarEntry, formatTimeRange } from "../lib/calendar";
 import { upsertMyRsvp } from "../lib/rsvps";
 

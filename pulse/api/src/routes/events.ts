@@ -178,16 +178,16 @@ export const createEventsRoutes = (
         async ({ query, headers, set }) => {
           // The personal agenda is viewer-scoped, so authentication is
           // required — an anonymous caller has no events to show.
-          const claims = await extractClaims(
-            headers["authorization"],
-            jwksUrl,
-            _testKey as CryptoKey,
-          );
+          const claims = await extractClaims(headers["authorization"], jwksUrl, {
+            testKey: _testKey as CryptoKey,
+            audience: "osn-access",
+          });
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
           }
-          const limit = query.limit ? Math.min(Math.max(1, Number(query.limit)), 100) : 50;
+          const parsedLimit = query.limit != null ? Number(query.limit) : NaN;
+          const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(1, parsedLimit), 100) : 50;
           const result = await Effect.runPromise(
             listMyCalendarEvents(claims.profileId, { limit }).pipe(
               Effect.catchAll((cause) =>
