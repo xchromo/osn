@@ -2,9 +2,12 @@ import { it, expect, describe } from "@effect/vitest";
 import {
   events,
   eventComms,
+  eventLineup,
   eventRsvps,
+  pulseAccountOnboarding,
   pulseCloseFriends,
   pulseDeletionJobs,
+  pulseProfileAccounts,
   pulseUsers,
 } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
@@ -113,6 +116,19 @@ describe("pulse account-erasure: requestErasure", () => {
     Effect.gen(function* () {
       const { eventId } = yield* seedPulseData();
       const { db } = yield* Db;
+      // Onboarding state for the leaving account (C-H1 re-review surface).
+      yield* Effect.promise(() =>
+        db.insert(pulseAccountOnboarding).values({
+          accountId: ACCOUNT_ID,
+          interests: '["music"]',
+        }),
+      );
+      yield* Effect.promise(() =>
+        db.insert(pulseProfileAccounts).values({
+          profileId: PROFILE_ID,
+          accountId: ACCOUNT_ID,
+        }),
+      );
       // Manually insert a deletion-jobs row with hard_delete_at in the past.
       yield* Effect.promise(() =>
         db.insert(pulseDeletionJobs).values({
@@ -139,6 +155,21 @@ describe("pulse account-erasure: requestErasure", () => {
         db.select().from(pulseUsers).where(eq(pulseUsers.profileId, PROFILE_ID)),
       );
       expect(pu).toHaveLength(0);
+      // Onboarding + profileId→accountId cache rows purged (C-H1).
+      const ob = yield* Effect.promise(() =>
+        db
+          .select()
+          .from(pulseAccountOnboarding)
+          .where(eq(pulseAccountOnboarding.accountId, ACCOUNT_ID)),
+      );
+      expect(ob).toHaveLength(0);
+      const pa = yield* Effect.promise(() =>
+        db
+          .select()
+          .from(pulseProfileAccounts)
+          .where(eq(pulseProfileAccounts.profileId, PROFILE_ID)),
+      );
+      expect(pa).toHaveLength(0);
       // Hosted event is still there (governed by its own 14-day window).
       const ev = yield* Effect.promise(() =>
         db.select().from(events).where(eq(events.id, eventId)),
@@ -167,14 +198,69 @@ describe("pulse account-erasure: requestErasure", () => {
 describe("pulse account-erasure: purgeAccount (full-account fan-out)", () => {
   it.effect("hard-deletes hosted events + all personal data with no grace window", () =>
     Effect.gen(function* () {
-      yield* seedPulseData();
+      const { eventId } = yield* seedPulseData();
+      const { db } = yield* Db;
+      // Lineup + onboarding rows for the merge-introduced tables — these
+      // must be purged too (S-M2 / C-H1 from the post-merge re-review).
+      yield* Effect.promise(() =>
+        db.insert(eventLineup).values({
+          id: "lnp_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+          eventId,
+          artistName: "DJ Test",
+          role: "headliner",
+          slotStart: new Date(),
+          slotEnd: new Date(Date.now() + 3_600_000),
+        }),
+      );
+      yield* Effect.promise(() =>
+        db.insert(pulseAccountOnboarding).values({
+          accountId: ACCOUNT_ID,
+          interests: '["music"]',
+        }),
+      );
+      yield* Effect.promise(() =>
+        db.insert(pulseProfileAccounts).values({
+          profileId: PROFILE_ID,
+          accountId: ACCOUNT_ID,
+        }),
+      );
+
       const result = yield* accountErasure.purgeAccount(ACCOUNT_ID, [PROFILE_ID]);
       expect(result.purged).toBe(1);
-      const { db } = yield* Db;
+
       const remaining = yield* Effect.promise(() =>
         db.select().from(events).where(eq(events.createdByProfileId, PROFILE_ID)),
       );
       expect(remaining).toHaveLength(0);
+      const lineup = yield* Effect.promise(() =>
+        db.select().from(eventLineup).where(eq(eventLineup.eventId, eventId)),
+      );
+      expect(lineup).toHaveLength(0);
+      const ob = yield* Effect.promise(() =>
+        db
+          .select()
+          .from(pulseAccountOnboarding)
+          .where(eq(pulseAccountOnboarding.accountId, ACCOUNT_ID)),
+      );
+      expect(ob).toHaveLength(0);
+      const pa = yield* Effect.promise(() =>
+        db
+          .select()
+          .from(pulseProfileAccounts)
+          .where(eq(pulseProfileAccounts.profileId, PROFILE_ID)),
+      );
+      expect(pa).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("replay-protected — second call for the same account is a no-op (S-H1)", () =>
+    Effect.gen(function* () {
+      yield* seedPulseData();
+      const first = yield* accountErasure.purgeAccount(ACCOUNT_ID, [PROFILE_ID]);
+      expect(first.alreadyProcessed).toBe(false);
+      const second = yield* accountErasure.purgeAccount(ACCOUNT_ID, [PROFILE_ID]);
+      expect(second.alreadyProcessed).toBe(true);
+      expect(second.purged).toBe(0);
     }).pipe(Effect.provide(createTestLayer())),
   );
 

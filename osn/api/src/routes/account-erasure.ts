@@ -147,21 +147,10 @@ export function createAccountErasureRoutes(
 
             metricAccountDeletionRequested(result.newlyScheduled ? "ok" : "already_pending");
 
-            // Fire-and-forget cross-service fan-out. Returns void; failures get
-            // logged + retried by the sweeper.
-            void Effect.runPromise(
-              accountErasure
-                .runFanOut({
-                  accountId: profile.accountId,
-                  pulseDoneAt: null,
-                  zapDoneAt: null,
-                })
-                .pipe(Effect.provide(dbLayer), Effect.provide(loggerLayer)) as Effect.Effect<
-                void,
-                never,
-                never
-              >,
-            ).catch(() => undefined);
+            // No fan-out here (S-H1): cross-service purges only fire from
+            // the sweeper AFTER the 7-day grace window elapses, so a
+            // restore during the window loses nothing on Pulse / Zap.
+            // See `runFanOutSweep` in services/account-erasure.ts.
 
             set.status = 202;
             return {

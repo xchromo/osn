@@ -31,4 +31,9 @@ CREATE TABLE `pulse_account_purges` (
 	`account_id` text PRIMARY KEY NOT NULL,
 	`processed_at` integer NOT NULL,
 	`profile_count` integer NOT NULL
-);
+);--> statement-breakpoint
+
+-- 4. Erasure sweeps delete event_comms rows by sender; without this index
+--    each per-row sweeper transaction full-scans a hot growing table while
+--    holding the write lock (P-W1, post-merge re-review).
+CREATE INDEX `event_comms_sent_by_idx` ON `event_comms` (`sent_by_profile_id`);

@@ -229,6 +229,32 @@ describe("account-erasure: cancelErasure", () => {
       expect(result.cancelled).toBe(false);
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  it.effect("refuses cancellation once the grace window has expired (S-H1)", () =>
+    Effect.gen(function* () {
+      const { accountId } = yield* seedAccountAndProfile();
+      const { db } = yield* Db;
+      // Job whose grace window is already over — fan-out may be in flight.
+      yield* Effect.promise(() =>
+        db.insert(deletionJobs).values({
+          accountId,
+          softDeletedAt: 1_000,
+          hardDeleteAt: 2_000, // long past
+          pulseDoneAt: null,
+          zapDoneAt: null,
+          reason: "user_request",
+          cancelSessionId: null,
+        }),
+      );
+      const result = yield* accountErasure.cancelErasure(accountId);
+      expect(result.cancelled).toBe(false);
+      // Job row untouched — the sweeper still owns it.
+      const jobs = yield* Effect.promise(() =>
+        db.select().from(deletionJobs).where(eq(deletionJobs.accountId, accountId)),
+      );
+      expect(jobs).toHaveLength(1);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
 
 describe("account-erasure: getDeletionStatus", () => {
@@ -313,6 +339,73 @@ describe("account-erasure: hard-delete sweeper", () => {
         db.select().from(deletionJobs).where(eq(deletionJobs.accountId, accountId)),
       );
       expect(remaining).toHaveLength(1);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("preserves security_events at hard-delete (Art. 6(1)(c) retention)", () =>
+    Effect.gen(function* () {
+      const { accountId } = yield* seedAccountAndProfile();
+      const { db } = yield* Db;
+      yield* Effect.promise(() =>
+        db.insert(securityEvents).values({
+          id: "sev_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+          accountId,
+          kind: "recovery_code_generate",
+          createdAt: 900,
+          acknowledgedAt: null,
+        }),
+      );
+      yield* Effect.promise(() =>
+        db.insert(deletionJobs).values({
+          accountId,
+          softDeletedAt: 1_000,
+          hardDeleteAt: 2_000,
+          pulseDoneAt: 1_500,
+          zapDoneAt: 1_500,
+          reason: "user_request",
+          cancelSessionId: null,
+        }),
+      );
+      yield* accountErasure.runHardDeleteSweep({ nowMs: 5_000_000 });
+      // Account row gone, audit row survives.
+      const acct = yield* Effect.promise(() =>
+        db.select().from(accounts).where(eq(accounts.id, accountId)),
+      );
+      expect(acct).toHaveLength(0);
+      const audit = yield* Effect.promise(() =>
+        db.select().from(securityEvents).where(eq(securityEvents.accountId, accountId)),
+      );
+      expect(audit).toHaveLength(1);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});
+
+describe("account-erasure: fan-out sweep grace gating (S-H1)", () => {
+  it.effect("skips rows whose grace window has not yet elapsed", () =>
+    Effect.gen(function* () {
+      const { accountId } = yield* seedAccountAndProfile();
+      const { db } = yield* Db;
+      const nowMs = 5_000_000;
+      // Pending fan-out but grace not over: must NOT be dispatched.
+      yield* Effect.promise(() =>
+        db.insert(deletionJobs).values({
+          accountId,
+          softDeletedAt: Math.floor(nowMs / 1_000) - 100,
+          hardDeleteAt: Math.floor(nowMs / 1_000) + 600_000, // grace still running
+          pulseDoneAt: null,
+          zapDoneAt: null,
+          reason: "user_request",
+          cancelSessionId: null,
+        }),
+      );
+      const result = yield* accountErasure.runFanOutRetrySweep({ nowMs });
+      expect(result.retried).toBe(0);
+      // Bridge columns untouched.
+      const job = yield* Effect.promise(() =>
+        db.select().from(deletionJobs).where(eq(deletionJobs.accountId, accountId)),
+      );
+      expect(job[0].pulseDoneAt).toBeNull();
+      expect(job[0].zapDoneAt).toBeNull();
     }).pipe(Effect.provide(createTestLayer())),
   );
 });

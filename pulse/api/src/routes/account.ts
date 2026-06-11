@@ -120,8 +120,9 @@ export const createAccountRoutes = (
         }
       },
       {
-        // accountId is read server-side from the access-token claim (S-H2);
-        // the request body only carries the step-up token.
+        // accountId is derived server-to-server from the step-up verify
+        // response's verified `sub` claim (S-H2); it is intentionally
+        // absent from access tokens (P6) and from this request body.
         body: t.Object({
           step_up_token: t.Optional(t.String()),
         }),

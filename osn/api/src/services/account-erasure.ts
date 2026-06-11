@@ -250,6 +250,16 @@ export const cancelErasure = (
     if (!existing[0]) return { cancelled: false };
 
     const now = Math.floor(Date.now() / 1_000);
+
+    // S-H1: cancellation is only honoured INSIDE the grace window. Once
+    // `hardDeleteAt` has passed, the fan-out sweep may already be purging
+    // Pulse / Zap data — resurrecting the OSN account at that point would
+    // leave it half-erased downstream with no way to re-trigger the purge
+    // (the per-account purge ledger treats it as already processed).
+    if (existing[0].hardDeleteAt <= now) {
+      return { cancelled: false };
+    }
+
     yield* Effect.tryPromise({
       try: () =>
         db.transaction(async (tx) => {
@@ -517,9 +527,18 @@ const hardDeleteAccount = (accountId: string): Effect.Effect<void, AccountErasur
   });
 
 /**
- * Fan-out retry sweeper pass. Finds any deletion_jobs row with a NULL
- * bridge column and re-runs the bridge call for it. Captures the age of
- * each pending row so dashboards can spot a chronically-stuck bridge.
+ * Fan-out sweeper pass — the SOLE driver of cross-service purges.
+ *
+ * S-H1: bridges only fire once the 7-day grace window has elapsed
+ * (`hard_delete_at <= now`). Purging Pulse / Zap at soft-delete time would
+ * destroy app data the user was promised they could get back by
+ * cancelling, and the per-account purge ledger on the Pulse side would
+ * then block any future re-purge after a restore-then-redelete.
+ *
+ * Also serves as the retry path: rows whose earlier fan-out attempt
+ * failed keep their NULL `*_done_at` and are re-dispatched each cycle.
+ * Captures the age of each pending row so dashboards can spot a
+ * chronically-stuck bridge.
  */
 export const runFanOutRetrySweep = (
   opts: { batchSize?: number; nowMs?: number } = {},
@@ -534,12 +553,17 @@ export const runFanOutRetrySweep = (
         db
           .select({
             accountId: deletionJobs.accountId,
-            softDeletedAt: deletionJobs.softDeletedAt,
+            hardDeleteAt: deletionJobs.hardDeleteAt,
             pulseDoneAt: deletionJobs.pulseDoneAt,
             zapDoneAt: deletionJobs.zapDoneAt,
           })
           .from(deletionJobs)
-          .where(or(isNull(deletionJobs.pulseDoneAt), isNull(deletionJobs.zapDoneAt)))
+          .where(
+            and(
+              lte(deletionJobs.hardDeleteAt, nowSec),
+              or(isNull(deletionJobs.pulseDoneAt), isNull(deletionJobs.zapDoneAt)),
+            ),
+          )
           .limit(batchSize),
       catch: (cause) => new AccountErasureDbError({ cause }),
     });
@@ -551,7 +575,10 @@ export const runFanOutRetrySweep = (
     yield* Effect.forEach(
       pending,
       (row) => {
-        const age = nowSec - row.softDeletedAt;
+        // Age = time since the grace window expired (when fan-out became
+        // eligible), NOT since soft-delete — otherwise every sample would
+        // saturate at ≥7 days and the stuck-bridge signal would be lost.
+        const age = nowSec - row.hardDeleteAt;
         if (row.pulseDoneAt === null) metricAccountDeletionFanoutPendingAge("pulse", age);
         if (row.zapDoneAt === null) metricAccountDeletionFanoutPendingAge("zap", age);
         return runFanOut(row);

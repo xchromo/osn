@@ -1,7 +1,7 @@
-import { serviceAccounts, serviceAccountKeys, users } from "@osn/db/schema";
+import { accounts, serviceAccounts, serviceAccountKeys, users } from "@osn/db/schema";
 import { Db, DbLive } from "@osn/db/service";
 import { evictPublicKeyCacheEntry, importKeyFromJwk } from "@shared/crypto";
-import { inArray, eq } from "drizzle-orm";
+import { and, inArray, eq, isNull } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -392,11 +392,17 @@ export function createInternalGraphRoutes(dbLayer: Layer.Layer<Db> = DbLive) {
               Effect.gen(function* () {
                 const { db } = yield* Db;
                 return yield* Effect.tryPromise({
+                  // S-H4 (tombstone rule): join accounts and require
+                  // deletedAt IS NULL so a soft-deleted account cannot be
+                  // resolved by downstream services during the grace
+                  // window — otherwise the surviving cancel-handle session
+                  // could keep writing app-side rows after a purge.
                   try: () =>
                     db
                       .select({ accountId: users.accountId })
                       .from(users)
-                      .where(eq(users.id, query.profileId))
+                      .innerJoin(accounts, eq(users.accountId, accounts.id))
+                      .where(and(eq(users.id, query.profileId), isNull(accounts.deletedAt)))
                       .limit(1),
                   catch: (cause) => new Error("DB query failed", { cause }),
                 });

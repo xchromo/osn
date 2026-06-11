@@ -1,10 +1,13 @@
 import {
   events,
   eventComms,
+  eventLineup,
   eventRsvps,
+  pulseAccountOnboarding,
   pulseAccountPurges,
   pulseCloseFriends,
   pulseDeletionJobs,
+  pulseProfileAccounts,
   pulseUsers,
 } from "@pulse/db/schema";
 import type { PulseDeletionJob } from "@pulse/db/schema";
@@ -286,7 +289,10 @@ export const runHardDeleteSweep = (
     const ready = yield* Effect.tryPromise({
       try: () =>
         db
-          .select({ profileId: pulseDeletionJobs.profileId })
+          .select({
+            profileId: pulseDeletionJobs.profileId,
+            accountId: pulseDeletionJobs.accountId,
+          })
           .from(pulseDeletionJobs)
           .where(lte(pulseDeletionJobs.hardDeleteAt, nowSec))
           .limit(batchSize),
@@ -310,6 +316,17 @@ export const runHardDeleteSweep = (
               );
             await tx.delete(eventComms).where(eq(eventComms.sentByProfileId, row.profileId));
             await tx.delete(pulseUsers).where(eq(pulseUsers.profileId, row.profileId));
+            // C-H1 (re-review): onboarding state is Pulse-scoped personal
+            // data (interests, opt-ins) and must go with the leave. The
+            // profileId→accountId cache row goes too — keeping it would
+            // preserve the exact account↔profile correlation the P6
+            // invariant exists to prevent.
+            await tx
+              .delete(pulseAccountOnboarding)
+              .where(eq(pulseAccountOnboarding.accountId, row.accountId));
+            await tx
+              .delete(pulseProfileAccounts)
+              .where(eq(pulseProfileAccounts.profileId, row.profileId));
             await tx
               .delete(pulseDeletionJobs)
               .where(eq(pulseDeletionJobs.profileId, row.profileId));
@@ -324,7 +341,7 @@ export const runHardDeleteSweep = (
 
 /**
  * Sweeper for hosted events whose 14-day public-cancellation window has
- * elapsed. Hard-deletes the event row + cascade-deletes RSVPs/comms.
+ * elapsed. Hard-deletes the event row + cascade-deletes RSVPs/comms/lineup.
  */
 export const runEventCancellationSweep = (
   opts: { batchSize?: number; nowMs?: number } = {},
@@ -351,6 +368,7 @@ export const runEventCancellationSweep = (
           db.transaction(async (tx) => {
             await tx.delete(eventRsvps).where(eq(eventRsvps.eventId, row.id));
             await tx.delete(eventComms).where(eq(eventComms.eventId, row.id));
+            await tx.delete(eventLineup).where(eq(eventLineup.eventId, row.id));
             await tx.delete(events).where(eq(events.id, row.id));
           }),
         catch: (cause) => new PulseErasureDbError({ cause }),
@@ -429,6 +447,17 @@ export const purgeAccount = (
           await tx.delete(eventComms).where(inArray(eventComms.sentByProfileId, profileIds));
           await tx.delete(pulseUsers).where(inArray(pulseUsers.profileId, profileIds));
 
+          // C-H1 (re-review): Pulse-scoped personal data added by the
+          // onboarding feature — interests/opt-ins keyed by accountId, and
+          // the profileId→accountId cache rows whose survival would
+          // preserve the exact correlation the P6 invariant prevents.
+          await tx
+            .delete(pulseAccountOnboarding)
+            .where(eq(pulseAccountOnboarding.accountId, accountId));
+          await tx
+            .delete(pulseProfileAccounts)
+            .where(inArray(pulseProfileAccounts.profileId, profileIds));
+
           // Drop hosted events + their cascading rows for the deleted profiles.
           const hostedEventIds = (
             await tx
@@ -439,6 +468,7 @@ export const purgeAccount = (
           if (hostedEventIds.length > 0) {
             await tx.delete(eventRsvps).where(inArray(eventRsvps.eventId, hostedEventIds));
             await tx.delete(eventComms).where(inArray(eventComms.eventId, hostedEventIds));
+            await tx.delete(eventLineup).where(inArray(eventLineup.eventId, hostedEventIds));
             await tx.delete(events).where(inArray(events.id, hostedEventIds));
           }
 
