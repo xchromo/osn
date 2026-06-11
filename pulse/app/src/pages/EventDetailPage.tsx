@@ -2,7 +2,7 @@ import { useAuth } from "@osn/client/solid";
 import { Badge } from "@osn/ui/ui/badge";
 import { Card } from "@osn/ui/ui/card";
 import { A, useParams, useSearchParams } from "@solidjs/router";
-import { createEffect, createResource, createSignal, Show } from "solid-js";
+import { createEffect, createResource, createSignal, on, untrack, Show } from "solid-js";
 
 import { AddToCalendarButton } from "../components/AddToCalendarButton";
 import { CommsSummary } from "../components/CommsSummary";
@@ -60,12 +60,22 @@ export function EventDetailPage() {
   const fetchKey = () => ({ id: params.id, token: accessToken() });
   const [event] = createResource(fetchKey, ({ id, token }) => fetchEvent(id, token));
 
-  // Inbound share-source attribution: latch the `?source=` param at mount
-  // so it survives router-driven URL cleanups, and only forward it on
-  // the first RSVP after this load. Unknown values bucket to "other"
-  // (see `coerceShareSource`) so we still record the touch.
-  const [inboundSource, setInboundSource] = createSignal<ShareSource | null>(
-    coerceShareSource(searchParams.source),
+  // Inbound share-source attribution: latch the `?source=` param so it
+  // survives router-driven URL cleanups, and only forward it on the
+  // first RSVP after this load. Unknown values bucket to "other" (see
+  // `coerceShareSource`) so we still record the touch.
+  //
+  // Keyed on `params.id` so a router-reused mount (navigating between
+  // events without a full unmount) re-latches from the new event's URL.
+  // The read is wrapped in `untrack` to make the one-shot intent
+  // explicit — we deliberately don't re-fire when only the query string
+  // mutates under the same event.
+  const [inboundSource, setInboundSource] = createSignal<ShareSource | null>(null);
+  createEffect(
+    on(
+      () => params.id,
+      () => setInboundSource(untrack(() => coerceShareSource(searchParams.source))),
+    ),
   );
   // Fire-and-forget exposure ping. Re-runs once the event has loaded so
   // we only count exposures for events the viewer can actually see —
@@ -165,7 +175,11 @@ export function EventDetailPage() {
                 </Show>
                 <div class="mt-4 flex flex-wrap gap-2">
                   <AddToCalendarButton eventId={e().id} apiBaseUrl={apiBaseUrl} />
-                  <ShareEventButton eventId={e().id} eventTitle={e().title} />
+                  <ShareEventButton
+                    eventId={e().id}
+                    eventTitle={e().title}
+                    accessToken={accessToken()}
+                  />
                 </div>
               </div>
             </Card>

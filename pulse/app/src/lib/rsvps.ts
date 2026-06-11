@@ -102,16 +102,30 @@ export async function upsertMyRsvp(
 
 /**
  * Fire-and-forget telemetry pings for outbound shares and inbound
- * exposures. Both are unauthenticated, both are rate-limited
- * server-side, and neither blocks the surrounding UX — failures are
- * swallowed because the user-facing action (share, navigation) has
- * already succeeded by the time these run.
+ * exposures. Both are rate-limited server-side and neither blocks the
+ * surrounding UX — failures are swallowed because the user-facing action
+ * (share, navigation) has already succeeded by the time these run.
+ *
+ * Both forward the access token when present so the server's visibility
+ * gate sees the caller's identity — without it an organiser sharing
+ * their own *private* event would 404 (the gate can't tell they're the
+ * organiser) and the counter would silently never increment.
+ *
+ * `keepalive: true` lets the browser complete the request even when the
+ * share fires a navigation intent (WhatsApp / X / Facebook open a new
+ * context and may unload this tab) — otherwise those platforms, the ones
+ * this metric most exists to measure, would systematically under-count.
  */
-export async function recordShareInvoked(eventId: string, source: ShareSource): Promise<void> {
+export async function recordShareInvoked(
+  eventId: string,
+  source: ShareSource,
+  token: string | null,
+): Promise<void> {
   try {
     await fetch(`${BASE_URL}/events/${eventId}/share`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify({ source }),
     });
   } catch {
@@ -127,6 +141,7 @@ export async function recordShareExposure(
   try {
     await fetch(`${BASE_URL}/events/${eventId}/exposure`, {
       method: "POST",
+      keepalive: true,
       headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify({ source }),
     });

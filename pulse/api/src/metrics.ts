@@ -16,6 +16,8 @@ import {
 } from "@shared/observability/metrics";
 import type { EventStatus, JwksCacheResult, Result } from "@shared/observability/metrics";
 
+import type { ShareSource } from "./lib/shareSource";
+
 /** Canonical metric name consts — grep-able, refactor-safe. */
 export const PULSE_METRICS = {
   eventsCreated: "pulse.events.created",
@@ -286,13 +288,10 @@ type CloseFriendsListedAttrs = { result_empty: "true" | "false" };
 
 // --- Share attribution ---
 
-/**
- * Bounded share-source union. MUST stay in sync with `SHARE_SOURCES` in
- * `lib/shareSource.ts` — duplicated here (rather than imported) so the
- * metric attribute type is statically resolvable at compile time without
- * coupling the metrics file to the Effect Schema layer.
- */
-type ShareSource = "instagram" | "facebook" | "tiktok" | "x" | "whatsapp" | "copy_link" | "other";
+// Bounded share-source union — imported type-only so the metric attribute
+// type stays the single source of truth in `lib/shareSource.ts` without
+// pulling that module's runtime (Effect Schema / TypeBox) into metrics.
+// `import type` is erased at compile time, so there is no runtime coupling.
 
 /**
  * Surface that emitted the share / exposure event. Single value today

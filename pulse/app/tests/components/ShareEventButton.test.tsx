@@ -89,7 +89,7 @@ describe("ShareEventButton", () => {
       expect(intentUrl).toContain("https://wa.me/");
       expect(intentUrl).toContain(encodeURIComponent("https://pulse.app/events/evt_1"));
       expect(intentUrl).toContain(encodeURIComponent("?source=whatsapp"));
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "whatsapp");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "whatsapp", null);
     });
   });
 
@@ -101,7 +101,7 @@ describe("ShareEventButton", () => {
       const [intentUrl] = windowOpen.mock.calls[0]!;
       expect(intentUrl).toContain("twitter.com/intent/tweet");
       expect(intentUrl).toContain(encodeURIComponent("?source=x"));
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "x");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "x", null);
     });
   });
 
@@ -113,7 +113,7 @@ describe("ShareEventButton", () => {
       const [intentUrl] = windowOpen.mock.calls[0]!;
       expect(intentUrl).toContain("facebook.com/sharer/sharer.php");
       expect(intentUrl).toContain(encodeURIComponent("?source=facebook"));
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "facebook");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "facebook", null);
     });
   });
 
@@ -123,7 +123,7 @@ describe("ShareEventButton", () => {
     fireEvent.click(await screen.findByText("Instagram"));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("https://pulse.app/events/evt_1?source=instagram");
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "instagram");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "instagram", null);
       expect(mockToastSuccess).toHaveBeenCalled();
     });
   });
@@ -134,7 +134,7 @@ describe("ShareEventButton", () => {
     fireEvent.click(await screen.findByText("Copy link"));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("https://pulse.app/events/evt_1?source=copy_link");
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "copy_link");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "copy_link", null);
     });
   });
 
@@ -147,7 +147,7 @@ describe("ShareEventButton", () => {
         url: "https://pulse.app/events/evt_1?source=other",
         title: "Party",
       });
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "other");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "other", null);
     });
   });
 
@@ -158,7 +158,27 @@ describe("ShareEventButton", () => {
     fireEvent.click(await screen.findByText("More…"));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("https://pulse.app/events/evt_1?source=other");
-      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "other");
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "other", null);
+    });
+  });
+
+  it("forwards the access token to the share telemetry ping when provided", async () => {
+    render(() => <ShareEventButton eventId="evt_1" eventTitle="Party" accessToken="tok" />);
+    openPicker();
+    fireEvent.click(await screen.findByText("Copy link"));
+    await waitFor(() => {
+      expect(mockRecordShareInvoked).toHaveBeenCalledWith("evt_1", "copy_link", "tok");
+    });
+  });
+
+  it("encodes the event id into the shared URL path", async () => {
+    render(() => <ShareEventButton eventId="evt /a#b" eventTitle="Party" />);
+    openPicker();
+    fireEvent.click(await screen.findByText("Copy link"));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://pulse.app/events/evt%20%2Fa%23b?source=copy_link",
+      );
     });
   });
 

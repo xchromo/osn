@@ -6,7 +6,7 @@ import { Elysia, t } from "elysia";
 import { DEFAULT_JWKS_URL, extractClaims } from "../lib/auth";
 import { MAX_PRICE_MAJOR } from "../lib/currency";
 import { MAX_EVENT_GUESTS } from "../lib/limits";
-import { shareSourceTypeBoxUnion, type ShareSource } from "../lib/shareSource";
+import { shareSourceTypeBox, type ShareSource } from "../lib/shareSource";
 import {
   metricCalendarIcsGenerated,
   metricEventAccessDenied,
@@ -17,7 +17,7 @@ import {
 import { buildIcs } from "../services/calendar";
 import { listBlasts, parseCommsChannels, sendBlast } from "../services/comms";
 import { discoverEvents } from "../services/discovery";
-import { loadVisibleEvent } from "../services/eventAccess";
+import { checkEventVisibility, loadVisibleEvent } from "../services/eventAccess";
 import {
   createEvent,
   deleteEvent,
@@ -681,7 +681,7 @@ export const createEventsRoutes = (
           params: t.Object({ id: t.String() }),
           body: t.Object({
             status: rsvpStatusEnum,
-            shareSource: t.Optional(shareSourceTypeBoxUnion()),
+            shareSource: t.Optional(shareSourceTypeBox),
           }),
         },
       )
@@ -712,10 +712,12 @@ export const createEventsRoutes = (
             jwksUrl,
             _testKey as CryptoKey,
           );
-          const event = await Effect.runPromise(
-            loadVisibleEvent(params.id, claims?.profileId ?? null).pipe(Effect.provide(dbLayer)),
+          const meta = await Effect.runPromise(
+            checkEventVisibility(params.id, claims?.profileId ?? null).pipe(
+              Effect.provide(dbLayer),
+            ),
           );
-          if (event === null) {
+          if (meta === null) {
             set.status = 404;
             return { message: "Event not found" } as const;
           }
@@ -725,7 +727,7 @@ export const createEventsRoutes = (
         },
         {
           params: t.Object({ id: t.String() }),
-          body: t.Object({ source: shareSourceTypeBoxUnion() }),
+          body: t.Object({ source: shareSourceTypeBox }),
         },
       )
       .post(
@@ -747,16 +749,18 @@ export const createEventsRoutes = (
             jwksUrl,
             _testKey as CryptoKey,
           );
-          const event = await Effect.runPromise(
-            loadVisibleEvent(params.id, claims?.profileId ?? null).pipe(Effect.provide(dbLayer)),
+          const meta = await Effect.runPromise(
+            checkEventVisibility(params.id, claims?.profileId ?? null).pipe(
+              Effect.provide(dbLayer),
+            ),
           );
-          if (event === null) {
+          if (meta === null) {
             set.status = 404;
             return { message: "Event not found" } as const;
           }
           // Organisers viewing their own event don't pollute exposure
           // analytics — same rule as the RSVP attribution short-circuit.
-          if (claims?.profileId && claims.profileId === event.createdByProfileId) {
+          if (claims?.profileId && claims.profileId === meta.createdByProfileId) {
             set.status = 204;
             return null;
           }
@@ -766,7 +770,7 @@ export const createEventsRoutes = (
         },
         {
           params: t.Object({ id: t.String() }),
-          body: t.Object({ source: shareSourceTypeBoxUnion() }),
+          body: t.Object({ source: shareSourceTypeBox }),
         },
       )
       .post(

@@ -184,18 +184,27 @@ describe("upsertMyRsvp", () => {
 // ── recordShareInvoked ───────────────────────────────────────────────────────
 
 describe("recordShareInvoked", () => {
-  it("POSTs the source to /events/:id/share", async () => {
+  it("POSTs the source to /events/:id/share with keepalive and no auth header when token is null", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
-    await recordShareInvoked("evt_1", "instagram");
+    await recordShareInvoked("evt_1", "instagram", null);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/events/evt_1/share");
     expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).keepalive).toBe(true);
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ source: "instagram" });
+    expect((init as RequestInit).headers).not.toMatchObject({ Authorization: expect.anything() });
+  });
+
+  it("attaches the bearer token when one is provided (organiser private-event share)", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await recordShareInvoked("evt_1", "instagram", "tok");
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer tok" });
   });
 
   it("swallows fetch failures so the share UX doesn't break", async () => {
     fetchMock.mockRejectedValueOnce(new Error("network down"));
-    await expect(recordShareInvoked("evt_1", "facebook")).resolves.toBeUndefined();
+    await expect(recordShareInvoked("evt_1", "facebook", null)).resolves.toBeUndefined();
   });
 });
 
@@ -208,6 +217,7 @@ describe("recordShareExposure", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/events/evt_1/exposure");
     expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).keepalive).toBe(true);
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ source: "x" });
     expect((init as RequestInit).headers).not.toMatchObject({ Authorization: expect.anything() });
   });

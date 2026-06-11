@@ -42,18 +42,20 @@ export const isShareSource = (value: unknown): value is ShareSource =>
 export const ShareSourceSchema = Schema.Literal(...SHARE_SOURCES);
 
 /**
- * TypeBox union over the share-source enum. Built fresh per call so the
- * route file can use it inline without sharing a mutable singleton with
- * other routes (TypeBox schemas are reference-tracked by Elysia for
- * type inference).
+ * TypeBox union over the share-source enum — for the HTTP boundary.
+ *
+ * A single module-level const (not a per-call factory): Elysia
+ * reference-tracks schemas at route-registration time, so sharing one
+ * frozen instance across the RSVP / share / exposure routes is correct
+ * and avoids re-allocating eight AST nodes per registration. Keep the
+ * literal list in sync with `SHARE_SOURCES` above.
  */
-export const shareSourceTypeBoxUnion = () =>
-  t.Union([
-    t.Literal("instagram"),
-    t.Literal("facebook"),
-    t.Literal("tiktok"),
-    t.Literal("x"),
-    t.Literal("whatsapp"),
-    t.Literal("copy_link"),
-    t.Literal("other"),
-  ]);
+export const shareSourceTypeBox = t.Union([
+  t.Literal("instagram"),
+  t.Literal("facebook"),
+  t.Literal("tiktok"),
+  t.Literal("x"),
+  t.Literal("whatsapp"),
+  t.Literal("copy_link"),
+  t.Literal("other"),
+]);

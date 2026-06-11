@@ -1,8 +1,6 @@
 import { Button } from "@osn/ui/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from "@osn/ui/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@osn/ui/ui/popover";
-// `Button` is used in the mobile branch below — keep the import even if
-// only one branch references it; the bundler tree-shakes per-call.
 import { createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
@@ -116,6 +114,12 @@ const DESTINATIONS: Destination[] = [
 interface ShareEventButtonProps {
   eventId: string;
   eventTitle: string;
+  /**
+   * Caller's access token, forwarded to the share telemetry ping so the
+   * server's visibility gate can recognise an organiser sharing their
+   * own private event. Optional — anonymous sharers pass null.
+   */
+  accessToken?: string | null;
 }
 
 /**
@@ -136,8 +140,12 @@ export function ShareEventButton(props: ShareEventButtonProps) {
   const [open, setOpen] = createSignal(false);
 
   const baseUrl = () => {
-    if (typeof window === "undefined") return `/events/${props.eventId}`;
-    return `${window.location.origin}/events/${props.eventId}`;
+    // `encodeURIComponent` guards against a future event-id schema (or a
+    // mis-populated prop) injecting `?`, `#`, or `..` into the path and
+    // shifting attribution onto a different event.
+    const path = `/events/${encodeURIComponent(props.eventId)}`;
+    if (typeof window === "undefined") return path;
+    return `${window.location.origin}${path}`;
   };
 
   async function pick(dest: Destination) {
@@ -145,7 +153,7 @@ export function ShareEventButton(props: ShareEventButtonProps) {
     const ok = await dest.handle(sourcedUrl, props.eventTitle);
     if (ok) {
       // Telemetry is fire-and-forget — don't block the close on it.
-      void recordShareInvoked(props.eventId, dest.id);
+      void recordShareInvoked(props.eventId, dest.id, props.accessToken ?? null);
     }
     setOpen(false);
   }
