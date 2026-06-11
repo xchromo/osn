@@ -1,5 +1,37 @@
 # @osn/api
 
+## 0.17.1
+
+### Patch Changes
+
+- 1a4e9d5: Harden the shared OSN access-token verifier: treat expired/invalid
+  tokens as terminal (no JWKS refetch), negative-cache unknown kids,
+  coalesce concurrent JWKS fetches, and add a fetch timeout — removing a
+  per-request upstream-fetch amplifier on every consumer. Fold the
+  audience check into the single jwtVerify pass. Pulse routes now enforce
+  aud=osn-access (previously any OSN-issued token authenticated).
+- 051daa8: Extract OSN access-token verification + JWKS cache into a new shared
+  package, `@shared/osn-auth-client`, with per-framework middleware
+  adapters (Hono + Elysia). Pulse switches to consuming the shared
+  verifier; cire will follow in a later phase.
+- Updated dependencies [9f6874b]
+- Updated dependencies [1a4e9d5]
+- Updated dependencies [051daa8]
+  - @shared/observability@0.9.2
+  - @shared/osn-auth-client@0.1.0
+  - @shared/crypto@0.6.11
+
+## 0.17.0
+
+### Minor Changes
+
+- dd742dd: Pulse first-run onboarding: six-step `/welcome` flow with themed coral illustrations (welcome rings, editorial map, interest constellation, location pin drop, notifications ember, finish date stamp). Captures interests, location/notifications permissions, and reminder opt-in. Account-keyed server-side via a new `pulse_account_onboarding` table + `pulse_profile_accounts` mapping cache + new `GET /graph/internal/profile-account` ARC endpoint on `osn/api` — preserves the multi-account privacy invariant (accountId never on the wire). Server-side first-run gate redirects new users to `/welcome` and is idempotent on the completion POST. See `wiki/systems/pulse-onboarding.md`.
+
+### Patch Changes
+
+- Updated dependencies [dd742dd]
+  - @pulse/db@0.13.0
+
 ## 0.16.1
 
 ### Patch Changes

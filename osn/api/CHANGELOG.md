@@ -1,5 +1,23 @@
 # @osn/osn
 
+## 3.4.1
+
+### Patch Changes
+
+- 2420fc8: Add http://localhost:4322 (@cire/organiser) to the local-dev CORS
+  fallback so the organiser portal's OSN passkey sign-in works
+  out-of-the-box.
+- Updated dependencies [9f6874b]
+  - @shared/observability@0.9.2
+  - @shared/crypto@0.6.11
+  - @shared/email@0.2.4
+
+## 3.4.0
+
+### Minor Changes
+
+- dd742dd: Pulse first-run onboarding: six-step `/welcome` flow with themed coral illustrations (welcome rings, editorial map, interest constellation, location pin drop, notifications ember, finish date stamp). Captures interests, location/notifications permissions, and reminder opt-in. Account-keyed server-side via a new `pulse_account_onboarding` table + `pulse_profile_accounts` mapping cache + new `GET /graph/internal/profile-account` ARC endpoint on `osn/api` — preserves the multi-account privacy invariant (accountId never on the wire). Server-side first-run gate redirects new users to `/welcome` and is idempotent on the completion POST. See `wiki/systems/pulse-onboarding.md`.
+
 ## 3.3.2
 
 ### Patch Changes
