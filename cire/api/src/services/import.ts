@@ -2,7 +2,7 @@ import { events, families, guests, guestEvents, rsvps, weddings } from "@cire/db
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Data } from "effect";
 
-import { DbService } from "../db";
+import { DbService, dbQuery } from "../db";
 import type {
   EventCreate,
   EventLink,
@@ -92,16 +92,18 @@ export function diffAgainstDb(
     // cross-deletes. diffAgainstDb is the chokepoint for preview/apply/revert,
     // so fail closed here if a second wedding exists. Real fix (join-based
     // scoping) is tracked in wiki/TODO.md → "diffAgainstDb scoping".
-    const [{ count: weddingCount }] = db
-      .select({ count: sql<number>`count(*)` })
-      .from(weddings)
-      .all();
+    const [{ count: weddingCount }] = yield* dbQuery(() =>
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(weddings)
+        .all(),
+    );
     if (weddingCount > 1) {
       return yield* Effect.fail(new MultiWeddingImportUnsupported({ weddingCount }));
     }
 
     // ── Events ──────────────────────────────────────────────────────────────
-    const existingEvents = db.select().from(events).all();
+    const existingEvents = yield* dbQuery(() => db.select().from(events).all());
     const existingEventByNorm = new Map(existingEvents.map((e) => [normaliseName(e.name), e]));
     const parsedEventByNorm = new Map(parsedEvents.map((e) => [normaliseName(e.name), e]));
 
@@ -130,7 +132,7 @@ export function diffAgainstDb(
     }
 
     // ── Families ────────────────────────────────────────────────────────────
-    const existingFamilies = db.select().from(families).all();
+    const existingFamilies = yield* dbQuery(() => db.select().from(families).all());
     const existingFamilyByNorm = new Map(
       existingFamilies.map((f) => [normaliseName(f.familyName), f]),
     );
@@ -165,7 +167,7 @@ export function diffAgainstDb(
 
     // ── Guests ──────────────────────────────────────────────────────────────
     const removedFamilyIds = new Set(familyRemoves.map((f) => f.id));
-    const existingGuests = db.select().from(guests).all();
+    const existingGuests = yield* dbQuery(() => db.select().from(guests).all());
 
     /** Per-family map: normFirstName → existing guest row. */
     const guestsByFamily = new Map<string, Map<string, (typeof existingGuests)[number]>>();
@@ -245,7 +247,7 @@ export function diffAgainstDb(
     }
 
     // ── Event links ─────────────────────────────────────────────────────────
-    const existingLinks = db.select().from(guestEvents).all();
+    const existingLinks = yield* dbQuery(() => db.select().from(guestEvents).all());
     const existingLinkSet = new Set(existingLinks.map((l) => `${l.guestId}::${l.eventId}`));
     /** Track desired (guestId, eventId) pairs after import. */
     const desiredLinks = new Set<string>();
@@ -288,7 +290,9 @@ export function diffAgainstDb(
 
     if (guestsBeingLost.length > 0) {
       const ids = guestsBeingLost.map((g) => g.id);
-      const rsvpRows = db.select().from(rsvps).where(inArray(rsvps.guestId, ids)).all();
+      const rsvpRows = yield* dbQuery(() =>
+        db.select().from(rsvps).where(inArray(rsvps.guestId, ids)).all(),
+      );
       const lostFirst = new Map(guestsBeingLost.map((g) => [g.id, g.firstName]));
       for (const r of rsvpRows) {
         const isMeaningful = r.status !== "pending" || (r.dietary && r.dietary.length > 0);
@@ -327,22 +331,28 @@ export function applyImport(
     const db = yield* DbService;
     const now = new Date();
 
-    // bun:sqlite drizzle is synchronous; ordering matters for FK integrity.
-    // The mirror of this on D1 would be a series of ≤100-statement batches —
-    // here we just run statements in dependency order.
+    // Statements run in FK-dependency order. Each is awaited so the same code
+    // path works on both drivers: bun:sqlite (tests/local) resolves
+    // synchronously, D1 (production) returns a Promise. NOTE: D1 has no
+    // interactive transaction, so this is a non-atomic sequence — a mid-way
+    // failure can leave a partial apply, exactly as the prior synchronous
+    // bun:sqlite version did (no BEGIN/COMMIT either). Wrapping the dependency
+    // chain in `db.batch([...])` for D1 atomicity is tracked as a follow-up
+    // (it can't share this code path — bun:sqlite has no `.batch()`).
 
-    yield* Effect.try({
-      try: () => {
+    yield* Effect.tryPromise({
+      try: async () => {
         // 1. event removes (cascade rsvps + guest_events on those events)
         for (const er of plan.eventRemoves) {
-          db.delete(rsvps).where(eq(rsvps.eventId, er.id)).run();
-          db.delete(guestEvents).where(eq(guestEvents.eventId, er.id)).run();
-          db.delete(events).where(eq(events.id, er.id)).run();
+          await db.delete(rsvps).where(eq(rsvps.eventId, er.id)).run();
+          await db.delete(guestEvents).where(eq(guestEvents.eventId, er.id)).run();
+          await db.delete(events).where(eq(events.id, er.id)).run();
         }
 
         // 2. event creates
         for (const ec of plan.eventCreates) {
-          db.insert(events)
+          await db
+            .insert(events)
             .values({
               id: ec.id,
               weddingId,
@@ -366,7 +376,8 @@ export function applyImport(
 
         // 3. event updates
         for (const eu of plan.eventUpdates) {
-          db.update(events)
+          await db
+            .update(events)
             .set({
               name: eu.event.name,
               date: eu.event.startAt.slice(0, 10),
@@ -387,12 +398,13 @@ export function applyImport(
 
         // 4. family removes (cascade guests, rsvps, sessions)
         for (const fr of plan.familyRemoves) {
-          db.delete(families).where(eq(families.id, fr.id)).run();
+          await db.delete(families).where(eq(families.id, fr.id)).run();
         }
 
         // 5. family creates
         for (const fc of plan.familyCreates) {
-          db.insert(families)
+          await db
+            .insert(families)
             .values({
               id: fc.id,
               weddingId,
@@ -406,12 +418,13 @@ export function applyImport(
 
         // 6. guest removes (cascade rsvps + guest_events for that guest)
         for (const gr of plan.guestRemoves) {
-          db.delete(guests).where(eq(guests.id, gr.id)).run();
+          await db.delete(guests).where(eq(guests.id, gr.id)).run();
         }
 
         // 7. guest creates
         for (const gc of plan.guestCreates) {
-          db.insert(guests)
+          await db
+            .insert(guests)
             .values({
               id: gc.id,
               familyId: gc.familyId,
@@ -426,7 +439,8 @@ export function applyImport(
 
         // 8. guest updates
         for (const gu of plan.guestUpdates) {
-          db.update(guests)
+          await db
+            .update(guests)
             .set({
               lastName: gu.lastName,
               sortOrder: gu.sortOrder,
@@ -441,14 +455,16 @@ export function applyImport(
         // we delete each pair individually rather than wiping a whole guest's
         // link set.
         for (const link of plan.eventLinkRemoves) {
-          db.delete(guestEvents)
+          await db
+            .delete(guestEvents)
             .where(
               and(eq(guestEvents.guestId, link.guestId), eq(guestEvents.eventId, link.eventId)),
             )
             .run();
         }
         for (const link of plan.eventLinkCreates) {
-          db.insert(guestEvents)
+          await db
+            .insert(guestEvents)
             .values({ guestId: link.guestId, eventId: link.eventId })
             .onConflictDoNothing()
             .run();
