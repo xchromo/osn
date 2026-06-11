@@ -1,5 +1,42 @@
 # @pulse/db
 
+## 0.14.0
+
+### Minor Changes
+
+- 1f61fc4: Add a venue detail page (initially scoped to clubs) plus a clickable
+  venue layer on the Explore map. Venues are namespaced under OSN
+  organisations so the same handle (and name) can recur across orgs.
+
+  - DB: new `venues` and `event_lineup` tables and a nullable
+    `events.venue_id` FK. `venues` rows carry `org_handle` + `handle`
+    with a unique `(org_handle, handle)` index; `id` is opaque (`ven_*`)
+    and not URL-addressable.
+  - API: routes nest under `/venues/:orgHandle/:venueHandle` —
+    `GET /venues` (index, feeds the map; tracked for bbox-aware
+    replacement), `GET /venues/:orgHandle/:venueHandle`, `/events`, and
+    `/events/:eventId/lineup`. Effect services with `pulse.venue.*`
+    spans and bounded-cardinality metrics for the detail, events list,
+    and lineup surfaces.
+  - Frontend page at `/venues/:orgHandle/:venueHandle` with a vertical
+    mono-time lineup timeline, a snap-scroll event carousel, a real-time
+    open/closed badge (computed in the venue's timezone, handles slots
+    crossing midnight), an "Open in Maps" button, and icon links to
+    website + Instagram. Discovery routes linking _into_ the page are
+    intentionally deferred — the Explore map is the first such surface.
+  - Explore map: new venue pin layer wrapped in `<A>` to the venue page.
+    When a visible event pin sits at the same venue, the diamond is
+    hidden and the event-pin popover gains a "See venue →" CTA. Popover
+    is now pointer-event aware with a hover-grace timer so the button is
+    reachable. `Icon` component promoted from `explore/` to `components/`
+    with `globe` + `instagram` glyphs added.
+
+## 0.13.0
+
+### Minor Changes
+
+- dd742dd: Pulse first-run onboarding: six-step `/welcome` flow with themed coral illustrations (welcome rings, editorial map, interest constellation, location pin drop, notifications ember, finish date stamp). Captures interests, location/notifications permissions, and reminder opt-in. Account-keyed server-side via a new `pulse_account_onboarding` table + `pulse_profile_accounts` mapping cache + new `GET /graph/internal/profile-account` ARC endpoint on `osn/api` — preserves the multi-account privacy invariant (accountId never on the wire). Server-side first-run gate redirects new users to `/welcome` and is idempotent on the completion POST. See `wiki/systems/pulse-onboarding.md`.
+
 ## 0.12.3
 
 ### Patch Changes

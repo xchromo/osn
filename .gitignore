@@ -180,6 +180,9 @@ dist
 # Turborepo
 .turbo
 
+# Wrangler local state (D1/KV/R2 emulation, build cache)
+.wrangler/
+
 # Astro
 .astro
 
@@ -192,3 +195,6 @@ data/
 
 # Obsidian (wiki vault user state)
 wiki/.obsidian/
+
+# Caveman compress backups
+*.original.md
