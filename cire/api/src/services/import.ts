@@ -342,6 +342,10 @@ export function applyImport(
 
     yield* Effect.tryPromise({
       try: async () => {
+        // no-await-in-loop is disabled for this block: statements MUST run in FK
+        // order (removes→creates→links); parallelising via Promise.all would
+        // violate referential integrity, and D1 has no interactive transaction.
+        /* eslint-disable no-await-in-loop */
         // 1. event removes (cascade rsvps + guest_events on those events)
         for (const er of plan.eventRemoves) {
           await db.delete(rsvps).where(eq(rsvps.eventId, er.id)).run();
@@ -469,6 +473,7 @@ export function applyImport(
             .onConflictDoNothing()
             .run();
         }
+        /* eslint-enable no-await-in-loop */
       },
       catch: (cause) => new ImportError({ reason: "apply failed", cause }),
     });
