@@ -2,6 +2,9 @@
 "@cire/organiser": patch
 "@cire/web": patch
 "@cire/api": patch
+"@pulse/api": patch
+"@pulse/app": patch
+"@osn/api": patch
 ---
 
 Bring cire under the OSN oxlint + oxfmt conventions cleanly — cire was the
@@ -29,3 +32,14 @@ Tooling parity:
 - The root `fmt` / `fmt:check` scripts now include `cire` (the `lint`
   script already covered it via `.`), so CI's format check enforces cire
   too. The two cire `astro.config.mjs` files were import-sorted to match.
+
+Also cleared the remaining 6 repo-wide oxlint warnings so the whole tree
+is warning-free under the shared config:
+
+- `@pulse/api` events feed — `Array#sort()` → `Array#toSorted()`.
+- `@pulse/app` Explore — hoisted `isDark` to module scope
+  (`consistent-function-scoping`) and prefixed an unused mock param.
+- `@osn/api` outbound-arc + `@shared/osn-auth-client` jwks-cache test —
+  justified `no-await-in-loop` disables where the sequential `await` is
+  intentional (short-circuit on a configured stack / LRU access order
+  under test), plus a hoisted test url helper.
