@@ -48,7 +48,7 @@ async function applyVersion(
       yield* storeUpload(eventsCsv, guestsCsv, importId);
       const ev = yield* parseEventsCsv(eventsCsv);
       const fam = (yield* parseGuestsCsv(guestsCsv, ev)) as ParsedFamily[];
-      const plan = yield* diffAgainstDb(ev, fam);
+      const plan = yield* diffAgainstDb(ev, fam, BOOTSTRAP_WEDDING_ID);
       const summary = yield* applyImport(importId, plan, BOOTSTRAP_WEDDING_ID);
       const db = yield* DbService;
       db.insert(imports)
