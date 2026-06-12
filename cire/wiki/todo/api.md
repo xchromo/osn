@@ -3,13 +3,14 @@ title: "Cire TODO — cire/api"
 tags: [todo, api]
 related:
   - "[[index]]"
-last-reviewed: 2026-06-11
+last-reviewed: 2026-06-12
 ---
 
 # cire/api
 
 Backend feature work. The Hono + Effect + Drizzle layer in `cire/api`.
 
+- [x] **Optional guest → OSN/Pulse account linking (backend)** — `account-link` Effect service + `/api/account/link` routes (POST dual-credential, GET/DELETE guest-only). POST binds the guest session (`familyId`) to an OSN account: validates `{ guestId }` ∈ family, resolves `profileId → accountId` over ARC via `services/osn-bridge.ts` (workerd-safe `signArcToken` from `@shared/crypto/jwk`; stable `CIRE_API_ARC_PRIVATE_KEY` key), and writes `guest_account_links`. Resolver injectable via `createApp({ resolveOsnAccountId })`; absent ⇒ 503. See `[[wiki/systems/cire-auth]]` (root). Frontend deferred — see `[[web]]`.
 - [x] Surface `guestId` on every claim member + extended event metadata (PR-A)
 - [x] Session-cookie auth on `/api/rsvp`; `/api/claim` mints `cire_session` (PR-B)
 - [ ] Set `Domain=` on session cookie when production root domain lands; today host-scoped works for same-origin dev.

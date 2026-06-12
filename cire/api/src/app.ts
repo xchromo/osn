@@ -1,16 +1,19 @@
 import { createRateLimiter } from "@shared/rate-limit";
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Hono } from "hono";
+import type { MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 
 import type { Db } from "./db";
 import { sessionAuth } from "./middleware/auth";
 import { osnAuth } from "./middleware/osn-auth";
 import { rateLimitMiddleware } from "./middleware/rate-limit";
+import { accountLinkRoute } from "./routes/account-link";
 import { claimRoute } from "./routes/claim";
 import { organiserImportRoute } from "./routes/organiser-import";
 import { organiserWeddingsRoute } from "./routes/organiser-weddings";
 import { rsvpRoute } from "./routes/rsvp";
+import type { OsnAccountResolver } from "./services/osn-bridge";
 import type { R2Bucket } from "./services/r2-imports";
 
 export type AppVariables = {
@@ -26,6 +29,9 @@ export type AppVariables = {
   weddingId?: string;
   // Optional CF bindings, present when `createApp` was given them.
   r2?: R2Bucket;
+  // Resolves an OSN profile id → account id over ARC for the account-linking
+  // POST. Absent when no ARC key is configured (linking then answers 503).
+  resolveOsnAccountId?: OsnAccountResolver;
 };
 
 /** Default per-IP rate limiter for the claim endpoint: 5 attempts per minute. */
@@ -46,6 +52,13 @@ export interface AppOptions {
   osnAudience?: string;
   /** Test-only: inject the verifying key and skip the JWKS fetch. */
   osnTestKey?: CryptoKey;
+  /**
+   * Resolves an OSN profile id to its account id (server-to-server, ARC) for
+   * the optional guest account-linking POST. When omitted, the link endpoint
+   * answers 503 — linking is an additive, opt-in surface, so a deployment
+   * without an ARC key simply doesn't offer it. Tests inject a stub.
+   */
+  resolveOsnAccountId?: OsnAccountResolver;
 }
 
 export function createApp(db: Db, options: AppOptions = {}) {
@@ -57,15 +70,18 @@ export function createApp(db: Db, options: AppOptions = {}) {
     osnJwksUrl = "http://localhost:4000/.well-known/jwks.json",
     osnAudience = "osn-access",
     osnTestKey,
+    resolveOsnAccountId,
   } = options;
   const corsOrigins = new Set(allowedOrigins ?? [webOrigin]);
   const app = new Hono<{ Variables: AppVariables }>();
 
-  // Inject db + webOrigin (and R2 when present) into every request.
+  // Inject db + webOrigin (and R2 / the account resolver when present) into
+  // every request.
   app.use("*", (c, next) => {
     c.set("db", db);
     c.set("webOrigin", webOrigin);
     if (r2) c.set("r2", r2);
+    if (resolveOsnAccountId) c.set("resolveOsnAccountId", resolveOsnAccountId);
     return next();
   });
 
@@ -76,7 +92,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // so the browser will include credentials. Any mismatch returns `null`
       // which Hono translates to no `Access-Control-Allow-Origin` header.
       origin: (origin) => (corsOrigins.has(origin) ? origin : null),
-      allowMethods: ["GET", "POST", "OPTIONS"],
+      // DELETE is used by the account-link unlink endpoint.
+      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
       allowHeaders: ["Content-Type", "Authorization"],
       credentials: true,
     }),
@@ -100,10 +117,22 @@ export function createApp(db: Db, options: AppOptions = {}) {
   app.use("/api/organiser", organiserAuth);
   app.use("/api/organiser/*", organiserAuth);
 
+  // Account linking. ALL methods require a guest session (sets `familyId`);
+  // the POST link additionally requires a valid OSN access token. The two
+  // never gate GET/DELETE — those are guest-only (read/remove your own
+  // household's links) — so the OSN gate is method-scoped to POST. Reuse the
+  // single `organiserAuth` instance rather than building a second verifier.
+  app.use("/api/account/link", sessionAuth());
+  app.use("/api/account/link/*", sessionAuth());
+  const linkOsnGate: MiddlewareHandler<{ Variables: AppVariables }> = (c, next) =>
+    c.req.method === "POST" ? organiserAuth(c, next) : next();
+  app.use("/api/account/link", linkOsnGate);
+
   app.route("/api/claim", claimRoute);
   app.route("/api/organiser", organiserWeddingsRoute);
   app.route("/api/organiser/import", organiserImportRoute);
   app.route("/api/rsvp", rsvpRoute);
+  app.route("/api/account/link", accountLinkRoute);
   app.notFound((c) => c.json({ error: "Not found" }, 404));
 
   return app;

@@ -8,7 +8,8 @@ related:
   - "[[cire]]"
   - "[[data-map]]"
   - "[[access-control]]"
-last-reviewed: 2026-06-11
+  - "[[arc-tokens]]"
+last-reviewed: 2026-06-12
 ---
 
 # Cire two-system auth
@@ -32,7 +33,7 @@ Cire runs **two deliberately separate auth systems** that never overlap. Guests 
 4. `sessionAuth()` middleware gates `/api/rsvp`: parses the cookie, validates the hash against `sessions`, and sets `c.var.familyId` for downstream handlers. Any failure is a generic 401 `Unauthorized` — no session-state leakage.
 5. `POST /api/claim` is rate-limited (KV-backed, via `@shared/rate-limit`) to keep code brute-force impractical.
 
-**Why guests never get OSN accounts:** the guest journey is "tap a link at the dinner table, pick who's coming". Any registration ceremony — even a passkey one — would lose RSVPs. The claim code is deliberately low-friction and family-scoped; the security bar is "unguessable + rate-limited + revocable", not "authenticated identity". A future optional claim-code → OSN account link is tracked in `wiki/TODO.md` (Cire section), but it must stay optional.
+**Why guests never get OSN accounts:** the guest journey is "tap a link at the dinner table, pick who's coming". Any registration ceremony — even a passkey one — would lose RSVPs. The claim code is deliberately low-friction and family-scoped; the security bar is "unguessable + rate-limited + revocable", not "authenticated identity". Guests may **optionally** link an OSN account on top of the guest session — see [Guest account linking](#guest-account-linking-the-one-deliberate-dual-credential-route) — but the claim-code session stays the primary credential.
 
 ## Organiser path: OSN passkey → access JWT → wedding ownership
 
@@ -74,7 +75,28 @@ Related debt: `@osn/client` should export an `isAuthExpiredError()` helper — `
 
 ## No overlap
 
-The two middlewares never run on the same route. `sessionAuth()` gates guest routes (`/api/rsvp`); `osnAuth()` (+ ownership middleware) gates `/api/organiser/*`. There is no route that accepts either credential, no privilege ladder from guest session to organiser, and no shared token format — a leaked guest cookie can never reach organiser surface and an organiser JWT is meaningless on the RSVP endpoint. The interim `X-Organiser-Token` shared secret that predated this model is fully deleted.
+The two middlewares never run on the same route **except the account-link POST below**, and even there they are not a privilege ladder. `sessionAuth()` gates guest routes (`/api/rsvp`); `osnAuth()` (+ ownership middleware) gates `/api/organiser/*`. Outside the linking POST there is no route that accepts either credential, no privilege ladder from guest session to organiser, and no shared token format — a leaked guest cookie can never reach organiser surface and an organiser JWT is meaningless on the RSVP endpoint. The interim `X-Organiser-Token` shared secret that predated this model is fully deleted.
+
+## Guest account linking (the one deliberate dual-credential route)
+
+An invitee may **optionally** attach their seat to a real OSN/Pulse account so they can see the invitation inside Pulse, and — within a family group — see other invitees' latest RSVPs. This is the **only** surface that requires both credentials at once, and it is **additive, not a ladder**: the OSN token grants no cire authority; it only names *which OSN account* to staple onto a household the guest session has already proven.
+
+| | |
+|---|---|
+| Endpoints | `POST /api/account/link` (dual-credential), `GET /api/account/link`, `DELETE /api/account/link/:guestId` (guest-only) |
+| Middleware | `sessionAuth()` on all methods; `osnAuth()` **method-gated to POST** (shared `organiserAuth` instance, reused not rebuilt) |
+| Table | `guest_account_links` (`@cire/db`) — **per invitee** (`guests` row), not per family |
+| Stored id | `osn_account_id` (account-level, so any of the user's OSN profiles can see the invitation) + `osn_profile_id` (audit). Opaque cross-DB references, no FK — same rule as `weddings.owner_osn_profile_id`. |
+
+**The bind.** `POST /api/account/link` carries `{ guestId }`. `sessionAuth()` proves the household (`familyId`); the `guestId` must belong to that family (else **403**). `osnAuth()` proves the OSN identity (`osnProfileId = sub`). The profile is resolved to its **account id** server-to-server over [[arc-tokens|ARC]] (`GET /graph/internal/profile-account`, `graph:read`) — account id is S2S-only and never returned to the client. The link row staples `guestId → osn_account_id`.
+
+**Uniqueness.** One link per invitee (`guest_id` unique); one OSN account can't claim two seats in the same household (`(family_id, osn_account_id)` unique); the *same* account linking across different weddings is allowed (one person, many invitations). Conflicts → generic **409 `already_linked`** (no enumeration).
+
+**401 here is correct (no 403 hazard).** Unlike the organiser 403-vs-401 rule above, a **401 from `osnAuth()` on the link POST is the right answer**: the guest's Pulse access token genuinely expired and `@osn/client` should silently refresh and retry. There's no authz wall to mask — the guest is *re-authenticating to OSN*, not being denied a cire resource. `GET`/`DELETE` never invoke `osnAuth()` (a guest with an expired Pulse token can still read/remove their household's links), so they can't trip it.
+
+**ARC on Workers.** cire/api runs on workerd, so it mints the outbound ARC token via the DB-free, metric-free `@shared/crypto/jwk` `signArcToken` (the barrel `@shared/crypto` and `@shared/observability` don't bundle for workerd). Key distribution is a **stable** ES256 key (`CIRE_API_ARC_PRIVATE_KEY` wrangler secret) pre-registered in osn-api's `service_accounts` under serviceId `cire-api` — not the ephemeral-key self-registration + rotation that long-lived bun services use, because a Worker has no startup hook. When the ARC key is absent the POST answers **503** (linking is opt-in; the rest of cire is unaffected). The resolver is injectable (`createApp({ resolveOsnAccountId })`) so tests stub it.
+
+The browser-side affordance (a "link my Pulse account" button on the guest site that obtains an OSN access token and POSTs it with the guest cookie) is **deferred** — backend only for now.
 
 ## Related
 

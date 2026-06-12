@@ -1,5 +1,7 @@
 import { createApp } from "./app";
 import { createD1Db } from "./db";
+import { createAccountResolverFromEnv } from "./services/osn-bridge";
+import type { OsnAccountResolver } from "./services/osn-bridge";
 
 // Worker bindings + vars. Mirrors `wrangler.toml` ([[d1_databases]], [[r2_buckets]],
 // [vars]); regenerate the full set with `bunx wrangler types` when bindings change.
@@ -13,6 +15,36 @@ export interface Env {
   WEB_ORIGIN: string;
   OSN_JWKS_URL: string;
   OSN_AUDIENCE: string;
+  // Optional — present only where guest account-linking is enabled. Base URL of
+  // osn-api plus cire-api's ARC signing key (a wrangler secret, ES256 JWK) and
+  // its `kid` (matching the public key registered in osn-api's service_accounts
+  // under serviceId `cire-api`). All three absent ⇒ linking POST answers 503.
+  OSN_API_URL?: string;
+  CIRE_API_ARC_PRIVATE_KEY?: string;
+  CIRE_API_ARC_KEY_ID?: string;
+}
+
+// Memoised account resolver. Workers reuse an isolate across requests, so we
+// import the ARC private key once per isolate (keyed by the secret value) rather
+// than on every request. `undefined` = not yet built; `null` = built and linking
+// is disabled (no ARC config).
+let _resolverKey: string | undefined;
+let _resolver: OsnAccountResolver | null | undefined;
+
+async function resolverFor(env: Env): Promise<OsnAccountResolver | null> {
+  const cacheKey = `${env.OSN_API_URL ?? ""}|${env.CIRE_API_ARC_KEY_ID ?? ""}|${
+    env.CIRE_API_ARC_PRIVATE_KEY ?? ""
+  }`;
+  if (_resolver !== undefined && _resolverKey === cacheKey) {
+    return _resolver;
+  }
+  _resolver = await createAccountResolverFromEnv({
+    osnApiUrl: env.OSN_API_URL,
+    arcPrivateKeyJwk: env.CIRE_API_ARC_PRIVATE_KEY,
+    arcKeyId: env.CIRE_API_ARC_KEY_ID,
+  });
+  _resolverKey = cacheKey;
+  return _resolver;
 }
 
 const handler: ExportedHandler<Env> = {
@@ -41,12 +73,15 @@ const handler: ExportedHandler<Env> = {
       .map((o) => o.trim())
       .filter(Boolean);
 
+    const resolveOsnAccountId = (await resolverFor(env)) ?? undefined;
+
     const app = createApp(db, {
       webOrigin: origins[0],
       allowedOrigins: origins,
       r2: env.SHEETS,
       osnJwksUrl: env.OSN_JWKS_URL,
       osnAudience: env.OSN_AUDIENCE,
+      resolveOsnAccountId,
     });
 
     return app.fetch(request, env, ctx);
