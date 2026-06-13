@@ -1,12 +1,16 @@
 import { Data, Effect, Schema } from "effect";
-import { Hono } from "hono";
+import { Elysia } from "elysia";
 
-import type { AppVariables } from "../app";
 import { DbService } from "../db";
+import type { Db } from "../db";
+import { sessionAuth } from "../middleware/auth";
+import { osnAuth } from "../middleware/osn-auth";
+import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { LinkAccountBody } from "../schemas/account-link";
 import { accountLinkService } from "../services/account-link";
+import type { OsnAccountResolver } from "../services/osn-bridge";
 
-export const accountLinkRoute = new Hono<{ Variables: AppVariables }>();
+const PREFIX = "/api/account/link";
 
 /** Transport failure resolving the OSN account id over ARC (osn-api down / 5xx). */
 class OsnAccountLookupError extends Data.TaggedError("OsnAccountLookupError")<{
@@ -14,113 +18,153 @@ class OsnAccountLookupError extends Data.TaggedError("OsnAccountLookupError")<{
 }> {}
 
 /**
+ * Guest-only account-link routes (GET status + DELETE unlink). Gated by the
+ * guest session cookie alone — an invitee reads/removes their own household's
+ * links without needing a live OSN token. The POST link lives in a separate
+ * instance ({@link createAccountLinkPostRoute}) because it additionally
+ * requires an OSN token; keeping them apart is what method-gates `osnAuth` to
+ * POST (the same sibling-instance pattern rsvp + organiser routes use).
+ */
+export const createAccountLinkRoutes = (db: Db) =>
+  new Elysia({ prefix: PREFIX })
+    .use(sessionAuth(db))
+    // GET /api/account/link — link status for every invitee in the household.
+    // Returns presence + linked-at; never the OSN account id (S2S-only) nor the
+    // profile id (kept minimal).
+    .get("/", ({ familyId, set }) => {
+      // sessionAuth guarantees this; the guard is a runtime safety net.
+      if (!familyId) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+      return Effect.runPromise(
+        accountLinkService.listByFamily(familyId).pipe(
+          Effect.provideService(DbService, db),
+          Effect.map((links) => ({
+            links: links.map((l) => ({ guestId: l.guestId, linkedAt: l.linkedAt.getTime() })),
+          })),
+        ),
+      );
+    })
+    // DELETE /api/account/link/:guestId — remove an invitee's link, scoped to
+    // the caller's household. Idempotent.
+    .delete("/:guestId", ({ familyId, params, set }) => {
+      if (!familyId) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+      const guestId = params.guestId;
+      return Effect.runPromise(
+        accountLinkService.unlink({ familyId, guestId }).pipe(
+          Effect.provideService(DbService, db),
+          Effect.as({ linked: false, guestId }),
+          Effect.catchTag("AccountLinkWriteError", () =>
+            Effect.sync(() => {
+              set.status = 500;
+              return { error: "Could not unlink account" };
+            }),
+          ),
+        ),
+      );
+    });
+
+/**
  * POST /api/account/link — attach an invitee to the caller's OSN account.
  *
- * Dual-credential: the guest session cookie (sets `familyId`) proves the
- * household; the OSN access token (sets `osnProfileId`, via the POST-only
- * `osnAuth` gate) proves the OSN identity. We resolve the profile to its
- * account id server-to-server (ARC) so account-level linking lets any of the
- * user's OSN profiles later see the invitation in Pulse.
+ * The one deliberate dual-credential route: the guest session cookie (derives
+ * `familyId`) proves the household; the OSN access token (derives
+ * `osnProfileId`) proves the OSN identity. Both `sessionAuth` and `osnAuth`
+ * gate this instance, so the OSN gate applies to POST only — GET/DELETE live in
+ * the sibling instance above. The profile is resolved to its account id S2S
+ * over ARC so account-level linking lets any of the user's OSN profiles later
+ * see the invitation in Pulse; the account id is never returned to the client.
  */
-accountLinkRoute.post("/", async (c) => {
-  const familyId = c.var.familyId;
-  const osnProfileId = c.var.osnProfileId;
-  // Both middlewares run on this route; the guards are runtime safety nets.
-  if (!familyId || !osnProfileId) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
+export const createAccountLinkPostRoute = (
+  db: Db,
+  osnAuthOptions: OsnAuthOptions,
+  resolveOsnAccountId?: OsnAccountResolver,
+) =>
+  new Elysia({ prefix: PREFIX })
+    .use(sessionAuth(db))
+    .use(osnAuth(osnAuthOptions))
+    .post(
+      "/",
+      async ({ request, familyId, osnProfileId, set }) => {
+        // Both plugins gate this route; the guards are runtime safety nets.
+        if (!familyId || !osnProfileId) {
+          set.status = 401;
+          return { error: "Unauthorized" };
+        }
+        if (!resolveOsnAccountId) {
+          // Deployment has no ARC key configured — linking is disabled, not broken.
+          set.status = 503;
+          return { error: "Account linking is not available" };
+        }
+        const resolveAccount = resolveOsnAccountId;
+        const profileId = osnProfileId;
 
-  const resolveAccount = c.var.resolveOsnAccountId;
-  if (!resolveAccount) {
-    // Deployment has no ARC key configured — linking is disabled, not broken.
-    return c.json({ error: "Account linking is not available" }, 503);
-  }
+        const raw: unknown = await request.json().catch(() => null);
 
-  let raw: unknown;
-  try {
-    raw = await c.req.json();
-  } catch {
-    raw = null;
-  }
+        return Effect.runPromise(
+          Effect.gen(function* () {
+            const body = yield* Schema.decodeUnknown(LinkAccountBody)(raw);
 
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const body = yield* Schema.decodeUnknown(LinkAccountBody)(raw);
+            const resolution = yield* Effect.tryPromise({
+              try: () => resolveAccount(profileId),
+              catch: (cause) => new OsnAccountLookupError({ reason: String(cause) }),
+            });
+            if (!resolution.ok) {
+              // Token verified but the profile no longer exists in OSN (deleted
+              // between issuance and now). Rare; distinct from a transport failure.
+              set.status = 404;
+              return { error: "OSN profile not found" };
+            }
 
-      const resolution = yield* Effect.tryPromise({
-        try: () => resolveAccount(osnProfileId),
-        catch: (cause) => new OsnAccountLookupError({ reason: String(cause) }),
-      });
-      if (!resolution.ok) {
-        // Token verified but the profile no longer exists in OSN (deleted
-        // between issuance and now). Rare; distinct from a transport failure.
-        return c.json({ error: "OSN profile not found" }, 404);
-      }
-
-      const link = yield* accountLinkService.link({
-        familyId,
-        guestId: body.guestId,
-        osnAccountId: resolution.accountId,
-        osnProfileId,
-      });
-      return c.json({ linked: true, guestId: link.guestId }, 201);
-    }).pipe(
-      Effect.provideService(DbService, c.var.db),
-      Effect.catchTags({
-        ParseError: () => Effect.succeed(c.json({ error: "Missing or invalid fields" }, 400)),
-        GuestNotInFamily: () =>
-          Effect.succeed(c.json({ error: "Guest does not belong to this family" }, 403)),
-        AccountLinkConflict: () => Effect.succeed(c.json({ error: "already_linked" }, 409)),
-        OsnAccountLookupError: (err) =>
-          Effect.logError("osn account lookup failed", { reason: err.reason }).pipe(
-            Effect.as(c.json({ error: "OSN account lookup failed" }, 502)),
+            const link = yield* accountLinkService.link({
+              familyId,
+              guestId: body.guestId,
+              osnAccountId: resolution.accountId,
+              osnProfileId: profileId,
+            });
+            set.status = 201;
+            return { linked: true, guestId: link.guestId };
+          }).pipe(
+            Effect.provideService(DbService, db),
+            Effect.catchTags({
+              ParseError: () =>
+                Effect.sync(() => {
+                  set.status = 400;
+                  return { error: "Missing or invalid fields" };
+                }),
+              GuestNotInFamily: () =>
+                Effect.sync(() => {
+                  set.status = 403;
+                  return { error: "Guest does not belong to this family" };
+                }),
+              AccountLinkConflict: () =>
+                Effect.sync(() => {
+                  set.status = 409;
+                  return { error: "already_linked" };
+                }),
+              OsnAccountLookupError: (err) =>
+                Effect.logError("osn account lookup failed", { reason: err.reason }).pipe(
+                  Effect.flatMap(() =>
+                    Effect.sync(() => {
+                      set.status = 502;
+                      return { error: "OSN account lookup failed" };
+                    }),
+                  ),
+                ),
+              AccountLinkWriteError: () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Could not link account" };
+                }),
+            }),
           ),
-        AccountLinkWriteError: () =>
-          Effect.succeed(c.json({ error: "Could not link account" }, 500)),
-      }),
-    ),
-  );
-});
-
-/**
- * GET /api/account/link — link status for every invitee in the household.
- * Guest-session only. Returns presence + linked-at; never the OSN account id
- * (S2S-only) nor the profile id (kept minimal).
- */
-accountLinkRoute.get("/", async (c) => {
-  const familyId = c.var.familyId;
-  if (!familyId) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  return Effect.runPromise(
-    accountLinkService.listByFamily(familyId).pipe(
-      Effect.provideService(DbService, c.var.db),
-      Effect.map((links) =>
-        c.json({
-          links: links.map((l) => ({ guestId: l.guestId, linkedAt: l.linkedAt.getTime() })),
-        }),
-      ),
-    ),
-  );
-});
-
-/**
- * DELETE /api/account/link/:guestId — remove an invitee's link. Guest-session
- * only, scoped to the caller's household. Idempotent.
- */
-accountLinkRoute.delete("/:guestId", async (c) => {
-  const familyId = c.var.familyId;
-  if (!familyId) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  const guestId = c.req.param("guestId");
-  return Effect.runPromise(
-    accountLinkService.unlink({ familyId, guestId }).pipe(
-      Effect.provideService(DbService, c.var.db),
-      Effect.as(c.json({ linked: false, guestId })),
-      Effect.catchTag("AccountLinkWriteError", () =>
-        Effect.succeed(c.json({ error: "Could not unlink account" }, 500)),
-      ),
-    ),
-  );
-});
+        );
+      },
+      // Sentinel parse hook: stops Elysia consuming the body so the handler
+      // parses it by hand — malformed JSON degrades to the schema's 400.
+      { parse: () => ({}) },
+    );
