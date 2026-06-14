@@ -15,6 +15,12 @@ import type { R2Bucket } from "./services/r2-imports";
 
 /** Default per-IP rate limiter for the claim endpoint: 5 attempts per minute. */
 const defaultClaimLimiter = createRateLimiter({ maxRequests: 5, windowMs: 60_000 });
+/**
+ * Default per-IP rate limiter for the account-link surface (S-L1): 20 req/min.
+ * Higher than claim because a household legitimately polls GET link-status, but
+ * still caps the POST's ARC-sign + S2S amplifier and the membership-probe oracle.
+ */
+const defaultAccountLinkLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 
 export interface AppOptions {
   /** Primary origin (used for the session cookie's `secure` flag). */
@@ -23,6 +29,8 @@ export interface AppOptions {
   allowedOrigins?: string[];
   /** Override the claim rate limiter (useful for testing). */
   claimLimiter?: RateLimiterBackend;
+  /** Override the account-link rate limiter (useful for testing). */
+  accountLinkLimiter?: RateLimiterBackend;
   /** R2 bucket binding for the organiser import flow. */
   r2?: R2Bucket;
   /** JWKS endpoint of the OSN issuer that signs organiser access tokens. */
@@ -45,6 +53,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     webOrigin = "http://localhost:4321",
     allowedOrigins,
     claimLimiter = defaultClaimLimiter,
+    accountLinkLimiter = defaultAccountLinkLimiter,
     r2,
     osnJwksUrl = "http://localhost:4000/.well-known/jwks.json",
     osnAudience = "osn-access",
@@ -102,7 +111,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // need only the guest session; the POST link additionally requires an OSN
       // token. Splitting them is what method-gates `osnAuth` to POST without
       // gating the guest-only reads (same sibling pattern as rsvp + organiser).
-      .use(createAccountLinkRoutes(db))
-      .use(createAccountLinkPostRoute(db, osnAuthOptions, resolveOsnAccountId))
+      .use(createAccountLinkRoutes(db, accountLinkLimiter))
+      .use(createAccountLinkPostRoute(db, osnAuthOptions, accountLinkLimiter, resolveOsnAccountId))
   );
 }

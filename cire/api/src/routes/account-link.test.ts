@@ -33,6 +33,7 @@ function buildApp(resolver: OsnAccountResolver | "disabled" = okResolver) {
   seedDb(db);
   const app = createApp(db, {
     claimLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+    accountLinkLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
     osnTestKey: auth.key,
     resolveOsnAccountId: resolver === "disabled" ? undefined : resolver,
   });
@@ -261,5 +262,28 @@ describe("DELETE /api/account/link/:guestId", () => {
       }),
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe("account-link rate limiting (S-L1)", () => {
+  it("returns 429 once the per-IP budget is exhausted", async () => {
+    const db = createDb(":memory:");
+    seedDb(db);
+    // Tiny budget shared across the account-link surface.
+    const app = createApp(db, {
+      claimLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+      accountLinkLimiter: createRateLimiter({ maxRequests: 2, windowMs: 60_000 }),
+      osnTestKey: auth.key,
+      resolveOsnAccountId: okResolver,
+    });
+    const cookie = await claimCookie(app, SAMPLETON);
+    const get = () =>
+      app.fetch(new Request("http://localhost/api/account/link", { headers: { Cookie: cookie } }));
+
+    expect((await get()).status).toBe(200);
+    expect((await get()).status).toBe(200);
+    const limited = await get();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
   });
 });

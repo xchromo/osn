@@ -1,3 +1,4 @@
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Data, Effect, Schema } from "effect";
 import { Elysia } from "elysia";
 
@@ -6,6 +7,7 @@ import type { Db } from "../db";
 import { sessionAuth } from "../middleware/auth";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { LinkAccountBody } from "../schemas/account-link";
 import { accountLinkService } from "../services/account-link";
 import type { OsnAccountResolver } from "../services/osn-bridge";
@@ -24,9 +26,13 @@ class OsnAccountLookupError extends Data.TaggedError("OsnAccountLookupError")<{
  * instance ({@link createAccountLinkPostRoute}) because it additionally
  * requires an OSN token; keeping them apart is what method-gates `osnAuth` to
  * POST (the same sibling-instance pattern rsvp + organiser routes use).
+ *
+ * Both instances share a per-IP `limiter` (S-L1) so a session can't drive
+ * unbounded membership probes / unlink churn.
  */
-export const createAccountLinkRoutes = (db: Db) =>
+export const createAccountLinkRoutes = (db: Db, limiter: RateLimiterBackend) =>
   new Elysia({ prefix: PREFIX })
+    .use(rateLimitMiddleware(limiter))
     .use(sessionAuth(db))
     // GET /api/account/link — link status for every invitee in the household.
     // Returns presence + linked-at; never the OSN account id (S2S-only) nor the
@@ -82,9 +88,14 @@ export const createAccountLinkRoutes = (db: Db) =>
 export const createAccountLinkPostRoute = (
   db: Db,
   osnAuthOptions: OsnAuthOptions,
+  limiter: RateLimiterBackend,
   resolveOsnAccountId?: OsnAccountResolver,
 ) =>
   new Elysia({ prefix: PREFIX })
+    // Rate limit runs in onBeforeHandle (before the handler), so it gates the
+    // ARC-sign + S2S amplifier and the family-membership oracle even though the
+    // auth derives run first (S-L1).
+    .use(rateLimitMiddleware(limiter))
     .use(sessionAuth(db))
     .use(osnAuth(osnAuthOptions))
     .post(

@@ -39,8 +39,12 @@ export interface AccountLinkByAccount {
   linkedAt: Date;
 }
 
-/** Maps a SQLite UNIQUE-constraint failure to the specific conflicting index. */
-function conflictReason(message: string): AccountLinkConflict["reason"] | null {
+/**
+ * Maps a SQLite UNIQUE-constraint failure to the specific conflicting index.
+ * Exported so the brittle string-matching is pinned by a direct unit test,
+ * independent of the SQLite driver's exact error wording (T-S2).
+ */
+export function conflictReason(message: string): AccountLinkConflict["reason"] | null {
   if (!message.includes("UNIQUE constraint failed")) return null;
   // (family_id, osn_account_id) — same OSN account already seated in this family.
   if (message.includes("osn_account_id")) return "account_already_in_family";

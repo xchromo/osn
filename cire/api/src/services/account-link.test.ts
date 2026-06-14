@@ -1,11 +1,12 @@
 import { describe, it, expect } from "bun:test";
 
 import { families, guests, weddings } from "@cire/db";
+import { sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService, type Db } from "../db";
 import { createDb } from "../db/setup";
-import { accountLinkService } from "./account-link";
+import { accountLinkService, conflictReason } from "./account-link";
 
 const now = new Date();
 
@@ -73,9 +74,12 @@ describe("accountLinkService.link", () => {
     expect(links[0]).toMatchObject({ guestId: "gst_a1", familyId: "fam_a", weddingId: "wed_a" });
   });
 
-  it("fails GuestNotInFamily when the guest is in a different family", async () => {
+  it("fails with the GuestNotInFamily tag when the guest is in a different family", async () => {
     const db = fixture();
-    const exit = await Effect.runPromiseExit(
+    // T-E1: assert the exact error channel — the route's 403 mapping keys off
+    // this tag, so a swap to a different tagged error must fail the test.
+    const err = await run(
+      db,
       accountLinkService
         .link({
           familyId: "fam_a",
@@ -83,9 +87,95 @@ describe("accountLinkService.link", () => {
           osnAccountId: "acc_1",
           osnProfileId: "usr_1",
         })
-        .pipe(Effect.provideService(DbService, db)),
+        .pipe(Effect.flip),
     );
-    expect(exit._tag).toBe("Failure");
+    expect(err._tag).toBe("GuestNotInFamily");
+  });
+
+  it("maps the two UNIQUE violations to the right AccountLinkConflict reason", async () => {
+    const db = fixture();
+    const link = (guestId: string, osnAccountId: string) =>
+      run(
+        db,
+        accountLinkService.link({
+          familyId: "fam_a",
+          guestId,
+          osnAccountId,
+          osnProfileId: "usr_1",
+        }),
+      );
+    await link("gst_a1", "acc_1");
+
+    // Same invitee linked again → guest_id unique violation.
+    const dup = await run(
+      db,
+      accountLinkService
+        .link({
+          familyId: "fam_a",
+          guestId: "gst_a1",
+          osnAccountId: "acc_2",
+          osnProfileId: "usr_2",
+        })
+        .pipe(Effect.flip),
+    );
+    expect(dup._tag).toBe("AccountLinkConflict");
+    expect((dup as { reason: string }).reason).toBe("guest_already_linked");
+
+    // Same account, different seat in the same family → (family_id, account) violation.
+    const seated = await run(
+      db,
+      accountLinkService
+        .link({
+          familyId: "fam_a",
+          guestId: "gst_a2",
+          osnAccountId: "acc_1",
+          osnProfileId: "usr_3",
+        })
+        .pipe(Effect.flip),
+    );
+    expect(seated._tag).toBe("AccountLinkConflict");
+    expect((seated as { reason: string }).reason).toBe("account_already_in_family");
+  });
+
+  it("surfaces a non-conflict insert failure as AccountLinkWriteError (op: insert)", async () => {
+    // T-S1: drop the table so the insert fails for a NON-unique reason
+    // (`conflictReason` returns null) — exercises the 500 path, not the 409 one.
+    const db = fixture();
+    db.run(sql`DROP TABLE guest_account_links`);
+    const err = await run(
+      db,
+      accountLinkService
+        .link({
+          familyId: "fam_a",
+          guestId: "gst_a1",
+          osnAccountId: "acc_1",
+          osnProfileId: "usr_1",
+        })
+        .pipe(Effect.flip),
+    );
+    expect(err._tag).toBe("AccountLinkWriteError");
+    expect((err as { op: string }).op).toBe("insert");
+  });
+});
+
+// T-S2: pin the SQLite-message → reason mapping directly, independent of the
+// driver's exact wording (the integration 409s depend on it).
+describe("conflictReason", () => {
+  it("classifies the family+account UNIQUE index", () => {
+    expect(
+      conflictReason(
+        "UNIQUE constraint failed: guest_account_links.family_id, guest_account_links.osn_account_id",
+      ),
+    ).toBe("account_already_in_family");
+  });
+  it("classifies the guest_id UNIQUE index", () => {
+    expect(conflictReason("UNIQUE constraint failed: guest_account_links.guest_id")).toBe(
+      "guest_already_linked",
+    );
+  });
+  it("returns null for a non-UNIQUE failure (→ 500, not 409)", () => {
+    expect(conflictReason("SQLiteError: no such table: guest_account_links")).toBeNull();
+    expect(conflictReason("FOREIGN KEY constraint failed")).toBeNull();
   });
 });
 
@@ -137,5 +227,17 @@ describe("accountLinkService.unlink", () => {
     await run(db, accountLinkService.unlink({ familyId: "fam_a", guestId: "gst_a1" }));
     await run(db, accountLinkService.unlink({ familyId: "fam_a", guestId: "gst_a1" }));
     expect(await run(db, accountLinkService.listByFamily("fam_a"))).toHaveLength(0);
+  });
+
+  it("surfaces a delete failure as AccountLinkWriteError (op: delete)", async () => {
+    // T-S1: drop the table so the delete throws — exercises the unlink 500 path.
+    const db = fixture();
+    db.run(sql`DROP TABLE guest_account_links`);
+    const err = await run(
+      db,
+      accountLinkService.unlink({ familyId: "fam_a", guestId: "gst_a1" }).pipe(Effect.flip),
+    );
+    expect(err._tag).toBe("AccountLinkWriteError");
+    expect((err as { op: string }).op).toBe("delete");
   });
 });
