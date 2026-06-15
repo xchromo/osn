@@ -1,6 +1,6 @@
 import { createResource, createSignal, Show } from "solid-js";
 
-interface InviteCustomisation {
+export interface InviteCustomisation {
   hero: { title: string | null; subtitle: string | null; imageUrl: string | null };
   story: {
     eyebrow: string | null;
@@ -13,6 +13,13 @@ interface InviteCustomisation {
 interface InviteHeaderProps {
   apiUrl: string;
   slug: string;
+  /**
+   * Customisation resolved at build time in `index.astro` and used as the
+   * initial render, so the hero paints with the real image/copy in the SSR'd
+   * HTML instead of after a client fetch waterfall (IB-P-W1). The island still
+   * revalidates on mount to pick up changes made since the build.
+   */
+  initial?: InviteCustomisation | null;
 }
 
 /**
@@ -24,15 +31,20 @@ interface InviteHeaderProps {
  * InvitePage's /api/claim flow.
  */
 export default function InviteHeader(props: InviteHeaderProps) {
-  const [data] = createResource<InviteCustomisation | null>(async () => {
-    try {
-      const res = await fetch(`${props.apiUrl}/api/invite/${props.slug}`);
-      if (!res.ok) return null;
-      return (await res.json()) as InviteCustomisation;
-    } catch {
-      return null;
-    }
-  });
+  const [data] = createResource<InviteCustomisation | null>(
+    async () => {
+      try {
+        const res = await fetch(`${props.apiUrl}/api/invite/${props.slug}`);
+        // On a non-OK/failed revalidation keep the build-time data rather than
+        // wiping the already-painted hero.
+        if (!res.ok) return props.initial ?? null;
+        return (await res.json()) as InviteCustomisation;
+      } catch {
+        return props.initial ?? null;
+      }
+    },
+    { initialValue: props.initial ?? null },
+  );
 
   const hero = () => data()?.hero;
   const story = () => data()?.story;

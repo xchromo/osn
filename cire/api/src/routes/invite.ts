@@ -66,6 +66,10 @@ export const createInvitePublicRoutes = (db: Db, assets: AssetsBucket | undefine
           return new Response(asset.bytes, {
             headers: {
               "Content-Type": asset.contentType,
+              // Bytes are magic-byte sniffed + allowlisted to JPEG/PNG/WebP on
+              // upload, but pin the declared type so a browser can't be coaxed
+              // into interpreting the response as anything else (IB-S-M1).
+              "X-Content-Type-Options": "nosniff",
               // URL is cache-busted by ?v=<updatedAt>, so a hit is safe to pin.
               "Cache-Control": "public, max-age=31536000, immutable",
             },
