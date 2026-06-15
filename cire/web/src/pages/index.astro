@@ -1,8 +1,10 @@
 ---
 import '../styles/global.css'
-import Hero from '../components/Hero.astro'
-import OurStory from '../components/OurStory.astro'
+import InviteHeader from '../components/InviteHeader'
 import InvitePage from '../components/InvitePage'
+
+const apiUrl = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:8787'
+const weddingSlug = import.meta.env.PUBLIC_WEDDING_SLUG ?? 'cire-wedding'
 ---
 <!DOCTYPE html>
 <html lang="en">
@@ -23,8 +25,7 @@ import InvitePage from '../components/InvitePage'
     </noscript>
   </head>
   <body>
-    <Hero />
-    <OurStory />
+    <InviteHeader client:load apiUrl={apiUrl} slug={weddingSlug} />
     <InvitePage
       client:visible
       apiUrl={import.meta.env.PUBLIC_API_URL}
