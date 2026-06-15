@@ -29,6 +29,7 @@ See [[overview]] for observability rules that apply to all security-sensitive co
 - [ ] Re-run `bun install` once devalue 5.8.1+ ages past `minimumReleaseAge` (3 days) and drop the last `--ignore=GHSA-77vg-94rm-hx3p` from `lefthook.yml`
 - [x] Bump hono to `^4.12.18` — closed cookie name validation, JSX HTML injection, serveStatic slash bypass, IPv4-mapped IPv6 in `ipRestriction()` (PR #25)
 - [ ] Bump transitive `smol-toml ^1.6.1+`, `postcss ^8.5.10+`, `esbuild >0.24.2` once their upstream dependents allow it — 3 remaining transitive `moderate` advisories. None affect production paths today (smol-toml is via wrangler, postcss via tailwind/vite, esbuild dev-server only) but worth tracking.
+- [ ] Drop `--ignore=GHSA-gv7w-rqvm-qjhr` from `lefthook.yml` once astro / drizzle-kit / vite / wrangler ship esbuild ≥0.28.1. Advisory is the esbuild Deno-module binary-integrity RCE via `NPM_CONFIG_REGISTRY` — reachable only through build/dev tooling (esbuild never runs in any Worker/production path), so suppressed in the pre-push audit gate pending upstream bumps.
 - [ ] Revisit `overrides.vite` in root `package.json` when Astro publishes Vite 8 support — current `^7.3.2` pin would force-downgrade an Astro-with-Vite-8 install (see PR #25 perf review)
 - [x] Bump drizzle-orm to ^0.45.2 to clear `GHSA-gpj5-g38j-94v9` (SQL injection via improperly escaped identifiers) — was `^0.41.0`
 
