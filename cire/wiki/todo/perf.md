@@ -4,12 +4,20 @@ tags: [todo, performance]
 related:
   - "[[index]]"
   - "[[review-findings]]"
-last-reviewed: 2026-06-14
+last-reviewed: 2026-06-16
 ---
 
 # Performance Backlog
 
 See [[review-findings]] for severity prefix conventions.
+
+### Invite builder — review findings
+
+- [ ] **IB-P-W1** — Guest hero LCP regressed from static SSR to a client-fetch waterfall. `Hero.astro` / `OurStory.astro` (zero-JS, build-time) were replaced by `cire/web/src/components/InviteHeader.tsx` hydrated `client:load` in `index.astro`; the customised hero now renders only after island JS downloads → SolidJS hydrates → `fetch(/api/invite/:slug)` → image fetch + `onLoad`. The hero is the LCP element. Fix: resolve the customisation server-side in `index.astro` frontmatter (`await fetch` the public endpoint, pass `hero`/`story` as props so the title/copy and hero `<img src>` are in the initial HTML); keep the island only for the CSS fade. Highest-impact item.
+- [ ] **IB-P-W2** — Custom hero image is invisible to the preload scanner (its URL is unknown until the JSON response). If resolved server-side (IB-P-W1), emit `<link rel="preload" as="image">` for customised weddings; the served image is already immutably cached.
+- [ ] **IB-P-W3** — `getForWeddingId` (`cire/api/src/services/invite.ts`) issues two sequential queries (slug lookup + customisation lookup); `upsertText` / `removeImage` re-call it after the write (3 round-trips). Organiser-only (low frequency). Fix: one `weddings LEFT JOIN wedding_invite_customisations` query.
+- [ ] **IB-P-I1** — `imageKeyForSlug` does a second `weddings`-only query on the customisation-miss path to distinguish 404 vs no-image-yet. Public image-serve path but only on the cold/uncustomised (then immutably cached) branch. Fix: `LEFT JOIN` keyed on `weddings.slug` answers both in one round-trip.
+- [ ] **IB-P-I2** — `fetchAsset` (`cire/api/src/services/invite-assets.ts`) materialises the full image via `obj.arrayBuffer()` (≤5 MB held in Worker memory) rather than streaming R2's `obj.body` into the `Response`. Bounded by the cap + CDN caching, hence Info. Fix on serve path only (upload buffering is needed for the magic-byte sniff).
 
 ### Account linking (guest → OSN/Pulse) — review notes (Info, no action)
 
