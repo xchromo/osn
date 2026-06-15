@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 
 import { BOOTSTRAP_WEDDING_ID } from "@cire/db";
+import { createRateLimiter } from "@shared/rate-limit";
+import type { RateLimiterBackend } from "@shared/rate-limit";
 
 import { createApp } from "../app";
 import { createDb, seedDb } from "../db/setup";
@@ -21,13 +23,28 @@ beforeAll(async () => {
   auth = await makeOsnTestAuth();
 });
 
-function buildApp() {
+function buildApp(opts?: { inviteLimiter?: RateLimiterBackend }) {
   const db = createDb(":memory:");
   seedDb(db);
   const assets = createAssetsStub();
-  const app = createApp(db, { osnTestKey: auth.key, assets });
+  const app = createApp(db, {
+    osnTestKey: auth.key,
+    assets,
+    // Generous per-test limiter so the shared module default can't bleed across
+    // tests; the rate-limit test below injects a tight one.
+    inviteLimiter:
+      opts?.inviteLimiter ?? createRateLimiter({ maxRequests: 1000, windowMs: 60_000 }),
+  });
   return { db, app, assets };
 }
+
+const emptyText = JSON.stringify({
+  heroTitle: null,
+  heroSubtitle: null,
+  storyEyebrow: null,
+  storyHeading: null,
+  storyBody: null,
+});
 
 async function authHeaders(profileId: string): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${await auth.sign(profileId)}` };
@@ -174,5 +191,23 @@ describe("invite image upload + serve + remove", () => {
     const { app } = buildApp();
     const res = await appRequest(app, `/api/invite/${SLUG}/image/story`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("invite write rate limiting (IB-S-L1)", () => {
+  it("429s once the per-IP limit is exceeded", async () => {
+    const { app } = buildApp({
+      inviteLimiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }),
+    });
+    const put = (body: string) =>
+      appRequest(app, `${orgBase}/text`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+    // No token needed — the limiter runs before auth, so a second hit from the
+    // same IP is rejected with 429 regardless of credentials.
+    expect((await put(emptyText)).status).not.toBe(429);
+    expect((await put(emptyText)).status).toBe(429);
   });
 });

@@ -5,7 +5,7 @@ import { Data, Effect } from "effect";
 import { DbService, dbQuery } from "../db";
 import type { InviteImageSlot, InviteTextBody } from "../schemas/invite";
 import { deleteAsset, storeAsset } from "./invite-assets";
-import type { AssetsR2Service } from "./invite-assets";
+import type { AssetR2Error, AssetsR2Service } from "./invite-assets";
 
 export class WeddingNotFound extends Data.TaggedError("WeddingNotFound")<{
   readonly slug?: string;
@@ -45,6 +45,36 @@ function normaliseCopy(value: string | null): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
+/** Map a (possibly absent, via LEFT JOIN) customisation row + slug to the response. */
+function toCustomisation(
+  slug: string,
+  c: {
+    heroTitle: string | null;
+    heroSubtitle: string | null;
+    storyEyebrow: string | null;
+    storyHeading: string | null;
+    storyBody: string | null;
+    heroImageKey: string | null;
+    storyImageKey: string | null;
+    updatedAt: Date | null;
+  },
+): InviteCustomisation {
+  const version = c.updatedAt ? c.updatedAt.getTime() : 0;
+  return {
+    hero: {
+      title: c.heroTitle,
+      subtitle: c.heroSubtitle,
+      imageUrl: c.heroImageKey ? imagePath(slug, "hero", version) : null,
+    },
+    story: {
+      eyebrow: c.storyEyebrow,
+      heading: c.storyHeading,
+      body: c.storyBody,
+      imageUrl: c.storyImageKey ? imagePath(slug, "story", version) : null,
+    },
+  };
+}
+
 export const inviteService = {
   /** Customisation for an organiser-owned wedding (weddingId already authorised). */
   getForWedding(
@@ -60,21 +90,7 @@ export const inviteService = {
           .where(eq(weddingInviteCustomisations.weddingId, weddingId))
           .all(),
       );
-      if (!row) return EMPTY;
-      const version = row.updatedAt.getTime();
-      return {
-        hero: {
-          title: row.heroTitle,
-          subtitle: row.heroSubtitle,
-          imageUrl: row.heroImageKey ? imagePath(slug, "hero", version) : null,
-        },
-        story: {
-          eyebrow: row.storyEyebrow,
-          heading: row.storyHeading,
-          body: row.storyBody,
-          imageUrl: row.storyImageKey ? imagePath(slug, "story", version) : null,
-        },
-      };
+      return row ? toCustomisation(slug, row) : EMPTY;
     }).pipe(Effect.withSpan("cire.invite.getForWedding"));
   },
 
@@ -90,14 +106,39 @@ export const inviteService = {
     });
   },
 
-  /** Customisation for an owned wedding, resolving the slug itself (organiser GET). */
+  /**
+   * Customisation for an owned wedding (organiser GET). Single LEFT JOIN so the
+   * slug + customisation come back in one round-trip (IB-P-W3).
+   */
   getForWeddingId(
     weddingId: string,
   ): Effect.Effect<InviteCustomisation, WeddingNotFound, DbService> {
     return Effect.gen(function* () {
-      const slug = yield* inviteService.weddingSlug(weddingId);
-      return yield* inviteService.getForWedding(weddingId, slug);
-    });
+      const db = yield* DbService;
+      const [row] = yield* dbQuery(() =>
+        db
+          .select({
+            slug: weddings.slug,
+            heroTitle: weddingInviteCustomisations.heroTitle,
+            heroSubtitle: weddingInviteCustomisations.heroSubtitle,
+            storyEyebrow: weddingInviteCustomisations.storyEyebrow,
+            storyHeading: weddingInviteCustomisations.storyHeading,
+            storyBody: weddingInviteCustomisations.storyBody,
+            heroImageKey: weddingInviteCustomisations.heroImageKey,
+            storyImageKey: weddingInviteCustomisations.storyImageKey,
+            updatedAt: weddingInviteCustomisations.updatedAt,
+          })
+          .from(weddings)
+          .leftJoin(
+            weddingInviteCustomisations,
+            eq(weddingInviteCustomisations.weddingId, weddings.id),
+          )
+          .where(eq(weddings.id, weddingId))
+          .all(),
+      );
+      if (!row) return yield* Effect.fail(new WeddingNotFound({}));
+      return toCustomisation(row.slug, row);
+    }).pipe(Effect.withSpan("cire.invite.getForWeddingId"));
   },
 
   /** Public read by wedding slug — drives the guest site. 404 for unknown slug. */
@@ -119,26 +160,25 @@ export const inviteService = {
   ): Effect.Effect<string | null, WeddingNotFound, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
+      // Single LEFT JOIN keyed on the slug: a missing weddings row is a 404; a
+      // present wedding with a null-joined customisation is a legitimate
+      // "no image yet" (IB-P-I1).
       const [row] = yield* dbQuery(() =>
         db
           .select({
+            weddingId: weddings.id,
             heroImageKey: weddingInviteCustomisations.heroImageKey,
             storyImageKey: weddingInviteCustomisations.storyImageKey,
           })
-          .from(weddingInviteCustomisations)
-          .innerJoin(weddings, eq(weddings.id, weddingInviteCustomisations.weddingId))
+          .from(weddings)
+          .leftJoin(
+            weddingInviteCustomisations,
+            eq(weddingInviteCustomisations.weddingId, weddings.id),
+          )
           .where(eq(weddings.slug, slug))
           .all(),
       );
-      // No customisation row yet is a legitimate "no image", not a 404 — only an
-      // unknown slug is. Distinguish by checking the wedding exists separately.
-      if (!row) {
-        const [wedding] = yield* dbQuery(() =>
-          db.select({ id: weddings.id }).from(weddings).where(eq(weddings.slug, slug)).all(),
-        );
-        if (!wedding) return yield* Effect.fail(new WeddingNotFound({ slug }));
-        return null;
-      }
+      if (!row) return yield* Effect.fail(new WeddingNotFound({ slug }));
       return slot === "hero" ? row.heroImageKey : row.storyImageKey;
     }).pipe(Effect.withSpan("cire.invite.imageKeyForSlug"));
   },
@@ -178,7 +218,7 @@ export const inviteService = {
     slot: InviteImageSlot,
     bytes: ArrayBuffer,
     contentType: string,
-  ): Effect.Effect<string, never, DbService | AssetsR2Service> {
+  ): Effect.Effect<string, AssetR2Error, DbService | AssetsR2Service> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const column =

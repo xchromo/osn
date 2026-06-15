@@ -23,6 +23,13 @@ const defaultClaimLimiter = createRateLimiter({ maxRequests: 5, windowMs: 60_000
  * still caps the POST's ARC-sign + S2S amplifier and the membership-probe oracle.
  */
 const defaultAccountLinkLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
+/**
+ * Default per-IP limiter for organiser invite-builder writes (IB-S-L1). An
+ * authenticated organiser could otherwise drive unbounded 5 MB R2 image writes;
+ * 30 req/min is generous for hand-editing while capping the storage/cost
+ * amplifier.
+ */
+const defaultInviteLimiter = createRateLimiter({ maxRequests: 30, windowMs: 60_000 });
 
 export interface AppOptions {
   /** Primary origin (used for the session cookie's `secure` flag). */
@@ -33,6 +40,8 @@ export interface AppOptions {
   claimLimiter?: RateLimiterBackend;
   /** Override the account-link rate limiter (useful for testing). */
   accountLinkLimiter?: RateLimiterBackend;
+  /** Override the invite-builder write rate limiter (useful for testing). */
+  inviteLimiter?: RateLimiterBackend;
   /** R2 bucket binding for the organiser import flow. */
   r2?: R2Bucket;
   /** R2 bucket binding for invite-builder images (separate from `r2`). */
@@ -58,6 +67,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     allowedOrigins,
     claimLimiter = defaultClaimLimiter,
     accountLinkLimiter = defaultAccountLinkLimiter,
+    inviteLimiter = defaultInviteLimiter,
     r2,
     assets,
     osnJwksUrl = "http://localhost:4000/.well-known/jwks.json",
@@ -115,7 +125,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // Invite builder. Public reads (guest site) + organiser writes split into
       // sibling instances so the guest GET isn't behind osnAuth.
       .use(createInvitePublicRoutes(db, assets))
-      .use(createInviteOrganiserRoutes(db, assets, osnAuthOptions))
+      .use(createInviteOrganiserRoutes(db, assets, osnAuthOptions, inviteLimiter))
       // Account linking. Two sibling instances on the same prefix: GET/DELETE
       // need only the guest session; the POST link additionally requires an OSN
       // token. Splitting them is what method-gates `osnAuth` to POST without

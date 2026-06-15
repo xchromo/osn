@@ -1,3 +1,4 @@
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect, Schema } from "effect";
 import { Elysia } from "elysia";
 
@@ -5,6 +6,7 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { InviteTextBody, isInviteImageSlot } from "../schemas/invite";
 import { inviteService } from "../services/invite";
@@ -114,8 +116,12 @@ export const createInviteOrganiserRoutes = (
   db: Db,
   assets: AssetsBucket | undefined,
   osnAuthOptions: OsnAuthOptions,
+  limiter: RateLimiterBackend,
 ) =>
   new Elysia({ prefix: "/api/organiser" })
+    // Per-IP cap on invite writes (IB-S-L1) — runs before auth so it also blunts
+    // unauthenticated hammering of the surface.
+    .use(rateLimitMiddleware(limiter))
     .use(osnAuth(osnAuthOptions))
     .group("/weddings/:weddingId", (group) =>
       group
