@@ -37,9 +37,12 @@ pre-push:
       #   or production runtime path opens a ws server. Drop once miniflare +
       #   happy-dom pull ws ≥8.21.0.
       #   GHSA-fx2h-pf6j-xcff  vite `server.fs.deny` bypass on Windows
-      #   alternate paths. Dev-server only (vite/astro/vitest) and
-      #   Windows-specific — never runs in CI, the Worker, or any production
-      #   path. Drop once vite ≥7.3.5 ages past `minimumReleaseAge`.
+      #   alternate paths. Repo-wide dev/build-tooling only — the vulnerable
+      #   vite range is pulled by `@cire/organiser` AND the OSN frontends
+      #   (`@osn/social`, `@osn/ui`, `@pulse/app`) via astro/vitest. Dev-server
+      #   only and Windows-specific — never runs in CI, any Worker, or a
+      #   production path for any consumer. Drop once vite ≥7.3.5 ages past
+      #   `minimumReleaseAge`.
       run: >
         bun audit --audit-level=high
         --ignore=GHSA-77vg-94rm-hx3p
