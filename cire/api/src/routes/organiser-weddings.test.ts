@@ -226,4 +226,23 @@ describe("POST /api/organiser/weddings/:weddingId/preview-code", () => {
     const res = await post(app, "/api/organiser/weddings/wed_nope/preview-code", BOOTSTRAP_OWNER);
     expect(res.status).toBe(404);
   });
+
+  it("does not leak the host preview family into the organiser guest roster", async () => {
+    const { app } = buildApp();
+    // Provision the host preview family/guest.
+    const minted = await post(app, path, BOOTSTRAP_OWNER);
+    expect(minted.status).toBe(200);
+
+    const res = await get(
+      app,
+      `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/guests`,
+      BOOTSTRAP_OWNER,
+    );
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as { firstName: string; publicId: string }[];
+    // Still the 6 real guests — the synthetic "Wedding Host" must not appear.
+    expect(rows).toHaveLength(6);
+    expect(rows.find((r) => r.firstName === "Wedding")).toBeUndefined();
+    expect(rows.find((r) => r.publicId.startsWith("HOST-"))).toBeUndefined();
+  });
 });
