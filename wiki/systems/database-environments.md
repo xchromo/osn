@@ -124,6 +124,19 @@ key loading. Its `wrangler.toml` therefore has no `main`/deploy target yet — i
 exists so the osn D1 databases can be created/migrated for free. Tracked in
 `wiki/TODO.md`.
 
+## Worker bundling: keep `bun:sqlite` out of the Worker
+
+`bun:sqlite` is Bun-only — wrangler/esbuild cannot resolve it, so **any** static
+import that reaches a Worker entry breaks `wrangler deploy`. The service →
+`@shared/db-utils` chain is imported by both the Bun host and the Worker, so
+`db-utils` must not statically import `bun:sqlite` (or `drizzle-orm/bun-sqlite`,
+which pulls it transitively). `createDrizzleClient` therefore imports both
+**dynamically via indirect specifiers** (`const m = "bun:sqlite"; await
+import(m)`) so esbuild leaves them as runtime imports and bundles neither — the
+code runs only on Bun (`local` + tests) and never executes on Workers.
+Consequently `makeDbLive` builds its layer asynchronously. Guard this with the
+Worker build: `bun run --cwd <pkg> build` (= `wrangler deploy --dry-run`).
+
 ## Testing
 
 Unit tests use `createTestLayer()` / bun:sqlite `:memory:` exactly as before —
@@ -134,3 +147,6 @@ integration test per service, co-located in `src/` so the vitest unit run
 ```bash
 bun run --cwd zap/api test:d1     # bun test src/d1-integration.test.ts
 ```
+
+`@shared/db-utils` has direct unit tests for the `commitBatch` driver split
+(empty no-op / D1 `batch` / sequential bun:sqlite fallback).
