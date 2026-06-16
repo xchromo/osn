@@ -33,9 +33,14 @@ const misconfigured = (detail: string): Response =>
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    // Fail closed at the edge if the D1 binding is missing rather than falling
-    // back to the bun:sqlite `local` layer in a misconfigured deployment.
+    // Fail closed at the edge if a required binding/secret is missing rather
+    // than falling back to the bun:sqlite `local` layer or — worse — the
+    // hardcoded dev JWT secret (S-H1). A deployed Zap Worker MUST verify Bearer
+    // tokens with the real OSN secret; an unset secret would otherwise degrade
+    // to a publicly-known key and let anyone forge a `sub` to read/write any
+    // user's chats.
     if (!env.DB) return misconfigured("missing DB");
+    if (!env.OSN_JWT_SECRET) return misconfigured("missing OSN_JWT_SECRET");
 
     if (!cached || cached.dbBinding !== env.DB) {
       cached = {

@@ -1,8 +1,6 @@
-import { Database } from "bun:sqlite";
-
 import type { D1Database } from "@cloudflare/workers-types";
 import type { BatchItem } from "drizzle-orm/batch";
-import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { Effect, Layer, type Context } from "effect";
@@ -28,14 +26,31 @@ export type Db<S extends Record<string, unknown>> = BaseSQLiteDatabase<
 >;
 
 /**
- * Construct a synchronous bun:sqlite-backed Drizzle client. Used by the `local`
- * environment only (dev servers + tests). The concrete {@link BunSQLiteDatabase}
- * is assignable to the broadened {@link Db}, so call sites stay portable to D1.
+ * Construct a bun:sqlite-backed Drizzle client. Used by the `local` environment
+ * only (dev servers + tests). The concrete {@link BunSQLiteDatabase} is
+ * assignable to the broadened {@link Db}, so call sites stay portable to D1.
+ *
+ * `bun:sqlite` and `drizzle-orm/bun-sqlite` are imported **dynamically** so they
+ * never enter a Cloudflare Workers bundle. The Workers entry only touches
+ * `createD1Db` / `makeD1DbLive` (which use `drizzle-orm/d1`); `DbLive` is
+ * evaluated at module load but `makeDbLive` returns a lazy Layer that doesn't
+ * reach this function until the `local` layer is actually built — which never
+ * happens on Workers. wrangler/esbuild cannot resolve `bun:sqlite`, so a static
+ * import here would break every Worker build.
  */
-export function createDrizzleClient<S extends Record<string, unknown>>(
+export async function createDrizzleClient<S extends Record<string, unknown>>(
   dbPath: string,
   schema: S,
-): BunSQLiteDatabase<S> {
+): Promise<BunSQLiteDatabase<S>> {
+  // Indirect (non-literal) specifiers so esbuild/wrangler cannot statically
+  // resolve them — it leaves both as runtime imports instead of pulling
+  // `bun:sqlite` (Bun-only, unresolvable in workerd) into the Worker bundle.
+  // This code runs only on Bun (`local` dev + tests); it is never executed on
+  // Workers, so the runtime import never fires there.
+  const bunSqlite = "bun:sqlite";
+  const bunSqliteDriver = "drizzle-orm/bun-sqlite";
+  const { Database } = (await import(bunSqlite)) as typeof import("bun:sqlite");
+  const { drizzle } = (await import(bunSqliteDriver)) as typeof import("drizzle-orm/bun-sqlite");
   const sqlite = new Database(dbPath);
   return drizzle(sqlite, { schema });
 }
@@ -47,7 +62,7 @@ export function makeDbLive<S extends Record<string, unknown>, A extends { readon
 ) {
   return Layer.effect(
     tag,
-    Effect.sync(() => ({ db: createDrizzleClient(dbPath, schema) }) as A),
+    Effect.promise(async () => ({ db: await createDrizzleClient(dbPath, schema) }) as A),
   );
 }
 

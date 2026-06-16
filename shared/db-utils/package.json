@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bunx --bun vitest",
+    "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -17,6 +19,7 @@
     "@cloudflare/workers-types": "^4.20260601.1",
     "@shared/typescript-config": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.10.0"
+    "better-sqlite3": "^12.10.0",
+    "vitest": "^4.1.8"
   }
 }

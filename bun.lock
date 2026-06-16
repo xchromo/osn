@@ -89,7 +89,7 @@
     },
     "osn/api": {
       "name": "@osn/api",
-      "version": "3.5.0",
+      "version": "3.5.2",
       "dependencies": {
         "@elysiajs/cors": "^1.4.2",
         "@osn/db": "workspace:*",
@@ -116,7 +116,7 @@
     },
     "osn/client": {
       "name": "@osn/client",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "dependencies": {
         "effect": "^3.21.2",
       },
@@ -134,7 +134,7 @@
     },
     "osn/db": {
       "name": "@osn/db",
-      "version": "0.15.0",
+      "version": "0.15.1",
       "dependencies": {
         "@shared/db-utils": "workspace:*",
         "drizzle-orm": "^0.45.2",
@@ -153,7 +153,7 @@
     },
     "osn/landing": {
       "name": "@osn/landing",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "dependencies": {
         "@astrojs/solid-js": "^6.0.1",
         "astro": "^6.4.2",
@@ -167,7 +167,7 @@
     },
     "osn/social": {
       "name": "@osn/social",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "dependencies": {
         "@osn/client": "workspace:*",
         "@osn/ui": "workspace:*",
@@ -192,7 +192,7 @@
     },
     "osn/ui": {
       "name": "@osn/ui",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "dependencies": {
         "@kobalte/core": "^0.13.11",
         "@osn/client": "workspace:*",
@@ -219,7 +219,7 @@
     },
     "pulse/api": {
       "name": "@pulse/api",
-      "version": "0.21.0",
+      "version": "0.21.1",
       "dependencies": {
         "@elysiajs/cors": "^1.4.2",
         "@elysiajs/eden": "^1.4.9",
@@ -246,7 +246,7 @@
     },
     "pulse/app": {
       "name": "@pulse/app",
-      "version": "0.15.1",
+      "version": "0.15.2",
       "dependencies": {
         "@osn/client": "workspace:*",
         "@osn/ui": "workspace:*",
@@ -277,7 +277,7 @@
     },
     "pulse/db": {
       "name": "@pulse/db",
-      "version": "0.17.0",
+      "version": "0.17.1",
       "dependencies": {
         "@shared/db-utils": "workspace:*",
         "drizzle-orm": "^0.45.2",
@@ -296,7 +296,7 @@
     },
     "shared/crypto": {
       "name": "@shared/crypto",
-      "version": "0.6.12",
+      "version": "0.7.0",
       "dependencies": {
         "@osn/db": "workspace:*",
         "@shared/observability": "workspace:*",
@@ -322,11 +322,12 @@
         "@shared/typescript-config": "workspace:*",
         "@types/better-sqlite3": "^7.6.13",
         "better-sqlite3": "^12.10.0",
+        "vitest": "^4.1.8",
       },
     },
     "shared/email": {
       "name": "@shared/email",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "dependencies": {
         "@shared/observability": "workspace:*",
         "effect": "^3.21.2",
@@ -339,7 +340,7 @@
     },
     "shared/observability": {
       "name": "@shared/observability",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "dependencies": {
         "@effect/opentelemetry": "^0.63.0",
         "@opentelemetry/api": "^1.9.1",
@@ -363,7 +364,7 @@
     },
     "shared/osn-auth-client": {
       "name": "@shared/osn-auth-client",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "dependencies": {
         "@shared/crypto": "workspace:*",
         "jose": "^6.2.3",
@@ -380,7 +381,7 @@
     },
     "shared/rate-limit": {
       "name": "@shared/rate-limit",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "devDependencies": {
         "@shared/typescript-config": "workspace:*",
         "vitest": "^4.1.8",
@@ -388,7 +389,7 @@
     },
     "shared/redis": {
       "name": "@shared/redis",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "dependencies": {
         "effect": "^3.21.2",
         "ioredis": "^5.10.1",
@@ -405,7 +406,7 @@
     },
     "zap/api": {
       "name": "@zap/api",
-      "version": "0.4.5",
+      "version": "0.4.6",
       "dependencies": {
         "@elysiajs/cors": "^1.4.2",
         "@elysiajs/eden": "^1.4.9",
@@ -429,7 +430,7 @@
     },
     "zap/db": {
       "name": "@zap/db",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "dependencies": {
         "@shared/db-utils": "workspace:*",
         "drizzle-orm": "^0.45.2",
