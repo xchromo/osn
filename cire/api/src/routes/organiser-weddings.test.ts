@@ -184,3 +184,46 @@ describe("GET /api/organiser/weddings/:weddingId/events", () => {
     expect(res.status).toBe(404);
   });
 });
+
+async function post(app: ReturnType<typeof buildApp>["app"], path: string, profileId?: string) {
+  const headers: Record<string, string> = {};
+  if (profileId) headers.Authorization = `Bearer ${await auth.sign(profileId)}`;
+  return appRequest(app, path, { method: "POST", headers });
+}
+
+describe("POST /api/organiser/weddings/:weddingId/preview-code", () => {
+  const path = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/preview-code`;
+
+  it("returns 401 without a token", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path);
+    expect(res.status).toBe(401);
+  });
+
+  it("mints a HOST-* preview code for the owner", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path, BOOTSTRAP_OWNER);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { publicId: string };
+    expect(body.publicId).toMatch(/^HOST-[A-Z0-9]{24}$/);
+  });
+
+  it("is idempotent — the same owner gets the same code", async () => {
+    const { app } = buildApp();
+    const first = (await (await post(app, path, BOOTSTRAP_OWNER)).json()) as { publicId: string };
+    const second = (await (await post(app, path, BOOTSTRAP_OWNER)).json()) as { publicId: string };
+    expect(second.publicId).toBe(first.publicId);
+  });
+
+  it("returns 403 for a non-owner", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path, OTHER_OWNER);
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 for an unknown wedding", async () => {
+    const { app } = buildApp();
+    const res = await post(app, "/api/organiser/weddings/wed_nope/preview-code", BOOTSTRAP_OWNER);
+    expect(res.status).toBe(404);
+  });
+});

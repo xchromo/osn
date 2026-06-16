@@ -8,6 +8,7 @@ import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
 import { claimService } from "../services/claim";
+import { hostCodeService } from "../services/host-code";
 import { weddingsService } from "../services/weddings";
 
 /**
@@ -66,6 +67,32 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           return runCire(
             claimService.listEvents(weddingId).pipe(
               Effect.provideService(DbService, db),
+              Effect.catchAllDefect(() =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal error" };
+                }),
+              ),
+            ),
+          );
+        })
+        // Provision (or fetch) this wedding's host preview code. The organiser
+        // dashboard opens the guest invite with `?code=<publicId>` so the host
+        // sees every event. Owner-gated by weddingOwner() above.
+        .post("/preview-code", ({ weddingId, set }) => {
+          if (!weddingId) {
+            set.status = 500;
+            return { error: "Internal error" };
+          }
+          return runCire(
+            hostCodeService.ensureForWedding(weddingId).pipe(
+              Effect.provideService(DbService, db),
+              Effect.catchTag("HostCodeError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal error" };
+                }),
+              ),
               Effect.catchAllDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;

@@ -163,6 +163,7 @@ export const claimService = {
         familyId: family.id,
         publicId: family.publicId,
         familyName: family.familyName,
+        preview: family.kind === "host",
         members: Array.from(memberMap.values()),
         events: eventList,
         rsvps: rsvpRows,
