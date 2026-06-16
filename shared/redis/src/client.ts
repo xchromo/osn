@@ -150,6 +150,27 @@ function isExpired(entry: { expiresAt?: number }): boolean {
 }
 
 /**
+ * Registry of additional "atomic counter" Lua scripts the in-memory `eval` is
+ * allowed to emulate (INCR + PEXPIRE-on-first, returning the new count).
+ *
+ * X5 keeps `eval` from silently applying rate-limit semantics to an unknown
+ * script, but the codebase legitimately has more than one counter script (e.g.
+ * the recovery-lockout store). Rather than coupling `@shared/redis` to those
+ * call sites' script bodies, each owner registers its script here at module
+ * load. Truly unrecognised scripts still fail loud.
+ */
+const counterScripts = new Set<string>();
+
+/**
+ * Register a Lua script with INCR + PEXPIRE-on-first + return-new-count
+ * semantics so the in-memory backend can emulate it. No-op against a real
+ * Redis (which executes the actual Lua). Call once at module load.
+ */
+export function registerMemoryCounterScript(script: string): void {
+  counterScripts.add(script);
+}
+
+/**
  * In-memory RedisClient for dev/test — no external Redis server needed.
  *
  * Uses a single `Map` store to mirror Redis's unified keyspace. The `eval`
@@ -176,20 +197,23 @@ export function createMemoryClient(maxEntries = DEFAULT_MAX_ENTRIES): RedisClien
 
   return {
     async eval(script, keys, args) {
-      // X5: this in-memory eval ONLY emulates the fixed-window rate-limit Lua
-      // script (INCR + PEXPIRE). It does not interpret arbitrary Lua. Guard so
-      // a future, semantically-different script can't silently inherit
-      // rate-limit behaviour — fail loud instead of returning a wrong answer.
-      if (script !== RATE_LIMIT_SCRIPT) {
+      // X5: this in-memory eval does not interpret arbitrary Lua. It emulates
+      // the fixed-window rate-limit script and any registered counter script
+      // (INCR + PEXPIRE-on-first). A truly unrecognised script fails loud
+      // instead of silently inheriting counter semantics and returning a wrong
+      // answer.
+      const isRateLimit = script === RATE_LIMIT_SCRIPT;
+      if (!isRateLimit && !counterScripts.has(script)) {
         throw new Error(
-          "createMemoryClient.eval only supports the rate-limit Lua script (RATE_LIMIT_SCRIPT); " +
-            "got an unrecognised script. The in-memory backend cannot execute arbitrary Lua.",
+          "createMemoryClient.eval only supports RATE_LIMIT_SCRIPT and registered counter " +
+            "scripts (see registerMemoryCounterScript); got an unrecognised script. The " +
+            "in-memory backend cannot execute arbitrary Lua.",
         );
       }
-      // Fixed-window rate limit: KEYS[1] = key, ARGV[1] = maxRequests, ARGV[2] = windowMs
+      // KEYS[1] = key. Rate-limit: ARGV = [maxRequests, windowMs], returns 1/0
+      // (allowed flag). Counter: ARGV = [pexpireMs], returns the new count.
       const key = keys[0]!;
-      const maxRequests = Number(args[0]);
-      const windowMs = Number(args[1]);
+      const windowMs = isRateLimit ? Number(args[1]) : Number(args[0]);
       const now = Date.now();
 
       sweep(windowMs);
@@ -201,6 +225,8 @@ export function createMemoryClient(maxEntries = DEFAULT_MAX_ENTRIES): RedisClien
       }
       const current = Number(entry.value) + 1;
       entry.value = String(current);
+      if (!isRateLimit) return current;
+      const maxRequests = Number(args[0]);
       return current <= maxRequests ? 1 : 0;
     },
     async ping() {

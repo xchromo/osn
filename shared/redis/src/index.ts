@@ -5,6 +5,7 @@ export {
   wrapIoRedis,
   createMemoryClient,
   createClientFromUrl,
+  registerMemoryCounterScript,
 } from "./client";
 export { Redis, type RedisService, RedisLive, RedisMemoryLive, sanitizeCause } from "./service";
 export {
@@ -13,3 +14,4 @@ export {
   RATE_LIMIT_SCRIPT,
 } from "./rate-limiter";
 export { checkRedisHealth } from "./health";
+export type { RedisNamespace } from "./metrics";

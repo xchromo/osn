@@ -190,7 +190,7 @@ describe("createMemoryClient — eval script guard (X5)", () => {
   it("throws on any other (unrecognised) Lua script", async () => {
     const client = createMemoryClient();
     await expect(client.eval("return 1", ["k1"], [1, 1000])).rejects.toThrow(
-      /only supports the rate-limit Lua script/,
+      /unrecognised script/,
     );
   });
 
