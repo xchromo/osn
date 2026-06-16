@@ -1,6 +1,6 @@
 ---
-"@shared/crypto": minor
-"@shared/observability": patch
+"@cire/api": minor
+"@cire/db": minor
 ---
 
 Cire: optional guest → OSN/Pulse account linking (backend).
@@ -14,13 +14,5 @@ account), `GET`/`DELETE` are guest-only. The POST resolves the OSN profile to
 its account id server-to-server over ARC; account id is S2S-only and never
 returned to clients. Linking is additive and opt-in — when no ARC key is
 configured the endpoint answers 503.
-
-`@shared/crypto` gains `signArcToken`, a DB-free, metric-free ES256 ARC signer
-on the Worker-safe `/jwk` subpath, so cire/api (Cloudflare Workers) can mint ARC
-tokens without bundling `@osn/db`/`bun:sqlite` or the node OpenTelemetry SDK.
-`createArcToken` now wraps it plus the issuance metric for bun/node services.
-
-`@shared/observability` adds `osn_account_id` to the log redaction deny-list (the
-new cross-database OSN account principal cire stores).
 
 Frontend (the guest-site "link my Pulse account" affordance) is deferred.
