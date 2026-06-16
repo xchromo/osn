@@ -11,3 +11,7 @@ locally — most visibly the debounced username-availability check
 (`GET /handle/:handle`). All nine route factories now run handlers against the
 single process-wide runtime (tests wrap their layer in a one-time runtime),
 eliminating the per-request rebuild.
+
+Also lightens the handle-availability check itself: it now runs a single-column
+`users.handle` existence probe instead of `findProfileByHandle`, which joined
+`accounts` to hydrate an email the check discarded.
