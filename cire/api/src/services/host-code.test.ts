@@ -5,10 +5,12 @@ import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService } from "../db";
+import type { Db } from "../db";
+import { createDb, seedDb } from "../db/setup";
 import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 import { claimService } from "./claim";
-import { hostCodeService } from "./host-code";
+import { hostCodeService, HostCodeError } from "./host-code";
 
 const withDb = effWith(TestDbLayer);
 
@@ -105,4 +107,29 @@ describe("hostCodeService.ensureForWedding", () => {
       }),
     ),
   );
+
+  it("fails with HostCodeError when a DB write throws", async () => {
+    // A Db whose reads pass through to a seeded DB but whose writes throw, so
+    // the family insert fails inside the service's `write` wrapper.
+    const real = createDb(":memory:");
+    seedDb(real);
+    const failing = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "insert") {
+          return () => {
+            throw new Error("simulated write failure");
+          };
+        }
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    }) as unknown as Db;
+
+    const error = await Effect.runPromise(
+      hostCodeService
+        .ensureForWedding(BOOTSTRAP_WEDDING_ID)
+        .pipe(Effect.provideService(DbService, failing), Effect.flip),
+    );
+    expect(error).toBeInstanceOf(HostCodeError);
+    expect(error.reason).toBe("insert family");
+  });
 });
