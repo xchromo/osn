@@ -346,7 +346,16 @@ eligible under the Digital ID Act 2024.
 - [x] OSN Core: session schema — server-side sessions with SHA-256 hashed opaque tokens (Copenhagen Book C1)
 - [ ] Pulse: event series schema
 - [ ] Add indexes on `status` and `category` columns in pulse-db events schema
-- [ ] Mirror `@pulse/db/testing` (`createSchemaSql()` + `applySchema()`) into `@osn/db` and `@zap/db` so adding a column there is also a one-file change. Pattern: `pulse/db/src/testing.ts` derives DDL from the live Drizzle schema via `getTableConfig()` in FK-respecting topological order. `@zap/db` test fixtures (`pulse/api/tests/services/zapBridge.test.ts` zap side, plus any in `zap/api/tests/`) and `@osn/db` test fixtures should be migrated off hand-rolled `CREATE TABLE` blocks once the helpers exist.
+- [ ] Mirror `@pulse/db/testing` (`createSchemaSql()` + `applySchema()`) into `@osn/db` so adding a column there is also a one-file change. Pattern: `pulse/db/src/testing.ts` derives DDL from the live Drizzle schema via `getTableConfig()` in FK-respecting topological order. `@osn/db` test fixtures (`osn/api/tests/helpers/db.ts`) should be migrated off hand-rolled `CREATE TABLE` blocks. (`@zap/db` done — added `zap/db/src/testing.ts`.)
+
+### Four-environment DB story (local / dev / staging / prod) — see [[database-environments]]
+
+`local` = bun:sqlite (fast/free in-memory tests + dev); `dev`/`staging`/`prod` = Cloudflare D1 on Workers. Foundation + Zap landed; Pulse + OSN pending the D1 transaction redesign.
+
+- [x] `@shared/db-utils`: driver-agnostic `Db<S>` type, `createD1Db`/`makeD1DbLive`, `dbQuery` bridge; `makeDbLive` accepts broadened tags
+- [x] Zap migrated end-to-end: `createApp` factory (`aot:false`) + `local.ts` (Bun.serve) + `index.ts` (Workers/D1) + `wrangler.toml` (dev/staging/prod) + Miniflare integration test (`bun run --cwd zap/api test:d1`) + first generated D1 migration
+- [ ] **Pulse → D1**: redesign the 5 `db.transaction()` calls in `pulse/api/src/services/accountErasure.ts` to D1's non-interactive `db.batch()` model (D1 has no interactive transactions), then broaden `@pulse/db` type + add `createApp` factory/`local.ts`/`index.ts`/`wrangler.toml`/integration test. **Atomicity-sensitive (account erasure / compliance).**
+- [ ] **OSN core → D1**: redesign 17 `db.transaction()` calls across `auth`, `profile`, `graph`, `organisation`, `account-erasure`. **Auth/compliance-critical** — several cite security findings S-H1/S-M2 for their atomicity guarantee; converting to `batch()` (no intermediate reads) needs care to preserve those invariants. Then wire the same factory/entry/wrangler/test set.
 
 ### Crypto (`osn/crypto`)
 
