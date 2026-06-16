@@ -85,27 +85,44 @@ bun run --cwd zap/db db:migrate:prod
 
 The one true incompatibility: **D1 does not support `db.transaction(async tx =>
 …)`** (interactive read-then-conditional-write). It offers only `db.batch([…])`
-— an atomic list of pre-built statements with no intermediate reads. Any service
-relying on `db.transaction` for atomicity (e.g. atomic handle-uniqueness checks,
-account erasure) must be redesigned before it can run on D1:
+— an atomic list of pre-built statements with no intermediate reads.
 
-- **Zap** — 0 transactions → fully D1-ready (migrated, Miniflare-tested).
-- **Pulse** — 5 transactions, all in `accountErasure.ts`.
-- **OSN core** — 17 transactions across `auth`, `profile`, `graph`,
-  `organisation`, `account-erasure` (auth/compliance-critical; several cite
-  security findings S-H1/S-M2 for their atomicity guarantee).
+The fix is the shared `commitBatch(db, statements)` helper in `@shared/db-utils`:
+it feature-detects the driver and runs the write set as a single atomic
+`db.batch([...])` on D1, or sequentially (awaited, in FK order) on bun:sqlite.
+Service code builds its statements up front instead of opening a transaction.
+Three rewrite shapes recur:
 
-These rewrites are tracked in `wiki/TODO.md`. Until a service's transactions are
-converted, it stays `local`-only (bun:sqlite) and is not wired for D1.
+1. **Pure write sets** (cascade deletes, swap-then-write) → drop straight into
+   `commitBatch`.
+2. **Read-then-write** (e.g. "pick the default-promotion target", "list hosted
+   events") → run the read first, then `commitBatch` the writes. Safe because the
+   subject (a profile/account being deleted) can't change between read and batch.
+3. **Check-then-insert under a constraint** (handle/email uniqueness) → pre-check
+   for a friendly error, then rely on the **UNIQUE constraint** as the
+   authoritative race-safe guard (S-H1/S-M2 preserved), mapping the violation to
+   a clean error. Count caps with no backing constraint (maxProfiles, passkey
+   cap) become best-effort with a documented benign over-by-one race; the
+   last-passkey invariant is kept race-safe with a **count-guarded conditional
+   DELETE** (`… WHERE (SELECT COUNT(*) …) > 1`).
 
 ## Migration status
 
-| Service | bun:sqlite (`local`) | D1 (`dev`/`staging`/`prod`) | Transactions to convert |
+| Service | bun:sqlite (`local`) | D1 (`dev`/`staging`/`prod`) | Transactions |
 |---|---|---|---|
-| `@zap/api` | ✅ | ✅ (Miniflare-tested) | 0 — done |
-| `@pulse/api` | ✅ | ⛔ pending | 5 (`accountErasure.ts`) |
-| `@osn/api` | ✅ | ⛔ pending | 17 (5 services) |
-| `@cire/api` | ✅ (dev/tests) | ✅ (always was) | n/a |
+| `@zap/api` | ✅ | ✅ (Miniflare-tested) | 0 |
+| `@pulse/api` | ✅ | ✅ (Miniflare-tested) | 5 → `commitBatch` |
+| `@osn/api` | ✅ | DB layer ✅ (Miniflare-tested) · Workers hosting ⛔ | 17 → `commitBatch` |
+| `@cire/api` | ✅ (dev/tests) | ✅ (always was) | n/a (async from day 1) |
+
+**`@osn/api` Workers-hosting caveat:** the DB layer is fully D1-ready and
+Miniflare-tested, but the long-lived osn-api process also depends on **ioredis**
+(rate-limiters, rotated-session + step-up JTI stores) and loads JWT keys from env
+at module top level — neither runs on Cloudflare Workers. Hosting osn-api on
+Workers needs a Workers-compatible Redis (e.g. Upstash REST) and request-scoped
+key loading. Its `wrangler.toml` therefore has no `main`/deploy target yet — it
+exists so the osn D1 databases can be created/migrated for free. Tracked in
+`wiki/TODO.md`.
 
 ## Testing
 

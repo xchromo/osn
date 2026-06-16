@@ -346,16 +346,18 @@ eligible under the Digital ID Act 2024.
 - [x] OSN Core: session schema — server-side sessions with SHA-256 hashed opaque tokens (Copenhagen Book C1)
 - [ ] Pulse: event series schema
 - [ ] Add indexes on `status` and `category` columns in pulse-db events schema
-- [ ] Mirror `@pulse/db/testing` (`createSchemaSql()` + `applySchema()`) into `@osn/db` so adding a column there is also a one-file change. Pattern: `pulse/db/src/testing.ts` derives DDL from the live Drizzle schema via `getTableConfig()` in FK-respecting topological order. `@osn/db` test fixtures (`osn/api/tests/helpers/db.ts`) should be migrated off hand-rolled `CREATE TABLE` blocks. (`@zap/db` done — added `zap/db/src/testing.ts`.)
+- [x] Mirror `@pulse/db/testing` (`createSchemaSql()` + `applySchema()`) into `@osn/db` and `@zap/db` — both now derive DDL from the live Drizzle schema via `getTableConfig()` in FK order, used by the Miniflare D1 integration tests. (Migrating the hand-rolled `osn/api/tests/helpers/db.ts` unit fixtures onto it is still open but optional.)
 
 ### Four-environment DB story (local / dev / staging / prod) — see [[database-environments]]
 
-`local` = bun:sqlite (fast/free in-memory tests + dev); `dev`/`staging`/`prod` = Cloudflare D1 on Workers. Foundation + Zap landed; Pulse + OSN pending the D1 transaction redesign.
+`local` = bun:sqlite (fast/free in-memory tests + dev); `dev`/`staging`/`prod` = Cloudflare D1 on Workers. Foundation + Zap + Pulse + OSN DB layer landed.
 
-- [x] `@shared/db-utils`: driver-agnostic `Db<S>` type, `createD1Db`/`makeD1DbLive`, `dbQuery` bridge; `makeDbLive` accepts broadened tags
-- [x] Zap migrated end-to-end: `createApp` factory (`aot:false`) + `local.ts` (Bun.serve) + `index.ts` (Workers/D1) + `wrangler.toml` (dev/staging/prod) + Miniflare integration test (`bun run --cwd zap/api test:d1`) + first generated D1 migration
-- [ ] **Pulse → D1**: redesign the 5 `db.transaction()` calls in `pulse/api/src/services/accountErasure.ts` to D1's non-interactive `db.batch()` model (D1 has no interactive transactions), then broaden `@pulse/db` type + add `createApp` factory/`local.ts`/`index.ts`/`wrangler.toml`/integration test. **Atomicity-sensitive (account erasure / compliance).**
-- [ ] **OSN core → D1**: redesign 17 `db.transaction()` calls across `auth`, `profile`, `graph`, `organisation`, `account-erasure`. **Auth/compliance-critical** — several cite security findings S-H1/S-M2 for their atomicity guarantee; converting to `batch()` (no intermediate reads) needs care to preserve those invariants. Then wire the same factory/entry/wrangler/test set.
+- [x] `@shared/db-utils`: driver-agnostic `Db<S>` type, `createD1Db`/`makeD1DbLive`, `dbQuery` bridge, `commitBatch` (atomic `db.batch` on D1 / sequential on bun:sqlite); `makeDbLive` accepts broadened tags
+- [x] Zap migrated end-to-end: `createApp` factory (`aot:false`) + `local.ts` (Bun.serve) + `index.ts` (Workers/D1) + `wrangler.toml` (dev/staging/prod) + Miniflare integration test + first generated D1 migration
+- [x] Pulse migrated end-to-end: 5 `accountErasure.ts` transactions → `commitBatch`; `createApp`/`local.ts`/`index.ts`/`wrangler.toml`/Miniflare test (`bun run --cwd pulse/api test:d1`)
+- [x] OSN core **DB layer** migrated: all 17 `db.transaction()` calls across `auth`/`profile`/`graph`/`organisation`/`account-erasure` → `commitBatch`, preserving the S-H1/S-M2 atomicity invariants (UNIQUE-constraint guards for handle/email races; count-guarded conditional DELETE for the last-passkey invariant). `@osn/db` type broadened + D1 layer; Miniflare integration test (`bun run --cwd osn/api test:d1`); `wrangler.toml` for D1 migration tooling.
+- [ ] **OSN core → Workers hosting** (the remaining blocker): replace ioredis (rate-limiters, rotated-session + step-up JTI stores) with a Workers-compatible Redis (e.g. Upstash REST) and move env-based JWT-key loading into the request path, then add the `createApp` factory / `local.ts` / Workers `index.ts` (+ `main` in `osn/api/wrangler.toml`). Until then osn-api runs only as the Bun.serve `local` host even though its D1 DB layer is ready.
+- [ ] **Pulse/Workers cron**: the leave-app deletion sweepers run on the long-lived `local` host (`pulse/api/src/local.ts`). On Workers they belong on a Cron Trigger (`[triggers] crons` + `scheduled()` handler).
 
 ### Crypto (`osn/crypto`)
 

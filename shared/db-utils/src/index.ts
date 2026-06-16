@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 
 import type { D1Database } from "@cloudflare/workers-types";
+import type { BatchItem } from "drizzle-orm/batch";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
@@ -83,3 +84,34 @@ export function makeD1DbLive<S extends Record<string, unknown>>(
  */
 export const dbQuery = <A>(run: () => A | Promise<A>): Effect.Effect<A> =>
   Effect.promise(() => Promise.resolve(run()));
+
+/**
+ * Commit a write set atomically across both drivers. D1 has no interactive
+ * transaction (`db.transaction(async tx => …)`), so flows that need
+ * all-or-nothing semantics build their statements up front — in FK-dependency
+ * order — and hand them here:
+ *  - D1 (`dev`/`staging`/`prod`): a single `db.batch([...])`. A batch IS a
+ *    transaction, so this is atomic and one round-trip.
+ *  - bun:sqlite (`local`/tests): no `.batch()` exists; awaited sequentially in
+ *    the same order. In-process, so no round-trip cost.
+ *
+ * `batch` exists only on the async D1 driver, so feature-detection picks the
+ * path — the same call site works on both. Mirrors the in-repo idiom first used
+ * by `cire/api`'s `commitWriteSet`.
+ */
+export async function commitBatch<S extends Record<string, unknown>>(
+  db: Db<S>,
+  statements: BatchItem<"sqlite">[],
+): Promise<void> {
+  if (statements.length === 0) return;
+  const batchable = db as unknown as {
+    batch?: (s: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]) => Promise<unknown>;
+  };
+  if (typeof batchable.batch === "function") {
+    await batchable.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    return;
+  }
+  // Sequential FK order, in-process — bun:sqlite has no batch.
+  /* eslint-disable-next-line no-await-in-loop */
+  for (const stmt of statements) await stmt;
+}
