@@ -1,14 +1,35 @@
 import { events, families, guests, guestEvents } from "@cire/db";
 import { and, eq } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { Effect, Data } from "effect";
 
 import { DbService, dbQuery } from "../db";
+import type { Db } from "../db";
 import { metricHostCodeEnsured } from "../metrics";
 
 export class HostCodeError extends Data.TaggedError("HostCodeError")<{
   readonly reason: string;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * Commit a write set atomically across both drivers. D1 has no interactive
+ * transaction, so the statements are batched into one round-trip; bun:sqlite
+ * (tests/local) has no `.batch()`, so they run sequentially in-process. Same
+ * feature-detected idiom as `import.ts`'s `commitWriteSet`.
+ */
+async function commitBatch(db: Db, statements: BatchItem<"sqlite">[]): Promise<void> {
+  if (statements.length === 0) return;
+  const batchable = db as {
+    batch?: (s: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]) => Promise<unknown>;
+  };
+  if (typeof batchable.batch === "function") {
+    await batchable.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    return;
+  }
+  // eslint-disable-next-line no-await-in-loop
+  for (const stmt of statements) await stmt;
+}
 
 /** Display name for the synthetic host family + its single member. The web
  *  invite renders these only behind the "preview" banner, so they never reach
@@ -131,18 +152,18 @@ export const hostCodeService = {
       );
       const linked = new Set(existingLinks.map((l) => l.eventId));
       const missing = eventRows.filter((e) => !linked.has(e.id));
-      yield* Effect.forEach(
-        missing,
-        (e) =>
-          write("link event", () =>
-            db
-              .insert(guestEvents)
-              .values({ guestId: hostGuestId, eventId: e.id })
-              .onConflictDoNothing()
-              .run(),
-          ),
-        { discard: true },
-      );
+      if (missing.length > 0) {
+        // One atomic batch (D1) / sequential run (bun:sqlite) instead of a
+        // round-trip per event — P-W1. `onConflictDoNothing` + the guest_events
+        // PK keep it idempotent across concurrent previews.
+        const statements = missing.map((e) =>
+          db
+            .insert(guestEvents)
+            .values({ guestId: hostGuestId, eventId: e.id })
+            .onConflictDoNothing(),
+        ) as BatchItem<"sqlite">[];
+        yield* write("link events", () => commitBatch(db, statements));
+      }
 
       return { publicId };
     }).pipe(
