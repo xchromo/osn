@@ -12,8 +12,10 @@
 # anywhere in the repo.
 set -euo pipefail
 
-# Resolve to the repo root so the workspace globs below always hold.
-cd "$(dirname "$0")/.."
+# Resolve to the repo root so the workspace globs below always hold. CHANGESET_ROOT
+# overrides the root (used by validate-changesets.test.sh to point at fixtures);
+# defaults to the repo root relative to this script.
+cd "${CHANGESET_ROOT:-$(dirname "$0")/..}"
 
 # Collect workspace names from every package.json under the five top-level
 # domain directories. Skip node_modules.
