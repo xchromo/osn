@@ -21,7 +21,7 @@ describe("hostCodeService.ensureForWedding", () => {
       Effect.gen(function* () {
         const db = yield* DbService;
         const { publicId } = yield* hostCodeService.ensureForWedding(BOOTSTRAP_WEDDING_ID);
-        expect(publicId).toMatch(/^HOST-[A-Z0-9]{24}$/);
+        expect(publicId).toMatch(/^HOST-[A-F0-9]{32}$/);
 
         const allEvents = yield* claimService.listEvents(BOOTSTRAP_WEDDING_ID);
         const claimed = yield* claimService.lookup(publicId);

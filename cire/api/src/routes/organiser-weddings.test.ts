@@ -205,7 +205,7 @@ describe("POST /api/organiser/weddings/:weddingId/preview-code", () => {
     const res = await post(app, path, BOOTSTRAP_OWNER);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { publicId: string };
-    expect(body.publicId).toMatch(/^HOST-[A-Z0-9]{24}$/);
+    expect(body.publicId).toMatch(/^HOST-[A-F0-9]{32}$/);
   });
 
   it("is idempotent — the same owner gets the same code", async () => {

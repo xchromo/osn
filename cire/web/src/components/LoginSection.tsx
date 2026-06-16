@@ -66,9 +66,15 @@ export function LoginSection(props: LoginSectionProps) {
   // host lands straight on the events view without retyping the code.
   onMount(() => {
     if (typeof window === "undefined") return;
-    const prefill = new URLSearchParams(window.location.search).get("code");
+    const url = new URL(window.location.href);
+    const prefill = url.searchParams.get("code");
     if (prefill && !props.result) {
       setCode(prefill.trim().toUpperCase());
+      // S-L1: strip the credential from the address bar + forward history
+      // immediately. submitCode already captured the value, and the claim sets
+      // the session cookie, so the URL copy is no longer needed.
+      url.searchParams.delete("code");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
       void submitCode(prefill);
     }
   });

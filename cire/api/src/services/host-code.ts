@@ -39,16 +39,20 @@ const HOST_GUEST_FIRST = "Wedding";
 const HOST_GUEST_LAST = "Host";
 
 /**
- * Mint a `HOST-*` claim code. 96 bits of `crypto.randomUUID` entropy (two
- * UUIDs, dashes stripped, first 24 hex chars) — far stronger than the 32-bit
- * family code, because this one code unlocks every event in the wedding. The
- * `HOST-` prefix keeps it visually distinct from family codes and out of their
- * namespace. 29 chars total, within the guest input's 30-char cap.
+ * Mint a `HOST-*` claim code with 128 bits of CSPRNG entropy (16 raw
+ * `crypto.getRandomValues` bytes, hex-encoded) — well above the project's
+ * 112-bit credential bar and far stronger than the 32-bit family code, because
+ * this one code unlocks every event in the wedding. Raw bytes (not UUID hex,
+ * which wastes bits on fixed version/variant nibbles) give full entropy per
+ * char. The `HOST-` prefix keeps it visually distinct from family codes and out
+ * of their namespace. Host codes are organiser deep-links, never hand-typed, so
+ * the length is unconstrained by the guest input's manual cap.
  */
 function mintHostPublicId(): string {
-  const suffix = (crypto.randomUUID() + crypto.randomUUID())
-    .replace(/-/g, "")
-    .slice(0, 24)
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const suffix = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"))
+    .join("")
     .toUpperCase();
   return `HOST-${suffix}`;
 }

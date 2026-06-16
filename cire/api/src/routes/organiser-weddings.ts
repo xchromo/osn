@@ -1,3 +1,4 @@
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 
@@ -5,6 +6,7 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
 import { claimService } from "../services/claim";
@@ -75,10 +77,28 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
               ),
             ),
           );
-        })
-        // Provision (or fetch) this wedding's host preview code. The organiser
-        // dashboard opens the guest invite with `?code=<publicId>` so the host
-        // sees every event. Owner-gated by weddingOwner() above.
+        }),
+    );
+
+/**
+ * Host preview-code provisioning, split into its own instance so the per-IP
+ * rate limiter gates only this mutating route (the find-or-create + event-relink
+ * amplifier — S-M2) and not the dashboard's read endpoints above. Same
+ * osnAuth + weddingOwner ownership gate; same sibling-instance pattern as the
+ * account-link POST. The organiser dashboard opens the guest invite with
+ * `?code=<publicId>` so the host sees every event.
+ */
+export const createOrganiserPreviewRoutes = (
+  db: Db,
+  osnAuthOptions: OsnAuthOptions,
+  limiter: RateLimiterBackend,
+) =>
+  new Elysia({ prefix: "/api/organiser" })
+    .use(osnAuth(osnAuthOptions))
+    .group("/weddings/:weddingId", (group) =>
+      group
+        .use(weddingOwner(db))
+        .use(rateLimitMiddleware(limiter))
         .post("/preview-code", ({ weddingId, set }) => {
           if (!weddingId) {
             set.status = 500;

@@ -87,6 +87,9 @@ describe("InvitePage", () => {
     // RSVP is disabled in preview mode.
     const respond = getByRole("button", { name: /Respond/i }) as HTMLButtonElement;
     expect(respond.disabled).toBe(true);
+
+    // S-L1: the host code is stripped from the URL after the one-time claim.
+    expect(window.location.search).not.toContain("code");
   });
 
   it("threads existingRsvps, apiUrl, members and onSubmitted into RsvpModal", async () => {
