@@ -78,7 +78,7 @@ const misconfigured = (detail: string): Response =>
  * `makeDbD1Live(env.DB)`, the redacting `osnLoggerLayer`, and the per-request
  * observability plugin OFF (see AppDeps).
  */
-async function buildAll(env: Env): Promise<App> {
+export async function buildAll(env: Env): Promise<App> {
   // -------------------------------------------------------------------------
   // Redis — S-L1: env-gate the in-memory fallback.
   //
@@ -141,9 +141,9 @@ async function buildAll(env: Env): Promise<App> {
  * the strict format; otherwise mint a fresh one. Never echo a client-controlled
  * value back untouched (log / header / terminal injection).
  */
-const REQUEST_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+export const REQUEST_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
-function resolveRequestId(request: Request): string {
+export function resolveRequestId(request: Request): string {
   const raw = request.headers.get("x-request-id");
   if (raw !== null && REQUEST_ID_RE.test(raw)) return raw;
   return `req_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -158,7 +158,7 @@ function resolveRequestId(request: Request): string {
  * passes a superset at call time, so this is sound. `scheduled` uses the real
  * workers types since it touches no DOM Request/Response.
  */
-const handler: {
+export const handler: {
   fetch(request: Request, env: Env): Promise<Response>;
   scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>;
 } = {
