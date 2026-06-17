@@ -16,7 +16,7 @@ type VariantName = keyof typeof VARIANT_WIDTHS;
  * width in `variants`. The browser picks the entry matching the rendered size +
  * DPR; the API negotiates WebP/AVIF per request via Accept.
  */
-function buildSrcSet(baseUrl: string, variants: readonly VariantName[]): string {
+export function buildSrcSet(baseUrl: string, variants: readonly VariantName[]): string {
   const sep = baseUrl.includes("?") ? "&" : "?";
   return variants.map((v) => `${baseUrl}${sep}variant=${v} ${VARIANT_WIDTHS[v]}w`).join(", ");
 }

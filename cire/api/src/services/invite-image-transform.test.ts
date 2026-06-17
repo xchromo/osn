@@ -87,6 +87,18 @@ describe("buildTransformCacheKey", () => {
     expect(new Set([avif, webp, jpeg]).size).toBe(3);
   });
 
+  it("differs by version so a re-upload (bumped updatedAt) mints a fresh entry (T-S1)", () => {
+    // After the S-M1 fix the version is the server-side row `updatedAt` epoch ms,
+    // not the client `?v=`. Two different versions must yield different keys so a
+    // re-uploaded image isn't served the stale cached transform.
+    const base = { slug: "s", slot: "hero", variant: "card", format: "image/jpeg" } as const;
+    const v1 = buildTransformCacheKey({ ...base, version: "1718000000000" });
+    const v2 = buildTransformCacheKey({ ...base, version: "1718999999999" });
+    expect(v1.url).not.toBe(v2.url);
+    expect(new URL(v1.url).searchParams.get("v")).toBe("1718000000000");
+    expect(new URL(v2.url).searchParams.get("v")).toBe("1718999999999");
+  });
+
   it("differs by variant and includes the ?v= content version when present", () => {
     const card = buildTransformCacheKey({
       slug: "s",

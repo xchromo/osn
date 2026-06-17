@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID } from "@cire/db";
+import { BOOTSTRAP_WEDDING_ID, weddingInviteCustomisations } from "@cire/db";
 import { createRateLimiter } from "@shared/rate-limit";
 import type { RateLimiterBackend } from "@shared/rate-limit";
+import { eq } from "drizzle-orm";
 
 import { createApp } from "../app";
 import { createDb, seedDb } from "../db/setup";
@@ -409,6 +410,85 @@ describe("invite image transforms — Cache API short-circuit", () => {
       });
       expect(webp2.headers.get("content-type")).toBe("image/webp");
       expect(images.widths.length).toBe(2);
+    });
+  });
+
+  it("a re-upload (bumped updatedAt) creates a second cache entry and re-runs the binding (T-S1)", async () => {
+    const cache = createCacheStub();
+    await withCaches(cache.caches, async () => {
+      const images = createImagesStub();
+      const built = buildApp({ images });
+      const app = built.app;
+      await uploadHero(app);
+
+      const accept = { accept: "image/avif,image/webp,*/*" };
+
+      // First request → miss → binding runs once, one cache entry written under
+      // the current server `updatedAt`.
+      const first = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+        headers: accept,
+      });
+      expect(first.status).toBe(200);
+      expect(images.widths).toEqual([1600]); // binding ran once
+      expect(cache.store.size).toBe(1);
+
+      // Simulate a re-upload by advancing the wedding's stored `updatedAt`. After
+      // the S-M1 fix the cache version is derived from this DB value (NOT the
+      // client ?v=), so a bump must mint a fresh key — the new image can't be
+      // served the stale cached transform.
+      built.db
+        .update(weddingInviteCustomisations)
+        .set({ updatedAt: new Date(Date.now() + 60_000) })
+        .where(eq(weddingInviteCustomisations.weddingId, BOOTSTRAP_WEDDING_ID))
+        .run();
+
+      // Same request URL (same ?variant, same Accept) → because the server
+      // version changed, this is a MISS against a new key → binding re-runs and a
+      // SECOND cache entry is created.
+      const second = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+        headers: accept,
+      });
+      expect(second.status).toBe(200);
+      expect(second.headers.get("content-type")).toBe("image/avif");
+      expect(new Uint8Array(await second.arrayBuffer())).toEqual(TRANSFORMED);
+      expect(images.widths).toEqual([1600, 1600]); // binding ran a second time
+      expect(cache.store.size).toBe(2); // new version ⇒ distinct cache entry
+    });
+  });
+
+  it("ignores the client ?v= for cache keying — looping ?v= does NOT re-bill transforms (S-M1)", async () => {
+    const cache = createCacheStub();
+    await withCaches(cache.caches, async () => {
+      const images = createImagesStub();
+      const app = buildApp({ images }).app;
+      await uploadHero(app);
+
+      const accept = { accept: "image/avif,image/webp,*/*" };
+
+      // First request primes the cache (server-derived version).
+      const first = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero&v=1`, {
+        headers: accept,
+      });
+      expect(first.status).toBe(200);
+      expect(images.widths).toEqual([1600]);
+      expect(cache.store.size).toBe(1);
+
+      // An attacker loops distinct ?v= values on the same valid slug. The cache
+      // is already primed (above), so each MUST hit the SAME server-derived entry
+      // — the binding never re-runs and no new entries are minted, so the
+      // per-(slug,slot,variant,format) live transform count stays at exactly 1.
+      const responses = await Promise.all(
+        [2, 3, 4, 5].map((v) =>
+          appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero&v=${v}`, {
+            headers: accept,
+          }),
+        ),
+      );
+      const bodies = await Promise.all(responses.map((r) => r.arrayBuffer()));
+      for (const res of responses) expect(res.status).toBe(200);
+      for (const body of bodies) expect(new Uint8Array(body)).toEqual(TRANSFORMED);
+      expect(images.widths).toEqual([1600]); // still exactly one transform
+      expect(cache.store.size).toBe(1); // no extra cache entries
     });
   });
 
