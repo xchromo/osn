@@ -59,3 +59,24 @@ OSN_JWKS_URL = "https://osn-api.example.com/.well-known/jwks.json"
 # REQUIRED BEFORE PROD — real OSN origin (placeholder host osn-api.example.com)
 OSN_ISSUER_URL = "https://osn-api.example.com"
 OSN_AUDIENCE = "osn-access"
+
+# Wrangler named environments do NOT inherit top-level [[d1_databases]] /
+# [[r2_buckets]] bindings — they must be redeclared per-env. Without these,
+# `wrangler deploy --env production` ships with no DB/R2 and the worker
+# fail-closes (503) at index.ts on the missing DB binding. Keep these in sync
+# with the top-level bindings above.
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "cire-db"
+database_id = "e0ebc94c-77df-47a6-af52-40a8c39b3afb"
+migrations_dir = "../db/migrations"
+
+[[env.production.r2_buckets]]
+binding = "SHEETS"
+bucket_name = "cire-sheets"
+preview_bucket_name = "cire-sheets-preview"
+
+[[env.production.r2_buckets]]
+binding = "ASSETS"
+bucket_name = "cire-assets"
+preview_bucket_name = "cire-assets-preview"
