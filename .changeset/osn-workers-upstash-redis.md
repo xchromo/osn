@@ -1,6 +1,7 @@
 ---
 "@shared/redis": minor
 "@osn/api": minor
+"@pulse/api": patch
 ---
 
 Add a Workers-compatible Upstash REST Redis backend (migration Phase 2).
