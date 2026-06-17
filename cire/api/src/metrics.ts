@@ -35,6 +35,8 @@ export const CIRE_METRICS = {
   claimLookupDuration: "cire.claim.lookup.duration",
   // Guest sessions.
   sessionCreated: "cire.session.created",
+  // Organiser host-code (invite preview) provisioning.
+  hostCodeEnsured: "cire.host_code.ensured",
   // RSVP.
   rsvpUpserted: "cire.rsvp.upserted",
   rsvpBatchSize: "cire.rsvp.batch.size",
@@ -101,6 +103,7 @@ export type FamilyCodeRegenResult = "ok" | "error";
 type ClaimAttemptsAttrs = { result: ClaimResult };
 type ClaimLookupDurationAttrs = { result: "ok" | "error" };
 type SessionCreatedAttrs = { result: "ok" | "error" };
+type HostCodeEnsuredAttrs = { result: "ok" | "error" };
 type RsvpUpsertedAttrs = { status: RsvpStatus; result: "ok" | "error" };
 type ImportSimpleAttrs = { result: "ok" | "error" };
 type ImportRowsAttrs = { entity: ImportEntity };
@@ -134,6 +137,12 @@ const sessionCreated = createCounter<SessionCreatedAttrs>({
   name: CIRE_METRICS.sessionCreated,
   description: "Guest session-cookie creations, by outcome",
   unit: "{session}",
+});
+
+const hostCodeEnsured = createCounter<HostCodeEnsuredAttrs>({
+  name: CIRE_METRICS.hostCodeEnsured,
+  description: "Organiser host-code (invite preview) find-or-create calls, by outcome",
+  unit: "{ensure}",
 });
 
 const rsvpUpserted = createCounter<RsvpUpsertedAttrs>({
@@ -232,6 +241,9 @@ export const metricClaimAttempt = (result: ClaimResult): void => claimAttempts.i
 
 export const metricSessionCreated = (result: "ok" | "error"): void =>
   sessionCreated.inc({ result });
+
+export const metricHostCodeEnsured = (result: "ok" | "error"): void =>
+  hostCodeEnsured.inc({ result });
 
 export const metricRsvpUpserted = (status: RsvpStatus, result: "ok" | "error"): void =>
   rsvpUpserted.inc({ status, result });

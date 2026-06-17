@@ -5,7 +5,7 @@
  * Why a script (not a SQL migration): the new code format needs the EFF
  * wordlist + a CSPRNG + the wedding's `code_style` tier — none of which a pure
  * D1 `.sql` migration can express. So the column add ships as migration
- * `0010_wedding_code_style.sql`, and this operator function performs the data
+ * `0011_wedding_code_style.sql`, and this operator function performs the data
  * re-mint against a live D1 binding.
  *
  * Safety properties:

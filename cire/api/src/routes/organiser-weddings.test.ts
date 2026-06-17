@@ -186,8 +186,14 @@ describe("GET /api/organiser/weddings/:weddingId/events", () => {
   });
 });
 
+async function post(app: ReturnType<typeof buildApp>["app"], path: string, profileId?: string) {
+  const headers: Record<string, string> = {};
+  if (profileId) headers.Authorization = `Bearer ${await auth.sign(profileId)}`;
+  return appRequest(app, path, { method: "POST", headers });
+}
+
 describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-code (C2)", () => {
-  async function post(
+  async function postRegen(
     app: ReturnType<typeof buildApp>["app"],
     weddingId: string,
     familyId: string,
@@ -219,21 +225,21 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
   it("returns 401 without a token", async () => {
     const { db, app } = buildApp();
     const fam = aBootstrapFamily(db);
-    const res = await post(app, BOOTSTRAP_WEDDING_ID, fam.id);
+    const res = await postRegen(app, BOOTSTRAP_WEDDING_ID, fam.id);
     expect(res.status).toBe(401);
   });
 
   it("returns 403 for a non-owner", async () => {
     const { db, app } = buildApp();
     const fam = aBootstrapFamily(db);
-    const res = await post(app, BOOTSTRAP_WEDDING_ID, fam.id, OTHER_OWNER);
+    const res = await postRegen(app, BOOTSTRAP_WEDDING_ID, fam.id, OTHER_OWNER);
     expect(res.status).toBe(403);
   });
 
   it("rotates the code (old code replaced) for the wedding owner", async () => {
     const { db, app } = buildApp();
     const fam = aBootstrapFamily(db);
-    const res = await post(app, BOOTSTRAP_WEDDING_ID, fam.id, BOOTSTRAP_OWNER);
+    const res = await postRegen(app, BOOTSTRAP_WEDDING_ID, fam.id, BOOTSTRAP_OWNER);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { familyId: string; publicId: string };
     expect(body.familyId).toBe(fam.id);
@@ -263,7 +269,7 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
       .run();
     expect(db.select().from(sessions).where(eq(sessions.familyId, fam.id)).all()).toHaveLength(2);
 
-    const res = await post(app, BOOTSTRAP_WEDDING_ID, fam.id, BOOTSTRAP_OWNER);
+    const res = await postRegen(app, BOOTSTRAP_WEDDING_ID, fam.id, BOOTSTRAP_OWNER);
     expect(res.status).toBe(200);
     // All sessions for the family are gone.
     expect(db.select().from(sessions).where(eq(sessions.familyId, fam.id)).all()).toHaveLength(0);
@@ -273,7 +279,63 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
     const { app } = buildApp();
     // fam_other lives under OTHER_WEDDING_ID — the bootstrap owner can't rotate it
     // through their own wedding's route.
-    const res = await post(app, BOOTSTRAP_WEDDING_ID, "fam_other", BOOTSTRAP_OWNER);
+    const res = await postRegen(app, BOOTSTRAP_WEDDING_ID, "fam_other", BOOTSTRAP_OWNER);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/organiser/weddings/:weddingId/preview-code", () => {
+  const path = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/preview-code`;
+
+  it("returns 401 without a token", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path);
+    expect(res.status).toBe(401);
+  });
+
+  it("mints a HOST-* preview code for the owner", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path, BOOTSTRAP_OWNER);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { publicId: string };
+    expect(body.publicId).toMatch(/^HOST-[A-F0-9]{32}$/);
+  });
+
+  it("is idempotent — the same owner gets the same code", async () => {
+    const { app } = buildApp();
+    const first = (await (await post(app, path, BOOTSTRAP_OWNER)).json()) as { publicId: string };
+    const second = (await (await post(app, path, BOOTSTRAP_OWNER)).json()) as { publicId: string };
+    expect(second.publicId).toBe(first.publicId);
+  });
+
+  it("returns 403 for a non-owner", async () => {
+    const { app } = buildApp();
+    const res = await post(app, path, OTHER_OWNER);
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 for an unknown wedding", async () => {
+    const { app } = buildApp();
+    const res = await post(app, "/api/organiser/weddings/wed_nope/preview-code", BOOTSTRAP_OWNER);
+    expect(res.status).toBe(404);
+  });
+
+  it("does not leak the host preview family into the organiser guest roster", async () => {
+    const { app } = buildApp();
+    // Provision the host preview family/guest.
+    const minted = await post(app, path, BOOTSTRAP_OWNER);
+    expect(minted.status).toBe(200);
+
+    const res = await get(
+      app,
+      `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/guests`,
+      BOOTSTRAP_OWNER,
+    );
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as { firstName: string; publicId: string }[];
+    // Still the 6 real guests — the synthetic "Wedding Host" must not appear.
+    expect(rows).toHaveLength(6);
+    expect(rows.find((r) => r.firstName === "Wedding")).toBeUndefined();
+    expect(rows.find((r) => r.publicId.startsWith("HOST-"))).toBeUndefined();
   });
 });
