@@ -7,6 +7,11 @@ import type { RateLimiterBackend } from "@shared/rate-limit";
 import { createApp } from "../app";
 import { createDb, seedDb } from "../db/setup";
 import { createAssetsStub } from "../services/invite-assets";
+import type {
+  ImagesBindingLike,
+  ImageTransformHandle,
+  OutputFormat,
+} from "../services/invite-image-transform";
 import { appRequest } from "../test-helpers";
 import { makeOsnTestAuth } from "../test-helpers/osn-token";
 import type { OsnTestAuth } from "../test-helpers/osn-token";
@@ -24,19 +29,60 @@ beforeAll(async () => {
   auth = await makeOsnTestAuth();
 });
 
-function buildApp(opts?: { inviteLimiter?: RateLimiterBackend }) {
+function buildApp(opts?: { inviteLimiter?: RateLimiterBackend; images?: ImagesBindingLike }) {
   const db = createDb(":memory:");
   seedDb(db);
   const assets = createAssetsStub();
   const app = createApp(db, {
     osnTestKey: auth.key,
     assets,
+    images: opts?.images,
     // Generous per-test limiter so the shared module default can't bleed across
     // tests; the rate-limit test below injects a tight one.
     inviteLimiter:
       opts?.inviteLimiter ?? createRateLimiter({ maxRequests: 1000, windowMs: 60_000 }),
   });
   return { db, app, assets };
+}
+
+// Distinct bytes from the uploaded PNG so a test can tell a transformed serve
+// apart from the raw-original fallback.
+const TRANSFORMED = new Uint8Array([0xaa, 0xbb, 0xcc]);
+
+/** Stub Images binding. Echoes the requested format as content-type, records the
+ *  transform widths, and can be made to throw to exercise the fallback path. */
+function createImagesStub(opts?: { fail?: boolean }): ImagesBindingLike & {
+  widths: (number | undefined)[];
+} {
+  const widths: (number | undefined)[] = [];
+  return {
+    widths,
+    input() {
+      const handle: ImageTransformHandle = {
+        transform(t) {
+          widths.push(t.width);
+          return handle;
+        },
+        output(o: { format: OutputFormat }) {
+          if (opts?.fail) return Promise.reject(new Error("transform boom"));
+          return Promise.resolve({
+            response: () => new Response(TRANSFORMED, { headers: { "Content-Type": o.format } }),
+            contentType: () => o.format,
+          });
+        },
+      };
+      return handle;
+    },
+  };
+}
+
+async function uploadHero(app: ReturnType<typeof buildApp>["app"]): Promise<void> {
+  const up = await appRequest(app, `${orgBase}/image/hero`, {
+    method: "POST",
+    headers: await authHeaders(BOOTSTRAP_OWNER),
+    body: PNG,
+  });
+  expect(up.status).toBe(200);
 }
 
 const emptyText = JSON.stringify({
@@ -192,6 +238,64 @@ describe("invite image upload + serve + remove", () => {
     const { app } = buildApp();
     const res = await appRequest(app, `/api/invite/${SLUG}/image/story`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("invite image transforms (Cloudflare Images)", () => {
+  it("falls back to the original bytes when no IMAGES binding is present", async () => {
+    // No `images` ⇒ the serve route serves the raw R2 original (today's
+    // behaviour), unchanged — the critical local-dev / test path.
+    const app = buildApp().app;
+    await uploadHero(app);
+    const img = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`);
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(PNG);
+  });
+
+  it("serves a transformed variant when the IMAGES binding is present", async () => {
+    const images = createImagesStub();
+    const app = buildApp({ images }).app;
+    await uploadHero(app);
+
+    const img = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+      headers: { accept: "image/avif,image/webp,*/*" },
+    });
+    expect(img.status).toBe(200);
+    // AVIF negotiated from Accept; transformed bytes (not the original PNG).
+    expect(img.headers.get("content-type")).toBe("image/avif");
+    expect(img.headers.get("vary")).toBe("Accept");
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(TRANSFORMED);
+    // `hero` variant ⇒ 1600px render width.
+    expect(images.widths).toEqual([1600]);
+  });
+
+  it("negotiates WebP when AVIF is not advertised", async () => {
+    const images = createImagesStub();
+    const app = buildApp({ images }).app;
+    await uploadHero(app);
+
+    const img = await appRequest(app, `/api/invite/${SLUG}/image/hero`, {
+      headers: { accept: "image/webp,*/*" },
+    });
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/webp");
+    // No ?variant ⇒ default `card` (800px).
+    expect(images.widths).toEqual([800]);
+  });
+
+  it("falls back to the original (never 500s) when a transform fails", async () => {
+    const images = createImagesStub({ fail: true });
+    const app = buildApp({ images }).app;
+    await uploadHero(app);
+
+    const img = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=card`, {
+      headers: { accept: "image/avif,*/*" },
+    });
+    expect(img.status).toBe(200);
+    // Transform threw ⇒ raw R2 original, with its stored content-type.
+    expect(img.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(PNG);
   });
 });
 
