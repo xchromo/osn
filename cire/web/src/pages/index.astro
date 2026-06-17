@@ -46,7 +46,7 @@ const preloadHero = initialInvite?.hero.imageUrl
     <InviteHeader client:load apiUrl={apiUrl} slug={weddingSlug} initial={initialInvite} />
     <InvitePage
       client:visible
-      apiUrl={import.meta.env.PUBLIC_API_URL}
+      apiUrl={apiUrl}
       siteUrl={import.meta.env.PUBLIC_SITE_URL}
     />
   </body>
