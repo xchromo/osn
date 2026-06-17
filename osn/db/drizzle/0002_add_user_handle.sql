@@ -10,7 +10,7 @@ CREATE TABLE `__new_users` (
 );
 --> statement-breakpoint
 INSERT INTO `__new_users`(`id`, `handle`, `email`, `display_name`, `avatar_url`, `created_at`, `updated_at`)
-	SELECT `id`, COALESCE(`handle`, 'usr_' || substr(`id`, 5)), `email`, `display_name`, `avatar_url`, `created_at`, `updated_at`
+	SELECT `id`, 'usr_' || substr(`id`, 5), `email`, `display_name`, `avatar_url`, `created_at`, `updated_at`
 	FROM `users`;
 --> statement-breakpoint
 DROP TABLE `users`;--> statement-breakpoint
