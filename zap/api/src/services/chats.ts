@@ -137,10 +137,15 @@ export const createChat = (
 
     // Z3/Z4: every profile pulled into the chat must consent (graph-gated).
     // Fail-closed on graph-unreachable. Checked BEFORE any insert so a denied
-    // member never leaves a half-built chat behind.
-    for (const targetId of initialMembers) {
-      yield* checkConsent(creatorProfileId, targetId);
-    }
+    // member never leaves a half-built chat behind. P-W1: run the per-member
+    // S2S consent checks with bounded concurrency (up to MAX_CHAT_MEMBERS) so
+    // they overlap instead of serialising one round-trip at a time; any
+    // rejection still short-circuits (Effect.forEach fails fast), preserving
+    // the fail-closed contract.
+    yield* Effect.forEach(initialMembers, (targetId) => checkConsent(creatorProfileId, targetId), {
+      concurrency: 10,
+      discard: true,
+    });
 
     const id = "chat_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
     const now = new Date();

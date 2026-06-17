@@ -60,7 +60,11 @@ async function claimCookie(app: ReturnType<typeof createApp>, publicId: string):
   const res = await app.fetch(
     new Request("http://localhost/api/claim", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "cf-connecting-ip": TEST_CF_IP, Origin: TEST_ORIGIN },
+      headers: {
+        "Content-Type": "application/json",
+        "cf-connecting-ip": TEST_CF_IP,
+        Origin: TEST_ORIGIN,
+      },
       body: JSON.stringify({ publicId }),
     }),
   );

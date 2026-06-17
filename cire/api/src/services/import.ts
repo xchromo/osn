@@ -6,8 +6,6 @@ import { Effect, Data } from "effect";
 import { DbService, dbQuery } from "../db";
 import type { Db } from "../db";
 import { metricImportApplied } from "../metrics";
-import { generateFamilyCode } from "./family-code";
-import type { CodeStyle } from "./family-code";
 import type {
   EventCreate,
   EventLink,
@@ -23,6 +21,8 @@ import type {
   ParsedEvent,
   ParsedFamily,
 } from "../schemas/import";
+import { generateFamilyCode } from "./family-code";
+import type { CodeStyle } from "./family-code";
 
 // ── Tagged errors ─────────────────────────────────────────────────────────────
 
@@ -77,7 +77,11 @@ export function diffAgainstDb(
     // this import. Read once; default to `secure` if the row is somehow absent
     // (defensive — `weddingId` is always a real, owned wedding here).
     const [weddingRow] = yield* dbQuery(() =>
-      db.select({ codeStyle: weddings.codeStyle }).from(weddings).where(eq(weddings.id, weddingId)).all(),
+      db
+        .select({ codeStyle: weddings.codeStyle })
+        .from(weddings)
+        .where(eq(weddings.id, weddingId))
+        .all(),
     );
     const codeStyle: CodeStyle = weddingRow?.codeStyle ?? "secure";
 

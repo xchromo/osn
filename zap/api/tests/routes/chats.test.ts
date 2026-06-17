@@ -36,6 +36,11 @@ function req(
       method,
       headers: {
         "Content-Type": "application/json",
+        // S-H1: write endpoints derive the rate-limit key from `cf-connecting-ip`
+        // (Zap runs behind Cloudflare) and fail closed (429) when it is
+        // unresolved. Supply a stable test IP so the limiter buckets requests
+        // deterministically instead of denying every header-less request.
+        "cf-connecting-ip": "203.0.113.7",
         ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
       },
       ...(opts.body ? { body: json(opts.body) } : {}),

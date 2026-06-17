@@ -55,6 +55,7 @@ Phase 1 surfaces:
 | If you need to... | Read |
 |---|---|
 | Understand monorepo layout | `[[wiki/architecture/monorepo-structure]]` |
+| Understand DB environments (local bun:sqlite vs dev/staging/prod D1) | `[[wiki/systems/database-environments]]` |
 | Write new Effect service or Elysia route | `[[wiki/architecture/backend-patterns]]`, `[[wiki/architecture/schema-layers]]` |
 | Understand accounts, profiles, orgs | `[[wiki/systems/identity-model]]` |
 | Add or verify ARC S2S tokens | `[[wiki/systems/arc-tokens]]` |
@@ -172,6 +173,7 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 |---|---|
 | Apps | Tauri apps created via CLI (`bunx create-tauri-app`), not manually |
 | Functional core | Effect.ts trial in OSN/Pulse first, decision tracked in `wiki/TODO.md` Deferred Decisions |
+| Effect runtime | Build the layer graph **once** (shared `ManagedRuntime` at boot), never `Effect.provide(DbLive/observability)` inside a per-request `runPromise` — it rebuilds the layer (restarts the OTel SDK + opens a new DB conn) every call. `@osn/api` threads one runtime through route factories via `makeAppRunner`. See `[[wiki/architecture/backend-patterns]]` |
 | Messaging | `@zap/api` shared backend — Pulse consumes for event chats; users don't need Zap install |
 | Privacy | E2E encryption everywhere; all personalisation data user-accessible + resettable |
 | Platform priority | iOS > Web > Android (Android deferred) |
@@ -181,7 +183,7 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 | oxfmt | `.oxfmtrc.json` — import sorting + Tailwind class sorting |
 | Runtime | Use `bunx --bun` for all tooling |
 | Branching | PRs required to merge to main; always work on feature branch |
-| Changesets | Every PR includes changeset (`bun run changeset`) — CI fails without. Package names must match workspace `name` field exactly (e.g. `"@pulse/app"`, not `"pulse"`); Changeset Check enforces |
+| Changesets | Every PR includes changeset (`bun run changeset`) — CI fails without. Package names must match workspace `name` field exactly (e.g. `"@pulse/app"`, not `"pulse"`). Never mix ignored (version-less, e.g. `@cire/*`) and versioned packages in one changeset — split them; Changeset Check (`scripts/validate-changesets.sh`) enforces both rules |
 | Versioning | Automatic — changesets consumed + committed by CI on merge to main |
 
 ## Commands

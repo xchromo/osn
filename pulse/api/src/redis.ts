@@ -15,6 +15,7 @@
  * - S-L1: optional `REDIS_REQUIRED` for fail-closed startup.
  */
 
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import {
   checkRedisHealth,
   createClientFromUrl,
@@ -23,6 +24,48 @@ import {
   type RedisClient,
 } from "@shared/redis";
 import { Effect, type Layer } from "effect";
+
+import {
+  createRedisDiscoveryRateLimiter,
+  createRedisExposureRateLimiter,
+  createRedisShareRateLimiter,
+  createRedisWriteRateLimiters,
+  type PulseWriteRateLimiters,
+} from "./lib/redis-rate-limiters";
+
+/**
+ * The full set of rate-limiter backends the Pulse app graph needs (W4): the
+ * per-USER write limiters plus the three per-IP limiters on the
+ * unauthenticated discover / share / exposure surfaces. Built from a
+ * `RedisClient` — Redis-backed when `REDIS_URL` is set, otherwise an in-memory
+ * client whose backends degrade to process-local counters with identical
+ * semantics.
+ */
+export interface PulseRateLimiters {
+  write: PulseWriteRateLimiters;
+  discovery: RateLimiterBackend;
+  share: RateLimiterBackend;
+  exposure: RateLimiterBackend;
+}
+
+/** Build every Pulse rate-limiter backend from a single `RedisClient`. */
+export function makeRateLimiters(client: RedisClient): PulseRateLimiters {
+  return {
+    write: createRedisWriteRateLimiters(client),
+    discovery: createRedisDiscoveryRateLimiter(client),
+    share: createRedisShareRateLimiter(client),
+    exposure: createRedisExposureRateLimiter(client),
+  };
+}
+
+/**
+ * In-memory rate limiters for tests + the no-`REDIS_URL` local path. Backed by
+ * `createMemoryClient()` so the same `createRedis*` factories drive both the
+ * Redis and in-memory cases — one policy, one set of call sites.
+ */
+export function makeMemoryRateLimiters(): PulseRateLimiters {
+  return makeRateLimiters(createMemoryClient());
+}
 
 export interface InitRedisOptions {
   /** `REDIS_URL` env value (or undefined). */

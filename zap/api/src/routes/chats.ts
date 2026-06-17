@@ -1,5 +1,10 @@
 import { extractClaims } from "@shared/osn-auth-client/verify";
-import { createRateLimiter, getClientIp, type RateLimiterBackend } from "@shared/rate-limit";
+import {
+  createRateLimiter,
+  getClientIp,
+  isUnresolvedIp,
+  type RateLimiterBackend,
+} from "@shared/rate-limit";
 import { DbLive, type Db } from "@zap/db/service";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
@@ -124,8 +129,12 @@ export const createChatsRoutes = (
       .post(
         "/",
         async ({ body, headers, set }) => {
-          const ip = getClientIp(headers);
-          if (!(await rateLimiters.createChat.check(ip))) {
+          // S-H1: Zap runs behind Cloudflare, so the only trustworthy client IP
+          // is `cf-connecting-ip` (W3 trust policy). A missing/malformed header
+          // yields the UNRESOLVED sentinel — fail closed (429) rather than
+          // bucket every header-less request together under a spoofable key.
+          const ip = getClientIp(headers, { trustCloudflare: true });
+          if (isUnresolvedIp(ip) || !(await rateLimiters.createChat.check(ip))) {
             set.status = 429;
             return { message: "Too many requests" } as const;
           }
@@ -244,8 +253,9 @@ export const createChatsRoutes = (
       .post(
         "/:id/members",
         async ({ params, body, headers, set }) => {
-          const ip = getClientIp(headers);
-          if (!(await rateLimiters.addMember.check(ip))) {
+          // S-H1: Cloudflare-only client IP, fail closed when unresolved.
+          const ip = getClientIp(headers, { trustCloudflare: true });
+          if (isUnresolvedIp(ip) || !(await rateLimiters.addMember.check(ip))) {
             set.status = 429;
             return { message: "Too many requests" } as const;
           }
@@ -351,8 +361,9 @@ export const createChatsRoutes = (
       .post(
         "/:id/messages",
         async ({ params, body, headers, set }) => {
-          const ip = getClientIp(headers);
-          if (!(await rateLimiters.sendMessage.check(ip))) {
+          // S-H1: Cloudflare-only client IP, fail closed when unresolved.
+          const ip = getClientIp(headers, { trustCloudflare: true });
+          if (isUnresolvedIp(ip) || !(await rateLimiters.sendMessage.check(ip))) {
             set.status = 429;
             return { message: "Too many requests" } as const;
           }

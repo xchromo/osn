@@ -42,7 +42,8 @@ function withDefaultXff<App extends { handle: (request: Request) => unknown }>(a
 
 /** `createAuthRoutes` with XFF-trusting client-IP config + default-XFF patch. */
 export function createAuthRoutes(...args: Parameters<typeof createAuthRoutesRaw>) {
-  const [authConfig, dbLayer, loggerLayer, rateLimiters, cookieConfig, clientIpConfig] = args;
+  const [authConfig, dbLayer, loggerLayer, rateLimiters, cookieConfig, clientIpConfig, runtime] =
+    args;
   return withDefaultXff(
     createAuthRoutesRaw(
       authConfig,
@@ -51,13 +52,14 @@ export function createAuthRoutes(...args: Parameters<typeof createAuthRoutesRaw>
       rateLimiters,
       cookieConfig,
       clientIpConfig ?? { trustedProxyCount: 1 },
+      runtime,
     ),
   );
 }
 
 /** `createProfileRoutes` with XFF-trusting client-IP config + default-XFF patch. */
 export function createProfileRoutes(...args: Parameters<typeof createProfileRoutesRaw>) {
-  const [authConfig, dbLayer, loggerLayer, rateLimiters, clientIpConfig] = args;
+  const [authConfig, dbLayer, loggerLayer, rateLimiters, clientIpConfig, runtime] = args;
   return withDefaultXff(
     createProfileRoutesRaw(
       authConfig,
@@ -65,6 +67,7 @@ export function createProfileRoutes(...args: Parameters<typeof createProfileRout
       loggerLayer,
       rateLimiters,
       clientIpConfig ?? { trustedProxyCount: 1 },
+      runtime,
     ),
   );
 }

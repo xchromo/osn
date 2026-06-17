@@ -103,7 +103,9 @@ export function remintFamilyCodes(
         try: () => commitBatch(db, updates),
         catch: (cause) => new RemintError({ reason: String(cause) }),
       }).pipe(
-        Effect.tapError((err) => Effect.logError("family-code re-mint failed", { reason: err.reason })),
+        Effect.tapError((err) =>
+          Effect.logError("family-code re-mint failed", { reason: err.reason }),
+        ),
       );
     }
 

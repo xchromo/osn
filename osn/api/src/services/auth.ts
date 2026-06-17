@@ -16,6 +16,7 @@ import {
   hashRecoveryCode,
   RECOVERY_CODE_COUNT,
 } from "@shared/crypto";
+import { commitBatch } from "@shared/db-utils";
 import { EmailError, EmailService } from "@shared/email";
 import type {
   SecurityEventKind,
@@ -38,7 +39,7 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
-import { and, count as countFn, desc, eq, gte, inArray, isNull, like, ne } from "drizzle-orm";
+import { and, count as countFn, desc, eq, gte, inArray, isNull, like, ne, sql } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { SignJWT, jwtVerify } from "jose";
 
@@ -980,17 +981,20 @@ export function createAuthService(config: AuthConfig) {
       const dn = displayName ?? null;
 
       yield* Effect.tryPromise({
+        // Account + default profile inserted atomically (batch on D1, sequential
+        // on bun:sqlite). Uniqueness is pre-checked above and backstopped by the
+        // UNIQUE constraints on accounts.email / users.handle.
         try: () =>
-          db.transaction(async (tx) => {
-            await tx.insert(accounts).values({
+          commitBatch(db, [
+            db.insert(accounts).values({
               id: accountId,
               email,
               passkeyUserId: crypto.randomUUID(),
               maxProfiles: 5,
               createdAt: ts,
               updatedAt: ts,
-            });
-            await tx.insert(users).values({
+            }),
+            db.insert(users).values({
               id,
               accountId,
               handle,
@@ -998,8 +1002,8 @@ export function createAuthService(config: AuthConfig) {
               isDefault: true,
               createdAt: ts,
               updatedAt: ts,
-            });
-          }),
+            }),
+          ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -1207,16 +1211,16 @@ export function createAuthService(config: AuthConfig) {
       const inserted = yield* Effect.tryPromise({
         try: async () => {
           try {
-            await db.transaction(async (tx) => {
-              await tx.insert(accounts).values({
+            await commitBatch(db, [
+              db.insert(accounts).values({
                 id: accountId,
                 email: pending.email,
                 passkeyUserId: crypto.randomUUID(),
                 maxProfiles: 5,
                 createdAt: ts,
                 updatedAt: ts,
-              });
-              await tx.insert(users).values({
+              }),
+              db.insert(users).values({
                 id,
                 accountId,
                 handle: pending.handle,
@@ -1224,8 +1228,8 @@ export function createAuthService(config: AuthConfig) {
                 isDefault: true,
                 createdAt: ts,
                 updatedAt: ts,
-              });
-            });
+              }),
+            ]);
             return { ok: true as const };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -1284,9 +1288,18 @@ export function createAuthService(config: AuthConfig) {
         metricAuthHandleCheck("taken");
         return { available: false };
       }
-      const existing = yield* findProfileByHandle(handle);
-      metricAuthHandleCheck(existing === null ? "available" : "taken");
-      return { available: existing === null };
+      // Availability only needs existence, not the profile — a single-column
+      // `users.handle` probe instead of `findProfileByHandle`'s account join
+      // (which exists to hydrate the email for its other callers). Keeps this
+      // high-frequency, debounced endpoint as light as possible.
+      const { db } = yield* Db;
+      const existing = yield* Effect.tryPromise({
+        try: () => db.select({ id: users.id }).from(users).where(eq(users.handle, handle)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const taken = existing.length > 0;
+      metricAuthHandleCheck(taken ? "taken" : "available");
+      return { available: !taken };
     }).pipe(Effect.withSpan("auth.handle.check"));
 
   // -------------------------------------------------------------------------
@@ -1704,17 +1717,19 @@ export function createAuthService(config: AuthConfig) {
       const nowSec = Math.floor(Date.now() / 1000);
 
       const { db } = yield* Db;
+      // Read the old session's metadata up front (D1 has no interactive
+      // transaction), then delete-old + insert-new commit as one atomic batch so
+      // the family never has zero rows mid-rotation.
+      const existing = yield* Effect.tryPromise({
+        try: () => db.select().from(sessions).where(eq(sessions.id, oldSessionId)).limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const old = existing[0];
       yield* Effect.tryPromise({
         try: () =>
-          db.transaction(async (tx) => {
-            const existing = await tx
-              .select()
-              .from(sessions)
-              .where(eq(sessions.id, oldSessionId))
-              .limit(1);
-            const old = existing[0];
-            await tx.delete(sessions).where(eq(sessions.id, oldSessionId));
-            await tx.insert(sessions).values({
+          commitBatch(db, [
+            db.delete(sessions).where(eq(sessions.id, oldSessionId)),
+            db.insert(sessions).values({
               id: newSessionId,
               accountId,
               familyId,
@@ -1723,8 +1738,8 @@ export function createAuthService(config: AuthConfig) {
               uaLabel: old?.uaLabel ?? null,
               ipHash: old?.ipHash ?? null,
               lastUsedAt: nowSec,
-            });
-          }),
+            }),
+          ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -1943,23 +1958,26 @@ export function createAuthService(config: AuthConfig) {
         uaLabel: eventMeta?.uaLabel ?? null,
       };
 
-      // P-W1 / P-I10: race-safe cap enforcement inside a single transaction.
-      // `beginPasskeyRegistration` already refuses past the limit, but a pair
-      // of `begin` calls racing `complete` would both pass the pre-check.
-      // Wrapping the count + insert in `db.transaction` collapses the TOCTOU
-      // window to zero on SQLite (serial writes) and to READ COMMITTED on
-      // libsql/Postgres.
+      // P-W1 / P-I10: cap enforcement. `beginPasskeyRegistration` already refuses
+      // past the limit; this is the belt-and-braces check. D1 has no interactive
+      // transaction, so the count read runs first and the passkey + audit insert
+      // commit as one atomic batch. A pair of completes racing the cap could
+      // exceed it by one — a benign over-count, not a security exposure (the
+      // begin-side check is the primary guard).
+      const passkeyCount = yield* Effect.tryPromise({
+        try: () =>
+          db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.accountId, accountId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (passkeyCount.length >= MAX_PASSKEYS_PER_ACCOUNT) {
+        return yield* Effect.fail(
+          new AuthError({ message: "Passkey limit reached for this account" }),
+        );
+      }
       yield* Effect.tryPromise({
         try: () =>
-          db.transaction(async (tx) => {
-            const rows = await tx
-              .select({ id: passkeys.id })
-              .from(passkeys)
-              .where(eq(passkeys.accountId, accountId));
-            if (rows.length >= MAX_PASSKEYS_PER_ACCOUNT) {
-              throw new Error("Passkey limit reached for this account");
-            }
-            await tx.insert(passkeys).values({
+          commitBatch(db, [
+            db.insert(passkeys).values({
               id,
               accountId,
               credentialId: info.credential.id,
@@ -1975,13 +1993,10 @@ export function createAuthService(config: AuthConfig) {
               backupEligible: eligible,
               backupState: backedUp,
               updatedAt: nowSec,
-            });
-            await tx.insert(securityEvents).values(securityEventRow);
-          }),
-        catch: (cause) =>
-          cause instanceof Error && /limit reached/i.test(cause.message)
-            ? new AuthError({ message: "Passkey limit reached for this account" })
-            : new DatabaseError({ cause }),
+            }),
+            db.insert(securityEvents).values(securityEventRow),
+          ]),
+        catch: (cause) => new DatabaseError({ cause }),
       });
 
       metricSecurityEventRecorded("passkey_register");
@@ -2528,12 +2543,14 @@ export function createAuthService(config: AuthConfig) {
       };
 
       yield* Effect.tryPromise({
+        // Swap the code set + audit row atomically (batch on D1, sequential on
+        // bun:sqlite) — never leave codes the account holder can't see.
         try: () =>
-          db.transaction(async (tx) => {
-            await tx.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId));
-            await tx.insert(recoveryCodes).values(rows);
-            await tx.insert(securityEvents).values(securityEventRow);
-          }),
+          commitBatch(db, [
+            db.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId)),
+            db.insert(recoveryCodes).values(rows),
+            db.insert(securityEvents).values(securityEventRow),
+          ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -2937,18 +2954,50 @@ export function createAuthService(config: AuthConfig) {
         ipHash: eventMeta?.ip ? hashIp(eventMeta.ip) : null,
         uaLabel: eventMeta?.uaLabel ?? null,
       };
-      yield* Effect.tryPromise({
+
+      // S-M1: the SELECT above is check-then-act — two concurrent requests with
+      // the same code can both pass `row.usedAt === null` and double-consume.
+      // Close the race with a compare-and-swap: mark the code used ONLY while it
+      // is still unused (`usedAt IS NULL`), then key the rest of the ceremony off
+      // the rows-affected count. Mirrors the passkey-rename CAS in this file.
+      const consumeResult = yield* Effect.tryPromise({
         try: () =>
-          db.transaction(async (tx) => {
-            await tx
-              .update(recoveryCodes)
-              .set({ usedAt: nowSec })
-              .where(eq(recoveryCodes.id, row.id));
-            // Recovery always revokes existing sessions — the ceremony is
-            // "I lost access, log me back in cleanly everywhere".
-            await tx.delete(sessions).where(eq(sessions.accountId, profile.accountId));
-            await tx.insert(securityEvents).values(securityEventRow);
-          }),
+          db
+            .update(recoveryCodes)
+            .set({ usedAt: nowSec })
+            .where(and(eq(recoveryCodes.id, row.id), isNull(recoveryCodes.usedAt))),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      // better-sqlite3 returns `{ changes }`, libsql/D1 `{ rowsAffected }`.
+      const consumed =
+        (consumeResult as unknown as { changes?: number; rowsAffected?: number }).changes ??
+        (consumeResult as unknown as { changes?: number; rowsAffected?: number }).rowsAffected ??
+        0;
+      if (consumed === 0) {
+        // Lost the CAS — another request consumed this code first. Do NOT wipe
+        // sessions or write the audit row. Treat exactly like a replayed used
+        // code: count the failed attempt and return the generic error.
+        yield* Effect.logWarning("Recovery code consumed concurrently — CAS lost");
+        metricRecoveryCodeConsumed("used");
+        const attempts = yield* Effect.promise(() =>
+          recoveryLockoutStore.recordFailure(profile.accountId),
+        );
+        if (attempts === RECOVERY_LOCKOUT_THRESHOLD) {
+          yield* recordRecoveryLockoutEvent(profile.accountId, eventMeta);
+        }
+        return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
+      }
+
+      yield* Effect.tryPromise({
+        // The code is now ours. Wipe sessions + write the audit row atomically
+        // (batch on D1, sequential on bun:sqlite). Recovery always revokes
+        // existing sessions — the ceremony is "I lost access, log me back in
+        // cleanly everywhere".
+        try: () =>
+          commitBatch(db, [
+            db.delete(sessions).where(eq(sessions.accountId, profile.accountId)),
+            db.insert(securityEvents).values(securityEventRow),
+          ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
@@ -3749,35 +3798,34 @@ export function createAuthService(config: AuthConfig) {
       const changed = yield* Effect.tryPromise({
         try: async () => {
           try {
-            return await db.transaction(async (tx) => {
-              await tx
+            // Atomic batch on D1, sequential on bun:sqlite. A half-applied
+            // change would leave a potentially-compromised session alive with a
+            // stale email claim, so the email swap + audit row + session wipe
+            // commit together.
+            await commitBatch(db, [
+              db
                 .update(accounts)
                 .set({ email: pending.newEmail, updatedAt: new Date(nowSec * 1000) })
-                .where(eq(accounts.id, accountId));
+                .where(eq(accounts.id, accountId)),
 
-              await tx.insert(emailChanges).values({
+              db.insert(emailChanges).values({
                 id: genId("ech_"),
                 accountId,
                 previousEmail: currentAccountRow.email,
                 newEmail: pending.newEmail,
                 completedAt: nowSec,
-              });
+              }),
 
-              // Kill every other session in the same TX — a half-applied
-              // change would leave a potentially-compromised session alive
-              // with a stale email claim.
-              if (currentSessionHash !== null) {
-                await tx
-                  .delete(sessions)
-                  .where(
-                    and(eq(sessions.accountId, accountId), ne(sessions.id, currentSessionHash)),
-                  );
-              } else {
-                await tx.delete(sessions).where(eq(sessions.accountId, accountId));
-              }
+              currentSessionHash !== null
+                ? db
+                    .delete(sessions)
+                    .where(
+                      and(eq(sessions.accountId, accountId), ne(sessions.id, currentSessionHash)),
+                    )
+                : db.delete(sessions).where(eq(sessions.accountId, accountId)),
+            ]);
 
-              return { ok: true as const, email: pending.newEmail };
-            });
+            return { ok: true as const, email: pending.newEmail };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             if (/UNIQUE|constraint/i.test(msg)) {
@@ -3935,28 +3983,43 @@ export function createAuthService(config: AuthConfig) {
       type TxResult =
         | { ok: true; remaining: number }
         | { ok: false; reason: "not_found" | "lockout" };
-      const txResult = yield* Effect.tryPromise<TxResult, DatabaseError>({
+      // D1 has no interactive transaction, so the gate is split: read the set
+      // for the not-found / lockout decisions, then issue a COUNT-GUARDED delete
+      // whose WHERE clause re-asserts ">1 passkey" in the same statement. That
+      // guard is what keeps the last-passkey invariant race-safe on D1 — two
+      // concurrent deletes can't both succeed, because the second's subquery
+      // sees the count would drop to 1 and deletes nothing. (A losing racer may
+      // still write a redundant audit row; harmless.)
+      const accountPasskeys = yield* Effect.tryPromise({
         try: () =>
-          db.transaction(async (tx) => {
-            const accountPasskeys = await tx
-              .select({ id: passkeys.id })
-              .from(passkeys)
-              .where(eq(passkeys.accountId, accountId));
-            const exists = accountPasskeys.some((r) => r.id === passkeyId);
-            if (!exists) {
-              return { ok: false, reason: "not_found" } as const;
-            }
-            if (accountPasskeys.length <= 1) {
-              return { ok: false, reason: "lockout" } as const;
-            }
-            await tx
-              .delete(passkeys)
-              .where(and(eq(passkeys.id, passkeyId), eq(passkeys.accountId, accountId)));
-            await tx.insert(securityEvents).values(securityEventRow);
-            return { ok: true, remaining: accountPasskeys.length - 1 } as const;
-          }),
+          db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.accountId, accountId)),
         catch: (cause) => new DatabaseError({ cause }),
       });
+      const exists = accountPasskeys.some((r) => r.id === passkeyId);
+      const txResult: TxResult = !exists
+        ? { ok: false, reason: "not_found" }
+        : accountPasskeys.length <= 1
+          ? { ok: false, reason: "lockout" }
+          : { ok: true, remaining: accountPasskeys.length - 1 };
+
+      if (txResult.ok) {
+        yield* Effect.tryPromise({
+          try: () =>
+            commitBatch(db, [
+              db
+                .delete(passkeys)
+                .where(
+                  and(
+                    eq(passkeys.id, passkeyId),
+                    eq(passkeys.accountId, accountId),
+                    sql`(select count(*) from ${passkeys} where ${passkeys.accountId} = ${accountId}) > 1`,
+                  ),
+                ),
+              db.insert(securityEvents).values(securityEventRow),
+            ]),
+          catch: (cause) => new DatabaseError({ cause }),
+        });
+      }
 
       if (!txResult.ok) {
         if (txResult.reason === "not_found") {

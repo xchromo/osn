@@ -195,10 +195,14 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
   ) {
     const headers: Record<string, string> = {};
     if (profileId) headers.Authorization = `Bearer ${await auth.sign(profileId)}`;
-    return appRequest(app, `/api/organiser/weddings/${weddingId}/families/${familyId}/regenerate-code`, {
-      method: "POST",
-      headers,
-    });
+    return appRequest(
+      app,
+      `/api/organiser/weddings/${weddingId}/families/${familyId}/regenerate-code`,
+      {
+        method: "POST",
+        headers,
+      },
+    );
   }
 
   /** A real family id in the bootstrap wedding (seed mints random UUIDs). */
@@ -235,7 +239,11 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
     expect(body.familyId).toBe(fam.id);
     expect(body.publicId).not.toBe(fam.publicId);
     // The new code is persisted; the old one no longer resolves.
-    const stored = db.select({ publicId: families.publicId }).from(families).where(eq(families.id, fam.id)).all()[0];
+    const stored = db
+      .select({ publicId: families.publicId })
+      .from(families)
+      .where(eq(families.id, fam.id))
+      .all()[0];
     expect(stored!.publicId).toBe(body.publicId);
     // New code is in the tiered format (bootstrap defaults to `secure` → 4 segs).
     expect(body.publicId.split("-")).toHaveLength(4);
@@ -247,8 +255,12 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/regenerate-
     // Plant two live sessions for the family.
     const now = new Date();
     const future = new Date(now.getTime() + 60_000);
-    db.insert(sessions).values({ id: "s1", familyId: fam.id, token: "h1", expiresAt: future, createdAt: now }).run();
-    db.insert(sessions).values({ id: "s2", familyId: fam.id, token: "h2", expiresAt: future, createdAt: now }).run();
+    db.insert(sessions)
+      .values({ id: "s1", familyId: fam.id, token: "h1", expiresAt: future, createdAt: now })
+      .run();
+    db.insert(sessions)
+      .values({ id: "s2", familyId: fam.id, token: "h2", expiresAt: future, createdAt: now })
+      .run();
     expect(db.select().from(sessions).where(eq(sessions.familyId, fam.id)).all()).toHaveLength(2);
 
     const res = await post(app, BOOTSTRAP_WEDDING_ID, fam.id, BOOTSTRAP_OWNER);

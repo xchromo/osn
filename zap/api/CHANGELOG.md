@@ -1,5 +1,62 @@
 # @zap/api
 
+## 0.5.0
+
+### Minor Changes
+
+- f466a65: Add a four-environment database story (local / dev / staging / prod) and
+  migrate Zap onto it. `local` keeps bun:sqlite (fast, free, in-memory unit
+  tests + dev); `dev` / `staging` / `prod` run on Cloudflare D1 via Workers.
+
+  `@shared/db-utils` gains a driver-agnostic `Db<S>` type (broadened over
+  bun:sqlite's sync and D1's async result kinds), a `createD1Db` /
+  `makeD1DbLive` pair mirroring `makeDbLive`, and a `dbQuery` sync/async
+  bridge. `makeDbLive` now accepts both the broadened and the existing
+  bun:sqlite-only tag shapes.
+
+  `@zap/api` is refactored into a `createApp({ dbLayer, jwtSecret })` factory
+  (`aot: false`): `local.ts` runs it on Bun.serve + bun:sqlite, `index.ts` is
+  a Workers entry that builds the app over `makeDbD1Live(env.DB)`. Adds
+  `wrangler.toml` with `dev` / `staging` / `production` D1 bindings and a
+  Miniflare-backed integration test (`bun run test:d1`) covering the async D1
+  driver path. `@zap/db` adds a schema-reflection `./testing` export and its
+  first generated D1 migration.
+
+### Patch Changes
+
+- Updated dependencies [f466a65]
+  - @zap/db@0.4.0
+
+## 0.4.6
+
+### Patch Changes
+
+- 04e0bf2: Audit + align cross-workspace dependency ranges and adopt TypeScript 6.0.
+
+  - Resolve declared-range drift: `solid-js` → `^1.9.13` and `vitest` → `^4.1.8`
+    everywhere they were behind; `@osn/landing` switched from pinned
+    `astro@6.1.10` / `@astrojs/solid-js@6.0.1` to the caret ranges (`^6.4.2` /
+    `^6.0.1`) used by the cire Astro apps.
+  - Bump `typescript` `^5.9.3` → `^6.0.3` across the repo. The shared tsconfig was
+    already TS 6.0-clean (`strict: true`, `target` ≥ ES2015, ESNext modules, no
+    removed flags), so no `ignoreDeprecations` shim was needed. Three call sites
+    surfaced by the stricter compiler were fixed:
+    - `@osn/social`: added the missing `src/vite-env.d.ts`
+      (`/// <reference types="vite/client" />`) so side-effect CSS imports type
+      again (TS2882).
+    - `@pulse/api`: dropped the now-deprecated `baseUrl` from `tsconfig.json`
+      (the `#db` / `#routes` `paths` are already tsconfig-relative; TS5101).
+    - `@pulse/api`: annotated `createClient`'s return type as
+      `Treaty.Create<App>` to satisfy the tightened declaration-portability check
+      (TS2883).
+
+- Updated dependencies [d04dc20]
+- Updated dependencies [77f91a4]
+- Updated dependencies [04e0bf2]
+  - @shared/observability@0.10.1
+  - @zap/db@0.3.2
+  - @shared/rate-limit@0.2.2
+
 ## 0.4.5
 
 ### Patch Changes
