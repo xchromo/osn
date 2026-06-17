@@ -4,6 +4,7 @@ import { Elysia } from "elysia";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
+import { getWaitUntil } from "../lib/execution-ctx";
 import { metricImageTransform } from "../metrics";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
@@ -20,6 +21,7 @@ import {
 } from "../services/invite-assets";
 import type { AssetsBucket, StoredAsset } from "../services/invite-assets";
 import {
+  buildTransformCacheKey,
   negotiateFormat,
   resolveVariant,
   transformAsset,
@@ -80,10 +82,32 @@ export const createInvitePublicRoutes = (
       // cardinality per slot is capped (3 variants × 3 formats) — keeps the edge
       // cache hot and denies an attacker unbounded distinct transform URLs.
       // (`?v=` is the separate, pre-existing content-version cache-buster.)
-      const variant = resolveVariant((query as Record<string, string | undefined>).variant);
+      const q = query as Record<string, string | undefined>;
+      const variant = resolveVariant(q.variant);
       const format = negotiateFormat(request.headers.get("accept"));
       return runCire(
         Effect.gen(function* () {
+          // Cache API short-circuit. The Images binding bills per call with no
+          // per-unique dedupe, so a fresh guest/device would otherwise re-bill
+          // the same transform on every request. We key on slug+slot+variant+
+          // format (+ the ?v= content version) — the format is baked into the
+          // key because it's Accept-negotiated, not in the request URL — so each
+          // negotiated output is a distinct entry. A hit serves the transformed
+          // bytes WITHOUT touching the binding (or even the DB). `caches` is
+          // undefined in unit tests / non-Workers runtimes, so guard it.
+          const cache =
+            typeof caches !== "undefined" && caches.default ? caches.default : undefined;
+          const cacheKey = cache
+            ? buildTransformCacheKey({ slug: params.slug, slot, variant, format, version: q.v })
+            : undefined;
+          if (cache && cacheKey) {
+            const hit = yield* Effect.promise(() => cache.match(cacheKey));
+            if (hit) {
+              metricImageTransform("cache_hit", variant, format);
+              return hit;
+            }
+          }
+
           const key = yield* inviteService.imageKeyForSlug(params.slug, slot);
           if (!key) {
             set.status = 404;
@@ -117,7 +141,7 @@ export const createInvitePublicRoutes = (
             metricImageTransform("original", variant, format);
           }
 
-          return new Response(served.bytes, {
+          const response = new Response(served.bytes, {
             headers: {
               "Content-Type": served.contentType,
               // Bytes are magic-byte sniffed + allowlisted to JPEG/PNG/WebP on
@@ -128,10 +152,30 @@ export const createInvitePublicRoutes = (
               "Cache-Control": "public, max-age=31536000, immutable",
               // The chosen output format depends on the request Accept header, so
               // a shared cache must key on it — otherwise an AVIF response could
-              // be served to a JPEG-only client (or vice versa).
+              // be served to a JPEG-only client (or vice versa). The Cache API
+              // key bakes the format in too, but keep Vary for any intermediary
+              // (and browser) cache that keys on the raw URL.
               Vary: "Accept",
             },
           });
+
+          // Populate the edge cache on a miss so the next identical request skips
+          // the binding. Prefer `ctx.waitUntil` (Elysia doesn't forward it, so we
+          // bridge it per-request via setExecutionCtx in the Worker fetch); fall
+          // back to awaiting the write inline when no execution context is bound
+          // (non-Workers runtimes). Cache the clone so the live `response` body
+          // stays readable.
+          if (cache && cacheKey) {
+            const put = cache.put(cacheKey, response.clone());
+            const waitUntil = getWaitUntil(request);
+            if (waitUntil) {
+              waitUntil(put);
+            } else {
+              yield* Effect.promise(() => put);
+            }
+          }
+
+          return response;
         }).pipe(
           Effect.provideService(DbService, db),
           Effect.provideService(AssetsR2Service, assets as AssetsBucket),

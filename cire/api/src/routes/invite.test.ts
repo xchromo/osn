@@ -299,6 +299,136 @@ describe("invite image transforms (Cloudflare Images)", () => {
   });
 });
 
+// ── Cache API short-circuit (Worker edge cache) ──────────────────────────────
+
+/** Map-backed `caches.default` stub. Records put/match calls so a test can assert
+ *  the binding only ran on a miss. Matches by the cache key's URL (what the real
+ *  Cache API keys on). */
+function createCacheStub() {
+  const store = new Map<string, Response>();
+  const calls = { match: 0, put: 0 };
+  const def = {
+    async match(req: Request | string): Promise<Response | undefined> {
+      calls.match += 1;
+      const url = typeof req === "string" ? req : req.url;
+      const hit = store.get(url);
+      return hit ? hit.clone() : undefined;
+    },
+    async put(req: Request | string, res: Response): Promise<void> {
+      calls.put += 1;
+      const url = typeof req === "string" ? req : req.url;
+      store.set(url, res);
+    },
+  };
+  return { calls, store, caches: { default: def } as unknown as CacheStorage };
+}
+
+/** Install a stub `globalThis.caches` for the duration of `fn`, restoring after. */
+async function withCaches<T>(stub: CacheStorage, fn: () => Promise<T>): Promise<T> {
+  const original = (globalThis as { caches?: CacheStorage }).caches;
+  (globalThis as { caches?: CacheStorage }).caches = stub;
+  try {
+    return await fn();
+  } finally {
+    (globalThis as { caches?: CacheStorage }).caches = original;
+  }
+}
+
+describe("invite image transforms — Cache API short-circuit", () => {
+  it("caches the first transform, then serves the second request from cache without re-invoking the binding", async () => {
+    const cache = createCacheStub();
+    await withCaches(cache.caches, async () => {
+      const images = createImagesStub();
+      const app = buildApp({ images }).app;
+      await uploadHero(app);
+
+      const accept = { accept: "image/avif,image/webp,*/*" };
+
+      // First request → miss → binding runs once + result cached.
+      const first = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+        headers: accept,
+      });
+      expect(first.status).toBe(200);
+      expect(first.headers.get("content-type")).toBe("image/avif");
+      expect(new Uint8Array(await first.arrayBuffer())).toEqual(TRANSFORMED);
+      expect(images.widths).toEqual([1600]); // binding called once
+      expect(cache.calls.put).toBe(1); // cached on miss
+
+      // Second identical request → hit → served from cache, binding NOT called again.
+      const second = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+        headers: accept,
+      });
+      expect(second.status).toBe(200);
+      expect(second.headers.get("content-type")).toBe("image/avif");
+      expect(new Uint8Array(await second.arrayBuffer())).toEqual(TRANSFORMED);
+      expect(images.widths).toEqual([1600]); // still one call — no re-invocation
+      expect(cache.calls.put).toBe(1); // no second write
+    });
+  });
+
+  it("keys a different variant separately (binding called again, new cache entry)", async () => {
+    const cache = createCacheStub();
+    await withCaches(cache.caches, async () => {
+      const images = createImagesStub();
+      const app = buildApp({ images }).app;
+      await uploadHero(app);
+
+      await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`);
+      await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=thumb`);
+
+      // Two distinct variants ⇒ two binding invocations + two cache entries.
+      expect(images.widths).toEqual([1600, 320]);
+      expect(cache.store.size).toBe(2);
+    });
+  });
+
+  it("keys a different negotiated format separately (AVIF vs WebP cached apart)", async () => {
+    const cache = createCacheStub();
+    await withCaches(cache.caches, async () => {
+      const images = createImagesStub();
+      const app = buildApp({ images }).app;
+      await uploadHero(app);
+
+      const avif = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=card`, {
+        headers: { accept: "image/avif,*/*" },
+      });
+      const webp = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=card`, {
+        headers: { accept: "image/webp,*/*" },
+      });
+
+      expect(avif.headers.get("content-type")).toBe("image/avif");
+      expect(webp.headers.get("content-type")).toBe("image/webp");
+      // Same variant, different format ⇒ two binding calls + two cache entries.
+      expect(images.widths.length).toBe(2);
+      expect(cache.store.size).toBe(2);
+
+      // A WebP-only client must NOT get the AVIF entry: repeat WebP hits cache,
+      // binding count unchanged.
+      const webp2 = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=card`, {
+        headers: { accept: "image/webp,*/*" },
+      });
+      expect(webp2.headers.get("content-type")).toBe("image/webp");
+      expect(images.widths.length).toBe(2);
+    });
+  });
+
+  it("serves correctly via the binding when the Cache API is absent (no caches global)", async () => {
+    // No stub installed ⇒ `caches` is undefined in this runtime; the route must
+    // still serve the transform (just without caching).
+    const images = createImagesStub();
+    const app = buildApp({ images }).app;
+    await uploadHero(app);
+
+    const img = await appRequest(app, `/api/invite/${SLUG}/image/hero?variant=hero`, {
+      headers: { accept: "image/avif,*/*" },
+    });
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/avif");
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(TRANSFORMED);
+    expect(images.widths).toEqual([1600]);
+  });
+});
+
 describe("invite write rate limiting (IB-S-L1)", () => {
   it("429s once the per-IP limit is exceeded", async () => {
     const { app } = buildApp({

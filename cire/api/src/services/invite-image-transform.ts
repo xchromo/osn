@@ -66,6 +66,47 @@ export function negotiateFormat(accept: string | null | undefined): OutputFormat
   return "image/jpeg";
 }
 
+// ── Cache key ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build the canonical Cache API key URL for a transformed serve. The Workers
+ * Images binding bills per call with no per-unique dedupe, so we short-circuit
+ * with `caches.default` and only invoke the binding on a miss. A Cache API key is
+ * a `Request`, matched by its URL — so every field that changes the transformed
+ * bytes MUST be in the URL:
+ *
+ *  - `slug` + `slot` — which asset.
+ *  - `variant` — the resolved render width (bounded to the 3-variant allowlist).
+ *  - `format` — the Accept-negotiated output format. Critical: the chosen format
+ *    is NOT in the request URL (it comes from the `Accept` header), so baking it
+ *    into the key is what keeps AVIF/WebP/JPEG as separate entries — otherwise a
+ *    WebP-only client could be served an AVIF cached for an AVIF-capable one.
+ *  - `v` — the existing `?v=<updatedAt>` content-version cache-buster, passed
+ *    through so a re-upload invalidates the cached transform.
+ *
+ * The format slug strips the `image/` prefix to keep the key tidy. We use a
+ * synthetic host so the key never collides with a real inbound request URL and
+ * is independent of the request's own host/scheme.
+ */
+export function buildTransformCacheKey(args: {
+  slug: string;
+  slot: string;
+  variant: ImageVariant;
+  format: OutputFormat;
+  version?: string | null;
+}): Request {
+  const formatSlug = args.format.replace("image/", "");
+  const params = new URLSearchParams({
+    variant: args.variant,
+    format: formatSlug,
+  });
+  if (args.version) params.set("v", args.version);
+  const url = `https://cire-image-cache.internal/${encodeURIComponent(args.slug)}/${encodeURIComponent(
+    args.slot,
+  )}?${params.toString()}`;
+  return new Request(url, { method: "GET" });
+}
+
 // ── Binding wrapper ───────────────────────────────────────────────────────────
 
 /**

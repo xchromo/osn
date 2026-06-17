@@ -123,14 +123,17 @@ type InviteSimpleAttrs = { result: "ok" | "error" };
 
 /**
  * Outcome of a public image serve:
- *  - `transformed` — the Images binding produced the requested variant.
+ *  - `cache_hit`   — served from the Worker Cache API; the (billed) Images
+ *                    binding was NOT invoked. The cost win we instrument for.
+ *  - `transformed` — cache miss; the Images binding produced the requested
+ *                    variant (and the result was written back to the cache).
  *  - `original`    — fell back to the raw R2 bytes because the binding was
  *                    absent (local/dev/tests) or the transform failed.
  * `variant` + `format` are the bounded unions from the transform module — never
  * the slug or any per-wedding value.
  */
 type ImageTransformAttrs = {
-  result: "transformed" | "original";
+  result: "cache_hit" | "transformed" | "original";
   variant: ImageVariant;
   format: OutputFormat;
 };
@@ -244,7 +247,7 @@ const inviteAssetSize = createHistogram<Record<never, never>>({
 const imageTransform = createCounter<ImageTransformAttrs>({
   name: CIRE_METRICS.imageTransform,
   description:
-    "Public invite-image serves, by whether the Cloudflare Images binding produced a variant or we fell back to the R2 original, plus the resolved variant + output format",
+    "Public invite-image serves, by whether the response came from the Worker Cache API (cache_hit), the Cloudflare Images binding produced a variant (transformed), or we fell back to the R2 original (original), plus the resolved variant + output format",
   unit: "{serve}",
 });
 
@@ -349,10 +352,11 @@ export const metricInviteAssetUploaded = (result: "ok" | "error", byteLength?: n
   if (result === "ok" && byteLength !== undefined) inviteAssetSize.record(byteLength, {});
 };
 
-/** Record a public image serve: `transformed` when the Images binding produced
- *  the variant, `original` when we fell back to the raw R2 bytes. */
+/** Record a public image serve: `cache_hit` when served from the Worker Cache
+ *  API (binding not invoked), `transformed` when the Images binding produced the
+ *  variant, `original` when we fell back to the raw R2 bytes. */
 export const metricImageTransform = (
-  result: "transformed" | "original",
+  result: "cache_hit" | "transformed" | "original",
   variant: ImageVariant,
   format: OutputFormat,
 ): void => imageTransform.inc({ result, variant, format });

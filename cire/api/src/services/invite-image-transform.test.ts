@@ -4,6 +4,7 @@ import { Effect, Exit } from "effect";
 
 import type { StoredAsset } from "./invite-assets";
 import {
+  buildTransformCacheKey,
   DEFAULT_VARIANT,
   IMAGE_VARIANTS,
   negotiateFormat,
@@ -41,6 +42,74 @@ describe("negotiateFormat", () => {
     expect(negotiateFormat(null)).toBe("image/jpeg");
     expect(negotiateFormat(undefined)).toBe("image/jpeg");
     expect(negotiateFormat("")).toBe("image/jpeg");
+  });
+});
+
+describe("buildTransformCacheKey", () => {
+  const keyUrl = (args: Parameters<typeof buildTransformCacheKey>[0]) =>
+    new URL(buildTransformCacheKey(args).url);
+
+  it("bakes slug, slot, variant and format into a stable GET key", () => {
+    const req = buildTransformCacheKey({
+      slug: "cire-wedding",
+      slot: "hero",
+      variant: "hero",
+      format: "image/avif",
+    });
+    expect(req.method).toBe("GET");
+    const url = new URL(req.url);
+    expect(url.pathname).toBe("/cire-wedding/hero");
+    expect(url.searchParams.get("variant")).toBe("hero");
+    expect(url.searchParams.get("format")).toBe("avif");
+  });
+
+  it("is identical for identical inputs (cache hits land)", () => {
+    const a = buildTransformCacheKey({
+      slug: "s",
+      slot: "hero",
+      variant: "card",
+      format: "image/webp",
+    });
+    const b = buildTransformCacheKey({
+      slug: "s",
+      slot: "hero",
+      variant: "card",
+      format: "image/webp",
+    });
+    expect(a.url).toBe(b.url);
+  });
+
+  it("differs by format so AVIF/WebP/JPEG are cached apart", () => {
+    const base = { slug: "s", slot: "hero", variant: "card" } as const;
+    const avif = keyUrl({ ...base, format: "image/avif" }).searchParams.get("format");
+    const webp = keyUrl({ ...base, format: "image/webp" }).searchParams.get("format");
+    const jpeg = keyUrl({ ...base, format: "image/jpeg" }).searchParams.get("format");
+    expect(new Set([avif, webp, jpeg]).size).toBe(3);
+  });
+
+  it("differs by variant and includes the ?v= content version when present", () => {
+    const card = buildTransformCacheKey({
+      slug: "s",
+      slot: "hero",
+      variant: "card",
+      format: "image/jpeg",
+    });
+    const hero = buildTransformCacheKey({
+      slug: "s",
+      slot: "hero",
+      variant: "hero",
+      format: "image/jpeg",
+    });
+    expect(card.url).not.toBe(hero.url);
+
+    const versioned = keyUrl({
+      slug: "s",
+      slot: "hero",
+      variant: "card",
+      format: "image/jpeg",
+      version: "1718000000",
+    });
+    expect(versioned.searchParams.get("v")).toBe("1718000000");
   });
 });
 

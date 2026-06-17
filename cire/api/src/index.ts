@@ -9,6 +9,7 @@ import {
   isDeployedEnv,
   resolveBootstrapOwnerProfileId,
 } from "./db/bootstrap-owner";
+import { setExecutionCtx } from "./lib/execution-ctx";
 import { createWorkersRateLimiter } from "./lib/workers-rate-limiter";
 import type { WorkersRateLimitBinding } from "./lib/workers-rate-limiter";
 import { runCire } from "./observability";
@@ -106,7 +107,7 @@ const misconfigured = (detail: string) =>
   });
 
 const handler: ExportedHandler<Env> = {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     // Fail closed at the edge if any required binding/var is missing, rather
     // than letting createApp fall back to its localhost dev defaults for the
     // OSN issuer/audience in a misconfigured production deployment (S-M1).
@@ -183,6 +184,12 @@ const handler: ExportedHandler<Env> = {
       };
     }
 
+    // Bridge the Workers execution context to the in-flight request so route
+    // handlers can reach `ctx.waitUntil` (Elysia's `fetch` doesn't forward it).
+    // The public image serve route uses it to populate the Cache API in the
+    // background after a transform. Keyed by this exact Request instance, which
+    // Elysia passes straight through to the handler.
+    setExecutionCtx(request, ctx);
     return cached.app.fetch(request);
   },
 
