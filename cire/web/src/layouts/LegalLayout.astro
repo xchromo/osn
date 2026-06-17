@@ -115,6 +115,21 @@ const { title } = Astro.props
         font-family: ui-monospace, "SF Mono", Menlo, monospace;
         font-size: 0.85em;
       }
+
+      .legal .owner-note {
+        border-left: 2px solid var(--color-gold-dim);
+        background: var(--color-surface-raised);
+        border-radius: 0.25rem;
+        padding: 0.625rem 0.875rem;
+        margin: 0.75rem 0 1rem;
+        font-size: 0.8125rem;
+        color: var(--color-text-muted);
+      }
+
+      .legal .owner-note strong {
+        color: var(--color-gold);
+        font-weight: 400;
+      }
     </style>
   </body>
 </html>

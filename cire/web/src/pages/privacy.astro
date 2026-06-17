@@ -9,7 +9,7 @@ import LegalLayout from '../layouts/LegalLayout.astro'
   </div>
 
   <h1>Privacy Notice</h1>
-  <p class="meta">Last updated: <span class="placeholder">{'{{LAST_UPDATED}}'}</span></p>
+  <p class="meta">Last updated: 2026-06-17</p>
 
   <p>
     This is a private wedding invitation website. We only collect the small amount
@@ -18,13 +18,23 @@ import LegalLayout from '../layouts/LegalLayout.astro'
     over your information.
   </p>
 
+  <p>
+    We run this site as individuals planning a personal celebration, not as a
+    business. A private wedding organised by individuals for a personal,
+    family or household event is likely to sit outside the strict reach of the
+    <em>Privacy Act 1988</em> (Cth) and the Australian Privacy Principles (APPs)
+    — which generally apply to “APP entities” such as businesses and agencies.
+    We are nonetheless providing this notice as a matter of good-practice
+    transparency, and we aim to follow the spirit of the APPs. It should not be
+    read as a claim that any particular legal regime strictly applies to us.
+  </p>
+
   <h2>Who is responsible for your information</h2>
   <p>
-    The person responsible for the information collected through this website
-    (the “data controller” under the UK GDPR / EU GDPR) is
-    <span class="placeholder">{'{{CONTROLLER_LEGAL_NAME}}'}</span>. You can reach us
-    about anything in this notice at
-    <a href="mailto:{{DSAR_CONTACT_EMAIL}}"><span class="placeholder">{'{{DSAR_CONTACT_EMAIL}}'}</span></a>.
+    The people responsible for the information collected through this website are
+    <span class="placeholder">{'{{CONTROLLER_LEGAL_NAME}}'}</span> (the couple). You
+    can reach us about anything in this notice at
+    <a href="mailto:chavaniket@duck.com">chavaniket@duck.com</a>.
   </p>
 
   <h2>What we collect</h2>
@@ -46,27 +56,27 @@ import LegalLayout from '../layouts/LegalLayout.astro'
 
   <h3>A note on dietary information</h3>
   <p>
-    Some dietary or access details can count as “special category” data under
-    Article 9 of the GDPR (for example information that reveals your health or
-    your religious beliefs). This field is optional. We only collect what you
-    choose to enter, and we ask for your explicit consent before you submit it.
-    Please don’t include any health or other sensitive detail you’d rather not
-    share — a simple note such as “vegetarian” or “no nuts” is all we need.
+    Some dietary or access details count as “sensitive information” under the
+    <em>Privacy Act 1988</em> (Cth) — for example information about your health,
+    or your religious beliefs. Under the Australian Privacy Principles (APP 3.3),
+    sensitive information should only be collected with your consent. This field
+    is therefore optional: we only collect what you choose to enter, and we ask
+    for your explicit consent before you submit it. Please don’t include any
+    health or other sensitive detail you’d rather not share — a simple note such
+    as “vegetarian” or “no nuts” is all we need.
   </p>
 
-  <h2>Why we use it and our lawful basis</h2>
+  <h2>Why we use it</h2>
   <ul>
     <li>
       <strong>Guest names &amp; RSVP status</strong> — to manage invitations,
-      confirm numbers, and organise seating and logistics. Our lawful basis is
-      our <strong>legitimate interest</strong> in planning our wedding (and,
-      where relevant, performing our arrangements with you as an invited guest).
+      confirm numbers, and organise seating and logistics for our wedding.
     </li>
     <li>
       <strong>Dietary requirements / access needs</strong> — to cater safely and
-      accommodate your needs on the day. Because this can include special
-      category data, our lawful basis is your <strong>explicit consent</strong>,
-      which you give when you choose to fill in that field and submit your RSVP.
+      accommodate your needs on the day. Because this can include sensitive
+      information, we rely on your <strong>consent</strong>, which you give when
+      you choose to fill in that field and submit your RSVP.
     </li>
   </ul>
 
@@ -78,47 +88,58 @@ import LegalLayout from '../layouts/LegalLayout.astro'
   </p>
   <p>
     The site and its data are hosted on <strong>Cloudflare</strong>, which
-    provides our website hosting, database, and security on our behalf as a data
-    processor. Cloudflare may process and store data in the course of providing
-    that service. We don’t transfer your information to anyone else except where
-    we’re required to by law.
+    provides our website hosting, database, and security on our behalf. Cloudflare
+    may process and store data in the course of providing that service. We don’t
+    transfer your information to anyone else except where we’re required to by law.
   </p>
 
   <h2>How long we keep it</h2>
   <p>
     We keep your RSVP information only as long as we need it to plan the wedding.
-    We delete it after the event, and in any case no later than
-    <span class="placeholder">{'{{RETENTION_WINDOW}}'}</span> after the final
-    event date. After that it is permanently removed from our systems.
+    By default we delete it <strong>90 days after the final wedding event</strong>,
+    after which guest data is removed. After that it is permanently deleted from
+    our systems.
+  </p>
+  <p class="owner-note">
+    <strong>Note for the site owner:</strong> this 90-day default retention window
+    is a sensible starting point — you can change it to whatever suits your plans
+    (e.g. a shorter or longer period). Update both this wording and the actual
+    deletion schedule together so they stay consistent.
   </p>
 
   <h2>Your rights</h2>
-  <p>You have the right to:</p>
+  <p>You can ask us to:</p>
   <ul>
     <li><strong>Access</strong> the information we hold about you;</li>
     <li><strong>Correct</strong> anything that is wrong or out of date;</li>
-    <li><strong>Ask us to delete</strong> your information;</li>
+    <li><strong>Delete</strong> your information;</li>
     <li>
       <strong>Withdraw your consent</strong> to the dietary/access information at
-      any time — this won’t affect anything we did before you withdrew it;
-    </li>
-    <li>
-      <strong>Object to or restrict</strong> how we use information we hold on the
-      basis of legitimate interests.
+      any time — this won’t affect anything we did before you withdrew it.
     </li>
   </ul>
   <p>
     To exercise any of these, just email us at
-    <a href="mailto:{{DSAR_CONTACT_EMAIL}}"><span class="placeholder">{'{{DSAR_CONTACT_EMAIL}}'}</span></a>.
-    We’ll respond within one month.
+    <a href="mailto:chavaniket@duck.com">chavaniket@duck.com</a>.
+    We’ll respond as soon as we reasonably can.
+  </p>
+
+  <h3>If you’re in the EU or UK</h3>
+  <p>
+    If any of our guests are in the EU or UK, we’ll also honour the rights you
+    have under the GDPR / UK GDPR — including the right to erasure and to withdraw
+    consent. Please use the same contact,
+    <a href="mailto:chavaniket@duck.com">chavaniket@duck.com</a>, and we’ll take
+    care of it.
   </p>
 
   <h2>Complaints</h2>
   <p>
-    We hope to resolve any concern directly, but you have the right to complain to
-    your local data protection authority — in the UK, the Information
-    Commissioner’s Office (ICO) at
-    <a href="https://ico.org.uk/make-a-complaint/" rel="noreferrer">ico.org.uk</a>.
+    We hope to resolve any concern directly. If you’re in Australia and you’re not
+    satisfied, you can contact the Office of the Australian Information Commissioner
+    (OAIC) at <a href="https://www.oaic.gov.au/" rel="noreferrer">oaic.gov.au</a>.
+    Guests in the EU or UK may instead contact their local data protection
+    authority.
   </p>
 
   <h2>Changes to this notice</h2>
