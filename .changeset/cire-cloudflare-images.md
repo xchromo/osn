@@ -16,12 +16,25 @@ collapses to `card`) and negotiates a modern output format from the request
 Worker Cache API short-circuit: because the Images binding bills per call with
 no per-unique dedupe, the serve route now checks `caches.default` before
 invoking `env.IMAGES`. The cache key is a canonical GET `Request` keyed on
-slug + slot + resolved variant + negotiated output format (+ the existing `?v=`
-content version) — the format is baked into the key because it is `Accept`-
-negotiated and therefore absent from the request URL, so AVIF/WebP/JPEG are
-cached as separate entries and a WebP-only client can never be served an AVIF.
-A hit serves the transformed bytes without touching the binding (or the DB); a
-miss runs the transform and writes the result back to the cache via
+slug + slot + resolved variant + negotiated output format + a content version
+**derived server-side from the wedding row's `updatedAt`** (S-M1) — the format
+is baked into the key because it is `Accept`-negotiated and therefore absent
+from the request URL, so AVIF/WebP/JPEG are cached as separate entries and a
+WebP-only client can never be served an AVIF.
+
+S-M1 (cost/abuse): the cache-key version is the server-side `updatedAt`, **not**
+the client `?v=` query param. Slugs are public, so keying on the unbounded,
+unvalidated `?v=` let an attacker loop `?v=1,2,3,…` on a valid slug to force
+unlimited cache-missing, per-call-billed transforms. The serve route now does
+the slug→wedding lookup FIRST (a cheap indexed D1 read — required on every
+request to authorise the slug and read the authoritative version; the expensive
+R2 read + binding call are still cache-skipped), 404s when the image is unset,
+then keys the cache on `updatedAt.getTime()`. The frontend may still send `?v=`
+for browser-cache busting (it equals `updatedAt`); it no longer influences the
+Worker cache key or triggers a transform, collapsing the live transform count
+per (slug, slot, variant, format) back to exactly 1. A hit serves the
+transformed bytes without re-running the binding; a miss runs the transform and
+writes the result back to the cache via
 `ctx.waitUntil` (bridged into the Elysia handler per-request, since Elysia's
 `fetch` does not forward the Workers execution context), falling back to an
 inline `await` when no execution context is bound. When `caches` is undefined

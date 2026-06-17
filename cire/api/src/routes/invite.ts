@@ -81,24 +81,46 @@ export const createInvitePublicRoutes = (
       // format. Both collapse to a fixed value, so the transform-URL/format
       // cardinality per slot is capped (3 variants × 3 formats) — keeps the edge
       // cache hot and denies an attacker unbounded distinct transform URLs.
-      // (`?v=` is the separate, pre-existing content-version cache-buster.)
-      const q = query as Record<string, string | undefined>;
-      const variant = resolveVariant(q.variant);
+      // (The client's `?v=` is intentionally NOT read here — the cache version is
+      // derived server-side from the wedding row's `updatedAt` below, S-M1.)
+      const variant = resolveVariant((query as Record<string, string | undefined>).variant);
       const format = negotiateFormat(request.headers.get("accept"));
       return runCire(
         Effect.gen(function* () {
+          // Resolve the slug → image key + authoritative content version FIRST.
+          // This is a cheap, indexed D1 read and it's required before we can key
+          // the cache: the cache-key version is derived SERVER-SIDE from the
+          // row's `updatedAt` (NOT the client `?v=`). Slugs are public, so if we
+          // keyed on the raw `?v=` an attacker could loop ?v=1,2,3… on a valid
+          // slug to force unbounded cache-missing, per-call-billed transforms,
+          // defeating the bounded-cardinality cost guarantee (S-M1). The client
+          // may still SEND `?v=` (the frontend uses it for browser-cache busting
+          // and it equals `updatedAt` anyway) but it MUST NOT influence this key.
+          // By design this DB read now runs on EVERY request — it's cheap and is
+          // the source of the authoritative version; the expensive work (R2 read
+          // + Images binding call) is still skipped on a cache hit below.
+          const { key, updatedAt } = yield* inviteService.imageKeyForSlug(params.slug, slot);
+          if (!key) {
+            set.status = 404;
+            return { error: "Not found" };
+          }
+          // Server-derived version: the row's `updatedAt` epoch ms. A re-upload
+          // bumps `updatedAt`, which mints a new cache key (fresh entry) so the
+          // new image is never served stale from the old entry.
+          const version = updatedAt ? String(updatedAt.getTime()) : undefined;
+
           // Cache API short-circuit. The Images binding bills per call with no
           // per-unique dedupe, so a fresh guest/device would otherwise re-bill
           // the same transform on every request. We key on slug+slot+variant+
-          // format (+ the ?v= content version) — the format is baked into the
+          // format (+ the server content version) — the format is baked into the
           // key because it's Accept-negotiated, not in the request URL — so each
           // negotiated output is a distinct entry. A hit serves the transformed
-          // bytes WITHOUT touching the binding (or even the DB). `caches` is
-          // undefined in unit tests / non-Workers runtimes, so guard it.
+          // bytes WITHOUT touching the binding (R2 read + transform skipped).
+          // `caches` is undefined in unit tests / non-Workers runtimes, so guard.
           const cache =
             typeof caches !== "undefined" && caches.default ? caches.default : undefined;
           const cacheKey = cache
-            ? buildTransformCacheKey({ slug: params.slug, slot, variant, format, version: q.v })
+            ? buildTransformCacheKey({ slug: params.slug, slot, variant, format, version })
             : undefined;
           if (cache && cacheKey) {
             const hit = yield* Effect.promise(() => cache.match(cacheKey));
@@ -108,11 +130,6 @@ export const createInvitePublicRoutes = (
             }
           }
 
-          const key = yield* inviteService.imageKeyForSlug(params.slug, slot);
-          if (!key) {
-            set.status = 404;
-            return { error: "Not found" };
-          }
           const original = yield* fetchAsset(key);
 
           // Transform through the Images binding when present; on any failure

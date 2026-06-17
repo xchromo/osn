@@ -81,8 +81,10 @@ export function negotiateFormat(accept: string | null | undefined): OutputFormat
  *    is NOT in the request URL (it comes from the `Accept` header), so baking it
  *    into the key is what keeps AVIF/WebP/JPEG as separate entries — otherwise a
  *    WebP-only client could be served an AVIF cached for an AVIF-capable one.
- *  - `v` — the existing `?v=<updatedAt>` content-version cache-buster, passed
- *    through so a re-upload invalidates the cached transform.
+ *  - `v` — the content version, derived SERVER-SIDE from the wedding row's
+ *    `updatedAt` (NOT the client `?v=`, which is ignored for keying — S-M1), so a
+ *    re-upload bumps `updatedAt` → a new key → the new image isn't served stale,
+ *    while an attacker can't loop arbitrary `?v=` values to mint fresh transforms.
  *
  * The format slug strips the `image/` prefix to keep the key tidy. We use a
  * synthetic host so the key never collides with a real inbound request URL and
