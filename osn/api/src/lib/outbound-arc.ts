@@ -210,7 +210,11 @@ export async function startOutboundKeyRotation(opts: {
  * downstream on *every* tick is wasteful. This flag is flipped on the first
  * successful registration pass so subsequent ticks within the same isolate
  * skip the network round-trips. A fresh isolate starts unregistered and
- * registers again on its first tick (and rotation resets it — see below).
+ * registers again on its first tick. Note: workerd has no rotation timer, so
+ * the latch is never reset within an isolate's life; the downstream
+ * registration TTL (~24h) only bites an isolate that outlives it — in practice
+ * isolates are short-lived, and a lapsed registration just 401s the fan-out,
+ * which is retried next tick (fail-and-retry, never a silent erasure drop).
  */
 let _downstreamRegistered = false;
 

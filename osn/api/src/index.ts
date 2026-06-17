@@ -232,31 +232,35 @@ export const handler: {
     const dbLayer = makeDbD1Live(env.DB);
     const fanoutUrls = { pulseApiUrl: env.PULSE_API_URL, zapApiUrl: env.ZAP_API_URL };
 
+    // Register the outbound ARC key, THEN run the fan-out retry sweep — awaited in
+    // sequence within the tick so the first `/internal/account-deleted` POST on a
+    // fresh isolate isn't 401'd before the key is published downstream. A
+    // registration failure is logged and does not block the sweep (the POST then
+    // 401s and is retried on the next tick, per the fail-and-retry posture below).
     ctx.waitUntil(
-      registerOutboundKeysOnce({
-        pulseApiUrl: env.PULSE_API_URL,
-        zapApiUrl: env.ZAP_API_URL,
-        internalServiceSecret: env.INTERNAL_SERVICE_SECRET,
-        osnEnv: env.OSN_ENV,
-      }).catch((err) =>
-        Effect.runPromise(
-          Effect.logError("scheduled outbound ARC key registration failed", {
-            reason: String(err),
-          }).pipe(Effect.provide(osnLoggerLayer)),
-        ),
-      ),
-    );
-
-    ctx.waitUntil(
-      Effect.runPromise(
-        accountErasure.runFanOutRetrySweep(fanoutUrls).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled fan-out retry sweep failed", { reason: String(err) }),
+      (async () => {
+        await registerOutboundKeysOnce({
+          pulseApiUrl: env.PULSE_API_URL,
+          zapApiUrl: env.ZAP_API_URL,
+          internalServiceSecret: env.INTERNAL_SERVICE_SECRET,
+          osnEnv: env.OSN_ENV,
+        }).catch((err) =>
+          Effect.runPromise(
+            Effect.logError("scheduled outbound ARC key registration failed", {
+              reason: String(err),
+            }).pipe(Effect.provide(osnLoggerLayer)),
           ),
-          Effect.provide(dbLayer),
-          Effect.provide(osnLoggerLayer),
-        ),
-      ),
+        );
+        await Effect.runPromise(
+          accountErasure.runFanOutRetrySweep(fanoutUrls).pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled fan-out retry sweep failed", { reason: String(err) }),
+            ),
+            Effect.provide(dbLayer),
+            Effect.provide(osnLoggerLayer),
+          ),
+        );
+      })(),
     );
 
     ctx.waitUntil(
