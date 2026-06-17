@@ -265,35 +265,41 @@ bunx wrangler d1 migrations apply cire-db --remote
 # bun run --cwd cire/db db:push:remote
 ```
 
-### 4.2 Substitute the bootstrap-owner profile id 🔑
+### 4.2 Set the bootstrap-owner profile id 🔑
 
-Migration `0006_multi_tenant.sql` (and the mirrored `src/db/setup.ts:158`,
-`schema.test.ts`) seeds the single bespoke wedding row `wed_bootstrap` with a
-**placeholder owner**: `usr_REPLACE_BEFORE_PROD`
-(`cire/db/migrations/0006_multi_tenant.sql:32-41`). The organiser dashboard authorises by
-matching the signed-in OSN profile id against `weddings.owner_osn_profile_id`
-(`ownedWedding()` / `weddingOwner()`), so **with the placeholder in place, the real
-organiser sees nothing**.
+> Assumes the `fix/cire-bootstrap-owner` PR is merged — it replaced the old
+> hardcoded `usr_REPLACE_BEFORE_PROD` placeholder with an env-driven owner +
+> runtime fixup. (Pre-merge behaviour was a manual post-migrate `UPDATE`.)
 
-`BOOTSTRAP_OWNER_PROFILE_ID` must be the organiser's **real `usr_*` OSN profile id**.
-Obtain it by having the organiser register their OSN passkey on production first (§7),
-then read their profile id from osn. Update the live D1 row after migrations apply:
+Migration `0006_multi_tenant.sql` seeds the single bespoke wedding row
+`wed_bootstrap` with an **inert sentinel owner** `usr_unclaimed_bootstrap`
+that satisfies the NOT NULL column + FK backfill but matches no real profile, so
+the ownership gate (`ownedWedding()` / `weddingOwner()`) **fails closed** — the
+real organiser sees nothing until the owner is repointed.
+
+The repoint is **automatic on boot**, driven by a single secret:
+
+1. Obtain the organiser's **real `usr_*` OSN profile id** by having them register
+   their OSN passkey on production first (§7), then read their profile id from osn.
+2. Set it on cire-api (alongside `OSN_ENV`), then redeploy / let the next isolate boot:
 
 ```bash
 cd cire/api
-bunx wrangler d1 execute cire-db --remote \
-  --command "UPDATE weddings SET owner_osn_profile_id = 'usr_REAL_ID_HERE' WHERE id = 'wed_bootstrap';"
+bunx wrangler secret put BOOTSTRAP_OWNER_PROFILE_ID --env production   # paste usr_*
+# OSN_ENV is a [vars] entry (dev|staging|production); confirm it is set non-local.
 ```
 
-Verify exactly one row updated and the value is the real id:
+On first request per isolate, `ensureBootstrapOwner` (`src/index.ts`) UPDATEs the
+row off the sentinel onto `BOOTSTRAP_OWNER_PROFILE_ID` (idempotent), or **throws →
+503** if it is missing / still the placeholder / sentinel / not `usr_*`
+(fail loud, never silently mis-owned). No manual SQL `UPDATE` is required.
+
+Verify the live row carries the real id after the first request:
 
 ```bash
 bunx wrangler d1 execute cire-db --remote \
   --command "SELECT id, owner_osn_profile_id FROM weddings WHERE id = 'wed_bootstrap';"
 ```
-
-> Because the placeholder is baked into migration `0006`, this UPDATE is a **post-migrate
-> step** on the remote DB — do not edit the migration file's seeded value in place.
 
 ---
 
@@ -399,9 +405,11 @@ Run these in order; each maps to a startup requirement enumerated above.
    registers + signs in with an OSN passkey. This validates `OSN_RP_ID`, `OSN_ORIGIN`,
    `OSN_ISSUER_URL`, `OSN_CORS_ORIGIN` (osn-api side) and `PUBLIC_OSN_ISSUER_URL`
    (organiser build). Capture their `usr_*` profile id for §4.2 if not done yet.
-6. **Organiser dashboard lists the wedding.** After §4.2's UPDATE, the organiser sees
-   `wed_bootstrap`'s guests/events. If it's empty, the bootstrap-owner substitution did
-   not take.
+6. **Organiser dashboard lists the wedding.** Once `BOOTSTRAP_OWNER_PROFILE_ID` is set
+   (§4.2) and a request has booted the worker, the runtime fixup repoints the owner off
+   the sentinel and the organiser sees `wed_bootstrap`'s guests/events. If it's empty,
+   the owner is still the sentinel — check the secret is set and the worker rebooted (a
+   missing/invalid value 503s rather than mis-owning).
 7. **RSVP write succeeds.** A guest claims their family code on the guest site and submits
    an RSVP (`POST /api/rsvp`). A 2xx + a persisted row confirms cire-api ↔ D1 writes and
    the guest-session cookie path. Verify with:
