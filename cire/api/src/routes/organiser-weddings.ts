@@ -10,8 +10,8 @@ import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
 import { claimService } from "../services/claim";
-import { regenerateCodeService } from "../services/regenerate-code";
 import { hostCodeService } from "../services/host-code";
+import { regenerateCodeService } from "../services/regenerate-code";
 import { weddingsService } from "../services/weddings";
 
 /**
