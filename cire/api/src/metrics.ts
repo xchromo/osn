@@ -28,6 +28,8 @@ import {
 import type { Result } from "@shared/observability/metrics";
 import { Effect } from "effect";
 
+import type { ImageVariant, OutputFormat } from "./services/invite-image-transform";
+
 /** Canonical metric name consts — grep-able, refactor-safe. */
 export const CIRE_METRICS = {
   // Guest claim (pre-auth credential exchange surface).
@@ -54,6 +56,8 @@ export const CIRE_METRICS = {
   inviteSaved: "cire.invite.saved",
   inviteAssetUploaded: "cire.invite.asset.uploaded",
   inviteAssetSize: "cire.invite.asset.size",
+  // On-the-fly image transform on the public serve path (Cloudflare Images).
+  imageTransform: "cire.image.transform",
   // Guest account-linking (OSN bridge).
   accountLinkRequests: "cire.account_link.requests",
   accountLinkUnlinks: "cire.account_link.unlinks",
@@ -116,6 +120,20 @@ type ImportSimpleAttrs = { result: "ok" | "error" };
 type ImportRowsAttrs = { entity: ImportEntity };
 type ImportParseRejectedAttrs = { reason: ParseRejectReason };
 type InviteSimpleAttrs = { result: "ok" | "error" };
+
+/**
+ * Outcome of a public image serve:
+ *  - `transformed` — the Images binding produced the requested variant.
+ *  - `original`    — fell back to the raw R2 bytes because the binding was
+ *                    absent (local/dev/tests) or the transform failed.
+ * `variant` + `format` are the bounded unions from the transform module — never
+ * the slug or any per-wedding value.
+ */
+type ImageTransformAttrs = {
+  result: "transformed" | "original";
+  variant: ImageVariant;
+  format: OutputFormat;
+};
 type AccountLinkRequestsAttrs = { result: AccountLinkResult };
 type AccountLinkUnlinksAttrs = { result: "ok" | "error" };
 type AccountLinkResolveDurationAttrs = { result: ResolveResult };
@@ -223,6 +241,13 @@ const inviteAssetSize = createHistogram<Record<never, never>>({
   boundaries: BYTE_BUCKETS,
 });
 
+const imageTransform = createCounter<ImageTransformAttrs>({
+  name: CIRE_METRICS.imageTransform,
+  description:
+    "Public invite-image serves, by whether the Cloudflare Images binding produced a variant or we fell back to the R2 original, plus the resolved variant + output format",
+  unit: "{serve}",
+});
+
 const accountLinkRequests = createCounter<AccountLinkRequestsAttrs>({
   name: CIRE_METRICS.accountLinkRequests,
   description: "Guest account-link POST attempts, by outcome",
@@ -323,6 +348,14 @@ export const metricInviteAssetUploaded = (result: "ok" | "error", byteLength?: n
   inviteAssetUploaded.inc({ result });
   if (result === "ok" && byteLength !== undefined) inviteAssetSize.record(byteLength, {});
 };
+
+/** Record a public image serve: `transformed` when the Images binding produced
+ *  the variant, `original` when we fell back to the raw R2 bytes. */
+export const metricImageTransform = (
+  result: "transformed" | "original",
+  variant: ImageVariant,
+  format: OutputFormat,
+): void => imageTransform.inc({ result, variant, format });
 
 export const metricAccountLinkRequest = (result: AccountLinkResult): void =>
   accountLinkRequests.inc({ result });

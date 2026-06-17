@@ -4,6 +4,7 @@ import { Elysia } from "elysia";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
+import { metricImageTransform } from "../metrics";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { rateLimitMiddleware } from "../middleware/rate-limit";
@@ -17,7 +18,13 @@ import {
   fetchAsset,
   MAX_IMAGE_BYTES,
 } from "../services/invite-assets";
-import type { AssetsBucket } from "../services/invite-assets";
+import type { AssetsBucket, StoredAsset } from "../services/invite-assets";
+import {
+  negotiateFormat,
+  resolveVariant,
+  transformAsset,
+} from "../services/invite-image-transform";
+import type { ImagesBindingLike } from "../services/invite-image-transform";
 
 // Sentinel parse hook: stop Elysia consuming the body so handlers parse it by
 // hand (JSON for text, raw bytes for images) — matches the import route.
@@ -29,9 +36,19 @@ const manualParse = { parse: () => ({}) };
  * — same split as /api/rsvp and the account-link reads.
  *
  *   GET /api/invite/:slug              → text + image URLs for the guest site
- *   GET /api/invite/:slug/image/:slot  → image bytes (served from R2)
+ *   GET /api/invite/:slug/image/:slot  → optimised image bytes (R2 + Images)
+ *
+ * `images` is the Cloudflare Images binding. When present the serve route
+ * transforms the R2 original into the requested responsive variant + a
+ * negotiated modern format; when absent (local/dev/tests, or an account without
+ * the Images product) — or when a transform fails — it serves the raw R2 bytes
+ * (the original behaviour), so the route never 500s on a transform miss.
  */
-export const createInvitePublicRoutes = (db: Db, assets: AssetsBucket | undefined) =>
+export const createInvitePublicRoutes = (
+  db: Db,
+  assets: AssetsBucket | undefined,
+  images?: ImagesBindingLike,
+) =>
   new Elysia({ prefix: "/api/invite" })
     .get("/:slug", ({ params, set }) =>
       runCire(
@@ -52,12 +69,19 @@ export const createInvitePublicRoutes = (db: Db, assets: AssetsBucket | undefine
         ),
       ),
     )
-    .get("/:slug/image/:slot", ({ params, set }) => {
+    .get("/:slug/image/:slot", ({ params, query, request, set }) => {
       if (!isInviteImageSlot(params.slot)) {
         set.status = 404;
         return { error: "Not found" };
       }
       const slot = params.slot;
+      // Bounded, allowlisted variant (?variant=) + Accept-negotiated output
+      // format. Both collapse to a fixed value, so the transform-URL/format
+      // cardinality per slot is capped (3 variants × 3 formats) — keeps the edge
+      // cache hot and denies an attacker unbounded distinct transform URLs.
+      // (`?v=` is the separate, pre-existing content-version cache-buster.)
+      const variant = resolveVariant((query as Record<string, string | undefined>).variant);
+      const format = negotiateFormat(request.headers.get("accept"));
       return runCire(
         Effect.gen(function* () {
           const key = yield* inviteService.imageKeyForSlug(params.slug, slot);
@@ -65,16 +89,47 @@ export const createInvitePublicRoutes = (db: Db, assets: AssetsBucket | undefine
             set.status = 404;
             return { error: "Not found" };
           }
-          const asset = yield* fetchAsset(key);
-          return new Response(asset.bytes, {
+          const original = yield* fetchAsset(key);
+
+          // Transform through the Images binding when present; on any failure
+          // (or when the binding is absent) fall back to the raw R2 original —
+          // never 500 on a transform miss. The metric records which path ran.
+          let served: StoredAsset = original;
+          if (images) {
+            served = yield* transformAsset(images, original, variant, format).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => metricImageTransform("transformed", variant, format)),
+              ),
+              Effect.catchTag("ImageTransformError", (err) =>
+                Effect.gen(function* () {
+                  yield* Effect.logWarning("invite image transform failed; serving original", {
+                    slot,
+                    variant,
+                    format,
+                    reason: err.reason,
+                  });
+                  metricImageTransform("original", variant, format);
+                  return original;
+                }),
+              ),
+            );
+          } else {
+            metricImageTransform("original", variant, format);
+          }
+
+          return new Response(served.bytes, {
             headers: {
-              "Content-Type": asset.contentType,
+              "Content-Type": served.contentType,
               // Bytes are magic-byte sniffed + allowlisted to JPEG/PNG/WebP on
               // upload, but pin the declared type so a browser can't be coaxed
               // into interpreting the response as anything else (IB-S-M1).
               "X-Content-Type-Options": "nosniff",
               // URL is cache-busted by ?v=<updatedAt>, so a hit is safe to pin.
               "Cache-Control": "public, max-age=31536000, immutable",
+              // The chosen output format depends on the request Accept header, so
+              // a shared cache must key on it — otherwise an AVIF response could
+              // be served to a JPEG-only client (or vice versa).
+              Vary: "Accept",
             },
           });
         }).pipe(
