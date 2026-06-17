@@ -61,4 +61,28 @@ describe("MapPreview", () => {
     // No venue text to show — falls back to a neutral "View on map" label.
     expect(getByText("View on map")).toBeTruthy();
   });
+
+  // T-S1: when there's no venue text to name the link, the accessible name
+  // falls back to the generic "Open the venue in maps".
+  it("uses an accessible-name fallback when there is no venue but a mapsUrl is present", () => {
+    const url = "https://maps.google.com/?q=somewhere";
+    const { getByLabelText } = render(() => (
+      <MapPreview event={{ ...baseEvent, address: null, location: "", mapsUrl: url }} />
+    ));
+    expect(getByLabelText(/open the venue in maps/i)).toBeTruthy();
+  });
+
+  // T-S2: a dangerous organiser-supplied mapsUrl (e.g. javascript:) must never
+  // reach the anchor href — the component routes through resolveMapsUrl, which
+  // rejects non-http(s) schemes and falls back to the safe Google Maps search
+  // URL derived from the address.
+  it("never renders a javascript: mapsUrl, falling back to the safe maps search", () => {
+    const { getByRole } = render(() => (
+      <MapPreview event={{ ...baseEvent, mapsUrl: "javascript:alert(1)" }} />
+    ));
+    const link = getByRole("link") as HTMLAnchorElement;
+    expect(link.href.startsWith("https://www.google.com/maps/search/")).toBe(true);
+    expect(link.href).not.toContain("javascript:");
+    expect(link.href).toContain(encodeURIComponent("12 Banksia Lane, Strathfield"));
+  });
 });

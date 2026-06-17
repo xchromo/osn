@@ -1,4 +1,4 @@
-import { For, Show, type JSX } from "solid-js";
+import { createUniqueId, For, Show, type JSX } from "solid-js";
 
 import { AddToCalendar } from "./AddToCalendar";
 import { AnimatedModal } from "./AnimatedModal";
@@ -41,12 +41,16 @@ export function DetailsModal(props: DetailsModalProps) {
   const day = () => formatEventDay(props.event);
   const timeRange = () => formatTimeRange(props.event);
   const tz = () => timezoneLabel(props.event);
+  const titleId = createUniqueId();
 
   return (
-    <AnimatedModal onClose={props.onClose}>
+    <AnimatedModal onClose={props.onClose} labelledBy={titleId}>
       <header class="mb-7">
         <p class="font-body text-gold mb-3 text-[0.72rem] tracking-[0.2em] uppercase">Details</p>
-        <h3 class="font-display text-text mb-5 text-[1.7rem] leading-tight font-light italic">
+        <h3
+          id={titleId}
+          class="font-display text-text mb-5 text-[1.7rem] leading-tight font-light italic"
+        >
           {props.event.name}
         </h3>
         <AddToCalendar event={props.event} siteUrl={props.siteUrl} variant="primary" />

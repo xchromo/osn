@@ -20,3 +20,12 @@ rendering a dead link.
 
 The outer event card's button is relabelled "View Event" now that Add-to-
 Calendar lives inside the details view.
+
+The shared `AnimatedModal` (which hosts both this details view and the RSVP
+modal) is hardened for accessibility: focus is moved into the panel on open and
+restored to the trigger on close, Tab/Shift+Tab are trapped within the panel,
+Escape closes the dialog, the dialog now carries an accessible name via
+`aria-labelledby` (wired to each consumer's title), background scroll is locked
+with `overscroll-behavior: contain` on the panel, the open/close animation
+honours `prefers-reduced-motion` by snapping to the final visible state, and the
+close button gets a 44×44px hit area with a visible focus ring.
