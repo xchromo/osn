@@ -29,6 +29,11 @@ export interface Env {
   // lifecycle: binary, served publicly). Absent ⇒ image upload/serve fail at
   // use, text customisation still works.
   ASSETS?: R2Bucket;
+  // Cloudflare Workers Images binding — transforms the R2 originals into
+  // responsive, modern-format variants on the public serve path. Absent (local
+  // `wrangler dev` / miniflare / unit tests, or an account without the Images
+  // product) ⇒ the serve route falls back to the raw R2 bytes, never 500s.
+  IMAGES?: ImagesBinding;
   WEB_ORIGIN: string;
   OSN_JWKS_URL: string;
   OSN_AUDIENCE: string;
@@ -170,6 +175,7 @@ const handler: ExportedHandler<Env> = {
           inviteLimiter: edgeLimiter,
           r2: env.SHEETS,
           assets: env.ASSETS,
+          images: env.IMAGES,
           osnJwksUrl: env.OSN_JWKS_URL,
           osnAudience: env.OSN_AUDIENCE,
           resolveOsnAccountId,
