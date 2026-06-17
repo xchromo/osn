@@ -1,4 +1,9 @@
-import { exportKeyToJwk, generateArcKeyPair, getOrCreateArcToken } from "@shared/crypto";
+import {
+  exportKeyToJwk,
+  generateArcKeyPair,
+  getOrCreateArcToken,
+  importKeyFromJwk,
+} from "@shared/crypto";
 import { Data, Effect } from "effect";
 
 /**
@@ -27,7 +32,19 @@ if (process.env.NODE_ENV === "production" && !OSN_API_URL.startsWith("https://")
 }
 
 // ---------------------------------------------------------------------------
-// Key-pair singleton (ephemeral key path — mirrors pulse graphBridge)
+// Key-pair singleton
+//
+// Auth strategy (in priority order, mirrors pulse graphBridge):
+//   1. `ZAP_API_ARC_PRIVATE_KEY` (+ `ZAP_API_ARC_KEY_ID`) env vars — use a
+//      pre-distributed STABLE key (production). The matching public key must
+//      already be registered in the osn/api `service_accounts` /
+//      `service_account_keys` tables (seeded out-of-band — see
+//      `docs/zap-arc-issuer-provisioning.md`). This is the only path that
+//      works correctly on Cloudflare Workers: every isolate signs with the
+//      same registered key instead of minting a fresh ephemeral key (and a
+//      new `service_account_keys` row) per isolate.
+//   2. Ephemeral key + self-registration (local dev) — generate a fresh
+//      P-256 key pair and register it via `registerWithOsnApi()`.
 // ---------------------------------------------------------------------------
 
 interface KeyInit {
@@ -35,10 +52,23 @@ interface KeyInit {
   keyId: string;
 }
 
+/** True when a stable, pre-distributed ARC key is configured (production). */
+function hasStableKey(): boolean {
+  return Boolean(process.env.ZAP_API_ARC_PRIVATE_KEY && process.env.ZAP_API_ARC_KEY_ID);
+}
+
 let _keyInitPromise: Promise<KeyInit> | null = null;
 
 function initKeys(): Promise<KeyInit> {
   _keyInitPromise ??= (async (): Promise<KeyInit> => {
+    const stableJwk = process.env.ZAP_API_ARC_PRIVATE_KEY;
+    const stableKid = process.env.ZAP_API_ARC_KEY_ID;
+    if (stableJwk && stableKid) {
+      // Pre-distributed stable private key (production). Imported once per
+      // isolate; the public half is already in the OSN service-account registry.
+      const privateKey = await importKeyFromJwk(stableJwk);
+      return { privateKey, keyId: stableKid };
+    }
     const pair = await generateArcKeyPair();
     return { privateKey: pair.privateKey, keyId: crypto.randomUUID() };
   })();
@@ -71,6 +101,10 @@ function isLocalEnv(): boolean {
  * misconfigured deploy is caught at boot rather than on the first S2S call.
  */
 export async function registerWithOsnApi(): Promise<boolean> {
+  // Stable pre-distributed key: nothing to self-register — the public key is
+  // already in the OSN registry. `initKeys()` will load it from env.
+  if (hasStableKey()) return true;
+
   const secret = process.env.INTERNAL_SERVICE_SECRET;
   if (!secret) {
     if (isLocalEnv()) return false;
