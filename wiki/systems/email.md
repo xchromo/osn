@@ -102,7 +102,7 @@ POST https://api.resend.com/emails
 Authorization: Bearer <RESEND_API_KEY>
 Content-Type: application/json
 {
-  "from":    "noreply@cireweddings.com",
+  "from":    "hello@cireweddings.com",
   "to":      ["user@example.com"],
   "subject": "Verify your OSN email",
   "html":    "...",
@@ -212,7 +212,7 @@ Environment variables for `@osn/api`:
 | `RESEND_API_KEY` | non-local (preferred) | Resend API key (bearer). Selects `ResendEmailLive`; wins over the Cloudflare vars. `wrangler secret put RESEND_API_KEY`. |
 | `CLOUDFLARE_ACCOUNT_ID` | optional / legacy | Cloudflare account ID (fallback transport) |
 | `CLOUDFLARE_EMAIL_API_TOKEN` | optional / legacy | API token with Email Send permission (fallback transport) |
-| `OSN_EMAIL_FROM` | optional | Verified sender address (default: `noreply@osn.local`; prod: `noreply@cireweddings.com`) |
+| `OSN_EMAIL_FROM` | optional | Verified sender address (default: `noreply@osn.local`; prod: `hello@cireweddings.com`) |
 
 Before deploying (Resend — the live path):
 
@@ -222,7 +222,7 @@ Before deploying (Resend — the live path):
    verification.
 2. Create a Resend API key (Sending access).
 3. `wrangler secret put RESEND_API_KEY --env production` on osn-api, and set
-   `OSN_EMAIL_FROM=noreply@cireweddings.com`.
+   `OSN_EMAIL_FROM=hello@cireweddings.com`.
 4. Once delivery is confirmed, remove `OSN_EMAIL_OPTIONAL` so email is
    required/fail-closed again. See [[production-deploy]] §1.1.
 
