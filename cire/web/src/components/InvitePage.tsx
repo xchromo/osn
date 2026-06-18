@@ -50,7 +50,9 @@ export default function InvitePage(props: InvitePageProps) {
     async () => {
       if (!props.slug) return props.theme ?? null;
       try {
-        const res = await fetch(`${props.apiUrl}/api/invite/${props.slug}`);
+        const res = await fetch(`${props.apiUrl}/api/invite/${props.slug}`, {
+          cache: "no-store",
+        });
         if (!res.ok) return props.theme ?? null;
         const body = (await res.json()) as InviteCustomisationResponse;
         return body.theme ?? null;

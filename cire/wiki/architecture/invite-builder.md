@@ -151,6 +151,16 @@ no-JS placeholder; the on-mount fetch is the source of truth. The `/api/claim`
 event/guest flow (`InvitePage`'s claim/RSVP logic) and its animations are
 untouched.
 
+**Cache discipline (why edits surface):** `GET /api/invite/:slug` is sent
+`Cache-Control: no-store`, and both islands fetch it with `{ cache: "no-store" }`.
+The JSON hands out the version-busted hero/story image URLs, so if it were itself
+cached (heuristically by the browser, or at an edge) the on-mount revalidation
+would read a stale body and the new hero/theme would never appear — the exact
+"saved in settings but not on the invite" symptom. The image **bytes** at
+`/api/invite/:slug/image/:slot` stay `immutable, max-age=1y`; that's safe because
+their URL carries `?v=<updatedAt>` and every upload bumps `updatedAt` + writes a
+fresh R2 key.
+
 The **theme** drives CSS custom properties (`--invite-accent`, `--invite-surface`,
 `--invite-heading`, `--invite-body`) set on each section wrapper's inline `style`,
 consumed by the section's elements via `var(--invite-*, <built-in-token>)`
