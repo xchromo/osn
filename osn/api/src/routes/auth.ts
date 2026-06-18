@@ -672,10 +672,21 @@ export function createAuthRoutes(
             return rlErr;
           }
           // Turnstile bot gate (key-optional; no-op when the secret is unset).
-          const tsErr = await turnstileGate("passkey_login_begin", body.turnstileToken, headers);
-          if (tsErr) {
-            set.status = 400;
-            return tsErr;
+          // ONLY the interactive, identifier-bound form carries a token and is
+          // gated. The silent conditional-UI / discoverable-credential ceremony
+          // (no identifier) runs token-free BY DESIGN — the frontend renders no
+          // challenge for it — so gating it would fail-closed and break passkey
+          // autofill sign-in (the common path). It discloses nothing
+          // account-specific, still requires a valid passkey assertion to
+          // complete, and remains per-IP rate-limited above.
+          const identifierPresent =
+            typeof body.identifier === "string" && body.identifier.trim() !== "";
+          if (identifierPresent) {
+            const tsErr = await turnstileGate("passkey_login_begin", body.turnstileToken, headers);
+            if (tsErr) {
+              set.status = 400;
+              return tsErr;
+            }
           }
           try {
             // M-PK: identifier is optional. Omitting it kicks off the

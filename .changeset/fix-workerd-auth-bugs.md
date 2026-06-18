@@ -26,3 +26,14 @@ Fix two auth-path bugs that only surfaced on the deployed Cloudflare Worker
   `/step-up/passkey/*` already uses), so enrolment always binds to the caller's
   own account; the client-supplied `profileId` is no longer a trust input and a
   foreign `profileId` can never redirect enrolment onto another account.
+
+- **Bug C — organiser login looped back to login once Turnstile was enabled.**
+  `/login/passkey/begin` is hit by TWO frontend paths: the interactive
+  identifier-bound form (renders the Turnstile widget, carries a token) and the
+  silent conditional-UI / passkey-autofill ceremony (NO identifier, NO token, by
+  design). With Turnstile configured the gate fail-closed on EVERY caller, so the
+  autofill path — the common way passkey users sign in — got `turnstile_failed`
+  and bounced back to login. The gate now fires only when a non-empty
+  `identifier` is present (the interactive form); the no-identifier conditional-UI
+  ceremony is exempt — it discloses nothing account-specific, still requires a
+  valid passkey assertion to complete, and stays per-IP rate-limited.
