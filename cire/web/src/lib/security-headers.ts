@@ -122,14 +122,34 @@ export function buildCsp(directives: Record<string, readonly string[]> = CSP_DIR
 }
 
 /**
+ * CSP rollout mode. While `false` (the default) the policy ships as
+ * `Content-Security-Policy-Report-Only`: the browser reports what WOULD be
+ * blocked but blocks NOTHING, so a missing allowlist entry can never break the
+ * live invite. After a real-browser smoke test on the deployed site confirms
+ * zero violations (load an invite + fonts + hero image, open a Pinterest
+ * moodboard, the Maps embed, and submit a claim with DevTools open), flip this
+ * to `true` to enforce. That one-line change is the entire enforce step.
+ */
+export const CSP_ENFORCE = false;
+
+/** The CSP header name for the current rollout mode. */
+export function cspHeaderName(): "Content-Security-Policy" | "Content-Security-Policy-Report-Only" {
+  return CSP_ENFORCE ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
+}
+
+/**
  * The full set of security headers attached to every SSR HTML response. The CSP
  * mirrors `public/_headers`; the other four headers re-assert the same intent
  * `public/_headers` documents, because that file does not apply to SSR Worker
  * responses (see the module doc above).
+ *
+ * The CSP ships in Report-Only mode until {@link CSP_ENFORCE} is flipped — see
+ * its doc. The non-CSP headers are always enforced (they carry no breakage
+ * risk).
  */
 export function securityHeaders(): Record<string, string> {
   return {
-    "Content-Security-Policy": buildCsp(),
+    [cspHeaderName()]: buildCsp(),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Frame-Options": "DENY",

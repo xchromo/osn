@@ -1,6 +1,7 @@
 import type { APIContext, MiddlewareNext } from "astro";
 import { describe, expect, it } from "vitest";
 
+import { cspHeaderName } from "./lib/security-headers";
 import { onRequest } from "./middleware";
 
 // The middleware only uses `next()`, so a minimal context cast is sufficient.
@@ -25,8 +26,8 @@ describe("onRequest middleware", () => {
 
     const res = await run(next);
 
-    expect(res.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
-    expect(res.headers.get("Content-Security-Policy")).toContain(
+    expect(res.headers.get(cspHeaderName())).toContain("frame-ancestors 'none'");
+    expect(res.headers.get(cspHeaderName())).toContain(
       "script-src 'self' 'unsafe-inline' https://assets.pinterest.com https://challenges.cloudflare.com",
     );
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
@@ -49,6 +50,6 @@ describe("onRequest middleware", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toBe("/some-slug");
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
-    expect(res.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+    expect(res.headers.get(cspHeaderName())).toContain("frame-ancestors 'none'");
   });
 });

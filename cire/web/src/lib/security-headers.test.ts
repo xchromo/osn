@@ -4,6 +4,7 @@ import {
   applySecurityHeaders,
   buildCsp,
   CSP_DIRECTIVES,
+  cspHeaderName,
   securityHeaders,
 } from "./security-headers";
 
@@ -96,7 +97,7 @@ describe("securityHeaders", () => {
   const headers = securityHeaders();
 
   it("includes the CSP plus the four classic hardening headers", () => {
-    expect(headers["Content-Security-Policy"]).toBe(buildCsp());
+    expect(headers[cspHeaderName()]).toBe(buildCsp());
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(headers["Referrer-Policy"]).toBe("strict-origin-when-cross-origin");
     expect(headers["X-Frame-Options"]).toBe("DENY");
@@ -108,7 +109,7 @@ describe("applySecurityHeaders", () => {
   it("attaches every security header to a Headers instance", () => {
     const h = new Headers();
     applySecurityHeaders(h);
-    expect(h.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+    expect(h.get(cspHeaderName())).toContain("frame-ancestors 'none'");
     expect(h.get("X-Content-Type-Options")).toBe("nosniff");
     expect(h.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
     expect(h.get("X-Frame-Options")).toBe("DENY");
@@ -120,6 +121,6 @@ describe("applySecurityHeaders", () => {
     applySecurityHeaders(h);
     expect(h.get("X-Frame-Options")).toBe("SAMEORIGIN");
     // ...but still fills in the ones that were absent.
-    expect(h.get("Content-Security-Policy")).toBeTruthy();
+    expect(h.get(cspHeaderName())).toBeTruthy();
   });
 });
