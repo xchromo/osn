@@ -154,6 +154,12 @@ jobs:
         env:
           PUBLIC_API_URL: https://api.cireweddings.com
           PUBLIC_SITE_URL: https://cireweddings.com
+          # Which wedding this single-wedding guest site renders. index.astro bakes
+          # /api/invite/<slug> at build time; if PUBLIC_WEDDING_SLUG is unset it
+          # falls back to the placeholder 'cire-wedding', which 404s → an
+          # all-defaults empty invite (no hero, no theme, no copy). MUST be the
+          # live couple's slug from the weddings table. Set via repo Variable.
+          PUBLIC_WEDDING_SLUG: ${{ vars.PUBLIC_WEDDING_SLUG }}
           PUBLIC_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
           # Google Maps Embed API key (public, referrer-restricted to *.cireweddings.com).
           # Present ⇒ real Embed iframe; absent ⇒ CSS-card fallback (key-optional).
