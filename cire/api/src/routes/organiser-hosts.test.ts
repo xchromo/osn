@@ -56,6 +56,11 @@ const stubDisplayResolver: OsnProfileDisplayResolver = async (profileIds) => {
 /** Display resolver that fails soft to an empty map (osn-api down / no ARC key). */
 const emptyDisplayResolver: OsnProfileDisplayResolver = async () => new Map();
 
+/** Display resolver that throws — stands in for osn-api returning a 5xx. */
+const throwingDisplayResolver: OsnProfileDisplayResolver = async () => {
+  throw new Error("osn-api 500");
+};
+
 function seedWedding(db: Db) {
   const now = new Date();
   db.insert(weddings)
@@ -273,9 +278,6 @@ describe("GET /api/organiser/weddings/:weddingId/hosts (list)", () => {
   });
 
   it("still 200s (profileId fallback) when the display resolver throws", async () => {
-    const throwingDisplayResolver: OsnProfileDisplayResolver = async () => {
-      throw new Error("osn-api 500");
-    };
     const { db, app } = buildApp({ resolveOsnProfileDisplays: throwingDisplayResolver });
     seedCohost(db);
     const res = await req(app, "GET", hostsPath, OWNER);
