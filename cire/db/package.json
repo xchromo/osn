@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/schema.ts"
+    ".": "./src/schema.ts",
+    "./seed": "./seed/data/index.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
@@ -11,7 +12,10 @@
     "db:push": "bunx wrangler --config ../api/wrangler.toml d1 migrations apply cire-db --local",
     "db:push:remote": "bunx wrangler --config ../api/wrangler.toml d1 migrations apply cire-db --remote",
     "db:seed": "bash ../../scripts/cire-db-seed.sh",
-    "db:reset": "rm -rf ../api/.wrangler/state/v3/d1 && bun run db:push && bun run db:seed"
+    "db:reset": "rm -rf ../api/.wrangler/state/v3/d1 && bun run db:push && bun run db:seed",
+    "seed:generate": "bun run seed/generate.ts",
+    "seed:check": "bun run seed/generate.ts --check",
+    "test": "bun test"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

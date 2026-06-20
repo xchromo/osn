@@ -196,6 +196,9 @@ app.config.timestamp_*.js
 
 # Local data
 data/
+# …but the cire dev/test seed's canonical data is source, not local state.
+!cire/db/seed/data/
+!cire/db/seed/data/**
 
 # Obsidian (wiki vault user state)
 wiki/.obsidian/

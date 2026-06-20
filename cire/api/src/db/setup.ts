@@ -1,10 +1,9 @@
 import { Database } from "bun:sqlite";
 
 import * as schema from "@cire/db";
+import { events as eventsData, families as guestsData } from "@cire/db/seed";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 
-import eventsData from "../data/events.json";
-import guestsData from "../data/guests.json";
 import type { Db } from "./index";
 
 // Stable owner for the local-dev / test sample wedding. No real OSN profile

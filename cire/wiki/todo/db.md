@@ -5,7 +5,7 @@ related:
   - "[[index]]"
   - "[[monorepo-structure]]"
   - "[[invite-builder]]"
-last-reviewed: 2026-06-19
+last-reviewed: 2026-06-21
 ---
 
 # cire/db
@@ -35,5 +35,5 @@ Schema and migration work. See [[monorepo-structure]] for how this package fits 
 - [x] Add `dietary_requirements` column to rsvps (added as `dietary` text NOT NULL DEFAULT '' in migration `0002_add_rsvp_dietary.sql`; per-event dietary lives on `rsvps` row)
 - [ ] Retire deprecated `events.date` / `events.location` columns (kept in 0003 for backwards compatibility — D1 is forward-only so this needs a separate copy-and-drop migration)
 - [ ] Seed script for local development that exercises real `generatePublicId` / `generatePassword` (currently uses fixed JSON fixtures so tests stay deterministic)
-- [x] `db:push` / `db:seed` / `db:reset` / `db:generate` / `db:studio` scripts in `cire/db/package.json`; `seed/dev-seed.sql` mirrors `cire/api/src/data/*` for local D1 — see `cire/db/README.md`
-- [ ] DRY the dev seed — move `cire/api/src/data/{events,guests}.json` into `cire/db/seed/data/` (or a TS module) and have `cire/api/src/db/setup.ts` import from there, so `seed/dev-seed.sql` regenerates from a single source rather than being hand-mirrored
+- [x] `db:push` / `db:seed` / `db:reset` / `db:generate` / `db:studio` scripts in `cire/db/package.json`; `seed/dev-seed.sql` is now generated from `cire/db/seed/data/` for local D1 — see `cire/db/README.md`
+- [x] **DRY the dev seed** (`chore/cire-dry-dev-seed`) — the JSON fixtures (`cire/api/src/data/{events,guests}.json`) are gone; the canonical seed data now lives as TS in `cire/db/seed/data/` (`events.ts` + `guests.ts` + `wedding.ts`, barrelled as `@cire/db/seed`). `cire/api/src/db/setup.ts#seedDb` and the route/service tests import `@cire/db/seed`, and `seed/dev-seed.sql` is **generated** from the same modules via `cire/db/seed/generate.ts` (`bun run --cwd cire/db seed:generate`). A drift guard (`seed/seed.test.ts`, `seed:check`) fails CI if the committed SQL ever diverges, so the two consumers can no longer hand-mirror / drift. Approach chosen = generator + check-test (least machinery that removes hand-mirroring entirely; the SQL is now a pure artifact). Seeded bun:sqlite state is byte-identical to before (family/guest ids still minted via `crypto.randomUUID()` in `seedDb`; only the SQL gained the existing stable UUIDs it already used). All 633 `@cire/api` tests + the new `@cire/db` test stay green.
