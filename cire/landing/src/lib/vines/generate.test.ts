@@ -40,9 +40,8 @@ describe("generateField", () => {
       const anchoredToEdge = root.side < 0 ? root.x < width * 0.2 : root.x > width * 0.8;
       expect(anchoredToEdge).toBe(true);
     }
-    // Sides alternate down the page.
-    for (let i = 1; i < roots.length; i++) {
-      expect(roots[i]!.side).toBe((roots[i - 1]!.side * -1) as -1 | 1);
-    }
+    // Both edges are planted (mostly alternating, with occasional repeats).
+    expect(roots.some((root) => root.side < 0)).toBe(true);
+    expect(roots.some((root) => root.side > 0)).toBe(true);
   });
 });

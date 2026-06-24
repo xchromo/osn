@@ -78,21 +78,26 @@ interface StemOpts {
   gravity: number;
   side: -1 | 1;
   maxY: number;
+  /** Per-anchor chance of throwing a curling tendril off the stem mid-length. */
+  tendrilRate: number;
 }
 
-/** Turtle-walk a sinuous stem downward, returning its anchor polyline. */
+/** Turtle-walk a sinuous stem, returning its anchor polyline. */
 function growStem(r: Rng, o: StemOpts): Vec[] {
   const pts: Vec[] = [{ ...o.start }];
   let x = o.start.x;
   let y = o.start.y;
   let h = o.heading;
   const phase = r.range(0, TAU);
-  const freq = r.range(0.18, 0.3);
+  const freq = r.range(0.18, 0.34);
 
   for (let i = 1; i <= o.steps; i++) {
+    const along = (i - 1) / o.steps;
     h += Math.sin(phase + i * freq) * o.curl; // coherent S-curve spine
     h += gauss(r) * o.wander; // organic irregularity
-    h += o.side * o.inwardBias; // bend toward page centre
+    // Sweep inward, strongest near the root and easing off — so the vine arcs
+    // into the page rather than hugging the edge straight down.
+    h += o.side * o.inwardBias * (1 - along);
     h += (Math.PI / 2 - h) * o.gravity; // ease toward straight-down
     const step = o.stepLen * r.range(0.85, 1.15);
     x += Math.cos(h) * step;
@@ -105,9 +110,9 @@ function growStem(r: Rng, o: StemOpts): Vec[] {
 
 /** A capped logarithmic-spiral tendril leaving `origin` along `tangent`. */
 function tendril(r: Rng, origin: Vec, tangent: number, dir: -1 | 1): Vec[] {
-  const turns = r.range(0.7, 1.25);
-  const startR = r.range(14, 26);
-  const tightness = r.range(0.14, 0.22);
+  const turns = r.range(0.8, 1.7);
+  const startR = r.range(12, 34);
+  const tightness = r.range(0.12, 0.22);
   const steps = Math.max(12, Math.round(turns * 16));
   const total = turns * TAU;
   const baseAng = tangent + (dir * Math.PI) / 2;
@@ -199,11 +204,24 @@ function buildBranch(r: Rng, o: StemOpts, depth: number, budget: Budget, out: Vi
   }
 
   // Tendril curl at the tip (chirality alternates via a coin per call).
-  if (stem.length >= 2 && r.chance(depth === 0 ? 0.85 : 0.5)) {
+  if (stem.length >= 2 && r.chance(depth === 0 ? 0.92 : 0.6)) {
     const a = stem[stem.length - 2]!;
     const b = stem[stem.length - 1]!;
     const tan = Math.atan2(b.y - a.y, b.x - a.x);
     out.strands.push(smoothPath(tendril(r, b, tan, r.chance(0.5) ? 1 : -1)));
+  }
+
+  // Mid-stem tendril curls — these give the vine a curlier character than a
+  // stem that just flows down. Spaced out and capped so it stays graceful.
+  let curls = 0;
+  for (let i = 2; i < stem.length - 2 && curls < 3; i++) {
+    if (!r.chance(o.tendrilRate)) continue;
+    const a = stem[i - 1]!;
+    const b = stem[i + 1]!;
+    const tan = Math.atan2(b.y - a.y, b.x - a.x);
+    out.strands.push(smoothPath(tendril(r, stem[i]!, tan, r.chance(0.5) ? 1 : -1)));
+    curls++;
+    i += 1;
   }
 
   placeOrgans(r, stem, out.leaves, out.flowers, depth <= 1);
@@ -242,24 +260,77 @@ function buildBranch(r: Rng, o: StemOpts, depth: number, budget: Budget, out: Vi
 
 /** Deterministic root anchors down both edges — the "where vines come from". */
 export function computeRoots(width: number, height: number, r: Rng): Root[] {
-  const count = clamp(Math.round(height / 620), 3, 7);
+  // Denser than before so the page feels generously planted.
+  const count = clamp(Math.round(height / 360), 6, 13);
   const roots: Root[] = [];
   let side: -1 | 1 = r.chance(0.5) ? 1 : -1;
   for (let k = 0; k < count; k++) {
-    const yFrac = (k + 0.5 + r.jitter(0.32)) / count;
-    const y = clamp(height * (0.03 + 0.92 * yFrac), 0, height);
-    const x = side < 0 ? r.range(-30, 28) : width - r.range(-30, 28);
-    roots.push({ x, y, side, heading: Math.PI / 2 + side * r.range(0.22, 0.5) });
-    side = (side * -1) as -1 | 1;
+    const yFrac = (k + 0.5 + r.jitter(0.42)) / count;
+    const y = clamp(height * (0.02 + 0.94 * yFrac), 0, height);
+    const x = side < 0 ? r.range(-34, 36) : width - r.range(-34, 36);
+    // Wide heading spread: some dive down, some strike out almost horizontally
+    // into the page — the source of much of the directional variety.
+    roots.push({ x, y, side, heading: Math.PI / 2 + side * r.range(0.18, 1.0) });
+    // Mostly alternate edges, but occasionally repeat a side so the rhythm
+    // isn't perfectly regular.
+    if (r.chance(0.8)) side = (side * -1) as -1 | 1;
   }
   return roots;
 }
 
-/** Generate one vine from a root anchor. */
+/**
+ * Growth archetypes — each vine picks one, which is the main lever for "lots of
+ * variation in shape and direction". Tuples are [min, max] ranges.
+ */
+const STYLES = [
+  // Sweeper — long, confident arc striking deep into the page, gentle curl.
+  {
+    stepLen: [88, 122],
+    curl: [0.07, 0.13],
+    wander: [0.04, 0.07],
+    inward: [0.04, 0.08],
+    gravity: [0.015, 0.03],
+    branches: [2, 4],
+    tendril: [0.05, 0.1],
+  },
+  // Curler — short, tightly looping, low gravity so it coils rather than falls.
+  {
+    stepLen: [42, 66],
+    curl: [0.24, 0.42],
+    wander: [0.07, 0.12],
+    inward: [0.02, 0.05],
+    gravity: [0.004, 0.014],
+    branches: [3, 6],
+    tendril: [0.16, 0.26],
+  },
+  // Climber — medium, balanced, a steady inward drift with regular curl.
+  {
+    stepLen: [62, 92],
+    curl: [0.13, 0.22],
+    wander: [0.05, 0.09],
+    inward: [0.03, 0.065],
+    gravity: [0.012, 0.026],
+    branches: [3, 5],
+    tendril: [0.09, 0.17],
+  },
+  // Wanderer — wide, unpredictable swings; the loosest, most organic shape.
+  {
+    stepLen: [56, 90],
+    curl: [0.16, 0.3],
+    wander: [0.1, 0.16],
+    inward: [0.012, 0.045],
+    gravity: [0.005, 0.016],
+    branches: [2, 5],
+    tendril: [0.11, 0.2],
+  },
+] as const;
+
+/** Generate one vine from a root anchor, picking a random growth style. */
 export function generateVine(r: Rng, root: Root, width: number, height: number): Vine {
   const out: Vine = { strands: [], leaves: [], flowers: [], top: Infinity, bottom: -Infinity };
-  const stepLen = r.range(74, 104);
-  const steps = clamp(Math.round((height - root.y) / stepLen) + r.int(2, 5), 7, 20);
+  const s = r.pick(STYLES);
+  const stepLen = r.range(s.stepLen[0], s.stepLen[1]);
+  const steps = clamp(Math.round((height - root.y) / stepLen) + r.int(2, 6), 8, 26);
   buildBranch(
     r,
     {
@@ -267,15 +338,16 @@ export function generateVine(r: Rng, root: Root, width: number, height: number):
       heading: root.heading,
       steps,
       stepLen,
-      curl: r.range(0.1, 0.16),
-      wander: r.range(0.045, 0.075),
-      inwardBias: r.range(0.01, 0.022),
-      gravity: r.range(0.02, 0.04),
+      curl: r.range(s.curl[0], s.curl[1]),
+      wander: r.range(s.wander[0], s.wander[1]),
+      inwardBias: r.range(s.inward[0], s.inward[1]),
+      gravity: r.range(s.gravity[0], s.gravity[1]),
       side: root.side,
-      maxY: height + 120,
+      maxY: height + 140,
+      tendrilRate: r.range(s.tendril[0], s.tendril[1]),
     },
     0,
-    { n: r.int(3, 5) },
+    { n: r.int(s.branches[0], s.branches[1]) },
     out,
   );
   return out;
