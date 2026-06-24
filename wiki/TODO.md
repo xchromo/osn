@@ -207,10 +207,33 @@ Wedding-invite stack merged from cire.git (2026-06). Cire-internal feature work 
 - [x] **Per-section invite theming (#152)** — bounded, CSS-injection-safe fonts + colours; migration `0014`. See [[cire]]. (Moved to [[changelog/completed-features]].)
 - [x] **Any OSN user is a first-class organiser (#156)** — `ensureBootstrapOwner` 503 gate + `BOOTSTRAP_OWNER_PROFILE_ID` removed; migration `0015` drops `wed_bootstrap`. See [[cire-auth]]. (Moved to [[changelog/completed-features]].)
 - [x] **Organiser Security / Devices section (#155)** — `PasskeysView` (list/add/rename/remove) + passkey-only step-up in the portal `SecurityPanel`. See [[passkey-primary]]. (Moved to [[changelog/completed-features]].)
+- [x] **Host-preview RSVP is an interactive no-op** — the organiser host preview's RSVP was greyed out (`disabled` in preview mode); it's now fully interactive with submit short-circuited to a no-op + a "nothing you send here is saved" banner (`RsvpModal` `preview` prop). Lets a host feel the guest flow without writing RSVP data. See [[cire-landing]].
 - [ ] Pulse event-feed integration — surface cire weddings in Pulse's discovery/feed. Blocked on the mechanism decision (ARC-token pull from `cire/api` vs push-on-publish into `pulse/db`) — see Deferred Decisions.
 - [ ] Co-host **roles** — membership shipped (#148, read-only co-hosts); add a role column (`owner`/`editor`/`viewer`) so a co-host (partner / planner) can be granted write access short of ownership. See [[cire-auth]].
 - [ ] Guest claim-code → optional OSN account linking (frontend) — backend shipped; the guest-site "link my Pulse account" affordance remains (guests stay deliberately account-free — see [[cire-auth]]).
 - [ ] **IB-S-L1 / colour-allowlist duplication (#152)** — the bounded theming colour allowlist is duplicated between the cire-api validator and the cire/web render path; a future drift could let an un-validated value reach rendered CSS. Factor a single shared source of truth (one `@cire/*` module both import) so the CSS-injection-safe guarantee can't drift — see [[cire]].
+
+---
+
+## Cire Landing (`cire/landing`)
+
+Static marketing site for the apex `cireweddings.com`. Full design + deploy +
+domain-migration plan in [[cire-landing]].
+
+- [x] **Build `@cire/landing`** — static Astro + SolidJS + Tailwind v4 marketing site; brand tokens kept byte-identical to `cire/web`. Wax-seal "unveil" hero (`WaxSealHero` + `WaxSeal.motion.ts`), promise/features/how-it-works/craft/FAQ sections, hotlinked-Unsplash imagery (centralised + swappable in `lib/site.ts`), legal drafts, `SiteFooter`. See [[cire-landing]].
+- [x] **Interactive no-op demo invite** — in-page "See it live" invitation (`demo/DemoRsvp.tsx`); RSVP is fully interactive but never hits the network (test-asserted).
+- [x] **Hidden testimonials** — section designed but gated behind `SHOW_TESTIMONIALS = false` until real, permissioned quotes exist.
+- [x] **CI deploy job** — `deploy-cire-landing` ships to a **non-apex** Pages preview (`cire-landing.pages.dev`); apex untouched so live invites don't break.
+- [ ] **Create the `cire-landing` Pages project** in the Cloudflare account (once, before first CI deploy) — mirror `cire-organiser`. Optionally attach `new.cireweddings.com` as the preview custom domain.
+- [ ] **Apex cutover (separate, reviewed change)** — move `cire/web` → `invite.cireweddings.com` (+301 from old invite paths), `cire/organiser` → `host.cireweddings.com` (update WebAuthn `OSN_ORIGIN`/CORS), point `PUBLIC_ORGANISER_URL`/`SITE` at the new hosts, then flip `cire/landing` onto the apex. See [[cire-landing]], [[production-deploy]].
+- [ ] **Real hero/gallery art** — replace the hotlinked Unsplash placeholders in `lib/site.ts` with brand photography.
+- [ ] **Wire a real demo invite** — set `PUBLIC_DEMO_INVITE_URL` to a seeded read-only invitation so "See a live invite" links out instead of scrolling to the in-page demo.
+
+### Platform roadmap (withjoy parity)
+
+- [ ] **Gift registry** — first-class registry surface (parity with withjoy).
+- [ ] **Wedding-management platform** — budget, vendors, seating, timeline, guest comms — built out from the organiser dashboard (`host.cireweddings.com`). Multi-tenant `weddings` root already in place. See [[cire]].
+- [ ] **Marketing depth** — pricing page, case studies, blog/SEO content; flip testimonials live once permissioned.
 
 ---
 
