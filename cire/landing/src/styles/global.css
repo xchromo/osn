@@ -84,3 +84,78 @@
     transform: none;
   }
 }
+
+/* ── Generative vine backdrop (see VineCanvas.tsx) ───────────────────────────
+   A typed custom property so `--p` (per-vine growth progress, 0→1) interpolates
+   cleanly inside calc(). */
+@property --p {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+/* The page wrapper is the positioning context; the vine layer spans its full
+   content height and sits behind everything (so vines run the whole page) but
+   never adds scrollable area (height:100% of content, overflow clipped). */
+.page-root {
+  position: relative;
+}
+
+.vine-layer {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  z-index: -1;
+  overflow: clip;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.vine-layer svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Hairline sage stems; flowers carry a faint gold heart. non-scaling-stroke
+   keeps the line weight constant despite the stretch-to-fit viewBox. */
+.vine-stroke {
+  fill: none;
+  stroke: oklch(53% 0.045 150 / 0.6);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.vine-leaf,
+.vine-petal {
+  fill: oklch(50% 0.05 150 / 0.4);
+}
+
+.vine-heart {
+  fill: oklch(74.99% 0.0854 82.08 / 0.5);
+}
+
+/* Animated mode (JS hydrated): draw the stems on as --p advances, and fade the
+   leaves/flowers in just behind the growth front. */
+.vine-layer.is-animated .vine-stroke {
+  stroke-dasharray: 1;
+  stroke-dashoffset: calc(1 - var(--p, 1));
+}
+
+.vine-layer.is-animated .vine-organs {
+  opacity: clamp(0, calc((var(--p, 1) - 0.12) / 0.5), 1);
+}
+
+/* Reduced motion (and the no-JS baseline): show the vines fully drawn. */
+@media (prefers-reduced-motion: reduce) {
+  .vine-layer.is-animated .vine-stroke {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+
+  .vine-layer.is-animated .vine-organs {
+    opacity: 1;
+  }
+}

@@ -10,7 +10,7 @@ related:
   - "[[cire-auth]]"
   - "[[production-deploy]]"
   - "[[free-tier-limits]]"
-last-reviewed: 2026-06-24
+last-reviewed: 2026-06-25
 ---
 
 # Cire Landing
@@ -55,11 +55,13 @@ in the other.**
 ## Page structure (`src/pages/index.astro`)
 
 1. **Wax-seal hero** (`WaxSealHero.tsx` + `WaxSeal.motion.ts`) — the signature
-   interaction. The page opens as an envelope sealed with a gold wax disc
-   (monogram "C"); the seal lifts, the flap swings open, and the hero headline +
-   CTAs rise into place. Opens on tap/keyboard, or auto-opens after a beat.
-   Honours `prefers-reduced-motion` (snaps open). `client:load` — it's the first
-   paint and the thesis of the product in one gesture.
+   interaction. The **whole first screen is the front of a sealed envelope** (a
+   full-bleed flap + body with pocket seams and a gold wax disc, monogram "C", at
+   its heart). The seal lifts, the flap swings open about its top hinge, and the
+   envelope fades away to unveil the headline + CTAs beneath. Opens on tap
+   (anywhere)/keyboard, or auto-opens after a beat. Honours
+   `prefers-reduced-motion` (snaps open). `client:load` — first paint, and the
+   thesis of the product in one gesture.
 2. **Promise** — the editorial "paper vs soulless e-invite vs Cire" passage.
 3. **Features** — alternating image/text rows; every feature is something cire
    actually ships (reveal animation, per-guest greetings, live RSVPs, details/
@@ -89,6 +91,33 @@ The **same no-op treatment** was applied to the organiser **host preview** in
 It is now fully interactive, with submit short-circuited to a no-op and a "Nothing
 you send here is saved" banner (`RsvpModal`'s `preview` prop). A host can now feel
 the exact guest RSVP flow without polluting their own RSVP data.
+
+## Generative vine backdrop
+
+A procedural botanical backdrop runs behind the whole page (`VineCanvas.tsx` +
+`lib/vines/`). Vines emerge from the left/right page edges, meander down and
+inward, curl into logarithmic-spiral tendrils, and carry golden-angle
+(phyllotactic) leaves + the occasional flower — and they **"grow" (draw on) as
+you scroll past them**.
+
+- **Procedural + seeded.** A pure, deterministic generator (`lib/vines/generate.ts`)
+  builds the field from a seed via a seedable PRNG (`prng.ts`: xmur3 + mulberry32)
+  and a Catmull-Rom → cubic-Bézier smoother (`geometry.ts`). Stems are a
+  turtle-walk with layered sine+brownian curvature; branching is depth- and
+  budget-limited so it never becomes a bush. Same seed ⇒ same plant.
+- **SSR roots, client growth.** The server prerenders a deterministic baseline
+  (stable roots + a fully-drawn static field — also the no-JS / reduced-motion
+  fallback). On mount the client measures the real document, regenerates with a
+  **fresh per-load seed** (so every visit is subtly different), and animates.
+- **Scroll-linked draw-on.** Stems are STROKED with `pathLength="1"` +
+  `stroke-dasharray:1`; a lean passive-scroll + `requestAnimationFrame` loop maps
+  each vine's document band to a single CSS custom property `--p` (0→1), and CSS
+  draws the stroke (`stroke-dashoffset: calc(1 - var(--p))`) and fades the
+  leaves/flowers in just behind the growth front. One property write per in-view
+  vine per frame; `prefers-reduced-motion` shows the vines fully drawn. (Chosen
+  over CSS `view()` scroll-timelines because SVG sub-elements aren't reliably
+  tracked by view-timelines, and the JS map gives exact per-vine document
+  positioning. The `lib/vines/` math is unit-tested for determinism.)
 
 ## Imagery
 
