@@ -24,12 +24,24 @@ export interface Root {
   side: -1 | 1;
 }
 
+export interface Strand {
+  /** Smooth stroked path data. */
+  d: string;
+  /**
+   * Normalized [0,1] positions within the vine's vertical span where this
+   * strand's drawing starts (a0) and finishes (a1). Keyed to the SAME growth
+   * front (`--p`) as everything else, so a tendril only draws once the stem has
+   * reached its attachment point — and recedes with it on scroll-up.
+   */
+  a0: number;
+  a1: number;
+}
+
 export interface Leaf {
   /** Filled almond path data. */
   d: string;
-  /** Base attachment point — used as the scale-in transform origin. */
-  ox: number;
-  oy: number;
+  /** Normalized [0,1] position within the vine's span at which the leaf reveals. */
+  a: number;
 }
 
 export interface Flower {
@@ -37,11 +49,13 @@ export interface Flower {
   cx: number;
   cy: number;
   cr: number;
+  /** Normalized [0,1] reveal position within the vine's span. */
+  a: number;
 }
 
 export interface Vine {
   /** Stroked stem + branch + tendril paths, in draw order (base → tip). */
-  strands: string[];
+  strands: Strand[];
   leaves: Leaf[];
   flowers: Flower[];
   /** Vertical span in canvas px — drives the scroll-linked growth mapping. */
@@ -176,7 +190,8 @@ function placeOrgans(r: Rng, stem: Vec[], leaves: Leaf[], flowers: Flower[], wan
     const pitch = r.range(0.35, 0.6);
     const ang = f.tan + side * (Math.PI / 2 - pitch); // outward, leaning to tip
     const leafLen = r.range(22, 40) * (1 - 0.3 * (k / n));
-    leaves.push({ d: leafPath(f.pos, ang, leafLen), ox: f.pos.x, oy: f.pos.y });
+    // `a` temporarily holds the raw y; normalised to [0,1] in generateVine.
+    leaves.push({ d: leafPath(f.pos, ang, leafLen), a: f.pos.y });
   }
   if (wantFlower && r.chance(0.75)) {
     const f = arcFrame(stem, r.range(0.86, 0.97));
@@ -186,7 +201,7 @@ function placeOrgans(r: Rng, stem: Vec[], leaves: Leaf[], flowers: Flower[], wan
     for (let i = 0; i < 5; i++) {
       petals.push(leafPath(f.pos, rot + (i * TAU) / 5, R));
     }
-    flowers.push({ petals, cx: f.pos.x, cy: f.pos.y, cr: R * 0.3 });
+    flowers.push({ petals, cx: f.pos.x, cy: f.pos.y, cr: R * 0.3, a: f.pos.y });
   }
 }
 
@@ -194,21 +209,33 @@ interface Budget {
   n: number;
 }
 
+/**
+ * Smooth a polyline into a stroked strand and record its raw y-extent in
+ * a0/a1 (normalised later) so its draw-on stays locked to the growth front.
+ */
+function pushStrand(out: Vine, pts: Vec[]) {
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const p of pts) {
+    if (p.y < top) top = p.y;
+    if (p.y > bottom) bottom = p.y;
+  }
+  if (top < out.top) out.top = top;
+  if (bottom > out.bottom) out.bottom = bottom;
+  out.strands.push({ d: smoothPath(pts), a0: top, a1: bottom });
+}
+
 /** Recursively build a stem + its sparse branches, tendrils and organs. */
 function buildBranch(r: Rng, o: StemOpts, depth: number, budget: Budget, out: Vine) {
   const stem = growStem(r, o);
-  out.strands.push(smoothPath(stem));
-  for (const p of stem) {
-    if (p.y < out.top) out.top = p.y;
-    if (p.y > out.bottom) out.bottom = p.y;
-  }
+  pushStrand(out, stem);
 
   // Tendril curl at the tip (chirality alternates via a coin per call).
   if (stem.length >= 2 && r.chance(depth === 0 ? 0.92 : 0.6)) {
     const a = stem[stem.length - 2]!;
     const b = stem[stem.length - 1]!;
     const tan = Math.atan2(b.y - a.y, b.x - a.x);
-    out.strands.push(smoothPath(tendril(r, b, tan, r.chance(0.5) ? 1 : -1)));
+    pushStrand(out, tendril(r, b, tan, r.chance(0.5) ? 1 : -1));
   }
 
   // Mid-stem tendril curls — these give the vine a curlier character than a
@@ -219,7 +246,7 @@ function buildBranch(r: Rng, o: StemOpts, depth: number, budget: Budget, out: Vi
     const a = stem[i - 1]!;
     const b = stem[i + 1]!;
     const tan = Math.atan2(b.y - a.y, b.x - a.x);
-    out.strands.push(smoothPath(tendril(r, stem[i]!, tan, r.chance(0.5) ? 1 : -1)));
+    pushStrand(out, tendril(r, stem[i]!, tan, r.chance(0.5) ? 1 : -1));
     curls++;
     i += 1;
   }
@@ -350,6 +377,22 @@ export function generateVine(r: Rng, root: Root, width: number, height: number):
     { n: r.int(s.branches[0], s.branches[1]) },
     out,
   );
+
+  // Normalise every element's raw y into a [0,1] reveal position within the
+  // vine's span, so strokes, tendrils, leaves and flowers all draw/recede in
+  // lockstep with the single growth front (`--p`). A small minimum window keeps
+  // near-horizontal strands from dividing by zero.
+  const span = Math.max(1, out.bottom - out.top);
+  for (const st of out.strands) {
+    // Cap the start a touch below 1 so every strand still has room to finish
+    // drawing by the time the front reaches the bottom of the vine.
+    const a0 = clamp((st.a0 - out.top) / span, 0, 0.97);
+    const t1 = clamp((st.a1 - out.top) / span, 0, 1);
+    st.a0 = a0;
+    st.a1 = Math.min(1, Math.max(t1, a0 + 0.03));
+  }
+  for (const leaf of out.leaves) leaf.a = clamp((leaf.a - out.top) / span, 0, 1);
+  for (const flower of out.flowers) flower.a = clamp((flower.a - out.top) / span, 0, 1);
   return out;
 }
 

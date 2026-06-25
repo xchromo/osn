@@ -21,10 +21,19 @@ describe("generateField", () => {
     expect(field.vines.length).toBeGreaterThanOrEqual(3);
     for (const vine of field.vines) {
       expect(vine.strands.length).toBeGreaterThanOrEqual(1);
-      // Every strand is a smooth path starting with a moveto.
-      for (const d of vine.strands) expect(d.startsWith("M ")).toBe(true);
-      // Leaves carry filled, closed path data.
-      for (const leaf of vine.leaves) expect(leaf.d.endsWith("Z")).toBe(true);
+      // Every strand is a smooth path with a normalized draw window a0 < a1.
+      for (const strand of vine.strands) {
+        expect(strand.d.startsWith("M ")).toBe(true);
+        expect(strand.a1).toBeGreaterThan(strand.a0);
+        expect(strand.a0).toBeGreaterThanOrEqual(0);
+        expect(strand.a1).toBeLessThanOrEqual(1.001);
+      }
+      // Leaves carry filled, closed path data + a reveal point in [0,1].
+      for (const leaf of vine.leaves) {
+        expect(leaf.d.endsWith("Z")).toBe(true);
+        expect(leaf.a).toBeGreaterThanOrEqual(0);
+        expect(leaf.a).toBeLessThanOrEqual(1);
+      }
     }
   });
 

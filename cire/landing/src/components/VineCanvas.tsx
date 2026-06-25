@@ -115,16 +115,25 @@ export function VineCanvas() {
               style={{ "--p": animated() ? "0" : "1" }}
             >
               <For each={vine.strands}>
-                {(d) => <path class="vine-stroke" d={d} pathLength="1" />}
+                {(strand) => (
+                  <path
+                    class="vine-stroke"
+                    d={strand.d}
+                    pathLength="1"
+                    style={{ "--a0": strand.a0, "--a1": strand.a1 }}
+                  />
+                )}
               </For>
               <g class="vine-organs">
-                <For each={vine.leaves}>{(leaf) => <path class="vine-leaf" d={leaf.d} />}</For>
+                <For each={vine.leaves}>
+                  {(leaf) => <path class="vine-leaf" d={leaf.d} style={{ "--a": leaf.a }} />}
+                </For>
                 <For each={vine.flowers}>
                   {(flower) => (
-                    <>
+                    <g style={{ "--a": flower.a }}>
                       <For each={flower.petals}>{(d) => <path class="vine-petal" d={d} />}</For>
                       <circle class="vine-heart" cx={flower.cx} cy={flower.cy} r={flower.cr} />
-                    </>
+                    </g>
                   )}
                 </For>
               </g>

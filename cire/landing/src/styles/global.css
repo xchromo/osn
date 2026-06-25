@@ -86,12 +86,30 @@
 }
 
 /* ── Generative vine backdrop (see VineCanvas.tsx) ───────────────────────────
-   A typed custom property so `--p` (per-vine growth progress, 0→1) interpolates
-   cleanly inside calc(). */
+   Typed custom properties so the growth maths interpolates cleanly in calc().
+   `--p` is the per-vine growth front (0→1, set from scroll). `--a0`/`--a1` are a
+   strand's draw window and `--a` an organ's reveal point — both normalized
+   positions within the vine's span, so every element draws/recedes locked to
+   the same front (a tendril only appears once the stem reaches it). */
 @property --p {
   syntax: "<number>";
   inherits: true;
   initial-value: 1;
+}
+@property --a0 {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+@property --a1 {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+@property --a {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
 }
 
 /* The page wrapper is the positioning context; the vine layer spans its full
@@ -137,15 +155,18 @@
   fill: oklch(74.99% 0.0854 82.08 / 0.5);
 }
 
-/* Animated mode (JS hydrated): draw the stems on as --p advances, and fade the
-   leaves/flowers in just behind the growth front. */
+/* Animated mode (JS hydrated): each strand draws only across its own window
+   [--a0, --a1] of the growth front, so a tendril stays attached to the stem and
+   recedes with it on scroll-up. Each leaf/flower reveals as the front passes its
+   own point --a. */
 .vine-layer.is-animated .vine-stroke {
   stroke-dasharray: 1;
-  stroke-dashoffset: calc(1 - var(--p, 1));
+  stroke-dashoffset: clamp(0, calc((var(--a1, 1) - var(--p, 1)) / (var(--a1, 1) - var(--a0, 0))), 1);
 }
 
-.vine-layer.is-animated .vine-organs {
-  opacity: clamp(0, calc((var(--p, 1) - 0.12) / 0.5), 1);
+.vine-layer.is-animated .vine-leaf,
+.vine-layer.is-animated .vine-organs > g {
+  opacity: clamp(0, calc((var(--p, 1) - var(--a, 0)) * 7), 1);
 }
 
 /* Reduced motion (and the no-JS baseline): show the vines fully drawn. */
@@ -155,7 +176,8 @@
     stroke-dashoffset: 0;
   }
 
-  .vine-layer.is-animated .vine-organs {
+  .vine-layer.is-animated .vine-leaf,
+  .vine-layer.is-animated .vine-organs > g {
     opacity: 1;
   }
 }
