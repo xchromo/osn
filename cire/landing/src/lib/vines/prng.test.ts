@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { smoothPath, vec } from "./geometry";
-import { makeRng } from "./prng";
+import { makeRng, randomSeed } from "./prng";
 
 describe("makeRng", () => {
   it("is deterministic for a given seed (server/client parity)", () => {
@@ -32,6 +32,22 @@ describe("makeRng", () => {
       expect(i2).toBeLessThanOrEqual(4);
       expect(Number.isInteger(i2)).toBe(true);
     }
+  });
+});
+
+describe("randomSeed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns a non-empty url-safe string when crypto is available", () => {
+    const s = randomSeed();
+    expect(typeof s).toBe("string");
+    expect(s.length).toBeGreaterThan(0);
+    expect(s).toMatch(/^[a-z0-9]+$/);
+  });
+
+  it("falls back to the static constant when crypto is unavailable", () => {
+    vi.stubGlobal("crypto", undefined);
+    expect(randomSeed()).toBe("cire-static-seed");
   });
 });
 

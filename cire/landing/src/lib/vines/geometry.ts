@@ -9,19 +9,8 @@ export interface Vec {
 }
 
 export const vec = (x: number, y: number): Vec => ({ x, y });
-export const add = (a: Vec, b: Vec): Vec => ({ x: a.x + b.x, y: a.y + b.y });
 export const sub = (a: Vec, b: Vec): Vec => ({ x: a.x - b.x, y: a.y - b.y });
-export const scale = (a: Vec, k: number): Vec => ({ x: a.x * k, y: a.y * k });
 export const len = (a: Vec): number => Math.hypot(a.x, a.y);
-
-/** Unit vector along an angle (radians). 0 = +x (right), PI/2 = +y (down in SVG). */
-export const fromAngle = (a: number): Vec => ({ x: Math.cos(a), y: Math.sin(a) });
-
-/** Left-hand normal of a heading angle (perpendicular, pointing to the stem's left). */
-export const normalOf = (a: number): Vec => ({
-  x: Math.cos(a + Math.PI / 2),
-  y: Math.sin(a + Math.PI / 2),
-});
 
 const n = (v: number): string => {
   // Compact, locale-independent number formatting for path data (≤2 dp).
@@ -54,11 +43,4 @@ export function smoothPath(points: readonly Vec[], tension = 1): string {
     d += ` C ${n(c1.x)} ${n(c1.y)} ${n(c2.x)} ${n(c2.y)} ${n(p2.x)} ${n(p2.y)}`;
   }
   return d;
-}
-
-/** Rough arc length of a polyline — used to budget leaves/branches by distance. */
-export function polylineLength(points: readonly Vec[]): number {
-  let total = 0;
-  for (let i = 1; i < points.length; i++) total += len(sub(points[i]!, points[i - 1]!));
-  return total;
 }

@@ -36,15 +36,17 @@ export function VineCanvas() {
   let layerRef!: HTMLDivElement;
 
   onMount(() => {
-    const measure = () => ({
-      w: document.documentElement.clientWidth,
-      h: Math.max(document.documentElement.scrollHeight, window.innerHeight),
-    });
+    // A fresh per-load seed, kept STABLE across resizes so a genuine resize
+    // re-lays-out the same plant rather than reshuffling into a new one.
+    const seed = randomSeed();
+    let lastW = 0;
 
-    // Regenerate at the real document size with a fresh seed (unique per load).
+    // Regenerate at the real document size.
     const regen = () => {
-      const { w, h } = measure();
-      setField(generateField(randomSeed(), w, h));
+      const w = document.documentElement.clientWidth;
+      const h = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+      lastW = w;
+      setField(generateField(seed, w, h));
     };
     regen();
     setAnimated(true);
@@ -54,15 +56,18 @@ export function VineCanvas() {
     let ticking = false;
     const update = () => {
       ticking = false;
-      const vh = window.innerHeight;
-      const sY = window.scrollY;
+      const front = window.scrollY + window.innerHeight * TRIGGER;
       const groups = layerRef.querySelectorAll<SVGGElement>("[data-vine]");
       for (const g of groups) {
         const top = Number(g.dataset.top);
-        const bottom = Number(g.dataset.bottom);
-        const span = Math.max(1, bottom - top);
-        const p = Math.min(1, Math.max(0, (sY + vh * TRIGGER - top) / span));
-        g.style.setProperty("--p", p.toFixed(3));
+        const span = Math.max(1, Number(g.dataset.bottom) - top);
+        const p = Math.min(1, Math.max(0, (front - top) / span)).toFixed(3);
+        // Skip redundant writes: a vine whose progress is unchanged (any
+        // off-screen vine pinned at 0 or 1) needs no style recalc or repaint —
+        // this bounds per-frame paint to the few vines crossing the front.
+        if (g.dataset.p === p) continue;
+        g.dataset.p = p;
+        g.style.setProperty("--p", p);
       }
     };
     const onScroll = () => {
@@ -76,7 +81,10 @@ export function VineCanvas() {
     const onResize = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
-        regen();
+        // Only rebuild on a real WIDTH change. Height-only resizes (the mobile
+        // URL bar showing/hiding during scroll) must NOT trigger the costly full
+        // regenerate + SVG rebuild mid-interaction; re-run growth either way.
+        if (Math.abs(document.documentElement.clientWidth - lastW) >= 24) regen();
         requestAnimationFrame(update);
       }, 200);
     };
