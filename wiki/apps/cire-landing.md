@@ -10,7 +10,7 @@ related:
   - "[[cire-auth]]"
   - "[[production-deploy]]"
   - "[[free-tier-limits]]"
-last-reviewed: 2026-06-25
+last-reviewed: 2026-06-27
 ---
 
 # Cire Landing
@@ -177,6 +177,15 @@ organiser dashboard. Tracked, not yet built:
 
 The data model is already multi-tenant (`weddings` root), so platformising is a
 product decision, not a migration — see [[cire]].
+
+## Deferred
+
+- **Wax-seal graphic** — the hero's seal disc (`WaxSealHero.tsx`) is a
+  PLACEHOLDER (gold radial-gradient + Cormorant "C" monogram). It is to be
+  replaced by a separately designed wax-seal asset. The component is structured
+  so only the inner seal `<div>` needs swapping — the full-page envelope, the
+  open/seal-break animation (`WaxSeal.motion.ts`) and all wiring stay. Marked
+  with `TODO(design)` in the source.
 
 ## Related
 

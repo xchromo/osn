@@ -188,7 +188,12 @@ export function WaxSealHero(props: WaxSealHeroProps) {
           }}
         />
 
-        {/* The wax seal, embossed with the Cire monogram, at the heart. */}
+        {/* The wax seal, embossed with the Cire monogram, at the heart.
+            TODO(design): PLACEHOLDER graphic — to be replaced by a separately
+            designed wax-seal asset. Swap only the inner seal <div> below (the
+            gold gradient disc + monogram); the surrounding button, layout and
+            open/animation wiring stay as-is. Deferred per product — see
+            wiki/apps/cire-landing.md "Deferred". */}
         <div class="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
           <button
             ref={sealRef}
