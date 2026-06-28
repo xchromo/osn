@@ -239,10 +239,12 @@ domain-migration plan in [[cire-landing]].
 
 ---
 
-## Landing (`osn/landing`)
+## Landing (`osn/landing` + `pulse/landing`)
 
-- [ ] Design and build landing page content
-- [ ] Deploy (Vercel/Cloudflare)
+- [x] **Build `@osn/landing`** — static Astro + SolidJS + Tailwind v4 marketing site; dark-grey / dotted-network identity (`ConstellationCanvas` backdrop + `ConnectionsHero`), connections-led copy, Apps/Principles/FAQ sections, legal drafts, tight CSP, `data-reveal` reveal. Space Grotesk + Inter. Dev port 4324. See [[osn-landing]].
+- [x] **Build `@pulse/landing`** — static Astro + SolidJS + Tailwind v4 marketing site following `pulse/DESIGN.md`; colourful + fun (`PulseField` backdrop + `PulseHero`, colourful Categories showcase, Venues lineup teaser). Instrument Serif / Geist / Geist Mono. Dev port 4325; root script `dev:pulse-landing`. See [[pulse-landing]].
+- [ ] **CI deploy + domains** — no deploy workflow yet for either site (cf. cire's `deploy-landing-preview.yml`); add Pages projects + workflows and replace the placeholder `SITE` / `PUBLIC_APP_URL` values once marketing + app hosts are chosen. See [[osn-landing]], [[pulse-landing]].
+- [ ] **Marketing depth** — pricing, deeper feature pages, real imagery/screenshots, SEO/blog content.
 
 ---
 

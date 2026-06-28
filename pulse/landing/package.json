@@ -1,15 +1,15 @@
 {
-  "name": "@osn/landing",
-  "version": "0.0.7",
+  "name": "@pulse/landing",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev --port 4324",
+    "dev": "astro dev --port 4325",
     "build": "astro build",
-    "preview": "astro preview --port 4324",
+    "preview": "astro preview --port 4325",
+    "check": "bunx --bun astro check",
     "test": "vitest run",
-    "test:run": "vitest run",
-    "check": "bunx --bun astro check"
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@astrojs/solid-js": "^6.0.1",
