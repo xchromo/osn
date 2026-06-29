@@ -1,18 +1,10 @@
-import { createSignal, For, onCleanup, onMount } from "solid-js";
+import { For } from "solid-js";
 
 interface PulseHeroProps {
   /** Primary CTA target — the Pulse app. */
   appUrl: string;
   /** Secondary CTA target — an in-page anchor (e.g. "#how-it-works"). */
   howHref: string;
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
 }
 
 // A few playful "live" event-card chips that float around the headline. Pure
@@ -28,27 +20,18 @@ const CHIPS = [
  * The hero — editorial and lively. An Instrument Serif headline with an italic
  * accent word (the DESIGN.md hero pattern), a Geist subhead, a few faux "live"
  * stats and floating colourful event chips, and two CTAs. The pulsing-dot energy
- * comes from the page-wide {@link PulseField} behind it; here we add a gentle
- * one-shot entrance. Honours reduced motion (snaps in) and is keyboard-operable.
+ * comes from the page-wide {@link PulseField} behind it.
+ *
+ * It is rendered STATICALLY (no client directive) and is visible by default: the
+ * entrance is a pure-CSS animation (`.pulse-rise`, gated behind
+ * `prefers-reduced-motion: no-preference` in global.css), so the hero never
+ * depends on JS hydration to appear. Reduced motion / no-JS simply show it at
+ * rest.
  */
 export function PulseHero(props: PulseHeroProps) {
-  let rootRef!: HTMLElement;
-  const [shown, setShown] = createSignal(false);
-
-  onMount(() => {
-    if (prefersReducedMotion()) {
-      setShown(true);
-      return;
-    }
-    // Next frame so the initial (hidden) state paints first, then the entrance.
-    const raf = requestAnimationFrame(() => setShown(true));
-    onCleanup(() => cancelAnimationFrame(raf));
-  });
-
   return (
     <section
-      ref={rootRef}
-      class="relative flex min-h-[100svh] items-center justify-center overflow-hidden px-6 py-24 text-center"
+      class="relative flex min-h-[100svh] flex-col items-center justify-center overflow-hidden px-6 py-24 text-center"
       aria-label="Pulse — find your scene"
     >
       {/* Soft coral bloom behind the headline. */}
@@ -66,14 +49,12 @@ export function PulseHero(props: PulseHeroProps) {
         <For each={CHIPS}>
           {(chip, i) => (
             <div
-              class="absolute rounded-xl border bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-left shadow-sm transition-all duration-700"
+              class="pulse-rise absolute rounded-xl border bg-[var(--color-surface-raised)] px-3.5 py-2.5 text-left shadow-sm"
               style={{
                 "border-color": "var(--color-border)",
                 top: ["14%", "22%", "64%", "70%"][i()],
                 left: ["10%", "78%", "8%", "80%"][i()],
-                opacity: shown() ? "1" : "0",
-                transform: shown() ? "translateY(0)" : "translateY(1.25rem)",
-                "transition-delay": `${300 + i() * 140}ms`,
+                "animation-delay": `${300 + i() * 140}ms`,
               }}
             >
               <p
@@ -91,20 +72,13 @@ export function PulseHero(props: PulseHeroProps) {
         </For>
       </div>
 
-      <div
-        class="relative mx-auto max-w-[46rem] transition-all duration-700"
-        style={{
-          opacity: shown() ? "1" : "0",
-          transform: shown() ? "translateY(0)" : "translateY(1.5rem)",
-        }}
-      >
+      <div class="pulse-rise relative mx-auto w-full max-w-[46rem]">
         <p class="mb-5 inline-flex items-center gap-2 font-mono text-[0.72rem] tracking-[0.28em] text-[var(--pulse-accent-strong)] uppercase">
           <span class="dot-mark" aria-hidden="true" />
           What&rsquo;s happening near you
         </p>
-        <h1 class="font-display text-[clamp(2.6rem,8vw,5rem)] leading-[1.04] font-normal text-[var(--color-text)]">
-          Find what&rsquo;s <span class="text-[var(--pulse-accent)] italic">happening</span>
-          <br />
+        <h1 class="font-display text-[clamp(2.2rem,8vw,5rem)] leading-[1.05] font-normal text-balance text-[var(--color-text)]">
+          Find what&rsquo;s <span class="text-[var(--pulse-accent)] italic">happening</span>{" "}
           tonight.
         </h1>
         <p class="font-body mx-auto mt-6 max-w-[34rem] text-[1.05rem] leading-[1.7] text-[var(--color-text-muted)]">

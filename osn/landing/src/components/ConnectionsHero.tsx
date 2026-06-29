@@ -165,7 +165,7 @@ export function ConnectionsHero(props: ConnectionsHeroProps) {
 
   return (
     <section
-      class="relative flex min-h-[100svh] items-center justify-center overflow-hidden px-6 py-24 text-center"
+      class="relative flex min-h-[100svh] flex-col items-center justify-center overflow-hidden px-6 py-24 text-center"
       aria-label="OSN — your social graph, your control"
     >
       {/* The connections graph, behind the headline. */}
@@ -182,11 +182,11 @@ export function ConnectionsHero(props: ConnectionsHeroProps) {
         }}
       />
 
-      <div class="relative mx-auto max-w-[48rem]">
+      <div class="relative mx-auto w-full max-w-[48rem]">
         <p class="font-body text-accent mb-5 text-[0.74rem] font-medium tracking-[0.26em] uppercase">
           Open Social Network
         </p>
-        <h1 class="font-display text-text text-[clamp(2.6rem,8vw,5rem)] leading-[1.05] font-bold tracking-[-0.02em]">
+        <h1 class="font-display text-text text-[clamp(2.1rem,7.5vw,5rem)] leading-[1.05] font-bold tracking-[-0.02em] text-balance">
           Your social graph,
           <br />
           your control.

@@ -172,6 +172,34 @@
   }
 }
 
+/* Hero entrance — pure CSS so the hero is visible WITHOUT JS / hydration. The
+   resting state is fully visible (opacity:1); only when motion is allowed do we
+   play a one-shot fade-up. `both` fill keeps the end state after it runs; the
+   `animation-delay` set inline on the floating chips staggers them. No-JS,
+   reduced-motion and pre-hydration all show the content at rest. */
+@layer utilities {
+  .pulse-rise {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-rise {
+    animation: pulse-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes pulse-rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* Small reusable dot-motif utility — a coral disc with a soft halo, used by the
    wordmark and a few accents to echo the app's "pulsing coral dot" mark. */
 @layer utilities {
