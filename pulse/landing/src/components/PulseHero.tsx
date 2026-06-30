@@ -1,10 +1,18 @@
-import { For } from "solid-js";
+import { createSignal, For, onMount } from "solid-js";
 
 interface PulseHeroProps {
   /** Primary CTA target — the Pulse app. */
   appUrl: string;
   /** Secondary CTA target — an in-page anchor (e.g. "#how-it-works"). */
   howHref: string;
+}
+
+/** Coarse, IP-derived location from the `/api/geo` Pages Function. */
+interface Geo {
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  count: number | null;
 }
 
 // A few playful "live" event-card chips that float around the headline. Pure
@@ -18,17 +26,56 @@ const CHIPS = [
 
 /**
  * The hero — editorial and lively. An Instrument Serif headline with an italic
- * accent word (the DESIGN.md hero pattern), a Geist subhead, a few faux "live"
- * stats and floating colourful event chips, and two CTAs. The pulsing-dot energy
- * comes from the page-wide {@link PulseField} behind it.
+ * accent word (the DESIGN.md hero pattern), a Geist subhead, and two CTAs. The
+ * pulsing-dot energy comes from the page-wide {@link PulseField} behind it.
  *
- * It is rendered STATICALLY (no client directive) and is visible by default: the
- * entrance is a pure-CSS animation (`.pulse-rise`, gated behind
- * `prefers-reduced-motion: no-preference` in global.css), so the hero never
- * depends on JS hydration to appear. Reduced motion / no-JS simply show it at
- * rest.
+ * All content is server-rendered visible (the entrance is a pure-CSS animation,
+ * `.pulse-rise`), so the hero never depends on JS to appear. Hydration only
+ * *enhances* it: a one-shot fetch to the `/api/geo` Pages Function turns the
+ * generic line + CTA into a location-aware "{n} events around {region}" hook
+ * that sends the visitor to their nearest city. No geo (no JS, fetch fails, or
+ * the function is absent) → the generic "near you" copy simply stays.
  */
 export function PulseHero(props: PulseHeroProps) {
+  const [geo, setGeo] = createSignal<Geo | null>(null);
+
+  onMount(() => {
+    if (typeof fetch !== "function") return;
+    try {
+      void fetch("/api/geo")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: Geo | null) => {
+          if (d && (d.city || d.region)) setGeo(d);
+          return null;
+        })
+        .catch(() => {
+          /* keep the generic fallback */
+        });
+    } catch {
+      /* keep the generic fallback */
+    }
+  });
+
+  // The place we headline the count with (region preferred), and the city we
+  // point the CTA at. Both degrade gracefully.
+  const place = () => geo()?.region ?? geo()?.city ?? null;
+  const city = () => geo()?.city ?? geo()?.region ?? null;
+  const count = () => geo()?.count ?? null;
+
+  const countLabel = () => {
+    const p = place();
+    const n = count();
+    if (p && n) return `${n} events around ${p} right now`;
+    if (p) return `Events happening around ${p} right now`;
+    return "Live events happening near you right now";
+  };
+
+  const ctaLabel = () => (city() ? `What’s on in ${city()}` : "Find events");
+  const ctaHref = () => {
+    const c = city();
+    return c ? `${props.appUrl}?near=${encodeURIComponent(c)}` : props.appUrl;
+  };
+
   return (
     <section
       class="relative flex min-h-[100svh] flex-col items-center justify-center overflow-hidden px-6 py-24 text-center"
@@ -86,34 +133,21 @@ export function PulseHero(props: PulseHeroProps) {
           in the loop, and let your calendar do the remembering.
         </p>
 
-        {/* Faux live stats — fun, grounded in real Pulse vocabulary. */}
-        <dl class="mx-auto mt-9 flex max-w-[30rem] items-stretch justify-center gap-6 sm:gap-10">
-          <div>
-            <dt class="font-mono text-[0.62rem] tracking-[0.18em] text-[var(--color-text-muted)] uppercase">
-              Tonight
-            </dt>
-            <dd class="font-display text-[1.9rem] leading-none text-[var(--pulse-accent)]">128</dd>
-          </div>
-          <div class="border-x border-[var(--color-border)] px-6 sm:px-10">
-            <dt class="font-mono text-[0.62rem] tracking-[0.18em] text-[var(--color-text-muted)] uppercase">
-              Near you
-            </dt>
-            <dd class="font-display text-[1.9rem] leading-none text-[var(--cat-3)]">12</dd>
-          </div>
-          <div>
-            <dt class="font-mono text-[0.62rem] tracking-[0.18em] text-[var(--color-text-muted)] uppercase">
-              Friends out
-            </dt>
-            <dd class="font-display text-[1.9rem] leading-none text-[var(--cat-2)]">7</dd>
-          </div>
-        </dl>
+        {/* Location-aware "what's on near you" line (IP geo, not account data). */}
+        <p
+          class="mx-auto mt-8 inline-flex items-center gap-2 font-mono text-[0.7rem] tracking-[0.14em] text-[var(--color-text-muted)] uppercase"
+          aria-live="polite"
+        >
+          <span class="dot-mark" aria-hidden="true" />
+          {countLabel()}
+        </p>
 
-        <div class="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <div class="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
-            href={props.appUrl}
+            href={ctaHref()}
             class="font-body w-full rounded-full bg-[var(--pulse-accent)] px-7 py-3.5 text-[0.9rem] font-semibold text-[var(--color-bg)] transition-transform duration-200 hover:scale-[1.03] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pulse-accent-strong)] sm:w-auto"
           >
-            Find events
+            {ctaLabel()}
           </a>
           <a
             href={props.howHref}

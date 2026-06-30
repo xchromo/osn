@@ -1,5 +1,5 @@
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { PulseHero } from "./PulseHero";
 
@@ -8,32 +8,9 @@ const baseProps = {
   howHref: "#how-it-works",
 };
 
-function setReducedMotion(reduced: boolean) {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn().mockImplementation((query: string) => ({
-      matches: reduced,
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    })),
-  );
-}
-
 describe("PulseHero", () => {
   afterEach(() => {
     cleanup();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  beforeEach(() => {
-    // The reduced-motion path is the most robust: it snaps the content visible
-    // synchronously on mount without waiting on requestAnimationFrame.
-    setReducedMotion(true);
   });
 
   it("renders the editorial headline with its italic accent word", () => {
@@ -43,7 +20,9 @@ describe("PulseHero", () => {
     expect(getByText("happening")).toBeTruthy();
   });
 
-  it("exposes both CTAs with the correct targets", async () => {
+  it("falls back to the generic CTA when geo is unavailable", async () => {
+    // No /api/geo in the test env, so the location-aware enhancement never
+    // resolves and the hero keeps its generic copy + app-root CTA.
     const { getByRole } = render(() => <PulseHero {...baseProps} />);
 
     await waitFor(() => {

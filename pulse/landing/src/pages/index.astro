@@ -11,9 +11,9 @@ import FinalCta from '../components/sections/FinalCta.astro'
 import { APP_URL, HOW_ANCHOR } from '../lib/site'
 ---
 <BaseLayout>
-  {/* Hero renders statically (no client directive) and is visible by default —
-      the entrance is pure CSS, so the first screen never waits on JS. */}
-  <PulseHero appUrl={APP_URL} howHref={HOW_ANCHOR} />
+  {/* Hero content is server-rendered visible (CSS entrance), so it never waits
+      on JS; client:load only *enhances* it with the IP-geo "near you" hook. */}
+  <PulseHero client:load appUrl={APP_URL} howHref={HOW_ANCHOR} />
 
   <main>
     <Promise />

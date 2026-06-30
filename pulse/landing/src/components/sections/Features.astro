@@ -4,6 +4,9 @@
 // with a serif glyph, echoing DESIGN.md's "ph-1..ph-8" gradient placeholder +
 // category-glyph system. Every feature here is something Pulse actually ships
 // (see README "Pulse (Events)").
+// Four core capabilities — the ones that actually sell going out. Every one is
+// something Pulse ships (see README "Pulse (Events)"). "What's on near you" is
+// the hero's job now, so it isn't repeated here.
 const features = [
   {
     glyph: '◎',
@@ -12,14 +15,6 @@ const features = [
     title: 'By location, category, friends & interests',
     body:
       'Filter what&rsquo;s on by where you are, what you&rsquo;re into, and who&rsquo;s going — your social graph and your tastes do the curating.',
-  },
-  {
-    glyph: '☀',
-    color: 'var(--cat-5)',
-    eyebrow: 'Default view',
-    title: '&ldquo;Today near you&rdquo;, out of the box',
-    body:
-      'Open Pulse and it already answers the question: what&rsquo;s happening today in your area. No empty search box, no setup.',
   },
   {
     glyph: '✓',
@@ -44,30 +39,6 @@ const features = [
     title: 'Venue pages & nightly lineups',
     body:
       'Clubs and venues get their own page — DJ schedules, genres and the night&rsquo;s lineup, so you know the vibe before you go.',
-  },
-  {
-    glyph: '✉',
-    color: 'var(--cat-6)',
-    eyebrow: 'Together',
-    title: 'Event group chats',
-    body:
-      'Every event can have a group chat, powered by the messaging backend — coordinate the night without leaving the event.',
-  },
-  {
-    glyph: '⚙',
-    color: 'var(--cat-1)',
-    eyebrow: 'Hosting',
-    title: 'Real organiser tools',
-    body:
-      'Moderation, cross-event blacklists and ticket configuration — the tooling to run a real event, not just post one.',
-  },
-  {
-    glyph: '◐',
-    color: 'var(--cat-3)',
-    eyebrow: 'Private',
-    title: 'Hidden attendance',
-    body:
-      'Hosting something low-key? Turn off the public guest list so attendance stays between the people invited.',
   },
 ] as const
 ---

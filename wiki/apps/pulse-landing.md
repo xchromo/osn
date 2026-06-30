@@ -10,7 +10,7 @@ related:
   - "[[osn-landing]]"
   - "[[cire-landing]]"
   - "[[venues]]"
-last-reviewed: 2026-06-28
+last-reviewed: 2026-06-30
 ---
 
 # Pulse Landing
@@ -48,21 +48,44 @@ restrained dark site. Two Solid islands:
   echoing the app's pulsing-coral-dot mark. Low opacity, `pointer-events:none`,
   spans the page.
 - **`PulseHero.tsx`** (`client:load`, `min-h-[100svh]`) — an editorial headline
-  with an italic accent word, lively floating chips / faux live-stats, and two
-  CTAs ("Find events" → app, "How it works" → `#how-it-works`).
+  with an italic accent word, decorative floating chips (desktop only), a
+  **location-aware "near you" line**, and two CTAs. All hero content is
+  **server-rendered visible** (the entrance is the pure-CSS `.pulse-rise`
+  animation), so it never waits on JS; `client:load` only *enhances* it with the
+  geo hook below.
 
-Both honour `prefers-reduced-motion` (still field / instant reveal, no rAF loop)
-and contain no `console.*`.
+Both honour `prefers-reduced-motion` (still field / instant reveal / CSS
+entrance only) and contain no `console.*`.
+
+### Location-aware hero (`/api/geo`)
+
+The hero deliberately shows **no account-specific stats** (we don't know the
+visitor yet). Instead a Cloudflare **Pages Function** at
+`pulse/landing/functions/api/geo.ts` reads the visitor's coarse, IP-derived
+location from `request.cf` (city / region / country) and returns it as JSON.
+`PulseHero` fetches `/api/geo` on mount and upgrades:
+
+- the "near you" line → `"{n} events around {region} right now"`, and
+- the primary CTA → `"What's on in {city}"` linking to `${APP_URL}?near={city}`.
+
+Same-origin, so the tight CSP (`connect-src 'self'`) is untouched. Fully
+progressive: no JS / fetch failure / function absent → the generic "near you"
+copy + plain `Find events` CTA simply remain (the hero is never blank). The
+function is bundled automatically by `wrangler pages deploy` from the
+`functions/` directory. **The event count is an illustrative placeholder**
+(deterministic per place) until the real Pulse events API is wired; the region
+and city are real.
 
 ## Page structure (`src/pages/index.astro`)
 
-1. **Pulse hero** — signature pulsing-dot energy + editorial headline + CTAs.
+1. **Pulse hero** — signature pulsing-dot energy + editorial headline + the
+   location-aware "near you" line + CTAs (see above).
 2. **Promise** — the thesis: the social ease of FB Events + the fun of
    Partiful/Luma + the tooling of Eventbrite; "what's happening today near you".
-3. **Features** — colourful glyph/gradient cards (no photos): discovery by
-   location/category/friends/interests, the "today near you" default view,
-   effortless RSVPs, calendar + iCal export, venue pages, event group chats,
-   organiser tools, hidden attendance. See [[pulse]].
+3. **Features** — **four** colourful glyph/gradient cards (no photos): discovery
+   by location/category/friends, effortless RSVPs, calendar + iCal export, and
+   venue pages / nightly lineups. (Kept deliberately tight; "what's on near you"
+   is the hero's job, not a card.) See [[pulse]].
 4. **How it works** — discover → RSVP in a tap → show up.
 5. **Categories** — the most colourful section: vivid per-category chips driven by
    `CATEGORIES` in `lib/site.ts`, each in its own `--cat-*` colour.
@@ -83,18 +106,30 @@ colour token), and the CTA target:
 | `SITE` | Canonical origin for SEO meta (placeholder `https://pulse.events`) | config default |
 
 `public/_headers` ships the same tight CSP as the other static sites (no external
-image host; Google Fonts allowed; immutable `/_astro/*`).
+image host; Google Fonts allowed; immutable `/_astro/*`). `connect-src 'self'`
+deliberately allows the same-origin `/api/geo` fetch (the only network call).
+
+The site is otherwise pure-static, but the `functions/` directory makes the Pages
+deploy a hybrid (static assets + one Pages Function); `wrangler pages deploy dist`
+bundles it automatically.
 
 ## Tests
 
-`PulseHero.test.tsx` renders the hero (reduced-motion path) and asserts the
-headline + CTA. Run with `bun run --cwd pulse/landing test:run`.
+`PulseHero.test.tsx` renders the hero and asserts the headline + the geo
+*fallback* CTA (no `/api/geo` in the test env). Run with
+`bun run --cwd pulse/landing test:run`. The `/api/geo` function logic is simple
+and edge-only (`request.cf`), so it is exercised at deploy rather than unit-mocked.
 
 ## Deferred
 
-- **CI deploy** — no deploy workflow yet; add one + a Pages project when a host
-  is chosen.
+- **Real events count** — `/api/geo` returns an illustrative, deterministic count
+  per place; wire it to the real Pulse events API for live numbers. The region +
+  city it resolves are already real.
+- **"State's main city" mapping** — the CTA currently targets the visitor's
+  nearest Cloudflare city; a region → capital/major-city table would let small
+  towns route to their state's main city instead.
 - **Real domain** — `SITE` / `PUBLIC_APP_URL` are placeholders until the Pulse
-  marketing + app hosts are decided.
+  marketing + app hosts are decided. (Preview deploys to `osn-pulse-landing.pages.dev`
+  via `.github/workflows/deploy-osn-pulse-landing.yml`.)
 - **Marketing depth** — screenshots/imagery once brand assets exist, deeper
   feature pages, SEO content.
