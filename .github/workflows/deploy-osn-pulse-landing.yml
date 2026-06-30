@@ -29,8 +29,12 @@ jobs:
       fail-fast: false
       matrix:
         site:
+          # `project` is also the *.pages.dev subdomain, which is GLOBALLY unique
+          # across all Cloudflare accounts — `pulse-landing` was already taken by
+          # an unrelated account, so the Pulse project carries an `osn-` prefix to
+          # claim a clean, owned subdomain.
           - { dir: osn/landing, project: osn-landing }
-          - { dir: pulse/landing, project: pulse-landing }
+          - { dir: pulse/landing, project: osn-pulse-landing }
     steps:
       - uses: actions/checkout@v4
 
