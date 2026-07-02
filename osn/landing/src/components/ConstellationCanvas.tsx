@@ -67,14 +67,14 @@ export function ConstellationCanvas() {
 
     // Arrow consts (not hoisted `function` declarations) so TS keeps the
     // non-null narrowing of `ctx` from the guard above inside these closures.
-    const resize = () => {
-      // Span the full document height so the field runs the whole page.
+    // Size the backing store to the VIEWPORT (the layer is `position: fixed`), so
+    // it stays a few MB regardless of page length. Cheap — no node rebuild.
+    const fit = () => {
       cssW = document.documentElement.clientWidth;
-      cssH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+      cssH = window.innerHeight;
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      buildNodes();
     };
 
     const draw = () => {
@@ -123,7 +123,8 @@ export function ConstellationCanvas() {
       raf = requestAnimationFrame(step);
     }
 
-    resize();
+    fit();
+    buildNodes();
 
     if (reduced) {
       // Still field — render once, no animation loop.
@@ -132,26 +133,42 @@ export function ConstellationCanvas() {
       raf = requestAnimationFrame(step);
     }
 
-    // Rebuild on real width changes only (height-only resizes from the mobile URL
-    // bar must not reshuffle the field mid-scroll).
+    // Always refit the canvas to the viewport (rotation, mobile URL bar), but
+    // only reshuffle the nodes on a real WIDTH change so the field doesn't jump
+    // mid-scroll when the URL bar toggles height.
     let lastW = cssW;
     let resizeTimer: number | undefined;
     const onResize = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
+        fit();
         if (Math.abs(document.documentElement.clientWidth - lastW) >= 24) {
           lastW = document.documentElement.clientWidth;
-          resize();
-          if (reduced) draw();
+          buildNodes();
         }
+        if (reduced) draw();
       }, 200);
     };
     window.addEventListener("resize", onResize, { passive: true });
+
+    // Pause the loop while the tab is hidden (belt-and-suspenders on top of the
+    // browser's own background-rAF throttling); resume on return.
+    const onVisibility = () => {
+      if (reduced) return;
+      if (document.hidden) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (raf === 0) {
+        raf = requestAnimationFrame(step);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     onCleanup(() => {
       if (raf) cancelAnimationFrame(raf);
       window.clearTimeout(resizeTimer);
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", onVisibility);
     });
   });
 

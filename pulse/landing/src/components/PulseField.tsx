@@ -83,9 +83,24 @@ export function PulseField() {
   const [animated, setAnimated] = createSignal(false);
   let layerRef!: HTMLDivElement;
 
+  // The animated node set only changes on regen() (a real width resize), so we
+  // cache the SVG elements + their parsed speed/phase once and reuse them every
+  // frame instead of re-walking the DOM 60×/sec.
+  let dotEls: { el: SVGElement; speed: number; phase: number }[] = [];
+  let ringEls: SVGElement[] = [];
+
   onMount(() => {
     const seed = (Math.floor(Math.random() * 0xffffffff) || 1) >>> 0;
     let lastW = 0;
+
+    const recache = () => {
+      dotEls = Array.from(layerRef.querySelectorAll<SVGElement>("[data-dot]")).map((el) => ({
+        el,
+        speed: Number(el.dataset.speed),
+        phase: Number(el.dataset.phase),
+      }));
+      ringEls = Array.from(layerRef.querySelectorAll<SVGElement>("[data-ring]"));
+    };
 
     const regen = () => {
       const w = document.documentElement.clientWidth;
@@ -94,6 +109,8 @@ export function PulseField() {
       setWidth(w);
       setHeight(h);
       setDots(buildDots(w, h, seed));
+      // Solid has applied the <For> DOM updates synchronously by here.
+      recache();
     };
     regen();
     setAnimated(true);
@@ -105,26 +122,16 @@ export function PulseField() {
     const tick = (now: number) => {
       if (start === 0) start = now;
       const t = (now - start) / 1000;
-      const nodes = layerRef.querySelectorAll<SVGElement>("[data-dot]");
-      for (const node of nodes) {
-        const speed = Number(node.dataset.speed);
-        const phase = Number(node.dataset.phase);
+      for (const { el, speed, phase } of dotEls) {
         const wave = Math.sin((t * speed + phase) * Math.PI * 2);
-        const s = (1 + wave * 0.18).toFixed(3);
-        const o = (0.42 + (wave + 1) * 0.18).toFixed(3);
-        node.style.setProperty("--s", s);
-        node.style.setProperty("--o", o);
+        el.style.setProperty("--s", (1 + wave * 0.18).toFixed(3));
+        el.style.setProperty("--o", (0.42 + (wave + 1) * 0.18).toFixed(3));
       }
       // A few rings ripple outward on a slow shared cycle, staggered by index.
-      const rings = layerRef.querySelectorAll<SVGElement>("[data-ring]");
-      let j = 0;
-      for (const ring of rings) {
+      for (let j = 0; j < ringEls.length; j++) {
         const cycle = (t * 0.35 + j * 0.5) % 1;
-        const rs = (0.6 + cycle * 2.4).toFixed(3);
-        const ro = Math.max(0, 0.5 - cycle * 0.5).toFixed(3);
-        ring.style.setProperty("--rs", rs);
-        ring.style.setProperty("--ro", ro);
-        j++;
+        ringEls[j].style.setProperty("--rs", (0.6 + cycle * 2.4).toFixed(3));
+        ringEls[j].style.setProperty("--ro", Math.max(0, 0.5 - cycle * 0.5).toFixed(3));
       }
       raf = requestAnimationFrame(tick);
     };

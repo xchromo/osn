@@ -14,6 +14,11 @@ on:
     branches: [claude/osn-pulse-landing-sites-dq3pmc]
   workflow_dispatch:
 
+# Least privilege: the job only needs to read the repo to build + ship to Pages
+# (deploy auth is the Cloudflare token, not GITHUB_TOKEN). Deny everything else.
+permissions:
+  contents: read
+
 # Per-project concurrency so a rapid re-push cancels the stale build but the two
 # sites never block each other.
 concurrency:

@@ -50,8 +50,10 @@ export const onRequestGet = (context: { request: Request & { cf?: EdgeGeo } }): 
   return new Response(JSON.stringify(body), {
     headers: {
       "content-type": "application/json; charset=utf-8",
-      // Coarse + stable, so a short shared cache per edge is fine.
-      "cache-control": "public, max-age=300",
+      // Per-visitor (varies by caller IP), so browser-only — never a shared/proxy
+      // cache, which could otherwise serve one visitor's coarse location to
+      // another. `private` keeps the short client-side freshness we want.
+      "cache-control": "private, max-age=300",
     },
   });
 };

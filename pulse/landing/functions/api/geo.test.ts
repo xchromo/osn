@@ -14,7 +14,7 @@ describe("GET /api/geo", () => {
     const res = call({ city: "Austin", region: "Texas", regionCode: "TX", country: "US" });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/application\/json/);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=300");
+    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
 
     const body = await res.json();
     expect(body).toMatchObject({

@@ -106,10 +106,13 @@
   position: relative;
 }
 
+/* Fixed to the viewport (not the full document): the canvas is sized to the
+   viewport in JS, so the backdrop stays a fixed few-MB layer no matter how long
+   the page is, rather than a document-height buffer cleared + repainted every
+   frame. */
 .constellation-layer {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  height: 100%;
   z-index: -1;
   overflow: clip;
   pointer-events: none;
