@@ -10,7 +10,7 @@ related:
   - "[[social]]"
   - "[[pulse-landing]]"
   - "[[cire-landing]]"
-last-reviewed: 2026-06-28
+last-reviewed: 2026-07-02
 ---
 
 # OSN Landing
@@ -44,9 +44,12 @@ Two self-contained Solid islands carry the "your social graph" idea:
 
 - **`ConstellationCanvas.tsx`** (`client:load`, mounted in `BaseLayout` behind
   every page, like cire's `VineCanvas`) — an animated field of dots with thin
-  links drawn between near neighbours: a living social graph. Spans the full page
-  height, sits at `z-index:-1`, low opacity, `pointer-events:none`. Node count is
-  capped by viewport area; the rAF loop is cleaned up in `onCleanup`.
+  links drawn between near neighbours: a living social graph. The layer is
+  **`position: fixed` and the canvas is sized to the viewport** (not the full
+  document), so the backing store stays a few MB no matter how long the page is;
+  it sits at `z-index:-1`, low opacity, `pointer-events:none`. Node count is
+  capped by viewport area; the rAF loop pauses on `visibilitychange` and is
+  cleaned up in `onCleanup`.
 - **`ConnectionsHero.tsx`** (`client:load`, full-screen `min-h-[100svh]`) — the
   hero. A small person-graph whose edges draw in sequentially on mount, around an
   ownership-themed headline + two CTAs ("Get started" → app, "Explore the
