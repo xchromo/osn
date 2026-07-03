@@ -21,10 +21,15 @@ let savedOsnEnv: string | undefined;
 
 const MF_HOOK_TIMEOUT_MS = 30_000;
 
+// Native rate-limit binding stub — a deployed env now REQUIRES CLAIM_RATE_LIMITER
+// (M-D fail-closed guard), so the happy-path boot must supply one.
+const RATE_LIMITER_STUB = { limit: async () => ({ success: true }) };
+
 const BASE_ENV = {
   WEB_ORIGIN: "https://app.example.com",
   OSN_JWKS_URL: "https://id.example.com/.well-known/jwks.json",
   OSN_AUDIENCE: "osn-access",
+  CLAIM_RATE_LIMITER: RATE_LIMITER_STUB,
 };
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext;
@@ -82,6 +87,24 @@ describe("Worker boot (no bootstrap-owner config)", () => {
       DB,
       OSN_JWKS_URL: BASE_ENV.OSN_JWKS_URL,
       OSN_AUDIENCE: BASE_ENV.OSN_AUDIENCE,
+    } as unknown as Parameters<typeof handler.fetch>[1];
+    const res = await handler.fetch!(
+      new Request("https://api.example.com/api/organiser/weddings"),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it("M-D: fail-closes 503 in a deployed env when CLAIM_RATE_LIMITER is missing", async () => {
+    // https WEB_ORIGIN (deployed) but no native rate-limit binding — the
+    // pre-auth claim brute-force guard must not silently degrade to per-isolate
+    // memory. Boot must 503 rather than serve with a weakened limiter.
+    const env = {
+      WEB_ORIGIN: BASE_ENV.WEB_ORIGIN,
+      OSN_JWKS_URL: BASE_ENV.OSN_JWKS_URL,
+      OSN_AUDIENCE: BASE_ENV.OSN_AUDIENCE,
+      DB,
     } as unknown as Parameters<typeof handler.fetch>[1];
     const res = await handler.fetch!(
       new Request("https://api.example.com/api/organiser/weddings"),

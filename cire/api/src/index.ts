@@ -100,6 +100,20 @@ const handler: ExportedHandler<Env> = {
       );
     }
 
+    // M-D: in a real deployment (any https WEB_ORIGIN) the native rate-limit
+    // binding is mandatory. Without it, createApp silently falls back to a
+    // per-isolate in-memory limiter, so the pre-auth claim-code brute-force
+    // guard (small keyspace) would reset per isolate with no alert. Fail closed
+    // — the wrangler foot-gun (named envs don't inherit top-level
+    // [[unsafe.bindings]]) must surface as a 503, not a weakened limiter. This
+    // sits with the other boot-config checks (pre-cache) so it fires on every
+    // cold isolate, not only the first app build. osn-api guards this class the
+    // same way at boot.
+    const isProd = origins.some((o) => o.startsWith("https://"));
+    if (isProd && !env.CLAIM_RATE_LIMITER) {
+      return misconfigured("missing CLAIM_RATE_LIMITER binding");
+    }
+
     if (!cached || cached.dbBinding !== env.DB) {
       const db = createD1Db(env.DB);
       // Any authenticated OSN user is a first-class organiser: they sign in,
