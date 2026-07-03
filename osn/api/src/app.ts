@@ -226,6 +226,7 @@ export function createApp(deps: AppDeps) {
         undefined,
         cookieConfig,
         appRuntime,
+        clientIpConfig,
       ),
     )
     .use(createInternalAccountRoutes(authConfig, DbLive, appRuntime));
