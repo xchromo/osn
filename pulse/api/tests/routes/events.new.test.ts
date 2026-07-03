@@ -485,6 +485,51 @@ describe("ICS route", () => {
     expect(res.headers.get("cache-control")).toBe("private, max-age=300");
   });
 
+  it("GET /events/:id/ics returns 304 when the real ETag appears in a multi-value If-None-Match", async () => {
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Cached", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const first = await get(app, `/events/${event.id}/ics`);
+    const etag = first.headers.get("etag")!;
+
+    const res = await app.handle(
+      new Request(`http://localhost/events/${event.id}/ics`, {
+        method: "GET",
+        headers: { "if-none-match": `W/"other", ${etag}` },
+      }),
+    );
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get("etag")).toBe(etag);
+  });
+
+  // RFC 9110 §13.1.2 — `If-None-Match: *` matches any current representation.
+  it("GET /events/:id/ics returns 304 for If-None-Match: * when the event exists", async () => {
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Cached", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+
+    const res = await app.handle(
+      new Request(`http://localhost/events/${event.id}/ics`, {
+        method: "GET",
+        headers: { "if-none-match": "*" },
+      }),
+    );
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe("");
+    // Revalidation headers still present on the 304.
+    expect(res.headers.get("etag")).toMatch(/^W\/".+"$/);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+  });
+
   it("GET /events/:id/ics returns a fresh body when If-None-Match does not match", async () => {
     const createRes = await post(
       app,

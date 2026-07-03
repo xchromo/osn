@@ -963,12 +963,15 @@ export const createEventsRoutes = (
           set.headers["cache-control"] = "private, max-age=300";
           set.headers["etag"] = etag;
           const ifNoneMatch = headers["if-none-match"];
+          // RFC 9110 §13.1.2: `If-None-Match: *` matches any current
+          // representation, so it must 304 whenever the resource exists.
           if (
             ifNoneMatch &&
-            ifNoneMatch
-              .split(",")
-              .map((v) => v.trim())
-              .includes(etag)
+            (ifNoneMatch.trim() === "*" ||
+              ifNoneMatch
+                .split(",")
+                .map((v) => v.trim())
+                .includes(etag))
           ) {
             set.status = 304;
             return null;

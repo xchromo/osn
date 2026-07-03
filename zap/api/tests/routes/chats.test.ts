@@ -251,6 +251,24 @@ describe("chats routes", () => {
     expect(data2.chats[0].title).toBe("Chat A");
   });
 
+  it("GET /chats?limit=abc coerces to the default page (200, all chats)", async () => {
+    // Route-level coercion: Number("abc") is NaN, which the service treats
+    // as "no limit supplied" and falls back to the default page size.
+    await req(app, "POST", "/chats", {
+      token: aliceToken,
+      body: { type: "group", title: "Chat A" },
+    });
+    await req(app, "POST", "/chats", {
+      token: aliceToken,
+      body: { type: "group", title: "Chat B" },
+    });
+
+    const res = await req(app, "GET", "/chats?limit=abc", { token: aliceToken });
+    expect(res.status).toBe(200);
+    const data = await body(res);
+    expect(data.chats).toHaveLength(2);
+  });
+
   it("GET /chats returns 422 for an unknown cursor", async () => {
     await req(app, "POST", "/chats", {
       token: aliceToken,
@@ -362,6 +380,23 @@ describe("chats routes", () => {
     // No overlap between the pages.
     const ids1 = data1.members.map((m: { id: string }) => m.id);
     expect(ids1).not.toContain(data2.members[0].id);
+  });
+
+  it("GET /chats/:id/members clamps a negative limit to one member", async () => {
+    const createRes = await req(app, "POST", "/chats", {
+      token: aliceToken,
+      body: { type: "group", memberProfileIds: ["usr_bob", "usr_charlie"] },
+    });
+    const chatId = (await body(createRes)).chat.id;
+
+    // Number("-5") is finite, so it reaches the service clamp
+    // Math.max(1, requested) — the page floors at exactly one row.
+    const res = await req(app, "GET", `/chats/${chatId}/members?limit=-5`, {
+      token: aliceToken,
+    });
+    expect(res.status).toBe(200);
+    const data = await body(res);
+    expect(data.members).toHaveLength(1);
   });
 
   it("GET /chats/:id/members returns empty for an offset beyond the end", async () => {
