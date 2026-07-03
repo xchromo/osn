@@ -3,6 +3,7 @@ import { serviceAccounts, serviceAccountKeys } from "@osn/db";
 import { Db } from "@osn/db/service";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { SignJWT } from "jose";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import {
@@ -111,6 +112,22 @@ describe("createArcToken / verifyArcToken", () => {
     expect(payload.aud).toBe("osn-core");
     expect(payload.scope).toBe("graph:read");
     expect(payload.exp).toBeGreaterThan(payload.iat);
+  });
+
+  // T-E2: verifyArcToken pins `requiredClaims: [exp, iat, iss, aud]` so a token
+  // minted WITHOUT `exp` can never be treated as non-expiring. `createArcToken`
+  // always sets `exp`, so sign a raw ES256 JWT that omits it.
+  it("rejects a token missing the exp claim (requiredClaims)", async () => {
+    const noExp = await new SignJWT({ scope: "graph:read" })
+      .setProtectedHeader({ alg: "ES256", kid: "test-kid" })
+      .setIssuedAt()
+      .setIssuer("pulse-api")
+      .setAudience("osn-core")
+      // deliberately NO setExpirationTime()
+      .sign(privateKey);
+    await expect(verifyArcToken(noExp, publicKey, "osn-core")).rejects.toThrow(
+      "ARC token verification failed",
+    );
   });
 
   it("respects custom TTL", async () => {

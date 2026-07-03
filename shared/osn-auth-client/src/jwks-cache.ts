@@ -230,3 +230,8 @@ export function clearJwksCache(): void {
   lastForcedRefresh.clear();
   inFlight.clear();
 }
+
+/** Current negative-cache entry count. Test-only — asserts the FIFO bound. */
+export function _negativeCacheSizeForTest(): number {
+  return negativeCache.size;
+}

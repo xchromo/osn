@@ -1,7 +1,12 @@
 import { generateKeyPair, exportJWK } from "jose";
 import { describe, expect, it, beforeAll, beforeEach, afterEach } from "vitest";
 
-import { clearJwksCache, resolvePublicKeyForKid, refreshPublicKeyForKid } from "../src/jwks-cache";
+import {
+  clearJwksCache,
+  resolvePublicKeyForKid,
+  refreshPublicKeyForKid,
+  _negativeCacheSizeForTest,
+} from "../src/jwks-cache";
 
 type JwkEntry = Record<string, unknown>;
 
@@ -194,6 +199,18 @@ describe("jwks-cache", () => {
       expect(k).toBe(refreshed);
     }
     expect(calls.get(URL_1)).toBe(2);
+  });
+
+  it("T-S1: negative cache is FIFO-bounded (junk-kid flood cannot grow it unbounded)", async () => {
+    // URL_1 serves an empty JWKS, so every distinct kid misses → negative entry.
+    routes.set(URL_1, []);
+    // Flood well past NEGATIVE_CACHE_MAX_SIZE (1024) with distinct junk kids.
+    for (let i = 0; i < 1200; i++) {
+      // eslint-disable-next-line no-await-in-loop -- sequential inserts; bound is the property under test
+      expect(await resolvePublicKeyForKid(`junk-${i}`, URL_1)).toBeNull();
+    }
+    // The map must have evicted rather than grown without limit.
+    expect(_negativeCacheSizeForTest()).toBeLessThanOrEqual(1024);
   });
 
   it("LRU eviction at CACHE_MAX_SIZE (256)", async () => {
