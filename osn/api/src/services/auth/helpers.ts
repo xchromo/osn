@@ -100,9 +100,15 @@ export function genOtpCode(): string {
  * local dev defaults to the debug log level (so it shows), non-local defaults to
  * info (a second guard on top of the env check).
  */
+// P-I1: resolved once at module load — `process.env` is a backed getter, not
+// a plain property read, so re-reading it per OTP issuance is wasted work.
+// Safe at module scope: workerd `nodejs_compat` populates `process.env` from
+// wrangler [vars] + secrets before module execution (same pattern as
+// `observability.ts`), and Bun/tests have native `process.env`.
+const IS_LOCAL_ENV = !process.env.OSN_ENV || process.env.OSN_ENV === "local";
+
 export function logDevOtp(purpose: string, to: string, code: string): Effect.Effect<void> {
-  const isLocal = !process.env.OSN_ENV || process.env.OSN_ENV === "local";
-  if (!isLocal) return Effect.void;
+  if (!IS_LOCAL_ENV) return Effect.void;
   return Effect.logDebug(`[dev-otp] ${purpose} to=${to} code=${code}`);
 }
 

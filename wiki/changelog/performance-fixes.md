@@ -6,12 +6,54 @@ related:
   - "[[redis]]"
   - "[[arc-tokens]]"
   - "[[component-library]]"
-last-reviewed: 2026-06-16
+last-reviewed: 2026-07-03
 ---
 
 # Performance Fixes — Completed
 
 Archived completed performance findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Performance Backlog in [[TODO]].
+
+## Performance audit sweep (2026-07-03)
+
+Cross-monorepo sweep of the open Performance Backlog. All fixes preserve security semantics exactly (fail-closed rate limiting, visibility gates, consent checks, single-use guarantees, tenant scoping); two of them (P-I2 recovery, P-W2 series) also close check-then-act races as a side effect.
+
+### zap/api
+
+- **P-W1 (zap)** — `listChats` returned every chat a profile belongs to, unbounded. **Fixed:** cursor pagination (default 50, max 100) over a single membership-joined query ordered `createdAt DESC`; cursor contract mirrors the hardened `listMessages` one (caller-scoped lookup, unknown/foreign cursors rejected with `ValidationError` → 422). See [[zap]].
+- **P-W2 (zap)** — `addMember` fetched all members to check the 500-member cap. **Fixed:** `SELECT COUNT(*)` for the cap and a `LIMIT 1` lookup on the unique `(chat_id, profile_id)` pair for the duplicate check; authz + fail-closed consent order unchanged. See [[zap]].
+- **P-W4 (zap)** — `getChatMembers` returned all members unbounded. **Fixed:** limit/offset pagination (default 100, max 500) with deterministic `joinedAt ASC, id ASC` ordering. See [[zap]].
+
+### osn/api
+
+- **P-W4 / P-W1 (cdl)** — The legacy `otpStore`/`magicStore` maps are gone (superseded by `createInMemoryCeremonyStore` with passkey-primary), but the successor store still ran a full O(n) TTL scan on **every** `set` — the same pathology both findings tracked. **Fixed:** sweep debounced to at most once per 30 s (mirroring `maybeSweepExpiredTokens` in `@shared/crypto`); lazy expiry on `get` unchanged; the `CEREMONY_STORE_MAX` hard cap is still enforced on every set (expired-first sweep, FIFO drop as last resort). See [[sessions]].
+- **P-W11** — `beginRegistration` (and `registerProfile`, same pattern) issued two parallel uniqueness queries. **Fixed:** single `WHERE email = ? OR handle = ?` probe (inner-join to accounts); identical error responses and S-M1 enumeration behaviour preserved. See [[identity-model]].
+- **P-W3** — `sendConnectionRequest` ran its two independent reads (block check, existing-connection check) sequentially. **Fixed:** `Effect.all` with unbounded concurrency; blocked-first failure priority preserved. See [[social-graph]].
+- **P-I5b** — Adapted (literal finding stale — no `findProfileByEmail` remains): the `accounts`-row SELECT that `completePasskeyLogin` executed on both flows is only needed for the discoverable flow's `userHandle` pin. **Fixed:** moved into the discoverable branch; identified-flow existence is proven by `resolveIdentifier`'s join + accountId binding. All verification checks intact. See [[passkey-primary]].
+- **P-I1 (recovery)** — `countActiveRecoveryCodes` fetched full rows (including `code_hash`) to count in JS. **Fixed:** single `SUM(CASE WHEN used_at IS NULL …)/COUNT(*)` aggregate; no secret-bearing columns fetched. See [[recovery-codes]].
+- **P-I2 (recovery)** — `consumeRecoveryCode` was SELECT + separate CAS transaction. **Fixed:** one atomic `UPDATE … WHERE account_id = ? AND code_hash = ? AND used_at IS NULL RETURNING id` — removes the remaining check-then-act window on every backend. Per-account lockout ordering, failed-attempt counting, audit events, metric classification, and the generic error shape all preserved. See [[recovery-codes]].
+- **P-I2/P-I3 (TextEncoder)** — Only one per-call `new TextEncoder()` existed (`beginPasskeyRegistration`); hoisted to module scope. JWT sign/verify uses jose `CryptoKey`s directly and `verifyPkceChallenge` was removed with Phase 5b — both sides verified stale.
+- **P-I1 (auth)** — `logDevOtp` re-read `process.env.OSN_ENV` per OTP issuance. **Fixed:** module-level `IS_LOCAL_ENV` const (safe on workerd — `nodejs_compat` populates `process.env` pre-module-execution).
+- **P-I9** — Verified already fixed: graph list endpoints all push `LIMIT`/`OFFSET` into the DB query; no JS slicing remains. Closed as stale.
+- **P-I8** — Verified stale: every `resolveHandle` call site resolves a *target* handle from URL params; no handler already holds that row. Closed.
+
+### pulse/api + pulse/db
+
+- **P-W3 (pulse)** — `listTodayEvents` had no `LIMIT`. **Fixed:** `TODAY_EVENTS_LIMIT = 200` cap (route exposes no limit param), matching the `listRsvps`/`listVenueEvents` ceiling. See [[event-access]].
+- **P-W5 + P-W1 (series)** — Status transitions were persisted one `UPDATE` per row across all list surfaces (up to 500 writes per GET on `listInstances`). **Fixed:** shared `applyTransitions(rows)` groups persisted transitions by (from → to) and issues one `UPDATE … WHERE id IN (…)` per group, covering `listEvents`, `listTodayEvents`, `listMyCalendarEvents`, `listVenueEvents`, and `listInstances`. Exact semantics preserved: terminal statuses sticky, `maybe_finished` display-only, `updatedAt` stamped, same span/counter (counter now `add(count)` per group). See [[venues]], [[event-access]].
+- **P-W2 (series)** — `updateSeries` SELECT-then-UPDATE raced an `instanceOverride` flip and cost extra round-trips. **Fixed:** single `UPDATE … WHERE seriesId ∧ NOT override ∧ startTime ≥ cutoff RETURNING id` — override predicate evaluated atomically at write time.
+- **P-W3 (series)** — `cancelSeries` same pattern. **Fixed:** single `UPDATE … RETURNING id`.
+- **P-W1 (pulse) + P-I15** — RSVP routes loaded the event row for the visibility gate, then `listRsvps`/`rsvpCounts`/`latestRsvps` re-fetched it internally. **Fixed:** services accept the already-loaded `Event`; routes thread the row from `loadVisibleEvent`. Visibility gating untouched. See [[s2s-patterns]].
+- **P-I7** — `createEvent` did INSERT + `getEvent` read-back. **Fixed:** `INSERT … RETURNING`; `applyTransition` kept on the returned row so status normalisation is unchanged.
+- **P-I2 (pulse)** — Missing composite index for RSVP status filters. **Fixed:** `event_rsvps_event_status_idx (event_id, status)` in the Drizzle schema + hand-written migration 0008 with journal entry; flows into test DDL via `createSchemaSql()`.
+- **P-I14** — `GET /events/:id/ics` had no caching headers. **Fixed:** `Cache-Control: private, max-age=300` (visibility-gated, so never shared-cacheable) + weak `ETag` on `(id, updatedAt)`; `If-None-Match` honoured with 304.
+
+### cire + clients
+
+- **P-I2 (cire)** — `events_sort_order_idx` was dead after wedding scoping and `events_wedding_idx` forced an in-memory sort. **Fixed:** migration 0026 replaces both with composite `events_wedding_id_sort_idx (wedding_id, sort_order)` (filter + order in one B-tree, one less index on the import write path); Drizzle schema and the cire/api test-DDL lockstep mirror updated together. See [[cire]].
+- **P-W10** — `RegistrationClient.checkHandle` had no `AbortController`, so debounced bursts stacked in-flight requests. **Fixed:** optional `AbortSignal` parameter; the debounced consumers (`Register`, `CreateProfileForm` in `@osn/ui`) abort the previous probe before each new one and on cleanup, with aborts never surfacing as error states.
+- **P-W3 (explore)** — Canvas heatmap + SVG map redrew on every `ResizeObserver` frame. **Fixed:** `setSize` trailing-edge debounced 100 ms (first measurement immediate; timer cleared on cleanup).
+- **P-W4 (explore)** — `StyleMap` grid-line geometry recalculated on every access. **Fixed:** `vLines`/`hLines`/`avenues`/`streets` are `createMemo`s keyed on the debounced size.
+- **P-W5 (explore)** — `isDark()` read `classList` from the DOM on every access, non-reactively. **Fixed:** `useIsDark()` signal driven by a `MutationObserver` on the root/body `class` attributes (disconnected on cleanup); theme-derived fills are now reactive O(1) reads.
 
 ## OSN API per-request layer rebuild (2026-06-16)
 

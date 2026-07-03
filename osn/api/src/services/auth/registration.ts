@@ -7,7 +7,7 @@ import { accounts, users } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { commitBatch } from "@shared/db-utils";
 import { type EmailError, EmailService } from "@shared/email";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 
 import { timingSafeEqualString } from "../../lib/timing-safe";
@@ -30,11 +30,13 @@ import type { ProfileWithEmail, SessionMeta } from "./types";
 
 export function createRegistrationModule(
   ctx: AuthContext,
-  profiles: ProfilesModule,
+  // P-W11: uniqueness probes now run as a single inline OR query, so the
+  // profiles module is no longer consulted. Parameter kept (underscore-
+  // prefixed) so the module factory wiring in index.ts stays uniform.
+  _profiles: ProfilesModule,
   tokens: TokensModule,
 ) {
   const { stores, otpTtl } = ctx;
-  const { findProfileByEmail, findProfileByHandle } = profiles;
   const { issueTokens } = tokens;
 
   /**
@@ -58,18 +60,28 @@ export function createRegistrationModule(
         return yield* Effect.fail(new AuthError({ message: "Handle is reserved" }));
       }
 
-      const [existingEmail, existingHandle] = yield* Effect.all(
-        [findProfileByEmail(email), findProfileByHandle(handle)],
-        { concurrency: "unbounded" },
-      );
-      if (existingEmail) {
+      const { db } = yield* Db;
+      // P-W11: single `WHERE email = ? OR handle = ?` probe instead of two
+      // parallel queries; which field collided is distinguished in JS below.
+      // limit(2) suffices: at most one row matches by email and one by handle,
+      // and the email error takes priority (same order as the old two checks).
+      const collisions = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ email: accounts.email, handle: users.handle })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(or(eq(accounts.email, email), eq(users.handle, handle)))
+            .limit(2),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (collisions.some((c) => c.email === email)) {
         return yield* Effect.fail(new AuthError({ message: "Email already registered" }));
       }
-      if (existingHandle) {
+      if (collisions.some((c) => c.handle === handle)) {
         return yield* Effect.fail(new AuthError({ message: "Handle already taken" }));
       }
 
-      const { db } = yield* Db;
       const accountId = genId("acc_");
       const id = genId("usr_");
       const ts = now();
@@ -166,15 +178,25 @@ export function createRegistrationModule(
       // O3: the store sweeps expired entries and self-bounds (CEREMONY_STORE_MAX
       // on the in-memory backend, native PX expiry on Redis), so no explicit
       // sweep / size cap is needed here any more.
-      const [existingEmail, existingHandle] = yield* Effect.all(
-        [findProfileByEmail(normalisedEmail), findProfileByHandle(handle)],
-        { concurrency: "unbounded" },
-      );
+      // P-W11: single existence probe (`WHERE email = ? OR handle = ?`)
+      // instead of two parallel per-field queries — S-M1 below responds
+      // identically for either collision, so no per-field distinction needed.
+      const { db } = yield* Db;
+      const collision = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ id: users.id })
+            .from(users)
+            .innerJoin(accounts, eq(users.accountId, accounts.id))
+            .where(or(eq(accounts.email, normalisedEmail), eq(users.handle, handle)))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
 
       // S-M1: silently no-op when the email/handle already exists. The user
       // can use the login flow if they already have an account; we don't
       // confirm or deny their existence over an unauthenticated channel.
-      if (existingEmail || existingHandle) {
+      if (collision.length > 0) {
         return { sent: true };
       }
 

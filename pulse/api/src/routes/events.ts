@@ -618,6 +618,9 @@ export const createEventsRoutes = (
             listRsvps(params.id, viewerId, {
               status: query.status,
               limit: query.limit ? Number(query.limit) : undefined,
+              // P-W1: thread the row `loadVisibleEvent` just fetched so
+              // the service skips its internal re-fetch.
+              event,
             }).pipe(
               Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
               Effect.catchAll(() =>
@@ -680,7 +683,9 @@ export const createEventsRoutes = (
             return { message: "Event not found" } as const;
           }
           const result = await Effect.runPromise(
-            rsvpCounts(params.id).pipe(
+            // P-I15: pass the already-loaded event so rsvpCounts skips
+            // its redundant loadEvent round-trip.
+            rsvpCounts(params.id, event).pipe(
               Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
               Effect.provide(dbLayer),
             ),
@@ -711,7 +716,8 @@ export const createEventsRoutes = (
           const isOrganiser = viewerId != null && viewerId === event.createdByProfileId;
           const limit = query.limit ? Math.min(Math.max(1, Number(query.limit)), 20) : 5;
           const result = await Effect.runPromise(
-            latestRsvps(params.id, viewerId, limit).pipe(
+            // P-W1: thread the row `loadVisibleEvent` just fetched.
+            latestRsvps(params.id, viewerId, limit, event).pipe(
               Effect.catchTag("EventNotFound", () => Effect.succeed(null)),
               Effect.catchAll(() =>
                 Effect.sync(() => {
@@ -941,6 +947,31 @@ export const createEventsRoutes = (
             );
             set.status = 404;
             return { message: "Event not found" } as const;
+          }
+          // P-I14: the ICS body is a pure function of the event row (the
+          // only per-request field is the informational DTSTAMP), but the
+          // route is visibility-gated, so it must never land in a shared
+          // cache — `private` + a short max-age keeps repeat "Add to
+          // calendar" clicks cheap without a stale-event window longer
+          // than 5 minutes. The weak ETag is derived from updatedAt so
+          // any event edit invalidates it.
+          const updatedAtMs =
+            event.updatedAt instanceof Date
+              ? event.updatedAt.getTime()
+              : new Date(event.updatedAt).getTime();
+          const etag = `W/"${event.id}-${updatedAtMs}"`;
+          set.headers["cache-control"] = "private, max-age=300";
+          set.headers["etag"] = etag;
+          const ifNoneMatch = headers["if-none-match"];
+          if (
+            ifNoneMatch &&
+            ifNoneMatch
+              .split(",")
+              .map((v) => v.trim())
+              .includes(etag)
+          ) {
+            set.status = 304;
+            return null;
           }
           const ics = buildIcs(event);
           metricCalendarIcsGenerated("ok");

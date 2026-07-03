@@ -55,6 +55,31 @@ describe("createInMemoryCeremonyStore", () => {
     }
   });
 
+  it("sweeps expired entries on set at most once per debounce window (P-W1 cdl / P-W4)", async () => {
+    const onEntryDelta = vi.fn();
+    const store = createInMemoryCeremonyStore<Entry>("login_challenge", { onEntryDelta });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(1_000_000));
+      await store.set("stale", entry("s"), 1_000); // first set sweeps (empty) + arms debounce
+
+      // 5s later — "stale" is expired, but we are inside the 30s debounce
+      // window, so a write does NOT trigger the O(n) sweep.
+      vi.setSystemTime(new Date(1_000_000 + 5_000));
+      await store.set("fresh1", entry("f1"), 60_000);
+      expect(onEntryDelta).not.toHaveBeenCalledWith(-1, "login_challenge");
+
+      // Past the debounce window — the next write sweeps and evicts "stale".
+      vi.setSystemTime(new Date(1_000_000 + 40_000));
+      await store.set("fresh2", entry("f2"), 60_000);
+      expect(onEntryDelta).toHaveBeenCalledWith(-1, "login_challenge");
+      expect(await store.get("stale")).toBe(null);
+      expect(await store.get("fresh1")).not.toBe(null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("carries an updated attempts counter across set/get (attempts carry-over)", async () => {
     const store = createInMemoryCeremonyStore<Entry>("step_up_otp");
     await store.set("k", entry("c", 0), 60_000);

@@ -444,6 +444,64 @@ describe("ICS route", () => {
     const res = await get(app, "/events/evt_missing/ics");
     expect(res.status).toBe(404);
   });
+
+  // P-I14 — private cache headers + weak ETag derived from updatedAt.
+  it("GET /events/:id/ics sets Cache-Control and a weak ETag", async () => {
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Cached", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await get(app, `/events/${event.id}/ics`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+    const etag = res.headers.get("etag");
+    expect(etag).toMatch(/^W\/".+"$/);
+  });
+
+  it("GET /events/:id/ics honours If-None-Match with 304", async () => {
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Cached", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const first = await get(app, `/events/${event.id}/ics`);
+    const etag = first.headers.get("etag")!;
+
+    const res = await app.handle(
+      new Request(`http://localhost/events/${event.id}/ics`, {
+        method: "GET",
+        headers: { "if-none-match": etag },
+      }),
+    );
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe("");
+    // Revalidation headers still present on the 304.
+    expect(res.headers.get("etag")).toBe(etag);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+  });
+
+  it("GET /events/:id/ics returns a fresh body when If-None-Match does not match", async () => {
+    const createRes = await post(
+      app,
+      "/events",
+      { title: "Cached", startTime: FUTURE },
+      aliceToken,
+    );
+    const { event } = (await createRes.json()) as { event: { id: string } };
+    const res = await app.handle(
+      new Request(`http://localhost/events/${event.id}/ics`, {
+        method: "GET",
+        headers: { "if-none-match": 'W/"stale-etag"' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("BEGIN:VCALENDAR");
+  });
 });
 
 describe("Comms routes", () => {

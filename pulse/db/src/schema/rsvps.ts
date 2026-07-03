@@ -49,6 +49,11 @@ export const eventRsvps = sqliteTable(
     // `event_rsvps_pair_idx` above has the wrong leading column for this
     // shape (it's `(event_id, profile_id)`).
     index("event_rsvps_profile_event_idx").on(t.profileId, t.eventId),
+    // P-I2: status-filtered RSVP reads (`listRsvps?status=…`, the counts
+    // GROUP BY) key on `event_id` then filter on `status`. Without the
+    // composite, the status filter is a post-index scan over every row
+    // the event has.
+    index("event_rsvps_event_status_idx").on(t.eventId, t.status),
   ],
 );
 
