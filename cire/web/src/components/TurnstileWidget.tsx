@@ -120,35 +120,35 @@ export function TurnstileWidget(props: TurnstileWidgetProps) {
     if (!siteKey || !container) return;
     try {
       await loadTurnstileScript();
+      const ts = getTurnstile();
+      if (!ts || !container) {
+        setFailed(true);
+        return;
+      }
+      widgetId = ts.render(container, {
+        sitekey: siteKey,
+        // Spin telemetry marker (account-level aggregate; carries no PII).
+        action: "turnstile-spin-v1",
+        theme: props.theme ?? "auto",
+        callback: (token) => {
+          setFailed(false);
+          props.onToken(token);
+        },
+        "expired-callback": () => props.onToken(null),
+        "timeout-callback": () => props.onToken(null),
+        "error-callback": () => {
+          setFailed(true);
+          props.onToken(null);
+        },
+      });
     } catch {
-      // Network failure loading api.js. Surface a hint; the parent keeps
-      // submit disabled because no token ever arrives (fail-closed on the UX
-      // side too — the server enforces the real gate).
+      // Network failure loading api.js — or a synchronous render() throw.
+      // Surface a hint; the parent keeps submit disabled because no token
+      // ever arrives (fail-closed on the UX side too — the server enforces
+      // the real gate).
       setFailed(true);
       props.onToken(null);
-      return;
     }
-    const ts = getTurnstile();
-    if (!ts || !container) {
-      setFailed(true);
-      return;
-    }
-    widgetId = ts.render(container, {
-      sitekey: siteKey,
-      // Spin telemetry marker (account-level aggregate; carries no PII).
-      action: "turnstile-spin-v1",
-      theme: props.theme ?? "auto",
-      callback: (token) => {
-        setFailed(false);
-        props.onToken(token);
-      },
-      "expired-callback": () => props.onToken(null),
-      "timeout-callback": () => props.onToken(null),
-      "error-callback": () => {
-        setFailed(true);
-        props.onToken(null);
-      },
-    });
   });
 
   onCleanup(() => {
