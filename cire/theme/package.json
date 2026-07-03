@@ -5,6 +5,10 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "test": "bun test",
+    "test:run": "bun test"
+  },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*"
   }

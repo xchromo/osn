@@ -80,6 +80,21 @@ describe("account-erasure routes — client-IP keying (S-M5)", () => {
     expect(keys).toEqual(["1.2.3.4"]);
   });
 
+  it("DELETE /account is gated by the same unresolved-IP deny (its own rateLimit call site)", async () => {
+    const { limiters, keys } = recordingLimiters();
+    const app = createAccountErasureRoutes(config, createTestLayer(), undefined, limiters);
+    const res = await app.handle(
+      new Request("http://localhost/account", {
+        method: "DELETE",
+        headers: { "content-type": "application/json", "x-forwarded-for": "6.6.6.6" },
+        body: JSON.stringify({ confirm_handle: "whoever" }),
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    expect(keys).toEqual([]);
+  });
+
   it("returns 429 when the per-IP limiter is exhausted", async () => {
     const denyAll: RateLimiterBackend = {
       check: async () => false,

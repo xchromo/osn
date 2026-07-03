@@ -118,6 +118,14 @@ describe("ImportPanel — CSV format help", () => {
     expect(body).not.toContain("One row per event.");
   });
 
+  it("keeps the sheet tablist out of the tab order (tab buttons are the stops)", () => {
+    render(() => <ImportPanel weddingId="wed_a" />);
+    const tablist = screen.getByRole("tablist", { name: /choose a sheet/i });
+    // tabIndex -1: focusable programmatically for the roving-focus pattern,
+    // but not a redundant keyboard tab stop alongside the tab buttons.
+    expect(tablist.tabIndex).toBe(-1);
+  });
+
   it("renders the mandatory-vs-optional key exactly once (shared, not per sheet)", () => {
     render(() => <ImportPanel weddingId="wed_a" />);
     const keys = [...document.querySelectorAll("*")].filter(
