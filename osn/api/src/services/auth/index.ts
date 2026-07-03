@@ -110,6 +110,11 @@ export function createAuthService(config: AuthConfig) {
     // internally by the generate/consume paths.
     notifyRecovery: recovery.notifyRecovery,
     notifyRecoveryByAccountId: recovery.notifyRecoveryByAccountId,
+    // Exposed for the same reason: tests pin the shared helper's
+    // missing-recipient branch and per-call-site template/kind wiring; in
+    // production it is only invoked internally by the passkey add/remove
+    // and cross-device-login flows.
+    notifySecurityEventByAccountId: securityEvents.notifySecurityEventByAccountId,
     beginStepUpPasskey: stepUp.beginStepUpPasskey,
     completeStepUpPasskey: stepUp.completeStepUpPasskey,
     beginStepUpOtp: stepUp.beginStepUpOtp,
