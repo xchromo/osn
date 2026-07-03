@@ -22,6 +22,8 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[s2s-patterns]] — graphBridge, cross-package calls, ARC token flow
 - [[frontend-patterns]] — SolidJS, Tauri, shared UI tokens, lazy loading
 - [[component-library]] — Zaidan/shadcn-style components, Kobalte primitives, CVA variants
+- [[auth-service-refactor]] — plan: split the ~4,480-line `auth.ts` into per-concern modules (behavior-preserving)
+- [[osn-api-worker-split]] — plan: split osn-api into identity / social / internal-S2S Workers
 
 ## Systems
 
