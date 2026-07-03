@@ -58,7 +58,7 @@ async function blobText(blob: Blob): Promise<string> {
   if (typeof blob.text === "function") return blob.text();
   return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
     reader.readAsText(blob);
   });
 }
