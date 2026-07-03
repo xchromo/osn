@@ -85,17 +85,38 @@ export const createChatsRoutes = (
   return (
     new Elysia({ prefix: "/chats" })
       // ── List user's chats ─────────────────────────────────────────────
-      .get("/", async ({ headers, set }) => {
-        const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
-        if (!claims) {
-          set.status = 401;
-          return { message: "Unauthorized" } as const;
-        }
-        const result = await Effect.runPromise(
-          listChats(claims.profileId).pipe(Effect.provide(dbLayer)),
-        );
-        return { chats: result };
-      })
+      .get(
+        "/",
+        async ({ query, headers, set }) => {
+          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          if (!claims) {
+            set.status = 401;
+            return { message: "Unauthorized" } as const;
+          }
+          const result = await Effect.runPromise(
+            listChats(claims.profileId, {
+              limit: query.limit ? Number(query.limit) : undefined,
+              cursor: query.cursor,
+            }).pipe(
+              Effect.catchTag("ValidationError", () =>
+                Effect.sync(() => {
+                  set.status = 422;
+                  return { error: "Invalid cursor" } as const;
+                }),
+              ),
+              Effect.provide(dbLayer),
+            ),
+          );
+          if (!Array.isArray(result) && "error" in result) return result;
+          return { chats: result };
+        },
+        {
+          query: t.Object({
+            limit: t.Optional(t.String()),
+            cursor: t.Optional(t.String()),
+          }),
+        },
+      )
       // ── Get chat by ID ────────────────────────────────────────────────
       .get(
         "/:id",
@@ -225,7 +246,7 @@ export const createChatsRoutes = (
       // ── Get members ───────────────────────────────────────────────────
       .get(
         "/:id/members",
-        async ({ params, headers, set }) => {
+        async ({ params, query, headers, set }) => {
           const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
           if (!claims) {
             set.status = 401;
@@ -234,7 +255,10 @@ export const createChatsRoutes = (
           const result = await Effect.runPromise(
             Effect.gen(function* () {
               yield* assertMember(params.id, claims.profileId);
-              return yield* getChatMembers(params.id);
+              return yield* getChatMembers(params.id, {
+                limit: query.limit ? Number(query.limit) : undefined,
+                offset: query.offset ? Number(query.offset) : undefined,
+              });
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
               Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
@@ -247,7 +271,13 @@ export const createChatsRoutes = (
           }
           return { members: result };
         },
-        { params: t.Object({ id: t.String() }) },
+        {
+          params: t.Object({ id: t.String() }),
+          query: t.Object({
+            limit: t.Optional(t.String()),
+            offset: t.Optional(t.String()),
+          }),
+        },
       )
       // ── Add member ────────────────────────────────────────────────────
       .post(

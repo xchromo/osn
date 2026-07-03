@@ -398,4 +398,162 @@ describe("chats service", () => {
       expect(members[0]!.profileId).toBe("usr_bob");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // ── P-W1 listChats pagination ───────────────────────────────────────────
+
+  it.effect("listChats applies the default limit (50) and returns newest first", () =>
+    Effect.gen(function* () {
+      const base = Date.now();
+      for (let i = 0; i < 55; i++) {
+        const chat = yield* seedChat({
+          type: "group",
+          title: `Chat ${i}`,
+          createdAt: new Date(base + i * 1000),
+        });
+        yield* seedMember(chat.id, "usr_alice");
+      }
+      const page = yield* listChats("usr_alice");
+      expect(page).toHaveLength(50);
+      // Newest first — the oldest 5 fall off the first page.
+      expect(page[0]!.title).toBe("Chat 54");
+      expect(page[49]!.title).toBe("Chat 5");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("listChats respects an explicit limit and clamps above the max (100)", () =>
+    Effect.gen(function* () {
+      const base = Date.now();
+      for (let i = 0; i < 105; i++) {
+        const chat = yield* seedChat({
+          type: "group",
+          title: `Chat ${i}`,
+          createdAt: new Date(base + i * 1000),
+        });
+        yield* seedMember(chat.id, "usr_alice");
+      }
+      const small = yield* listChats("usr_alice", { limit: 2 });
+      expect(small).toHaveLength(2);
+      expect(small[0]!.title).toBe("Chat 104");
+      expect(small[1]!.title).toBe("Chat 103");
+
+      const clamped = yield* listChats("usr_alice", { limit: 9999 });
+      expect(clamped).toHaveLength(100);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("listChats supports cursor-based pagination", () =>
+    Effect.gen(function* () {
+      const base = Date.now();
+      for (let i = 0; i < 5; i++) {
+        const chat = yield* seedChat({
+          type: "group",
+          title: `Chat ${i}`,
+          createdAt: new Date(base + i * 1000),
+        });
+        yield* seedMember(chat.id, "usr_alice");
+      }
+      const page1 = yield* listChats("usr_alice", { limit: 2 });
+      expect(page1.map((c) => c.title)).toEqual(["Chat 4", "Chat 3"]);
+
+      const page2 = yield* listChats("usr_alice", { limit: 2, cursor: page1[1]!.id });
+      expect(page2.map((c) => c.title)).toEqual(["Chat 2", "Chat 1"]);
+
+      const page3 = yield* listChats("usr_alice", { limit: 2, cursor: page2[1]!.id });
+      expect(page3.map((c) => c.title)).toEqual(["Chat 0"]);
+
+      // Cursor at the oldest chat: past the end — empty page, not an error.
+      const page4 = yield* listChats("usr_alice", { limit: 2, cursor: page3[0]!.id });
+      expect(page4).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("listChats rejects an unknown cursor instead of returning page 1", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice");
+      const result = yield* Effect.either(
+        listChats("usr_alice", { cursor: "chat_does_not_exist" }),
+      );
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ValidationError");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("listChats rejects a cursor naming a chat the caller is not a member of", () =>
+    Effect.gen(function* () {
+      const mine = yield* seedChat({ type: "group", title: "Mine" });
+      yield* seedMember(mine.id, "usr_alice");
+      const foreign = yield* seedChat({ type: "group", title: "Not Mine" });
+      yield* seedMember(foreign.id, "usr_bob", "admin");
+
+      // A cursor minted from someone else's chat must not paginate (or probe)
+      // the caller's list.
+      const result = yield* Effect.either(listChats("usr_alice", { cursor: foreign.id }));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ValidationError");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // ── P-W2 addMember member-count invariant (COUNT(*) path) ────────────────
+
+  it.effect("addMember rejects with MemberLimitReached at the member cap", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      // Fill to the 500-member cap (alice + 499 others).
+      for (let i = 0; i < 499; i++) {
+        yield* seedMember(chat.id, `usr_filler_${i}`);
+      }
+      const result = yield* Effect.either(addMember(chat.id, "usr_overflow", "usr_alice"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("MemberLimitReached");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // ── P-W4 getChatMembers pagination ────────────────────────────────────────
+
+  it.effect("getChatMembers applies the default limit (100)", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      for (let i = 0; i < 105; i++) {
+        yield* seedMember(chat.id, `usr_member_${i}`);
+      }
+      const page = yield* getChatMembers(chat.id);
+      expect(page).toHaveLength(100);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("getChatMembers pages with limit/offset without overlap or gaps", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      for (let i = 0; i < 4; i++) {
+        yield* seedMember(chat.id, `usr_member_${i}`);
+      }
+      const all = yield* getChatMembers(chat.id);
+      expect(all).toHaveLength(5);
+
+      const page1 = yield* getChatMembers(chat.id, { limit: 2, offset: 0 });
+      const page2 = yield* getChatMembers(chat.id, { limit: 2, offset: 2 });
+      const page3 = yield* getChatMembers(chat.id, { limit: 2, offset: 4 });
+      expect(page1.map((m) => m.id)).toEqual(all.slice(0, 2).map((m) => m.id));
+      expect(page2.map((m) => m.id)).toEqual(all.slice(2, 4).map((m) => m.id));
+      expect(page3.map((m) => m.id)).toEqual(all.slice(4, 5).map((m) => m.id));
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("getChatMembers returns empty for an offset beyond the end", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      const page = yield* getChatMembers(chat.id, { limit: 10, offset: 50 });
+      expect(page).toHaveLength(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });
