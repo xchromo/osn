@@ -99,6 +99,53 @@ describe("createInMemoryCeremonyStore", () => {
     expect(await store.get(`k${CEREMONY_STORE_MAX + 4}`)).not.toBe(null);
   });
 
+  it("evicts expired entries before FIFO-dropping live ones on a cap breach (T-S1)", async () => {
+    const onEntryDelta = vi.fn();
+    const store = createInMemoryCeremonyStore<Entry>("cross_device", { onEntryDelta });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(1_000_000));
+      // Fill past the cap (CEREMONY_STORE_MAX + 1 — the bound check runs
+      // BEFORE each insert, so the breach is only observed on the next set)
+      // with three short-TTL entries interleaved among long-TTL live ones.
+      // "live-0" is the OLDEST live insertion — first in FIFO order.
+      const shortIndices = new Set([100, 5_000, 9_000]);
+      for (let i = 0; i < CEREMONY_STORE_MAX + 1; i++) {
+        if (shortIndices.has(i)) {
+          // eslint-disable-next-line no-await-in-loop -- sequential insert
+          await store.set(`short-${i}`, entry(`s${i}`), 1_000);
+        } else {
+          // eslint-disable-next-line no-await-in-loop -- sequential insert
+          await store.set(`live-${i}`, entry(`l${i}`), 600_000);
+        }
+      }
+      expect(onEntryDelta).not.toHaveBeenCalledWith(-1, "cross_device");
+
+      // Advance past the short TTLs but WITHIN the 30s sweep debounce — the
+      // debounced TTL sweep is still armed from the first set, so only the
+      // cap-breach path can evict.
+      vi.setSystemTime(new Date(1_000_000 + 5_000));
+      await store.set("extra", entry("x"), 600_000);
+
+      // The breach swept the three expired entries (size drops back under the
+      // cap), so NO live entry was FIFO-dropped: exactly 3 evictions.
+      const evictions = onEntryDelta.mock.calls.filter(
+        ([delta, ns]) => delta === -1 && ns === "cross_device",
+      );
+      expect(evictions).toHaveLength(3);
+      for (const i of shortIndices) {
+        // eslint-disable-next-line no-await-in-loop -- sequential read
+        expect(await store.get(`short-${i}`)).toBe(null);
+      }
+      // The oldest LIVE key survived — expired entries were preferred over
+      // FIFO-dropping live insertions.
+      expect(await store.get("live-0")).toMatchObject({ challenge: "l0" });
+      expect(await store.get("extra")).toMatchObject({ challenge: "x" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits op + entry-delta observer hooks", async () => {
     const onOp = vi.fn();
     const onEntryDelta = vi.fn();
