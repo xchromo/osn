@@ -1,7 +1,7 @@
 import { chats, chatMembers } from "@zap/db/schema";
 import type { Chat, ChatMember } from "@zap/db/schema";
 import { Db } from "@zap/db/service";
-import { and, asc, count, desc, eq, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, lt, or } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
 import {
@@ -100,7 +100,11 @@ export const getChat = (id: string): Effect.Effect<Chat, ChatNotFound | Database
 export const listChats = (
   profileId: string,
   opts: { limit?: number; cursor?: string } = {},
-): Effect.Effect<Chat[], ValidationError | DatabaseError, Db> =>
+): Effect.Effect<
+  { chats: Chat[]; nextCursor: string | null; hasMore: boolean },
+  ValidationError | DatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
@@ -117,23 +121,36 @@ export const listChats = (
       // and reject an unknown/foreign cursor with a validation error instead
       // of silently falling back to page 1.
       const cursorRows = yield* Effect.tryPromise({
-        try: (): Promise<{ createdAt: Date }[]> =>
+        try: (): Promise<{ createdAt: Date; id: string }[]> =>
           db
-            .select({ createdAt: chats.createdAt })
+            .select({ createdAt: chats.createdAt, id: chats.id })
             .from(chats)
             .innerJoin(chatMembers, eq(chatMembers.chatId, chats.id))
             .where(and(eq(chats.id, opts.cursor!), eq(chatMembers.profileId, profileId)))
-            .limit(1) as Promise<{ createdAt: Date }[]>,
+            .limit(1) as Promise<{ createdAt: Date; id: string }[]>,
         catch: (cause) => new DatabaseError({ cause }),
       });
       if (cursorRows.length === 0) {
         return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this user" }));
       }
-      conditions.push(lt(chats.createdAt, cursorRows[0]!.createdAt));
+      // Composite keyset (createdAt, id): created_at has SECOND resolution and
+      // is not unique, so a strict `createdAt <` alone would silently skip any
+      // chat sharing the cursor's second (the expected case for creation
+      // bursts). The id tiebreak makes pages disjoint and exhaustive — same
+      // pattern as getChatMembers' (joinedAt, id) ordering.
+      const cur = cursorRows[0]!;
+      conditions.push(
+        or(
+          lt(chats.createdAt, cur.createdAt),
+          and(eq(chats.createdAt, cur.createdAt), lt(chats.id, cur.id)),
+        )!,
+      );
     }
 
     // Single membership-joined query, newest first, bounded by limit —
     // replaces the old fetch-all-memberships + inArray fetch-all-chats pair.
+    // Fetch limit + 1 so the presence of a next page costs one extra row
+    // instead of one extra request.
     const rows = yield* Effect.tryPromise({
       try: (): Promise<{ chat: Chat }[]> =>
         db
@@ -141,11 +158,17 @@ export const listChats = (
           .from(chats)
           .innerJoin(chatMembers, eq(chatMembers.chatId, chats.id))
           .where(and(...conditions))
-          .orderBy(desc(chats.createdAt))
-          .limit(limit) as Promise<{ chat: Chat }[]>,
+          .orderBy(desc(chats.createdAt), desc(chats.id))
+          .limit(limit + 1) as Promise<{ chat: Chat }[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
-    return rows.map((r) => r.chat);
+    const hasMore = rows.length > limit;
+    const page = (hasMore ? rows.slice(0, limit) : rows).map((r) => r.chat);
+    return {
+      chats: page,
+      hasMore,
+      nextCursor: hasMore && page.length > 0 ? page[page.length - 1]!.id : null,
+    };
   }).pipe(Effect.withSpan("zap.chats.list"));
 
 export const createChat = (
@@ -406,11 +429,16 @@ export const removeMember = (
 
 export const getChatMembers = (
   chatId: string,
-  opts: { limit?: number; offset?: number } = {},
-): Effect.Effect<ChatMember[], ChatNotFound | DatabaseError, Db> =>
+  opts: { limit?: number; offset?: number; assertedExists?: boolean } = {},
+): Effect.Effect<{ members: ChatMember[]; hasMore: boolean }, ChatNotFound | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    yield* getChat(chatId);
+    // P-I5: callers that already gated on assertMember have proven the chat
+    // exists (a membership row FK-references it) — skip the redundant load.
+    // Un-gated callers keep the 404 contract.
+    if (!opts.assertedExists) {
+      yield* getChat(chatId);
+    }
 
     // P-W4: limit/offset pagination — members are bounded at MAX_CHAT_MEMBERS
     // (500), so offset paging is stable enough. Default 100, cap 500, floor 1.
@@ -418,7 +446,8 @@ export const getChatMembers = (
     const limit = Math.min(Math.max(1, requested), MAX_MEMBER_LIMIT);
     const offset = Number.isFinite(opts.offset) ? Math.max(0, opts.offset as number) : 0;
 
-    const members = yield* Effect.tryPromise({
+    // limit + 1: next-page presence for one extra row, not one extra request.
+    const rows = yield* Effect.tryPromise({
       try: (): Promise<ChatMember[]> =>
         db
           .select()
@@ -427,11 +456,12 @@ export const getChatMembers = (
           // Deterministic page order: joinedAt, then id as tiebreak (batch
           // inserts share a joinedAt timestamp).
           .orderBy(asc(chatMembers.joinedAt), asc(chatMembers.id))
-          .limit(limit)
+          .limit(limit + 1)
           .offset(offset) as Promise<ChatMember[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
-    return members;
+    const hasMore = rows.length > limit;
+    return { members: hasMore ? rows.slice(0, limit) : rows, hasMore };
   }).pipe(Effect.withSpan("zap.chats.get_members"));
 
 // ---------------------------------------------------------------------------

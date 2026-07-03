@@ -951,16 +951,20 @@ export const createEventsRoutes = (
           // P-I14: the ICS body is a pure function of the event row (the
           // only per-request field is the informational DTSTAMP), but the
           // route is visibility-gated, so it must never land in a shared
-          // cache — `private` + a short max-age keeps repeat "Add to
-          // calendar" clicks cheap without a stale-event window longer
-          // than 5 minutes. The weak ETag is derived from updatedAt so
-          // any event edit invalidates it.
+          // cache. S-M1: `no-cache` (NOT max-age) — a browser's private
+          // cache keys on URL only, so any freshness window would replay a
+          // 200 across auth-state changes (logout, profile switch) on the
+          // same client without re-running the visibility gate. `no-cache`
+          // + ETag forces a conditional revalidation through the gate on
+          // every reuse; repeat "Add to calendar" clicks still get a cheap
+          // 304 instead of a regenerated body. The weak ETag is derived
+          // from updatedAt so any event edit invalidates it.
           const updatedAtMs =
             event.updatedAt instanceof Date
               ? event.updatedAt.getTime()
               : new Date(event.updatedAt).getTime();
           const etag = `W/"${event.id}-${updatedAtMs}"`;
-          set.headers["cache-control"] = "private, max-age=300";
+          set.headers["cache-control"] = "private, no-cache";
           set.headers["etag"] = etag;
           const ifNoneMatch = headers["if-none-match"];
           // RFC 9110 §13.1.2: `If-None-Match: *` matches any current

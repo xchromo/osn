@@ -42,7 +42,9 @@ export const eventRsvps = sqliteTable(
   },
   (t) => [
     unique("event_rsvps_pair_idx").on(t.eventId, t.profileId),
-    index("event_rsvps_event_idx").on(t.eventId),
+    // P-I1 (prep-pr review): no single-column `event_id` index — both the
+    // unique pair index above and the (event_id, status) composite below
+    // lead on event_id, so it would be pure write amplification.
     index("event_rsvps_profile_idx").on(t.profileId),
     // P-W3: powers the visibility-filter EXISTS lookup, which keys on the
     // constant `viewerId` first then the per-row `event_id`. The

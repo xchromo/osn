@@ -231,10 +231,13 @@ export function createRecoveryModule(
    * "wrong identifier" and "wrong code" over the wire.
    *
    * S-M2: both branches (unknown identifier vs known identifier + wrong code)
-   * execute the same shape of work — identifier lookup, a `hashRecoveryCode`
-   * call, and one indexed statement against `recovery_codes` (a probe SELECT
-   * on the unknown branch, the atomic conditional UPDATE on the known branch)
-   * — so wall-clock latency does not reveal whether the identifier exists.
+   * execute a similar shape of work — identifier lookup, a `hashRecoveryCode`
+   * call, and an indexed statement against `recovery_codes` (a probe SELECT
+   * on the unknown branch, the atomic conditional UPDATE on the known branch).
+   * Parity is APPROXIMATE, not exact: the known branch additionally runs the
+   * lockout-store round-trips (`isLocked`/`recordFailure`, pre-existing) and
+   * a failure-classification SELECT, so the timing oracle is narrowed by the
+   * per-IP rate limit and per-account lockout rather than eliminated.
    */
   const consumeRecoveryCode = (
     identifier: string,

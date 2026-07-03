@@ -107,8 +107,10 @@ export const createChatsRoutes = (
               Effect.provide(dbLayer),
             ),
           );
-          if (!Array.isArray(result) && "error" in result) return result;
-          return { chats: result };
+          if ("error" in result) return result;
+          // P-I4: continuation metadata — clients stop without probing an
+          // empty extra page.
+          return { chats: result.chats, nextCursor: result.nextCursor, hasMore: result.hasMore };
         },
         {
           query: t.Object({
@@ -258,6 +260,8 @@ export const createChatsRoutes = (
               return yield* getChatMembers(params.id, {
                 limit: query.limit ? Number(query.limit) : undefined,
                 offset: query.offset ? Number(query.offset) : undefined,
+                // P-I5: assertMember above proved the chat exists.
+                assertedExists: true,
               });
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
@@ -269,7 +273,8 @@ export const createChatsRoutes = (
             set.status = 404;
             return { message: "Chat not found" };
           }
-          return { members: result };
+          // P-I4: continuation metadata for offset paging.
+          return { members: result.members, hasMore: result.hasMore };
         },
         {
           params: t.Object({ id: t.String() }),

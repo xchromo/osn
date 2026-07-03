@@ -12,13 +12,19 @@ Performance audit sweep (versioned packages). No behavioural or security
 changes — fail-closed rate limiting, visibility gates, consent checks,
 single-use guarantees, and tenant scoping are preserved exactly.
 
-- `@zap/api`: `listChats` is cursor-paginated (default 50, max 100) with
-  caller-scoped cursors (unknown/foreign cursors rejected); `getChatMembers`
-  is limit/offset-paginated (default 100, max 500); `addMember` checks the
-  member cap with `COUNT(*)` instead of fetching every member row.
+- `@zap/api`: `listChats` is cursor-paginated (default 50, max 100) with a
+  composite `(createdAt, id)` keyset cursor (same-second creation bursts are
+  never skipped) and caller-scoped cursors (unknown/foreign cursors
+  rejected); `getChatMembers` is limit/offset-paginated (default 100, max
+  500) and skips its redundant existence load when the route has already
+  asserted membership; both list responses carry `hasMore` (+ `nextCursor`
+  for chats) continuation metadata; `addMember` checks the member cap with
+  `COUNT(*)` instead of fetching every member row.
 - `@osn/api`: ceremony-store TTL sweep debounced to once per 30s (hard cap
   still enforced on every set); `beginRegistration`/`registerProfile`
-  uniqueness probes collapsed to one `WHERE email = ? OR handle = ?` query;
+  uniqueness probes collapsed to one round-trip via `UNION ALL` of two
+  indexed single-table arms (an `OR` across the users-accounts join defeats
+  SQLite's OR-optimization and plans as a full table scan);
   `sendConnectionRequest` reads run concurrently; `consumeRecoveryCode` is a
   single atomic conditional `UPDATE … RETURNING` (also closes the remaining
   check-then-act window); `countActiveRecoveryCodes` is a SQL aggregate that
@@ -31,10 +37,13 @@ single-use guarantees, and tenant scoping are preserved exactly.
   collapsed to single race-free `UPDATE … RETURNING`; `listTodayEvents`
   capped at 200 rows; RSVP routes thread the already-loaded event row into
   `listRsvps`/`rsvpCounts`/`latestRsvps`; `createEvent` uses `INSERT …
-  RETURNING`; `GET /events/:id/ics` sends `Cache-Control: private` + weak
-  ETag and honours `If-None-Match` with 304.
+  RETURNING`; `GET /events/:id/ics` sends `Cache-Control: private,
+  no-cache` + a weak ETag and honours `If-None-Match` (including `*` and
+  multi-value lists) with 304 — every reuse revalidates through the
+  visibility gate.
 - `@pulse/db`: new `event_rsvps_event_status_idx (event_id, status)`
-  composite index (migration 0008).
+  composite index; the subsumed single-column `event_rsvps_event_idx` is
+  dropped (migration 0008).
 - `@osn/client`: `RegistrationClient.checkHandle` accepts an optional
   `AbortSignal` so debounced callers can cancel stale availability probes.
 - `@osn/ui`: `Register` and `CreateProfileForm` abort the previous in-flight

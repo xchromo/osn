@@ -456,7 +456,7 @@ describe("ICS route", () => {
     const { event } = (await createRes.json()) as { event: { id: string } };
     const res = await get(app, `/events/${event.id}/ics`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+    expect(res.headers.get("cache-control")).toBe("private, no-cache");
     const etag = res.headers.get("etag");
     expect(etag).toMatch(/^W\/".+"$/);
   });
@@ -482,7 +482,7 @@ describe("ICS route", () => {
     expect(await res.text()).toBe("");
     // Revalidation headers still present on the 304.
     expect(res.headers.get("etag")).toBe(etag);
-    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+    expect(res.headers.get("cache-control")).toBe("private, no-cache");
   });
 
   it("GET /events/:id/ics returns 304 when the real ETag appears in a multi-value If-None-Match", async () => {
@@ -527,7 +527,7 @@ describe("ICS route", () => {
     expect(await res.text()).toBe("");
     // Revalidation headers still present on the 304.
     expect(res.headers.get("etag")).toMatch(/^W\/".+"$/);
-    expect(res.headers.get("cache-control")).toBe("private, max-age=300");
+    expect(res.headers.get("cache-control")).toBe("private, no-cache");
   });
 
   it("GET /events/:id/ics returns a fresh body when If-None-Match does not match", async () => {

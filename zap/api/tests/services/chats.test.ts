@@ -31,7 +31,7 @@ describe("chats service", () => {
       expect(chat.createdByProfileId).toBe("usr_alice");
 
       // Creator should be an admin member.
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
       expect(members[0]!.profileId).toBe("usr_alice");
       expect(members[0]!.role).toBe("admin");
@@ -43,7 +43,7 @@ describe("chats service", () => {
       const chat = yield* createChat({ type: "dm", memberProfileIds: ["usr_bob"] }, "usr_alice");
       expect(chat.type).toBe("dm");
       expect(chat.title).toBeNull();
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(2);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -65,7 +65,7 @@ describe("chats service", () => {
         { type: "group", title: "With Members", memberProfileIds: ["usr_bob", "usr_charlie"] },
         "usr_alice",
       );
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(3); // alice (admin) + bob + charlie
       const userIds = members.map((m) => m.profileId).toSorted();
       expect(userIds).toEqual(["usr_alice", "usr_bob", "usr_charlie"]);
@@ -100,7 +100,7 @@ describe("chats service", () => {
       yield* seedMember(chat1.id, "usr_alice", "admin");
       yield* seedMember(chat2.id, "usr_alice");
 
-      const result = yield* listChats("usr_alice");
+      const { chats: result } = yield* listChats("usr_alice");
       expect(result).toHaveLength(2);
       const ids = result.map((c) => c.id).toSorted();
       expect(ids).toEqual([chat1.id, chat2.id].toSorted());
@@ -109,7 +109,7 @@ describe("chats service", () => {
 
   it.effect("listChats returns empty for user with no chats", () =>
     Effect.gen(function* () {
-      const result = yield* listChats("usr_nobody");
+      const { chats: result } = yield* listChats("usr_nobody");
       expect(result).toHaveLength(0);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -168,7 +168,7 @@ describe("chats service", () => {
       yield* seedMember(chat.id, "usr_alice", "admin");
       yield* seedMember(chat.id, "usr_bob");
       yield* removeMember(chat.id, "usr_bob", "usr_alice");
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
       expect(members[0]!.profileId).toBe("usr_alice");
     }).pipe(Effect.provide(createTestLayer())),
@@ -180,7 +180,7 @@ describe("chats service", () => {
       yield* seedMember(chat.id, "usr_alice", "admin");
       yield* seedMember(chat.id, "usr_bob");
       yield* removeMember(chat.id, "usr_bob", "usr_bob");
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -238,7 +238,7 @@ describe("chats service", () => {
       yield* seedMember(chat1.id, "usr_bob", "admin");
       yield* seedMember(chat2.id, "usr_charlie", "admin");
 
-      const result = yield* listChats("usr_nobody");
+      const { chats: result } = yield* listChats("usr_nobody");
       expect(result).toHaveLength(0);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -251,7 +251,7 @@ describe("chats service", () => {
       yield* seedMember(chat.id, "usr_alice", "admin");
       yield* seedMember(chat.id, "usr_bob");
       yield* seedMember(chat.id, "usr_charlie");
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(3);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -292,7 +292,7 @@ describe("chats service", () => {
         }
       }
       // No member should have been inserted.
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -310,7 +310,7 @@ describe("chats service", () => {
           expect(result.left.reason).toBe("graph_unreachable");
         }
       }
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -328,7 +328,7 @@ describe("chats service", () => {
           expect(result.left._tag).toBe("ConsentDenied");
         }
         // The chat must not have been created.
-        const mine = yield* listChats("usr_alice");
+        const { chats: mine } = yield* listChats("usr_alice");
         expect(mine).toHaveLength(0);
       }).pipe(Effect.provide(createTestLayer())),
   );
@@ -382,7 +382,7 @@ describe("chats service", () => {
       if (Either.isLeft(result)) {
         expect(result.left._tag).toBe("LastAdmin");
       }
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(2);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -393,7 +393,7 @@ describe("chats service", () => {
       yield* seedMember(chat.id, "usr_alice", "admin");
       yield* seedMember(chat.id, "usr_bob", "admin");
       yield* removeMember(chat.id, "usr_alice", "usr_bob");
-      const members = yield* getChatMembers(chat.id);
+      const { members } = yield* getChatMembers(chat.id);
       expect(members).toHaveLength(1);
       expect(members[0]!.profileId).toBe("usr_bob");
     }).pipe(Effect.provide(createTestLayer())),
@@ -412,7 +412,7 @@ describe("chats service", () => {
         });
         yield* seedMember(chat.id, "usr_alice");
       }
-      const page = yield* listChats("usr_alice");
+      const { chats: page } = yield* listChats("usr_alice");
       expect(page).toHaveLength(50);
       // Newest first — the oldest 5 fall off the first page.
       expect(page[0]!.title).toBe("Chat 54");
@@ -431,12 +431,12 @@ describe("chats service", () => {
         });
         yield* seedMember(chat.id, "usr_alice");
       }
-      const small = yield* listChats("usr_alice", { limit: 2 });
+      const { chats: small } = yield* listChats("usr_alice", { limit: 2 });
       expect(small).toHaveLength(2);
       expect(small[0]!.title).toBe("Chat 104");
       expect(small[1]!.title).toBe("Chat 103");
 
-      const clamped = yield* listChats("usr_alice", { limit: 9999 });
+      const { chats: clamped } = yield* listChats("usr_alice", { limit: 9999 });
       expect(clamped).toHaveLength(100);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -453,17 +453,49 @@ describe("chats service", () => {
         yield* seedMember(chat.id, "usr_alice");
       }
       const page1 = yield* listChats("usr_alice", { limit: 2 });
-      expect(page1.map((c) => c.title)).toEqual(["Chat 4", "Chat 3"]);
+      expect(page1.chats.map((c) => c.title)).toEqual(["Chat 4", "Chat 3"]);
+      // P-I4: continuation metadata — nextCursor is the last row of the page.
+      expect(page1.hasMore).toBe(true);
+      expect(page1.nextCursor).toBe(page1.chats[1]!.id);
 
-      const page2 = yield* listChats("usr_alice", { limit: 2, cursor: page1[1]!.id });
-      expect(page2.map((c) => c.title)).toEqual(["Chat 2", "Chat 1"]);
+      const page2 = yield* listChats("usr_alice", { limit: 2, cursor: page1.nextCursor! });
+      expect(page2.chats.map((c) => c.title)).toEqual(["Chat 2", "Chat 1"]);
+      expect(page2.hasMore).toBe(true);
 
-      const page3 = yield* listChats("usr_alice", { limit: 2, cursor: page2[1]!.id });
-      expect(page3.map((c) => c.title)).toEqual(["Chat 0"]);
+      const page3 = yield* listChats("usr_alice", { limit: 2, cursor: page2.nextCursor! });
+      expect(page3.chats.map((c) => c.title)).toEqual(["Chat 0"]);
+      expect(page3.hasMore).toBe(false);
+      expect(page3.nextCursor).toBeNull();
 
       // Cursor at the oldest chat: past the end — empty page, not an error.
-      const page4 = yield* listChats("usr_alice", { limit: 2, cursor: page3[0]!.id });
-      expect(page4).toHaveLength(0);
+      const page4 = yield* listChats("usr_alice", { limit: 2, cursor: page3.chats[0]!.id });
+      expect(page4.chats).toHaveLength(0);
+      expect(page4.hasMore).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("listChats does not skip chats created in the same second (P-W2)", () =>
+    Effect.gen(function* () {
+      // Creation bursts share a second-resolution createdAt; the composite
+      // (createdAt, id) cursor must still walk every chat exactly once.
+      const ts = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const chat = yield* seedChat({ type: "group", title: `Burst ${i}`, createdAt: ts });
+        yield* seedMember(chat.id, "usr_alice");
+        ids.push(chat.id);
+      }
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (;;) {
+        const page = yield* listChats("usr_alice", { limit: 2, cursor });
+        seen.push(...page.chats.map((c) => c.id));
+        if (!page.hasMore) break;
+        cursor = page.nextCursor!;
+      }
+      // Every burst chat appears exactly once — no drops, no repeats.
+      expect([...seen].sort()).toEqual([...ids].sort());
+      expect(new Set(seen).size).toBe(ids.length);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -524,7 +556,7 @@ describe("chats service", () => {
       for (let i = 0; i < 105; i++) {
         yield* seedMember(chat.id, `usr_member_${i}`);
       }
-      const page = yield* getChatMembers(chat.id);
+      const { members: page } = yield* getChatMembers(chat.id);
       expect(page).toHaveLength(100);
     }).pipe(Effect.provide(createTestLayer())),
   );
@@ -536,12 +568,12 @@ describe("chats service", () => {
       for (let i = 0; i < 4; i++) {
         yield* seedMember(chat.id, `usr_member_${i}`);
       }
-      const all = yield* getChatMembers(chat.id);
+      const { members: all } = yield* getChatMembers(chat.id);
       expect(all).toHaveLength(5);
 
-      const page1 = yield* getChatMembers(chat.id, { limit: 2, offset: 0 });
-      const page2 = yield* getChatMembers(chat.id, { limit: 2, offset: 2 });
-      const page3 = yield* getChatMembers(chat.id, { limit: 2, offset: 4 });
+      const { members: page1 } = yield* getChatMembers(chat.id, { limit: 2, offset: 0 });
+      const { members: page2 } = yield* getChatMembers(chat.id, { limit: 2, offset: 2 });
+      const { members: page3 } = yield* getChatMembers(chat.id, { limit: 2, offset: 4 });
       expect(page1.map((m) => m.id)).toEqual(all.slice(0, 2).map((m) => m.id));
       expect(page2.map((m) => m.id)).toEqual(all.slice(2, 4).map((m) => m.id));
       expect(page3.map((m) => m.id)).toEqual(all.slice(4, 5).map((m) => m.id));
@@ -552,7 +584,7 @@ describe("chats service", () => {
     Effect.gen(function* () {
       const chat = yield* seedChat({ type: "group" });
       yield* seedMember(chat.id, "usr_alice", "admin");
-      const page = yield* getChatMembers(chat.id, { limit: 10, offset: 50 });
+      const { members: page } = yield* getChatMembers(chat.id, { limit: 10, offset: 50 });
       expect(page).toHaveLength(0);
     }).pipe(Effect.provide(createTestLayer())),
   );

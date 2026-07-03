@@ -7,7 +7,8 @@ import { accounts, users } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { commitBatch } from "@shared/db-utils";
 import { type EmailError, EmailService } from "@shared/email";
-import { eq, or } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/sqlite-core";
 import { Effect, Schema } from "effect";
 
 import { timingSafeEqualString } from "../../lib/timing-safe";
@@ -30,7 +31,7 @@ import type { ProfileWithEmail, SessionMeta } from "./types";
 
 export function createRegistrationModule(
   ctx: AuthContext,
-  // P-W11: uniqueness probes now run as a single inline OR query, so the
+  // P-W11: uniqueness probes now run as a single inline UNION ALL query, so the
   // profiles module is no longer consulted. Parameter kept (underscore-
   // prefixed) so the module factory wiring in index.ts stays uniform.
   _profiles: ProfilesModule,
@@ -61,24 +62,32 @@ export function createRegistrationModule(
       }
 
       const { db } = yield* Db;
-      // P-W11: single `WHERE email = ? OR handle = ?` probe instead of two
-      // parallel queries; which field collided is distinguished in JS below.
-      // limit(2) suffices: at most one row matches by email and one by handle,
-      // and the email error takes priority (same order as the old two checks).
+      // P-W11: single round-trip uniqueness probe. UNION ALL of two
+      // single-table arms rather than `WHERE email = ? OR handle = ?` across
+      // the users⋈accounts join — an OR spanning two joined tables defeats
+      // SQLite's OR-optimization and plans as a full `users` scan, while each
+      // arm here is a seek on its UNIQUE index (accounts.email / users.handle).
+      // The email error takes priority (same order as the old two checks).
       const collisions = yield* Effect.tryPromise({
         try: () =>
-          db
-            .select({ email: accounts.email, handle: users.handle })
-            .from(users)
-            .innerJoin(accounts, eq(users.accountId, accounts.id))
-            .where(or(eq(accounts.email, email), eq(users.handle, handle)))
-            .limit(2),
+          // No per-arm LIMIT: SQLite rejects LIMIT inside compound arms, and
+          // both columns are UNIQUE so each arm yields at most one row anyway.
+          unionAll(
+            db
+              .select({ field: sql<string>`'email'`.as("field") })
+              .from(accounts)
+              .where(eq(accounts.email, email)),
+            db
+              .select({ field: sql<string>`'handle'`.as("field") })
+              .from(users)
+              .where(eq(users.handle, handle)),
+          ),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      if (collisions.some((c) => c.email === email)) {
+      if (collisions.some((c) => c.field === "email")) {
         return yield* Effect.fail(new AuthError({ message: "Email already registered" }));
       }
-      if (collisions.some((c) => c.handle === handle)) {
+      if (collisions.some((c) => c.field === "handle")) {
         return yield* Effect.fail(new AuthError({ message: "Handle already taken" }));
       }
 
@@ -178,18 +187,24 @@ export function createRegistrationModule(
       // O3: the store sweeps expired entries and self-bounds (CEREMONY_STORE_MAX
       // on the in-memory backend, native PX expiry on Redis), so no explicit
       // sweep / size cap is needed here any more.
-      // P-W11: single existence probe (`WHERE email = ? OR handle = ?`)
-      // instead of two parallel per-field queries — S-M1 below responds
-      // identically for either collision, so no per-field distinction needed.
+      // P-W11: single round-trip existence probe — UNION ALL of two indexed
+      // single-table arms (see registerProfile for why not an OR across the
+      // join). S-M1 below responds identically for either collision, so no
+      // per-field distinction is needed.
       const { db } = yield* Db;
       const collision = yield* Effect.tryPromise({
         try: () =>
-          db
-            .select({ id: users.id })
-            .from(users)
-            .innerJoin(accounts, eq(users.accountId, accounts.id))
-            .where(or(eq(accounts.email, normalisedEmail), eq(users.handle, handle)))
-            .limit(1),
+          // No per-arm LIMIT — see registerProfile's probe.
+          unionAll(
+            db
+              .select({ hit: sql<number>`1`.as("hit") })
+              .from(accounts)
+              .where(eq(accounts.email, normalisedEmail)),
+            db
+              .select({ hit: sql<number>`1`.as("hit") })
+              .from(users)
+              .where(eq(users.handle, handle)),
+          ),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
