@@ -1709,28 +1709,62 @@ export function createAuthService(config: AuthConfig) {
 
       const { db } = yield* Db;
       // Read the old session's metadata up front (D1 has no interactive
-      // transaction), then delete-old + insert-new commit as one atomic batch so
-      // the family never has zero rows mid-rotation.
+      // transaction).
       const existing = yield* Effect.tryPromise({
         try: () => db.select().from(sessions).where(eq(sessions.id, oldSessionId)).limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
       const old = existing[0];
+
+      // S-review (rotation CAS): `verifyRefreshToken` above is check-then-act —
+      // two concurrent refreshes presenting the SAME token both see the row and
+      // both reach here. Without a CAS both would delete-old (the 2nd affecting
+      // 0 rows, unnoticed) and both insert a NEW session, leaving two live
+      // sessions in one family with reuse detection never firing. Make the
+      // DELETE the gate: rotate ONLY while the old row still exists, then key
+      // the insert off rows-affected. Mirrors the recovery-code CAS in this file.
+      const delResult = yield* Effect.tryPromise({
+        try: () => db.delete(sessions).where(eq(sessions.id, oldSessionId)),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const rotated =
+        (delResult as unknown as { changes?: number; rowsAffected?: number }).changes ??
+        (delResult as unknown as { changes?: number; rowsAffected?: number }).rowsAffected ??
+        0;
+
+      if (rotated === 0) {
+        // Lost the CAS: the old session was already rotated out by a concurrent
+        // refresh (or a replayed token) between our verify and our delete. This
+        // is the C2 reuse signal — revoke the whole family rather than minting a
+        // sibling session, matching `detectReuse`'s response to a replayed
+        // rotated-out token.
+        metricSessionReuseDetected();
+        yield* Effect.logWarning("Session rotation CAS lost — revoking family");
+        yield* Effect.tryPromise({
+          try: () => db.delete(sessions).where(eq(sessions.familyId, familyId)),
+          catch: (cause) => new DatabaseError({ cause }),
+        });
+        yield* trackRotatedSession(oldSessionId, familyId).pipe(Effect.catchAll(() => Effect.void));
+        metricSessionFamilyRevoked();
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired session" }));
+      }
+
+      // We own the rotation — insert the new session in the same family. The
+      // zero-rows-in-family window between delete and insert is inert: the new
+      // token isn't returned to any caller until below, and other tokens are
+      // looked up by their own id, not by family.
       yield* Effect.tryPromise({
         try: () =>
-          commitBatch(db, [
-            db.delete(sessions).where(eq(sessions.id, oldSessionId)),
-            db.insert(sessions).values({
-              id: newSessionId,
-              accountId,
-              familyId,
-              expiresAt: nowSec + refreshTokenTtl,
-              createdAt: nowSec,
-              uaLabel: old?.uaLabel ?? null,
-              ipHash: old?.ipHash ?? null,
-              lastUsedAt: nowSec,
-            }),
-          ]),
+          db.insert(sessions).values({
+            id: newSessionId,
+            accountId,
+            familyId,
+            expiresAt: nowSec + refreshTokenTtl,
+            createdAt: nowSec,
+            uaLabel: old?.uaLabel ?? null,
+            ipHash: old?.ipHash ?? null,
+            lastUsedAt: nowSec,
+          }),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
