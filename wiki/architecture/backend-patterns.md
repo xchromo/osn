@@ -19,7 +19,7 @@ packages:
   - "@pulse/api"
   - "@osn/api"
   - "@zap/api"
-last-reviewed: 2026-06-17
+last-reviewed: 2026-07-03
 ---
 
 # Backend Code Patterns
@@ -111,6 +111,17 @@ Key points:
 - Errors are mapped to domain-specific tagged errors (`ValidationError`, `EventNotFound`, etc.)
 - Services use `Effect.gen` + generator syntax for sequential Effect composition
 - Every service function should be wrapped in `Effect.withSpan("<domain>.<operation>")` for tracing
+
+### Large services: split into a module directory
+
+When a service outgrows a single file, split it into a directory of domain modules composed by an `index.ts` factory — the canonical example is `osn/api/src/services/auth/`:
+
+- `index.ts` — `createAuthService(config)` builds a shared context once, wires the domain module factories in dependency order, and returns the flat method surface. It also re-exports every previously-public name, so consumers keep importing from `services/auth` unchanged.
+- `context.ts` — `createAuthContext(config)`: config defaults resolved once + injected stores + cross-cutting helpers (e.g. `hashIp`). Every module factory takes this as its first argument.
+- One file per domain (`tokens.ts`, `passkeys.ts`, `recovery.ts`, `step-up.ts`, …). A module that needs another module's methods takes it as a factory parameter (`createTokensModule(ctx, profiles)`) and destructures what it uses — the layering stays acyclic and explicit.
+- Stateless building blocks live beside them: `errors.ts`, `types.ts` (public DTOs), `helpers.ts` (pure functions), `constants.ts` (tunables + rationale), `stores.ts` (store contracts + in-memory defaults), `config.ts`.
+
+Rules of thumb: module factories return only the methods other code calls (internals stay closed over); the composition root enumerates the public surface explicitly rather than spreading modules, so the service's API is pinned in one place.
 
 ## Route Factory Pattern
 
@@ -210,3 +221,4 @@ export const login = (input: LoginInput) =>
 - [pulse/api/src/routes/events.ts](../../pulse/api/src/routes/events.ts) — canonical route example
 - [pulse/api/src/services/events.ts](../../pulse/api/src/services/events.ts) — canonical service example
 - [osn/api/src/routes/auth.ts](../../osn/api/src/routes/auth.ts) — auth route factory
+- [osn/api/src/services/auth/index.ts](../../osn/api/src/services/auth/index.ts) — module-directory service composition root
