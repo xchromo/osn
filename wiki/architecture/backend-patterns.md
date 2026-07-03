@@ -123,12 +123,14 @@ When a service outgrows a single file, split it into a directory of domain modul
 
 Rules of thumb: module factories return only the methods other code calls (internals stay closed over); the composition root enumerates the public surface explicitly rather than spreading modules, so the service's API is pinned in one place.
 
+The same shape applies at the route layer — `osn/api/src/routes/auth/` splits a large route factory into one Elysia group per domain (`registration.ts`, `step-up.ts`, `sessions.ts`, …), each a `createXxxRoutes(ctx)` factory over a shared `AuthRouteContext` (`context.ts`: service instance, app runner, rate-limit / Turnstile gates, IP + cookie plumbing). `index.ts` builds the context once and mounts the groups with `.use(...)`, keeping the original `createAuthRoutes` signature and re-exports intact.
+
 ## Route Factory Pattern
 
 Every backend uses route factories that accept dependency layers, so tests can swap in `createTestLayer()` without touching production wiring:
 
 ```typescript
-// osn/api/src/routes/auth.ts — factory definition
+// osn/api/src/routes/auth/index.ts — factory definition
 export const createAuthRoutes = (config: AuthConfig, dbLayer?: Layer) => { ... }
 export const createGraphRoutes = (dbLayer?: Layer) => { ... }
 
@@ -220,5 +222,5 @@ export const login = (input: LoginInput) =>
 - [CLAUDE.md](../../CLAUDE.md) — "Backend Code Patterns" section
 - [pulse/api/src/routes/events.ts](../../pulse/api/src/routes/events.ts) — canonical route example
 - [pulse/api/src/services/events.ts](../../pulse/api/src/services/events.ts) — canonical service example
-- [osn/api/src/routes/auth.ts](../../osn/api/src/routes/auth.ts) — auth route factory
+- [osn/api/src/routes/auth/index.ts](../../osn/api/src/routes/auth/index.ts) — auth route factory (route-group composition root)
 - [osn/api/src/services/auth/index.ts](../../osn/api/src/services/auth/index.ts) — module-directory service composition root
