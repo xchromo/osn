@@ -99,6 +99,41 @@ export function presetForCrop(crop: ImageCrop | null | undefined, slot: CropSlot
   return "freeform";
 }
 
+/** An axis-aligned rectangle in some pixel space (canvas coords in the editor). */
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The largest `ratio`-locked box that fits inside `bounds`, centred on
+ * (`cx`,`cy`) (defaults to the bounds' centre) and clamped fully inside. A
+ * non-finite / non-positive ratio returns the whole bounds (freeform).
+ *
+ * Used by the crop editor to fit the selection to the DISPLAYED IMAGE: Cropper
+ * v2's `initial-coverage` covers the whole canvas — not the image — so a
+ * letterboxed image needs an explicit image-fitted box or the selection starts
+ * overflowing onto the background (v1's `autoCropArea: 1` did this for us).
+ */
+export function fitAspectBox(bounds: Box, ratio: number, cx?: number, cy?: number): Box {
+  let w = bounds.w;
+  let h = bounds.h;
+  if (Number.isFinite(ratio) && ratio > 0) {
+    h = w / ratio;
+    if (h > bounds.h) {
+      h = bounds.h;
+      w = h * ratio;
+    }
+  }
+  const centreX = cx ?? bounds.x + bounds.w / 2;
+  const centreY = cy ?? bounds.y + bounds.h / 2;
+  const x = Math.min(Math.max(centreX - w / 2, bounds.x), bounds.x + bounds.w - w);
+  const y = Math.min(Math.max(centreY - h / 2, bounds.y), bounds.y + bounds.h - h);
+  return { x, y, w, h };
+}
+
 function inUnit(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
 }

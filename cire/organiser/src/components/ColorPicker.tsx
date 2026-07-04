@@ -88,9 +88,21 @@ export default function ColorPicker(props: {
     props.onChange(toHex(hsb));
   };
 
-  /** Handle raw hex-field input. Emit only once it parses to a full colour. */
+  /**
+   * A COMPLETE typed hex colour — exactly 6 digits, with or without the "#".
+   * `parseColor` also accepts 3/4-digit shorthand, but committing those on a
+   * keystroke hijacks the field mid-typing: en route to "#d4af37" the partial
+   * "#d4a" already parses, expands to "#DD44AA", and yanks the swatch, preview
+   * and trigger to the wrong colour. Shorthand still works — on blur Kobalte's
+   * ColorField normalises it to the full 6-digit hex, which re-enters
+   * `onHexInput` below and commits then.
+   */
+  const COMPLETE_HEX = /^#?[0-9a-fA-F]{6}$/;
+
+  /** Handle raw hex-field input. Emit only once the full 6-digit hex is typed. */
   const onHexInput = (raw: string) => {
     setHexText(raw);
+    if (!COMPLETE_HEX.test(raw)) return;
     const parsed = tryParse(raw.startsWith("#") ? raw : `#${raw}`);
     if (parsed) {
       setColor(parsed.toFormat("hsb"));
