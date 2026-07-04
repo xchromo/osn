@@ -18,6 +18,14 @@ See [[review-findings]] for severity prefix conventions.
 - [x] **CSV-P-I2** (fixed in the same PR) — `eventsCsv` used an unprojected `db.select()`; now projects only the columns the CSV emits, matching the service's projection convention.
 - [x] **CSV-P-I3** (no change — deliberate) — the `guests.csv` Events cell filters the full event list per guest (O(guests × events) `Set` lookups). Microseconds at wedding scale (~hundreds × ~10); the simple filter is the more readable choice. Revisit only if the service is reused for larger tenants.
 
+### Crop editor + colour picker fixes — review findings (cire-color-upload-bugs branch)
+
+Branch-scoped IDs (distinct from the numbered items below).
+
+- [ ] **CB-P-W1** — `ImageCropModal.onSelectionChange` reads `getBoundingClientRect()` on both `<cropper-image>` and `<cropper-canvas>` on every cancellable `change` event (fires per pointermove during selection drag/resize), forcing a synchronous reflow in the hot path. Correct but jank-prone on low-end/mobile hardware, and layout invalidation is document-scoped (the dashboard behind the modal is included). Fix: cache the image bounds and invalidate on the `<cropper-image>` `transform` event (pan/zoom is the only thing that moves them mid-session) + window `resize`; the `boxWithinBounds` veto itself is free arithmetic.
+- [x] **CB-P-I1** (fixed on branch) — `COMPLETE_HEX` regex was declared inside the `ColorPicker` component body (recompiled per mounted picker, two per theme section); hoisted to module scope alongside `DEFAULT_HEX`.
+- [ ] **CB-P-I2** (pre-existing, surfaced by review) — `cropperjs` is statically imported by `ImageCropModal`, which `InviteBuilder` + `EventTable` import statically, so the full Cropper v2 web-component suite ships in the initial organiser-dashboard chunk for a feature used in a fraction of sessions. Fix: `lazy(() => import("./ImageCropModal"))` at both consumption sites (it already renders conditionally), or dynamic `import("cropperjs")` in `onMount`.
+
 ### Host invite preview — review findings (host-preview-code branch)
 
 Branch-scoped IDs (distinct from the numbered items below).
