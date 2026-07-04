@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, events, families, guestEvents, guests } from "@cire/db";
+import { BOOTSTRAP_WEDDING_ID, events, families, guestEvents, guests, weddings } from "@cire/db";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
@@ -111,6 +111,70 @@ describe("tableExportService.guestsCsv", () => {
       }),
     ),
   );
+
+  it(
+    "still lists a guest with no event invites (blank Events cell)",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date();
+        // A household imported but not yet linked to any event — the exact
+        // population the roster export exists to chase. Left-join semantics
+        // must keep them in the file.
+        db.insert(families)
+          .values({
+            id: "fam_solo",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            publicId: "ZZSOLO-AAAA",
+            familyName: "Solofam",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        db.insert(guests)
+          .values({
+            id: "gst_solo",
+            familyId: "fam_solo",
+            firstName: "Sana",
+            lastName: "Solo",
+            sortOrder: 0,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+
+        const csv = yield* tableExportService.guestsCsv(BOOTSTRAP_WEDDING_ID);
+        const row = lines(csv).find((r) => r.startsWith("ZZSOLO-AAAA"));
+        // Empty Events + Sent + Opened cells, Active status.
+        expect(row).toBe("ZZSOLO-AAAA,Solofam,Sana,Solo,,,,Active");
+      }),
+    ),
+  );
+
+  it(
+    "returns a header-only CSV for a wedding with no guests",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date();
+        db.insert(weddings)
+          .values({
+            id: "wed_empty",
+            slug: "empty-wedding",
+            displayName: "Empty Wedding",
+            ownerOsnProfileId: "usr_empty",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+
+        const csv = yield* tableExportService.guestsCsv("wed_empty");
+        expect(lines(csv)).toEqual([
+          "Family Code,Family Name,Guest First Name,Guest Last Name,Events,Invite Sent At,Invite Opened At,Code Status",
+        ]);
+      }),
+    ),
+  );
 });
 
 describe("tableExportService.eventsCsv", () => {
@@ -178,6 +242,53 @@ describe("tableExportService.eventsCsv", () => {
 
         const csv = yield* tableExportService.eventsCsv(BOOTSTRAP_WEDDING_ID);
         expect(csv).not.toContain("javascript:alert(1)");
+      }),
+    ),
+  );
+
+  it(
+    "renders an empty palette cell for a malformed dress_code_palette (export never breaks)",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        db.update(events)
+          .set({ dressCodePalette: "{not json" })
+          .where(eq(events.slug, "catholic"))
+          .run();
+
+        const csv = yield* tableExportService.eventsCsv(BOOTSTRAP_WEDDING_ID);
+        const rows = lines(csv);
+        // All 5 events still export; the corrupt palette degrades to blank.
+        expect(rows).toHaveLength(6);
+        const row = rows.find((r) => r.startsWith("Catholic Ceremony"))!;
+        expect(row).not.toContain("Blush");
+        expect(row).not.toContain("undefined");
+        expect(row).not.toContain("null");
+      }),
+    ),
+  );
+
+  it(
+    "returns a header-only CSV for a wedding with no events",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date();
+        db.insert(weddings)
+          .values({
+            id: "wed_empty",
+            slug: "empty-wedding",
+            displayName: "Empty Wedding",
+            ownerOsnProfileId: "usr_empty",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+
+        const csv = yield* tableExportService.eventsCsv("wed_empty");
+        expect(lines(csv)).toEqual([
+          "Event Name,Slug,Starts At,Ends At,Timezone,Address,Description,Dress Code,Dress Code Palette,Pinterest URL,Maps URL,Invited Guests",
+        ]);
       }),
     ),
   );
