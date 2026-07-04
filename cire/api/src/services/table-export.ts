@@ -1,11 +1,36 @@
 import { families, guests, events, guestEvents } from "@cire/db";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, count, eq, ne } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService, dbQuery } from "../db";
 import { serialiseCsv } from "../lib/csv";
 import { compareEventsByStart } from "../lib/event-order";
 import { decodePalette, safeHttpUrl } from "./claim";
+
+/**
+ * Invited-guest count per event for one wedding, aggregated IN SQL (`GROUP BY`
+ * returns one row per event instead of one per membership — P-W1) with the
+ * same host-family exclusion as every other organiser read. Shared by the
+ * events CSV export and the RSVP dashboard view.
+ */
+export function invitedCountsByEvent(
+  weddingId: string,
+): Effect.Effect<Map<string, number>, never, DbService> {
+  return Effect.gen(function* () {
+    const db = yield* DbService;
+    const rows = yield* dbQuery(() =>
+      db
+        .select({ eventId: guestEvents.eventId, invited: count() })
+        .from(guestEvents)
+        .innerJoin(guests, eq(guestEvents.guestId, guests.id))
+        .innerJoin(families, eq(guests.familyId, families.id))
+        .where(and(eq(families.weddingId, weddingId), ne(families.kind, "host")))
+        .groupBy(guestEvents.eventId)
+        .all(),
+    );
+    return new Map(rows.map((r) => [r.eventId, r.invited]));
+  });
+}
 
 /**
  * Organiser CSV exports for the two dashboard tables — the guest roster and the
@@ -147,25 +172,29 @@ export const tableExportService = {
       const db = yield* DbService;
 
       const eventRows = yield* dbQuery(() =>
-        db.select().from(events).where(eq(events.weddingId, weddingId)).all(),
+        db
+          .select({
+            id: events.id,
+            name: events.name,
+            slug: events.slug,
+            startAt: events.startAt,
+            endAt: events.endAt,
+            timezone: events.timezone,
+            address: events.address,
+            description: events.description,
+            dressCodeDescription: events.dressCodeDescription,
+            dressCodePalette: events.dressCodePalette,
+            pinterestUrl: events.pinterestUrl,
+            mapsUrl: events.mapsUrl,
+            sortOrder: events.sortOrder,
+          })
+          .from(events)
+          .where(eq(events.weddingId, weddingId))
+          .all(),
       );
       const orderedEvents = eventRows.toSorted(compareEventsByStart);
 
-      // Invite counts per event (one guest_events row per invited guest),
-      // host families excluded.
-      const inviteRows = yield* dbQuery(() =>
-        db
-          .select({ eventId: guestEvents.eventId })
-          .from(guestEvents)
-          .innerJoin(guests, eq(guestEvents.guestId, guests.id))
-          .innerJoin(families, eq(guests.familyId, families.id))
-          .where(and(eq(families.weddingId, weddingId), ne(families.kind, "host")))
-          .all(),
-      );
-      const invitedByEvent = new Map<string, number>();
-      for (const row of inviteRows) {
-        invitedByEvent.set(row.eventId, (invitedByEvent.get(row.eventId) ?? 0) + 1);
-      }
+      const invitedByEvent = yield* invitedCountsByEvent(weddingId);
 
       const header = [
         "Event Name",

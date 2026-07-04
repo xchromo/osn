@@ -43,6 +43,18 @@ const csvAttachment = (csv: string, filename: string) =>
   });
 
 /**
+ * Shared defect recovery for the CSV export routes: log the failure (S-L2 —
+ * a silent run of 500s on a PII-bearing export leaves no incident signal;
+ * weddingId only, never guest data) and answer a generic 500.
+ */
+const exportDefect = (set: { status?: number | string }, exportName: string, weddingId: string) =>
+  Effect.gen(function* () {
+    yield* Effect.logError("csv export failed", { export: exportName, weddingId });
+    set.status = 500;
+    return { error: "Internal error" };
+  });
+
+/**
  * Wedding-scoped organiser routes, mounted under /api/organiser. osnAuth()
  * gates every route in this instance (osnProfileId derived on every request).
  *
@@ -123,17 +135,17 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           }
           return runCire(
             Effect.gen(function* () {
-              const data = yield* rsvpExportService.build(weddingId);
-              const slug = yield* weddingsService.slugOf(weddingId);
+              // The build and the filename slug are independent reads — run
+              // them concurrently rather than paying two sequential D1
+              // round-trips (P-I1).
+              const [data, slug] = yield* Effect.all(
+                [rsvpExportService.build(weddingId), weddingsService.slugOf(weddingId)],
+                { concurrency: 2 },
+              );
               return csvAttachment(toCsv(data), `cire-rsvps-${slug ?? weddingId}.csv`);
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchAllDefect(() =>
-                Effect.sync(() => {
-                  set.status = 500;
-                  return { error: "Internal error" };
-                }),
-              ),
+              Effect.catchAllDefect(() => exportDefect(set, "rsvps.csv", weddingId)),
             ),
           );
         })
@@ -147,17 +159,14 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           }
           return runCire(
             Effect.gen(function* () {
-              const csv = yield* tableExportService.guestsCsv(weddingId);
-              const slug = yield* weddingsService.slugOf(weddingId);
+              const [csv, slug] = yield* Effect.all(
+                [tableExportService.guestsCsv(weddingId), weddingsService.slugOf(weddingId)],
+                { concurrency: 2 },
+              );
               return csvAttachment(csv, `cire-guests-${slug ?? weddingId}.csv`);
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchAllDefect(() =>
-                Effect.sync(() => {
-                  set.status = 500;
-                  return { error: "Internal error" };
-                }),
-              ),
+              Effect.catchAllDefect(() => exportDefect(set, "guests.csv", weddingId)),
             ),
           );
         })
@@ -171,17 +180,14 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           }
           return runCire(
             Effect.gen(function* () {
-              const csv = yield* tableExportService.eventsCsv(weddingId);
-              const slug = yield* weddingsService.slugOf(weddingId);
+              const [csv, slug] = yield* Effect.all(
+                [tableExportService.eventsCsv(weddingId), weddingsService.slugOf(weddingId)],
+                { concurrency: 2 },
+              );
               return csvAttachment(csv, `cire-events-${slug ?? weddingId}.csv`);
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchAllDefect(() =>
-                Effect.sync(() => {
-                  set.status = 500;
-                  return { error: "Internal error" };
-                }),
-              ),
+              Effect.catchAllDefect(() => exportDefect(set, "events.csv", weddingId)),
             ),
           );
         })

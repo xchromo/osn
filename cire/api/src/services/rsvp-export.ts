@@ -5,6 +5,7 @@ import { Effect } from "effect";
 import { DbService, dbQuery } from "../db";
 import { sanitiseCsvCell, serialiseCsv } from "../lib/csv";
 import { compareEventsByStart } from "../lib/event-order";
+import { invitedCountsByEvent } from "./table-export";
 
 // Re-exported for existing importers (tests + `download.ts` docs reference this
 // module); the implementation moved to `../lib/csv` when the guests/events
@@ -131,24 +132,9 @@ export const rsvpExportService = {
 
       const orderedEvents = eventRows.toSorted(compareEventsByStart);
 
-      // Invite counts per event (one guest_events row per invited guest), host
-      // families excluded.
-      const inviteRows = yield* dbQuery(() =>
-        db
-          .select({
-            eventId: guestEvents.eventId,
-            guestId: guests.id,
-          })
-          .from(guestEvents)
-          .innerJoin(guests, eq(guestEvents.guestId, guests.id))
-          .innerJoin(families, eq(guests.familyId, families.id))
-          .where(and(eq(families.weddingId, weddingId), ne(families.kind, "host")))
-          .all(),
-      );
-      const invitedByEvent = new Map<string, number>();
-      for (const row of inviteRows) {
-        invitedByEvent.set(row.eventId, (invitedByEvent.get(row.eventId) ?? 0) + 1);
-      }
+      // Invite counts per event, host families excluded — aggregated in SQL
+      // (shared with the events CSV export).
+      const invitedByEvent = yield* invitedCountsByEvent(weddingId);
 
       // RSVP rows joined to guest + family for the per-event guest lists.
       const rsvpRows = yield* dbQuery(() =>
