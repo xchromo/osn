@@ -134,6 +134,21 @@ export function fitAspectBox(bounds: Box, ratio: number, cx?: number, cy?: numbe
   return { x, y, w, h };
 }
 
+/**
+ * Whether `box` lies fully inside `bounds`, allowing `eps` px of slack per
+ * edge. The crop editor's containment predicate: selection geometry rounds to
+ * whole px (Cropper's non-`precise` mode), so an image-hugging box can land a
+ * hair outside the measured bounds without actually escaping the image.
+ */
+export function boxWithinBounds(box: Box, bounds: Box, eps: number): boolean {
+  return (
+    box.x >= bounds.x - eps &&
+    box.y >= bounds.y - eps &&
+    box.x + box.w <= bounds.x + bounds.w + eps &&
+    box.y + box.h <= bounds.y + bounds.h + eps
+  );
+}
+
 function inUnit(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
 }

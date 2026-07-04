@@ -6,6 +6,7 @@ import {
   ASPECT_PRESETS,
   type AspectPresetId,
   type Box,
+  boxWithinBounds,
   type CropSlot,
   fitAspectBox,
   type ImageCrop,
@@ -110,9 +111,7 @@ export default function ImageCropModal(props: ImageCropModalProps) {
     };
   }
 
-  // Rounding slack for the containment veto below: selection geometry rounds to
-  // whole px (Cropper's non-`precise` mode), so an image-hugging box can land a
-  // hair outside the measured bounds without actually escaping the image.
+  // Rounding slack for the containment veto below — see `boxWithinBounds`.
   const EDGE_EPS = 1;
 
   /**
@@ -127,12 +126,8 @@ export default function ImageCropModal(props: ImageCropModalProps) {
       .detail;
     const bounds = imageBounds();
     if (!detail || !bounds) return;
-    if (
-      detail.x < bounds.x - EDGE_EPS ||
-      detail.y < bounds.y - EDGE_EPS ||
-      detail.x + detail.width > bounds.x + bounds.w + EDGE_EPS ||
-      detail.y + detail.height > bounds.y + bounds.h + EDGE_EPS
-    ) {
+    const box: Box = { x: detail.x, y: detail.y, w: detail.width, h: detail.height };
+    if (!boxWithinBounds(box, bounds, EDGE_EPS)) {
       e.preventDefault();
     }
   }

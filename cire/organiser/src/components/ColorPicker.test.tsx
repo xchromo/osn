@@ -51,6 +51,18 @@ describe("ColorPicker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("accepts a bare 6-digit hex pasted without the leading '#'", async () => {
+    const onChange = vi.fn();
+    render(() => <ColorPicker label="Accent" value={null} onChange={onChange} />);
+
+    fireEvent.click(screen.getByLabelText("Accent colour"));
+    const hex = await waitFor(() => screen.getByLabelText("Hex") as HTMLInputElement);
+    // Design tools often copy hex without the hash — the commit path prepends it.
+    fireEvent.input(hex, { target: { value: "d4af37" } });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("#D4AF37"));
+  });
+
   it("does not emit 3/4-digit shorthand while the organiser is still typing", async () => {
     const onChange = vi.fn();
     render(() => <ColorPicker label="Accent" value="#d4af37" onChange={onChange} />);

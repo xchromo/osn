@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   ASPECT_PRESETS,
+  boxWithinBounds,
   CROP_ASPECT,
   cropAspectRatio,
   cropBackgroundStyle,
@@ -41,8 +42,13 @@ describe("fitAspectBox", () => {
     expect(box.x + box.w).toBeLessThanOrEqual(bounds.x + bounds.w + 1e-6);
   });
 
-  it("returns the whole bounds for a non-finite (freeform) ratio", () => {
+  it("returns the whole bounds for a non-finite or non-positive (freeform) ratio", () => {
     expect(fitAspectBox(bounds, Number.NaN)).toEqual(bounds);
+    expect(fitAspectBox(bounds, Number.POSITIVE_INFINITY)).toEqual(bounds);
+    // A zero/negative ratio must not produce a degenerate (Infinity-height /
+    // negative-size) box — the guard treats it as freeform.
+    expect(fitAspectBox(bounds, 0)).toEqual(bounds);
+    expect(fitAspectBox(bounds, -1)).toEqual(bounds);
   });
 
   it("clamps a requested centre so the box never escapes the bounds", () => {
@@ -54,6 +60,30 @@ describe("fitAspectBox", () => {
     const box2 = fitAspectBox(bounds, 1, bounds.x + bounds.w, bounds.y + bounds.h);
     expect(box2.x + box2.w).toBeCloseTo(bounds.x + bounds.w);
     expect(box2.y + box2.h).toBeCloseTo(bounds.y + bounds.h);
+  });
+});
+
+describe("boxWithinBounds", () => {
+  // The crop editor's containment veto: selection changes outside the displayed
+  // image get preventDefault()ed, with EDGE_EPS px of rounding slack.
+  const bounds = { x: 98, y: 0, w: 704, h: 440 };
+  const EPS = 1;
+
+  it("accepts a box fully inside the bounds", () => {
+    expect(boxWithinBounds({ x: 200, y: 100, w: 300, h: 200 }, bounds, EPS)).toBe(true);
+  });
+
+  it("accepts an image-hugging box within the rounding slack", () => {
+    // Half a pixel outside every edge — whole-px rounding, not a real escape.
+    expect(boxWithinBounds({ x: 97.5, y: -0.5, w: 705, h: 441 }, bounds, EPS)).toBe(true);
+  });
+
+  it("rejects a box escaping past the slack on any single edge", () => {
+    const inside = { x: 200, y: 100, w: 300, h: 200 };
+    expect(boxWithinBounds({ ...inside, x: bounds.x - 2 }, bounds, EPS)).toBe(false); // left
+    expect(boxWithinBounds({ ...inside, y: bounds.y - 2 }, bounds, EPS)).toBe(false); // top
+    expect(boxWithinBounds({ ...inside, w: bounds.w }, bounds, EPS)).toBe(false); // right
+    expect(boxWithinBounds({ ...inside, h: bounds.h }, bounds, EPS)).toBe(false); // bottom
   });
 });
 
