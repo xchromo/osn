@@ -153,6 +153,30 @@ describe("InviteBuilder theme", () => {
     expect(sent.detailsAccentColor).toBeNull();
   });
 
+  it("PUTs an edited welcome surface colour (the background signal lane)", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+    await waitFor(() => screen.getByText("Save theme"));
+
+    // The FOURTH "Background colour" swatch is the welcome section's surface.
+    const surfaces = screen.getAllByLabelText("Background colour");
+    expect(surfaces.length).toBe(4);
+    fireEvent.click(surfaces[3]);
+    const hex = await waitFor(() => screen.getByLabelText("Hex") as HTMLInputElement);
+    fireEvent.input(hex, { target: { value: "#223344" } });
+    fireEvent.click(screen.getByText("Save theme"));
+
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = JSON.parse(authFetchMock.mock.calls[1][1].body as string);
+    expect(sent.welcomeSurfaceColor).toBe("#223344");
+    // Sibling surface lanes untouched — guards a copy-paste slip in the updater.
+    expect(sent.storySurfaceColor).toBeNull();
+    expect(sent.detailsSurfaceColor).toBeNull();
+    expect(sent.welcomeAccentColor).toBeNull();
+  });
+
   it("seeds the hero display sliders from the loaded customisation", async () => {
     authFetchMock.mockResolvedValueOnce(
       json({
