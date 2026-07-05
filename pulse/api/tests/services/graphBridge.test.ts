@@ -217,7 +217,7 @@ describe("startKeyRotation", () => {
     expect(init?.method).toBe("POST");
     const body = JSON.parse(init?.body as string) as Record<string, unknown>;
     expect(body.serviceId).toBe("pulse-api");
-    expect(body.allowedScopes).toBe("graph:read");
+    expect(body.allowedScopes).toBe("graph:read,graph:resolve-account");
     expect(typeof body.keyId).toBe("string");
     expect(typeof body.publicKeyJwk).toBe("string");
   });

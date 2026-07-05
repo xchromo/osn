@@ -360,9 +360,9 @@ describe("buildSeedServiceAccounts", () => {
     expect(rows[0]!.serviceId).toBe("pulse-api");
   });
 
-  it("allowedScopes is 'graph:read'", () => {
+  it("allowedScopes grants graph:read + graph:resolve-account", () => {
     const rows = buildSeedServiceAccounts(new Date());
-    expect(rows[0]!.allowedScopes).toBe("graph:read");
+    expect(rows[0]!.allowedScopes).toBe("graph:read,graph:resolve-account");
   });
 });
 

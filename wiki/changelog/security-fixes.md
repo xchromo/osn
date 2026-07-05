@@ -7,12 +7,21 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-07-03
+last-reviewed: 2026-07-05
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## TODO-backlog hardening sweep (2026-07-05)
+
+- **S-H (arc-scope-pattern)** — **Issue:** `@shared/crypto` `SCOPE_PATTERN` (`/^[a-z0-9_:]+$/`) rejected hyphens while the deployed scope taxonomy contains hyphenated scopes (`step-up:verify`, `app-enrollment:write` in osn-api's `PERMITTED_SCOPES`). Every `signArcToken`/`createArcToken` call carrying them threw `ArcTokenError: Invalid scope format` at mint time — so the entire Flow B leave-Pulse fan-out (`pulse/api/src/lib/osn-bridge.ts` step-up verify + enrollment-leave calls) was broken at runtime and had never worked. **Why:** availability failure of a compliance-critical path (C-H2 account erasure); latent because tests mock the HTTP layer above token minting. **Solution:** pattern widened to `/^[a-z0-9_:-]+$/`; round-trip regression test signs + verifies the full hyphenated taxonomy (`shared/crypto/tests/jwk-sign.test.ts`). Found while adding `graph:resolve-account` (below). **Rationale:** the server-side `PERMITTED_SCOPES` allowlist is the authoritative scope registry; the format validator must admit everything it grants. See [[arc-tokens]].
+- **S-M1 (pulse-onboarding)** — **Issue:** `GET /graph/internal/profile-account` (profileId → accountId) was gated by the generic `graph:read` scope, so any ARC consumer of the internal graph API could enumerate the mapping and dissolve the multi-account privacy invariant ([[identity-model]] §"Privacy Rules"). **Solution:** dedicated `graph:resolve-account` scope — added to `PERMITTED_SCOPES`, required on the endpoint, granted to pulse-api (boot self-registration, rotation, and the `@osn/db` seed all send `graph:read,graph:resolve-account`) and requested per-call by `graphBridge.getAccountIdForProfile` and cire-api's account-link resolver. A `graph:read`-only token now 401s (regression test). **Ops note:** cire-api's stable key is pre-registered in prod with `graph:read` only — re-run the registration curl with the widened scopes before the next account-link attempt ([[production-deploy]] §6). **Rationale:** least privilege wants the constraint declarative, not an emergent property of who happens to hold keys. See [[pulse-onboarding]], [[cire-auth]], [[arc-tokens]].
+- **S-L6 (account-deletion)** — **Issue:** Pulse's `requireArc` returned bare 401s from its early-exit branches (missing/malformed token, kid unknown, kid revoked, key-registration expired, registry scope denial) with no metric, so ARC failures on Pulse were indistinguishable on dashboards; only tokens reaching `verifyArcToken` were counted. **Solution:** each early exit now records the shared `arc.token.verification{iss, result}` counter (`malformed` / `unknown_issuer` / `revoked_key` / `scope_denied`); `revoked_key` is a new bounded member of `ArcVerifyResult` in `@shared/observability`. `verifyArcToken`'s own reporting is untouched, so no double-count. **Rationale:** mirrors osn-api's verification observability. See [[observability/overview]], [[arc-tokens]].
+- **S-M4 (auth)** — **Issue:** no startup assertion that `OSN_JWT_PRIVATE_KEY` imports as a signing key; the public JWK pasted into the private slot imports fine (verify-only usages) and every token mint then fails at request time. **Solution:** `loadJwtKeyPair` throws at boot when `!privateKey.usages.includes("sign")`; unit-tested with the public-JWK-in-private-slot fixture. **Rationale:** misconfiguration should fail at deploy, not on the first login.
+- **S-L5 (auth)** — **Issue:** a non-local deploy missing `OSN_ORIGIN` silently fell back to the `http://localhost:5173` WebAuthn origin — fails closed (all passkey ceremonies rejected) but with no boot-time signal. **Solution:** `buildAppDeps` now throws when `OSN_ENV` is non-local and `OSN_ORIGIN` is unset, mirroring `assertCorsOriginsConfigured`; every deployed wrangler tier already sets the var. See [[passkey-primary]].
+- **M3 (Copenhagen)** — `EmailSchema` now rejects emails longer than 255 chars (practical RFC 5321 mailbox ceiling) ahead of the format regex; boundary-tested at 255/256.
 
 ## Code-quality review sweep (2026-07-03)
 

@@ -254,7 +254,9 @@ export function buildSeedServiceAccounts(now: Date): NewServiceAccount[] {
   return [
     {
       serviceId: "pulse-api",
-      allowedScopes: "graph:read",
+      // graph:resolve-account gates /graph/internal/profile-account (S-M1
+      // pulse-onboarding) — mirrors what pulse-api self-registers at boot.
+      allowedScopes: "graph:read,graph:resolve-account",
       createdAt: now,
       updatedAt: now,
     },

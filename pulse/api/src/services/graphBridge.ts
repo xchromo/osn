@@ -85,16 +85,23 @@ function initKeys(): Promise<KeyInit> {
   return _keyInitPromise;
 }
 
-async function arcAuthHeader(): Promise<string> {
+/**
+ * Scopes this key is registered with. `graph:read` covers the general bridge
+ * calls (connections, profile-displays — the POST is a read-equivalent
+ * enrichment call); `graph:resolve-account` is the dedicated scope for the
+ * profileId → accountId lookup (S-M1 pulse-onboarding — least privilege on
+ * the multi-account privacy invariant). If a truly mutating S2S POST is ever
+ * added, introduce a new scope and a separate osPost variant rather than
+ * expanding `graph:read`.
+ */
+const REGISTERED_SCOPES = "graph:read,graph:resolve-account";
+
+async function arcAuthHeader(scope: string = "graph:read"): Promise<string> {
   const { privateKey, keyId } = await initKeys();
   const token = await getOrCreateArcToken(privateKey, {
     iss: "pulse-api",
     aud: "osn-api",
-    // The POST endpoint (/profile-displays) is a read-equivalent enrichment
-    // call; graph:read is the correct scope for both bridge calls.
-    // If a truly mutating S2S POST is ever added, introduce a new scope and a
-    // separate osPost variant rather than expanding this one.
-    scope: "graph:read",
+    scope,
     kid: keyId,
   });
   return `ARC ${token}`;
@@ -168,7 +175,7 @@ async function registerWithOsnApi(): Promise<boolean> {
       serviceId: "pulse-api",
       keyId,
       publicKeyJwk,
-      allowedScopes: "graph:read",
+      allowedScopes: REGISTERED_SCOPES,
       expiresAt: Math.floor(expiresAt / 1000),
     }),
   });
@@ -283,7 +290,7 @@ async function rotateKey(): Promise<void> {
         serviceId: "pulse-api",
         keyId,
         publicKeyJwk,
-        allowedScopes: "graph:read",
+        allowedScopes: REGISTERED_SCOPES,
         expiresAt: Math.floor(expiresAt / 1000),
       }),
     });
@@ -399,7 +406,8 @@ export const getAccountIdForProfile = (
     try: async () => {
       const res = await fetch(
         `${OSN_API_URL}/graph/internal/profile-account?profileId=${encodeURIComponent(profileId)}`,
-        { headers: { authorization: await arcAuthHeader() } },
+        // Dedicated scope — /profile-account rejects plain graph:read (S-M1).
+        { headers: { authorization: await arcAuthHeader("graph:resolve-account") } },
       );
       if (res.status === 404) {
         // Distinguish "profile doesn't exist" from infra failures so the
