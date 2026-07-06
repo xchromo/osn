@@ -360,9 +360,11 @@ describe("buildSeedServiceAccounts", () => {
     expect(rows[0]!.serviceId).toBe("pulse-api");
   });
 
-  it("allowedScopes grants graph:read + graph:resolve-account", () => {
+  it("allowedScopes carries the full pulse-api scope union", () => {
     const rows = buildSeedServiceAccounts(new Date());
-    expect(rows[0]!.allowedScopes).toBe("graph:read,graph:resolve-account");
+    expect(rows[0]!.allowedScopes).toBe(
+      "graph:read,graph:resolve-account,step-up:verify,app-enrollment:write",
+    );
   });
 });
 

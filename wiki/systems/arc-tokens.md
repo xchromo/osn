@@ -245,6 +245,19 @@ to each downstream — otherwise the first `/internal/account-deleted` POST is
 
 `/register-service` validates requested `allowedScopes` against a server-side allowlist (`PERMITTED_SCOPES`). Any unknown scope returns 400 — a service cannot self-promote its scope set (S-M101).
 
+> ⚠ **Scope authorisation is service-granular, not key-granular (S-H1, 2026-07-05).**
+> `allowedScopes` lives on `service_accounts` (one row per serviceId) and every
+> `/register-service` call **replaces** it wholesale, while keys live per-`kid` in
+> `service_account_keys`. Consequences: (a) a service that registers multiple keys
+> (pulse-api registers a graph-bridge key AND a leave-app key) **must send the
+> identical scope union from every registration call site**, or the registrations
+> clobber each other on boot races / rotations and randomly fail-close S2S calls;
+> (b) per-key least privilege between a service's own keys does not exist — any of
+> its keys can mint any scope in the service union. The per-key `allowed_scopes`
+> schema fix is tracked in [[TODO]] as S-M1 (arc-key-scopes). Keep
+> `pulse/api/src/services/graphBridge.ts` `REGISTERED_SCOPES` and
+> `pulse/api/src/lib/outbound-arc.ts` `ALLOWED_SCOPES` in lockstep.
+
 ### Cross-process revocation window (X4)
 
 Revocation is immediate *in the process that performs it* (it calls `evictPublicKeyCacheEntry(kid)`). Other processes that have already cached the key keep serving it until their own `publicKeyCache` entry expires — at most one cache TTL.

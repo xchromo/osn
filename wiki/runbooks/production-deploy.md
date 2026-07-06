@@ -604,6 +604,22 @@ OSN account. It is **additive and opt-in**; skip this section for the minimal la
   on account resolution. If cire-api was registered before this scope existed, re-run
   §6.2 with the widened `allowedScopes` (the endpoint upserts).
 
+> ⚠ **Deploy order for the `graph:resolve-account` rollout (S-L2).** There is no
+> order that avoids a brief account-linking outage without the manual step: new
+> cire-api mints `graph:resolve-account` (old osn-api's registry rejects it), and new
+> osn-api rejects old cire-api's `graph:read` on `/profile-account`. CI auto-deploys
+> cire-api on merge while osn-api deploys are manual, so `POST /api/account/link`
+> **401s from merge time until BOTH steps below are done**:
+> 1. Deploy the osn-api Worker first (its widened `PERMITTED_SCOPES` is
+>    backwards-compatible for every route except `/profile-account`).
+> 2. Re-run §6.2 with `allowedScopes: "graph:read,graph:resolve-account"` (upsert).
+>
+> Likewise deploy osn-api **before** pulse-api in any environment — a new pulse-api
+> booting against an old osn-api gets 400 `Unknown scopes: graph:resolve-account`
+> from `/register-service`, which is fatal at boot in non-local envs. Impact is
+> availability-only (the linking endpoint is additive/opt-in; failure mode is
+> 401/503, never a bypass).
+
 ### 6.2 Register cire's ARC public key with osn-api
 
 This is what `INTERNAL_SERVICE_SECRET` is for. Generate a stable ES256 key pair for

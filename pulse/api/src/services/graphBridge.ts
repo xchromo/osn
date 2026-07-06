@@ -86,15 +86,26 @@ function initKeys(): Promise<KeyInit> {
 }
 
 /**
- * Scopes this key is registered with. `graph:read` covers the general bridge
- * calls (connections, profile-displays — the POST is a read-equivalent
- * enrichment call); `graph:resolve-account` is the dedicated scope for the
- * profileId → accountId lookup (S-M1 pulse-onboarding — least privilege on
- * the multi-account privacy invariant). If a truly mutating S2S POST is ever
- * added, introduce a new scope and a separate osPost variant rather than
- * expanding `graph:read`.
+ * Scopes this key's registration carries.
+ *
+ * ⚠ This is the FULL pulse-api scope union, not just what the graph bridge
+ * itself mints (`graph:read` for connections/profile-displays,
+ * `graph:resolve-account` for the profileId → accountId lookup — S-M1
+ * pulse-onboarding). osn-api stores `allowedScopes` PER SERVICE
+ * (`service_accounts` row, upsert = full replace) — not per key — and
+ * pulse-api registers TWO keys under the same `serviceId` (this one and the
+ * leave-app key in `lib/outbound-arc.ts`). If the two registrations carried
+ * disjoint scope sets, whichever landed last (boot race, 24h rotation) would
+ * clobber the other's grants and fail-close its S2S calls at random (S-H1,
+ * prep-pr review 2026-07-05). Both call sites therefore register the same
+ * union; keep them in lockstep with `lib/outbound-arc.ts` `ALLOWED_SCOPES`.
+ * Per-key scope storage (which would restore real least-privilege between the
+ * two keys) is tracked in wiki/TODO.md.
+ *
+ * Tokens are still minted with the MINIMAL scope per call (`arcAuthHeader`
+ * below defaults to `graph:read`); the union applies only to the registration.
  */
-const REGISTERED_SCOPES = "graph:read,graph:resolve-account";
+const REGISTERED_SCOPES = "graph:read,graph:resolve-account,step-up:verify,app-enrollment:write";
 
 async function arcAuthHeader(scope: string = "graph:read"): Promise<string> {
   const { privateKey, keyId } = await initKeys();
