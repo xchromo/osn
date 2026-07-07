@@ -6,15 +6,15 @@ import {
 } from "@shared/crypto";
 
 /**
- * Lightweight in-memory ARC verifier for pulse-api.
+ * Lightweight in-memory ARC verifier for zap-api.
  *
- * Pulse only needs to accept ARC tokens from a small known set of issuers
- * (osn-api today; potentially zap-api in the future) so a full
- * `service_accounts` schema would be overkill. Public keys are registered
- * at runtime by the issuing service via `POST /internal/register-service`
- * (same shared-secret bootstrap as `osn/api/src/routes/graph-internal.ts`).
+ * Zap only needs to accept ARC tokens from a small known set of issuers
+ * (osn-api today) so a full `service_accounts` schema would be overkill.
+ * Public keys are registered at runtime by the issuing service via
+ * `POST /internal/register-service` (same shared-secret bootstrap as
+ * `osn/api/src/routes/graph-internal.ts` and `pulse/api`).
  *
- * Single source of truth: every ARC route on pulse-api calls `requireArc`,
+ * Single source of truth: every ARC route on zap-api calls `requireArc`,
  * which consults the in-memory registry below.
  */
 
@@ -45,9 +45,9 @@ export class ServiceKeyMismatchError extends Error {
 
 export async function registerServiceKey(input: RegisterServiceKeyInput): Promise<void> {
   // S-L1: refuse to overwrite a kid registered to a different serviceId.
-  // The single INTERNAL_SERVICE_SECRET is the trust root for both Pulse
-  // and Zap; without this guard, a holder could pivot across services
-  // by reusing another's kid.
+  // The single INTERNAL_SERVICE_SECRET is the trust root across services;
+  // without this guard, a holder could pivot across services by reusing
+  // another's kid.
   const existing = keyRegistry.get(input.keyId);
   if (existing && existing.issuer !== input.serviceId) {
     throw new ServiceKeyMismatchError(
@@ -109,7 +109,7 @@ function peekKid(token: string): string | null {
 }
 
 /**
- * ARC token verification guard for Pulse Elysia routes. Mirrors the API
+ * ARC token verification guard for Zap Elysia routes. Mirrors the API
  * shape of osn-api's `requireArc` so route bodies look the same:
  *
  *   const caller = await requireArc(headers.authorization, set, AUDIENCE, SCOPE);
@@ -186,11 +186,10 @@ export async function requireArc(
 }
 
 /**
- * Allowlist of scopes pulse-api will accept on registration. Permitted
- * scopes are those Pulse will verify on inbound ARC tokens — keep tight.
+ * Allowlist of scopes zap-api will accept on registration. Permitted scopes
+ * are those Zap will verify on inbound ARC tokens — keep tight.
+ *
+ * `account:export` powers the DSAR account-export fan-out (C-H1);
+ * `account:erase` is reserved for the future account-deletion fan-out.
  */
-export const PERMITTED_INBOUND_SCOPES = new Set([
-  "account:erase",
-  "account:export", // C-H1 DSAR export fan-out from osn-api
-  "graph:read", // future-proofing for an osn-api fan-out that needs profile lookups
-]);
+export const PERMITTED_INBOUND_SCOPES = new Set(["account:export", "account:erase"]);

@@ -1,4 +1,6 @@
-import { DbLive, type Db } from "@pulse/db/service";
+import { chatMembers } from "@zap/db/schema";
+import { DbLive, Db, type Db as DbType } from "@zap/db/service";
+import { inArray } from "drizzle-orm";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -9,29 +11,69 @@ import {
   requireArc,
   revokeServiceKey,
 } from "../lib/arc-middleware";
-import * as accountErasure from "../services/accountErasure";
-import * as accountExport from "../services/accountExport";
 
-const AUDIENCE = "pulse-api";
-const SCOPE_ACCOUNT_ERASE = "account:erase";
+const AUDIENCE = "zap-api";
 const SCOPE_ACCOUNT_EXPORT = "account:export";
 
 function isTimingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   // Use a constant-time loop in lieu of Buffer.timingSafeEqual to keep
-  // this lib browser-portable. JS strings are immutable so we can hash
-  // both inputs with a simple XOR-accumulate.
+  // this lib browser/Workers-portable. JS strings are immutable so we can
+  // XOR-accumulate both inputs.
   let mismatch = 0;
   for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return mismatch === 0;
 }
 
 /**
- * Internal pulse-api endpoints — ARC-gated (account-deleted) and
+ * A single DSAR export line: `{"section": "...", "record": {...}}`.
+ * NDJSON — one JSON object per line, `application/x-ndjson`.
+ */
+interface ExportChatMemberRecord {
+  readonly chatId: string;
+  readonly role: string;
+  readonly joinedAt: string | null;
+}
+
+/**
+ * Reads the caller's chat memberships for the DSAR export. Message CONTENT
+ * (`messages.ciphertext`) is deliberately NOT read — the export surfaces only
+ * membership metadata (which chats a profile belongs to, its role, and when it
+ * joined), never the E2E-encrypted message bodies.
+ */
+const loadChatMemberships = (
+  profileIds: readonly string[],
+): Effect.Effect<ExportChatMemberRecord[], never, DbType> =>
+  Effect.gen(function* () {
+    if (profileIds.length === 0) return [];
+    const { db } = yield* Db;
+    const rows = yield* Effect.promise(
+      (): Promise<{ chatId: string; role: string; joinedAt: Date | null }[]> =>
+        db
+          .select({
+            chatId: chatMembers.chatId,
+            role: chatMembers.role,
+            joinedAt: chatMembers.joinedAt,
+          })
+          .from(chatMembers)
+          .where(inArray(chatMembers.profileId, [...profileIds])) as Promise<
+          { chatId: string; role: string; joinedAt: Date | null }[]
+        >,
+    );
+    return rows.map((r) => ({
+      chatId: r.chatId,
+      role: r.role,
+      joinedAt: r.joinedAt ? r.joinedAt.toISOString() : null,
+    }));
+  }).pipe(Effect.withSpan("zap.internal.account_export"));
+
+/**
+ * Internal zap-api endpoints — ARC-gated (account-export) and
  * shared-secret-gated (register-service / service-keys/:keyId revoke).
  */
-export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) => {
-  // Layer graph built once per factory (convention: see osn/api/src/lib/route-runtime.ts) — not per request.
+export const createInternalRoutes = (dbLayer: Layer.Layer<DbType> = DbLive) => {
+  // Layer graph built once per factory (convention: build the runtime once,
+  // never per request) — mirrors pulse/api's internal router.
   const runtime = ManagedRuntime.make(dbLayer);
   return (
     new Elysia({ prefix: "/internal" })
@@ -39,7 +81,7 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) => {
       // ARC public-key registration. Mirrors osn-api's
       // /graph/internal/register-service. osn-api calls this on startup with
       // the shared INTERNAL_SERVICE_SECRET to register the outbound key it
-      // will use when fanning out a deletion to Pulse.
+      // will use when fanning out a DSAR export to Zap.
       // ------------------------------------------------------------------
       .post(
         "/register-service",
@@ -69,7 +111,9 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) => {
               serviceId: body.serviceId,
               keyId: body.keyId,
               publicKeyJwk: body.publicKeyJwk,
-              allowedScopes: body.allowedScopes,
+              // Persist only the permitted subset (defence in depth — the
+              // check above already rejects any unknown scope).
+              allowedScopes: requestedScopes.join(","),
               expiresAt: body.expiresAt,
             });
             return { ok: true };
@@ -110,48 +154,10 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) => {
         { params: t.Object({ keyId: t.String({ minLength: 1 }) }) },
       )
       // ------------------------------------------------------------------
-      // ARC-gated `/internal/account-deleted` — called by osn-api when
-      // fanning out a full-account deletion. Hard-deletes Pulse data for
-      // the supplied profile IDs (no grace; osn-api already enforced its
-      // own 7-day window before fanning out).
-      // ------------------------------------------------------------------
-      .post(
-        "/account-deleted",
-        async ({ body, headers, set }) => {
-          const caller = await requireArc(
-            headers.authorization,
-            set,
-            AUDIENCE,
-            SCOPE_ACCOUNT_ERASE,
-          );
-          if (!caller) return { error: "Unauthorized" };
-          try {
-            const result = await runtime.runPromise(
-              accountErasure.purgeAccount(body.accountId, body.profileIds) as Effect.Effect<
-                { purged: number },
-                accountErasure.PulseErasureDbError,
-                Db
-              >,
-            );
-            return { ok: true as const, purged: result.purged };
-          } catch {
-            set.status = 500;
-            return { error: "internal_error" };
-          }
-        },
-        {
-          body: t.Object({
-            accountId: t.String({ minLength: 1 }),
-            profileIds: t.Array(t.String({ minLength: 1 }), { maxItems: 50 }),
-          }),
-        },
-      )
-      // ------------------------------------------------------------------
       // ARC-gated `/internal/account-export` — called by osn-api when
-      // fanning out a DSAR (Art.15) export. Returns this account's
-      // Pulse-scoped data as NDJSON (one `{ section, record }` object per
-      // line). osn-api streams these through its own export envelope, so no
-      // header/terminator lines are emitted here.
+      // fanning out a DSAR account export (C-H1). Returns NDJSON: one
+      // `{"section":"zap.chats","record":{...}}` line per chat membership of
+      // the supplied profile IDs. Message content is EXCLUDED.
       // ------------------------------------------------------------------
       .post(
         "/account-export",
@@ -163,26 +169,18 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<Db> = DbLive) => {
             SCOPE_ACCOUNT_EXPORT,
           );
           if (!caller) return { error: "Unauthorized" };
-          try {
-            const lines = await runtime.runPromise(
-              accountExport.collectExport(body.profile_ids) as Effect.Effect<
-                accountExport.ExportLine[],
-                accountExport.PulseExportDbError,
-                Db
-              >,
-            );
-            const text = lines.map((line) => JSON.stringify(line)).join("\n");
-            // Buffered NDJSON: each line ends in "\n" (including the last),
-            // and an empty export yields an empty body (osn-api adds the
-            // terminator).
-            const responseBody = text.length > 0 ? text + "\n" : "";
-            return new Response(responseBody, {
-              headers: { "content-type": "application/x-ndjson" },
-            });
-          } catch {
-            set.status = 500;
-            return { error: "internal_error" };
-          }
+
+          const records = await runtime.runPromise(loadChatMemberships(body.profile_ids));
+
+          // Buffered NDJSON — one JSON object per line, no trailing newline
+          // beyond each record's own. Empty profile set → empty body.
+          const ndjson = records
+            .map((record) => JSON.stringify({ section: "zap.chats", record }))
+            .join("\n");
+
+          set.status = 200;
+          set.headers["content-type"] = "application/x-ndjson";
+          return ndjson;
         },
         {
           body: t.Object({
