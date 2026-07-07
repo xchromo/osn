@@ -9,6 +9,10 @@ export function publicError(
   e: unknown,
   loggerLayer: Layer.Layer<never> = Layer.empty,
 ): { status: number; body: { error: string; message?: string } } {
+  // Effect's own Cause nodes carry `_tag`s ("Fail", "Die", …) that would
+  // otherwise shadow the domain error's tag — skip them and keep descending
+  // into `.error` / children.
+  const CAUSE_TAGS = new Set(["Fail", "Die", "Interrupt", "Sequential", "Parallel", "Empty"]);
   const tag = (() => {
     const seen = new Set<unknown>();
     const queue: unknown[] = [e];
@@ -17,8 +21,21 @@ export function publicError(
       if (!node || typeof node !== "object" || seen.has(node)) continue;
       seen.add(node);
       const tag_value = (node as { _tag?: unknown })._tag;
-      if (typeof tag_value === "string") return tag_value;
-      for (const v of Object.values(node)) queue.push(v);
+      if (typeof tag_value === "string" && !CAUSE_TAGS.has(tag_value)) return tag_value;
+      // Traverse ALL own keys (string + symbol), not just enumerable values:
+      // `Effect.runPromise` rejects with a `FiberFailure` that stores the
+      // underlying tagged error under a symbol-keyed `Cause`, which
+      // `Object.values` never reaches — so the real `_tag` would otherwise be
+      // invisible and every Effect failure would fall through to the default.
+      for (const key of Reflect.ownKeys(node)) {
+        let v: unknown;
+        try {
+          v = (node as Record<PropertyKey, unknown>)[key];
+        } catch {
+          continue; // a throwing getter is not a tag carrier
+        }
+        queue.push(v);
+      }
     }
     return null;
   })();
@@ -31,6 +48,13 @@ export function publicError(
   );
 
   switch (tag) {
+    // C-H8 (COPPA): fixed-shape 422 with the generic public message. Never
+    // reveals whether the email/handle was otherwise valid or taken.
+    case "AgeRestrictionError":
+      return {
+        status: 422,
+        body: { error: "age_restricted", message: "OSN is for users 13 and older" },
+      };
     case "ValidationError":
       return { status: 400, body: { error: "invalid_request" } };
     case "AuthError":
