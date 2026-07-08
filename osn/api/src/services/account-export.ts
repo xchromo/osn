@@ -131,6 +131,14 @@ async function* fanOutSection(
 ): AsyncGenerator<string> {
   try {
     const res = await fetchStream(ds, { account_id: accountId, profile_ids: profileIds });
+    // Defence-in-depth: the default `fetchStream` (`arcFetchStream`) already
+    // throws on a non-2xx status, but this guard keeps `fanOutSection` honest
+    // for any injected fetcher — a downstream error body must degrade, never
+    // be piped into the user's bundle as if it were real records.
+    if (!res.ok) {
+      yield jsonLine({ degraded: ds.namespace, reason: `http_${res.status}` });
+      return;
+    }
     const reader = res.body?.getReader();
     if (!reader) {
       yield jsonLine({ degraded: ds.namespace, reason: "no_response_body" });

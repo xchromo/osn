@@ -345,6 +345,22 @@ describe("auth routes", () => {
       expect(capture.code()).toBeUndefined();
     });
 
+    it("C-H8: rejects a malformed birthdate with 400 (not 422) on the wire", async () => {
+      const res = await app.handle(
+        new Request("http://localhost/register/begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "baddob-route@example.com",
+            handle: "baddobroute",
+            birthdate: "2021-02-30", // not a real calendar date
+          }),
+        }),
+      );
+      // Format failure is a ValidationError → 400, distinct from the under-13 422.
+      expect(res.status).toBe(400);
+    });
+
     it("rejects /register/complete with no preceding /register/begin", async () => {
       const res = await app.handle(
         new Request("http://localhost/register/complete", {

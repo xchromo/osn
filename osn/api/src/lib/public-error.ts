@@ -16,7 +16,14 @@ export function publicError(
   const tag = (() => {
     const seen = new Set<unknown>();
     const queue: unknown[] = [e];
-    while (queue.length) {
+    // P-I1: bound the traversal. A tagged error's `_tag` sits within a few hops
+    // of the root (the instance itself, or a FiberFailure → Cause → Fail node),
+    // so a small budget never truncates a real lookup — but it guarantees
+    // constant worst-case work on the hot error path when an UNtagged value
+    // (which falls through to the generic default) references a large object
+    // graph (DB layer, fiber state) via a `Die` cause.
+    let budget = 512;
+    while (queue.length && budget-- > 0) {
       const node = queue.shift();
       if (!node || typeof node !== "object" || seen.has(node)) continue;
       seen.add(node);

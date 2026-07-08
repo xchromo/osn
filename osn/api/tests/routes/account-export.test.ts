@@ -105,6 +105,33 @@ describe("GET /account/export — gating", () => {
     expect(res.status).toBe(403);
   });
 
+  it("a failed step-up (403) does not consume the 1/24h allowance", async () => {
+    const layer = createTestLayer();
+    const { auth, profile, accessToken } = await seed(layer);
+    const app = makeApp(layer); // default 1/24h per-account limiter
+
+    // First attempt: no step-up token → 403, BEFORE the limiter check.
+    const denied = await app.handle(
+      new Request("http://localhost/account/export", {
+        headers: { ...IP_HEADERS, Authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    // A subsequent valid export must still succeed — the allowance is intact.
+    const ok = await app.handle(
+      new Request("http://localhost/account/export", {
+        headers: {
+          ...IP_HEADERS,
+          Authorization: `Bearer ${accessToken}`,
+          "x-step-up-token": await mintStepUp(auth, profile.accountId),
+        },
+      }),
+    );
+    expect(ok.status).toBe(200);
+    await ok.text();
+  });
+
   it("429 on the second export within the window (1/24h per account)", async () => {
     const layer = createTestLayer();
     const { auth, profile, accessToken } = await seed(layer);
@@ -222,6 +249,43 @@ describe("GET /account/export — bundle", () => {
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(lines.some((l) => l.degraded === "pulse")).toBe(true);
     expect(lines[lines.length - 1]).toEqual({ end: true });
+  });
+
+  it("degrades (does not pipe the body) when a downstream returns a non-2xx status", async () => {
+    const layer = createTestLayer();
+    const runtime = ManagedRuntime.make(layer);
+    const auth = createAuthService(config);
+    const profile = await runtime.runPromise(
+      auth.registerProfile("nak@example.com", "nak").pipe(Effect.provide(layer)),
+    );
+    const { db } = await runtime.runPromise(Db);
+
+    // A reachable downstream that answers 500 with a body — its lines must NOT
+    // leak into the bundle as records; the section must degrade instead.
+    const failingFetch = async (): Promise<Response> =>
+      new Response('{"section":"pulse.rsvps","record":{"leaked":true}}\n', { status: 500 });
+
+    let out = "";
+    for await (const line of exportLines({
+      db,
+      accountId: profile.accountId,
+      downstreams: [
+        { namespace: "pulse", url: "http://stub/internal/account-export", audience: "pulse-api" },
+      ],
+      fetchStream: failingFetch,
+    })) {
+      out += line;
+    }
+    expect(out).not.toContain("leaked");
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(
+      lines.some((l) => l.degraded === "pulse" && String(l.reason).startsWith("http_500")),
+    ).toBe(true);
+    expect(lines[lines.length - 1]).toEqual({ end: true });
+    await runtime.dispose();
   });
 
   it("pipes a downstream NDJSON sub-bundle through the outer envelope", async () => {

@@ -292,6 +292,23 @@ describe("beginRegistration + completeRegistration", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("C-H8: rejects when the 13th birthday has not yet occurred this year", () => {
+    const { svc, captured, layer } = makeAuth();
+    return Effect.gen(function* () {
+      // Born ~13 years ago but the birthday is still ~2 days away ⇒ age 12.
+      // Exercises the `monthDelta < 0 || day-not-reached` branch of ageInYears.
+      const d = new Date();
+      d.setUTCFullYear(d.getUTCFullYear() - 13);
+      d.setUTCDate(d.getUTCDate() + 2);
+      const dob = d.toISOString().slice(0, 10);
+      const error = yield* Effect.flip(
+        svc.beginRegistration("almost13@example.com", "almost13", dob),
+      );
+      expect(error._tag).toBe("AgeRestrictionError");
+      expect(captured.code).toBeUndefined();
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("C-H8: begin rejects a malformed birthdate with ValidationError", () => {
     const { svc, layer } = makeAuth();
     return Effect.gen(function* () {
