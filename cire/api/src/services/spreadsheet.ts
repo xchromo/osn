@@ -28,9 +28,7 @@ export type MalformedSpreadsheetReason =
   // Required per-row event fields.
   | "Event Name is required"
   | "Start is required"
-  | "End is required"
   | "Timezone is required"
-  | "Location is required"
   // URL-cell scheme rejections.
   | "Pinterest URL must be an http(s) URL"
   | "Maps URL must be an http(s) URL"
@@ -334,12 +332,15 @@ function parseHttpUrl(raw: string): string | null | undefined {
 
 // ── Parsers ──────────────────────────────────────────────────────────────────
 
-// Location joins Event Name / Start / End / Timezone as a hard requirement: an
-// event with no place to be is unusable on the invite (the "Where" section + the
-// Open-in-Maps affordance both derive from it). Enforced both as a required
-// column (header must exist) and a required per-row value (cell must be non-empty)
-// below.
-const REQUIRED_EVENT_COLUMNS = ["Event Name", "Start", "End", "Timezone", "Location"] as const;
+// Only Event Name / Start / Timezone are hard requirements — the minimum to
+// render and order an event on the invite. `End` is optional (column and cell):
+// an open-ended event stores `endAt: ""` (the DB column is NOT NULL with the ""
+// sentinel meaning "no stated end"; display + calendar + retention all handle
+// it). `Location` is optional too — the invite's "Where" + Open-in-Maps derive
+// from `Address` (see `cire/web/src/components/event-details.ts`), and a
+// provided Location is only used as the address fallback at import-write time
+// when Address is blank (see `services/import.ts`).
+const REQUIRED_EVENT_COLUMNS = ["Event Name", "Start", "Timezone"] as const;
 
 export function parseEventsCsv(
   content: string,
@@ -386,9 +387,9 @@ export function parseEventsCsv(
 
       const name = (row[idxName] ?? "").trim();
       const startAt = (row[idxStart] ?? "").trim();
-      const endAt = (row[idxEnd] ?? "").trim();
+      // Optional: "" = no stated end (column may be absent entirely).
+      const endAt = idxEnd === -1 ? "" : (row[idxEnd] ?? "").trim();
       const timezone = (row[idxTz] ?? "").trim();
-      const location = (row[idxLocation] ?? "").trim();
 
       if (name.length === 0) {
         return yield* Effect.fail(
@@ -408,30 +409,12 @@ export function parseEventsCsv(
           }),
         );
       }
-      if (endAt.length === 0) {
-        return yield* Effect.fail(
-          new MalformedSpreadsheet({
-            reason: "End is required",
-            row: r + 1,
-            column: idxEnd + 1,
-          }),
-        );
-      }
       if (timezone.length === 0) {
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Timezone is required",
             row: r + 1,
             column: idxTz + 1,
-          }),
-        );
-      }
-      if (location.length === 0) {
-        return yield* Effect.fail(
-          new MalformedSpreadsheet({
-            reason: "Location is required",
-            row: r + 1,
-            column: idxLocation + 1,
           }),
         );
       }
@@ -462,7 +445,7 @@ export function parseEventsCsv(
         startAt,
         endAt,
         timezone,
-        location,
+        location: idxLocation === -1 ? null : nullableString(row[idxLocation] ?? ""),
         address: idxAddress === -1 ? null : nullableString(row[idxAddress] ?? ""),
         dressCodeDescription: idxDressDesc === -1 ? null : nullableString(row[idxDressDesc] ?? ""),
         dressCodePalette: idxPalette === -1 ? [] : parseDressCodePalette(row[idxPalette] ?? ""),

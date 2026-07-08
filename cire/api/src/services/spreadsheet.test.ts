@@ -95,35 +95,56 @@ describe("parseEventsCsv", () => {
     expect((error as MissingRequiredColumn).column).toBe("Start");
   });
 
-  it("fails when the Location column header is missing (now required)", async () => {
+  it("parses a sheet with no Location column (optional) — location is null", async () => {
     const csv = [
       "Event Name,Start,End,Timezone",
       "Mehndi,2026-09-18T16:00:00+10:00,2026-09-18T22:00:00+10:00,Australia/Sydney",
     ].join("\n");
-    const error = await Effect.runPromise(Effect.flip(parseEventsCsv(csv)));
-    expect(error).toBeInstanceOf(MissingRequiredColumn);
-    expect((error as MissingRequiredColumn).column).toBe("Location");
+    const events = await Effect.runPromise(parseEventsCsv(csv));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.location).toBeNull();
+    expect(events[0]!.endAt).toBe("2026-09-18T22:00:00+10:00");
   });
 
-  it("rejects an event row with an empty Location cell", async () => {
+  it("treats an empty or whitespace-only Location cell as null", async () => {
     const csv = [
       EVENTS_HEADER,
       "Mehndi,2026-09-18T16:00:00+10:00,2026-09-18T22:00:00+10:00,Australia/Sydney,,,,,,",
+      "Sangeet,2026-09-19T16:00:00+10:00,2026-09-19T22:00:00+10:00,Australia/Sydney,   ,,,,,",
     ].join("\n");
-    const error = await Effect.runPromise(Effect.flip(parseEventsCsv(csv)));
-    expect(error).toBeInstanceOf(MalformedSpreadsheet);
-    expect((error as MalformedSpreadsheet).reason).toBe("Location is required");
-    expect((error as MalformedSpreadsheet).row).toBe(2);
+    const events = await Effect.runPromise(parseEventsCsv(csv));
+    expect(events).toHaveLength(2);
+    expect(events[0]!.location).toBeNull();
+    expect(events[1]!.location).toBeNull();
   });
 
-  it("rejects an event row whose Location is whitespace-only", async () => {
+  it("parses a populated Location cell into `location`", async () => {
     const csv = [
       EVENTS_HEADER,
-      "Mehndi,2026-09-18T16:00:00+10:00,2026-09-18T22:00:00+10:00,Australia/Sydney,   ,,,,,",
+      "Mehndi,2026-09-18T16:00:00+10:00,2026-09-18T22:00:00+10:00,Australia/Sydney,Home,,,,,",
     ].join("\n");
-    const error = await Effect.runPromise(Effect.flip(parseEventsCsv(csv)));
-    expect(error).toBeInstanceOf(MalformedSpreadsheet);
-    expect((error as MalformedSpreadsheet).reason).toBe("Location is required");
+    const events = await Effect.runPromise(parseEventsCsv(csv));
+    expect(events[0]!.location).toBe("Home");
+  });
+
+  it("parses a sheet with no End column (optional) — endAt is the '' sentinel", async () => {
+    const csv = [
+      "Event Name,Start,Timezone",
+      "Mehndi,2026-09-18T16:00:00+10:00,Australia/Sydney",
+    ].join("\n");
+    const events = await Effect.runPromise(parseEventsCsv(csv));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.endAt).toBe("");
+  });
+
+  it("treats an empty End cell as the '' no-stated-end sentinel", async () => {
+    const csv = [
+      EVENTS_HEADER,
+      "Mehndi,2026-09-18T16:00:00+10:00,,Australia/Sydney,Home,,,,,",
+    ].join("\n");
+    const events = await Effect.runPromise(parseEventsCsv(csv));
+    expect(events[0]!.endAt).toBe("");
+    expect(events[0]!.startAt).toBe("2026-09-18T16:00:00+10:00");
   });
 
   it("rejects an event row with an empty Start cell (start is required)", async () => {

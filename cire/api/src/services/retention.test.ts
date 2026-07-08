@@ -67,6 +67,8 @@ function makeWedding(opts: {
   withInviteImages?: boolean;
   /** Give the FIRST event an `event_image_key`. */
   withEventImage?: boolean;
+  /** Store the "" no-stated-end sentinel instead of a real endAt on every event. */
+  openEnded?: boolean;
 }): Effect.Effect<
   {
     weddingId: string;
@@ -134,7 +136,7 @@ function makeWedding(opts: {
           slug: `${weddingId}-ev-${i}`,
           name: `Event ${i}`,
           startAt: `${date}T10:00:00+11:00`,
-          endAt: `${date}T12:00:00+11:00`,
+          endAt: opts.openEnded ? "" : `${date}T12:00:00+11:00`,
           timezone: "Australia/Sydney",
           eventImageKey,
         })
@@ -263,6 +265,45 @@ describe("retentionService.sweepExpiredGuestData", () => {
 
         expect(db.select().from(guests).where(eq(guests.id, guestId)).all().length).toBe(1);
         expect(db.select().from(rsvps).where(eq(rsvps.id, rsvpId)).all().length).toBe(1);
+      }),
+    ),
+  );
+
+  it(
+    "keeps a RECENT wedding whose events are all open-ended (endAt '' falls back to startAt)",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date("2026-06-17T04:00:00.000Z");
+        // Final event 2 months ago, but every endAt is the "" sentinel — a naive
+        // max(end_at) would aggregate to "" < cutoff and sweep it immediately.
+        const { guestId, rsvpId } = yield* makeWedding({
+          eventDates: ["2026-03-01", "2026-04-15"],
+          openEnded: true,
+        });
+
+        yield* retentionService.sweepExpiredGuestData(now);
+
+        expect(db.select().from(guests).where(eq(guests.id, guestId)).all().length).toBe(1);
+        expect(db.select().from(rsvps).where(eq(rsvps.id, rsvpId)).all().length).toBe(1);
+      }),
+    ),
+  );
+
+  it(
+    "still sweeps an EXPIRED wedding whose events are all open-ended (startAt >1 year ago)",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date("2026-06-17T04:00:00.000Z");
+        const { guestId } = yield* makeWedding({
+          eventDates: ["2025-04-01"],
+          openEnded: true,
+        });
+
+        yield* retentionService.sweepExpiredGuestData(now);
+
+        expect(db.select().from(guests).where(eq(guests.id, guestId)).all().length).toBe(0);
       }),
     ),
   );
