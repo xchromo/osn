@@ -520,9 +520,9 @@ function EventsGuidance() {
             <dt class="text-text">Timestamps</dt>
             <dd class="text-text-muted">
               <Col required>Start</Col> and <Col>End</Col> as{" "}
-              <span class="text-text font-mono">YYYY-MM-DDTHH:MM:+GMT</span> — e.g.{" "}
-              <span class="text-text font-mono">2026-11-14T15:00:+11:00</span> is 3 pm on 14 Nov
-              2026 in AEST (GMT+11). Leave <Col>End</Col> blank for an open-ended event — the invite
+              <span class="text-text font-mono">YYYY-MM-DDTHH:MM+GMT</span> — e.g.{" "}
+              <span class="text-text font-mono">2026-11-14T15:00+11:00</span> is 3 pm on 14 Nov 2026
+              in AEST (GMT+11). Leave <Col>End</Col> blank for an open-ended event — the invite
               shows just the start time.
             </dd>
           </div>

@@ -29,6 +29,9 @@ export type MalformedSpreadsheetReason =
   | "Event Name is required"
   | "Start is required"
   | "Timezone is required"
+  // Timestamp-shape rejections (see isIsoTimestamp).
+  | "Start must be an ISO-8601 timestamp"
+  | "End must be an ISO-8601 timestamp"
   // URL-cell scheme rejections.
   | "Pinterest URL must be an http(s) URL"
   | "Maps URL must be an http(s) URL"
@@ -314,6 +317,21 @@ function nullableString(s: string): string | null {
 }
 
 /**
+ * Validate a Start/End cell as an ISO-8601 timestamp: a zero-padded
+ * `YYYY-MM-DDTHH:MM` prefix AND parseable by `Date`. The prefix check is
+ * load-bearing beyond display: `events.start_at`/`end_at` are compared
+ * LEXICALLY against a `YYYY-MM-DD` cutoff by the guest-data retention sweep
+ * (`services/retention.ts`), so a free-text date like "1st Nov 2026" (sorts
+ * below any `2…` cutoff) would make an upcoming wedding aggregate as expired
+ * and have its guest PII deleted, while "TBD" (sorts above) would never
+ * expire. Enforcing the shape at the sole ingest point makes the sweep's
+ * documented invariant actually true.
+ */
+function isIsoTimestamp(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !Number.isNaN(new Date(s).getTime());
+}
+
+/**
  * Parse a URL cell into a trimmed http(s) string, or null when blank.
  * Returns `undefined` for present-but-non-http(s) values so the caller
  * can emit a {@link MalformedSpreadsheet} with row/column context — a
@@ -415,6 +433,24 @@ export function parseEventsCsv(
             reason: "Timezone is required",
             row: r + 1,
             column: idxTz + 1,
+          }),
+        );
+      }
+      if (!isIsoTimestamp(startAt)) {
+        return yield* Effect.fail(
+          new MalformedSpreadsheet({
+            reason: "Start must be an ISO-8601 timestamp",
+            row: r + 1,
+            column: idxStart + 1,
+          }),
+        );
+      }
+      if (endAt.length > 0 && !isIsoTimestamp(endAt)) {
+        return yield* Effect.fail(
+          new MalformedSpreadsheet({
+            reason: "End must be an ISO-8601 timestamp",
+            row: r + 1,
+            column: idxEnd + 1,
           }),
         );
       }

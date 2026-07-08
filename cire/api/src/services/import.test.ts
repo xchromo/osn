@@ -601,6 +601,7 @@ describe("applyImport: optional End + Location → Address fallback", () => {
     "Event Name,Start,Timezone,Location,Address",
     "Ceremony,2026-10-31T10:00:00+11:00,Australia/Sydney,Example Parish,",
     "Reception,2026-10-31T18:00:00+11:00,Australia/Sydney,Sample House,126 Example Road",
+    "Afterparty,2026-11-01T00:00:00+11:00,Australia/Sydney,,",
   ].join("\n");
 
   it("stores endAt '' and falls back Location → address only when Address is blank", async () => {
@@ -617,9 +618,12 @@ describe("applyImport: optional End + Location → Address fallback", () => {
     const rows = sharedDb.select().from(events).all();
     const ceremony = rows.find((r) => r.name === "Ceremony")!;
     const reception = rows.find((r) => r.name === "Reception")!;
+    const afterparty = rows.find((r) => r.name === "Afterparty")!;
     expect(ceremony.endAt).toBe("");
     expect(ceremony.address).toBe("Example Parish");
     expect(reception.address).toBe("126 Example Road");
+    // Neither Address nor Location ⇒ null (invite hides the "Where" affordances).
+    expect(afterparty.address).toBeNull();
   });
 
   it("update path applies the same fallback to an existing event", async () => {

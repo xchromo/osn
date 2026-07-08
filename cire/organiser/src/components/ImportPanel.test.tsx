@@ -183,7 +183,7 @@ describe("ImportPanel — CSV format help", () => {
   it("documents the events timestamp + dress-code palette formats", () => {
     render(() => <ImportPanel weddingId="wed_a" />);
     const body = document.body.textContent ?? "";
-    expect(body).toContain("2026-11-14T15:00:+11:00");
+    expect(body).toContain("2026-11-14T15:00+11:00");
     expect(body).toContain("DisplayName:#RGB");
   });
 });
