@@ -232,3 +232,47 @@ Flag to the root compliance programme as each phase lands (root `wiki/compliance
 P1 and the vendor-CRM half of P2 are independent after P0 and can run in parallel branches (disjoint tables/routes). Directory v2 and pricing v2 are the long poles — both gated on real-world content (listings, quotes), not code. Ship order optimises for *an organiser gets planning value on day one* (checklist + budget + CRM) while the two-sided directory grows underneath.
 
 Per-phase checklists: [[platform]].
+
+## 12. Agent pick-up guide
+
+How to pick up any phase of this plan in a fresh session. Read this section +
+the phase's checklist in [[platform]] + the phase's section above; skim the rest.
+
+### Code map (all paths from the OSN repo root)
+
+| Area | Where | Notes |
+|---|---|---|
+| Route factories | `cire/api/src/routes/` | One factory per domain, composed by `createApp` in `src/app.ts` (`aot: false` — Workers forbids `new Function`). New modules = new factory + `.use()` in `createApp`. POST routes pass the sentinel `parse` hook (`{ parse: () => ({}) }`) and read `request.json()` by hand. |
+| Auth gates | `cire/api/src/middleware/` | `osnAuth()` (organiser JWT), `weddingOwner()` / `weddingMember()` (per-`:weddingId` authz), `sessionAuth()` (guest cookie), `rate-limit.ts`, `turnstile.ts`. Phase 0 adds `weddingEditor()` between member and owner. |
+| Services | `cire/api/src/services/` | Return `Effect.Effect<A, E>` with `Data.TaggedError` errors; routes unwrap via `runCire`. No logic in handlers; Drizzle only, no raw SQL. |
+| Validation | `cire/api/src/schemas/` | Effect Schema per domain. |
+| Metrics | `cire/api/src/metrics.ts` | Typed `cire.*` counters/histograms; bounded attribute cardinality only (closed enums). |
+| DB schema | `cire/db/src/schema.ts` | **Three-way DDL mirror**: schema.ts + `cire/db/migrations/*.sql` + the test DDL in `cire/api/src/db/setup.ts` must stay in lockstep by hand (T-S1 test pending). Parent-table rebuilds need the `__keep_*` snapshot/restore idiom (`0006_multi_tenant.sql`) — D1 enforces FKs and DROP TABLE cascades. |
+| Organiser portal | `cire/organiser/src/` | SolidJS islands in an Astro static shell; single root island `components/OrganiserApp.tsx`; hash routing in `lib/dashboard-route.ts`; per-wedding module tabs in `components/DashboardTabs.tsx` (Phase 0 replaces with sidebar); API calls via `authFetch` + `lib/api.ts`. |
+| Guest site | `cire/web/src/` | Only touched when a module changes what guests see (RSVP, invite render). |
+| Tests | co-located `*.test.ts` | `bun:test` (api) / vitest (organiser, web). Route tests build `createApp(createDb(":memory:"))`; osnAuth accepts an injected `osnTestKey`. |
+
+### Invariants (do not break)
+
+- **Tenant scoping**: every organiser read/write is scoped to `:weddingId` through the gates; tables without a `wedding_id` column (guests, guest_events, rsvps) scope via a `families`/`events` join — see the `diffAgainstDb` wedding-scoping entry in [[spreadsheet-import]] for why the join is load-bearing.
+- **No cross-DB FKs**: OSN identities are opaque `usr_*` strings; resolve via the ARC-gated `services/osn-bridge.ts` (key-optional, fail-soft). Never store OSN emails/handles.
+- **`events.end_at` `""` sentinel** = no stated end; anything aggregating or comparing event dates must use the effective end (`max(end_at, start_at)` — see `services/retention.ts`).
+- **Host preview families** (`families.kind = 'host'`) are synthetic and must stay invisible to imports, exports, RSVP counts, and (future) seating/comms.
+- **Guest PII rules**: dietary text is special-category (Art. 9 consent columns on `rsvps`); no PII in logs (redaction deny-list in `cire/CLAUDE.md`); new PII classes need [[../../wiki/compliance/data-map|root data-map]] + retention rows (§10 lists the per-phase deltas).
+- Effect is **backend-only** — never import it in `cire/organiser` or `cire/web`.
+
+### Definition of done (every platform PR)
+
+1. Code + co-located tests (route authz cases included: 401 unauth / 403 wrong-wedding / 404 unknown).
+2. Migration mirrored in all three DDL surfaces (if schema changed).
+3. Wiki: tick the [[platform]] shard item, update this page if the design changed, bump `last-reviewed`, note new decisions in [[deferred]].
+4. Changeset (`bun run changeset`) — `@cire/*` exact workspace names, never mixed with versioned packages.
+5. `bun run --cwd cire/api test` + organiser/web suites + root `bun run check` green.
+
+### Per-phase entry points
+
+- **Phase 0** — start from §3.6's PR table. PR 0/1/2 are independent; PR 4 (the `families` rebuild) is the only risky migration — read §3.2's mechanics note first. The roles PR extends `middleware/wedding-member.ts` + `wedding_hosts.role` (no CHECK constraint — data UPDATE + Drizzle enum widening only). The IA PR restructures `OrganiserApp.tsx`/`DashboardTabs.tsx` + `dashboard-route.ts` and must fold in the P-I3 fetch-lift (root TODO, Performance Backlog).
+- **Phase 1** — greenfield tables (`tasks`, `budget_items`, `payments`) + the shared category enum (`cire/api/src/lib/service-categories.ts`, mirror the pulse `shareSource` single-source-of-truth pattern). No auth changes; everything rides `weddingMember()`/`weddingEditor()`. Checklist template is a versioned TS module resolved against `weddings.wedding_date` (nullable — seed only when set, re-anchor incomplete seeded tasks on change).
+- **Phase 2** — CRM first (`vendors`, wedding-scoped, §5.1) — it is deliberately shippable without the directory. Directory (§5.2) introduces the third principal (vendor = OSN account + `directory_vendors.owner_osn_profile_id` authz) and the D1 geo query (bounding-box prefilter on indexed lat/lng, haversine order). Check [[deferred]] for the open vendor-identity decision before building self-serve.
+- **Phase 3** — pure-function engine (`services/pricing.ts`) over a versioned dataset (`lib/pricing-baselines.ts`); regions keyed by `weddings.pricing_region` (set by the Phase 0 geocoding flow). v2 (directory quote blending) needs the k-anonymity floor from §6 — do not ship aggregates without it.
+- **Phase 4** — seating consumes Guests + RSVPs (watch the host-family and `""`-endAt invariants); comms is **blocked** on guest email columns (consent decision in [[deferred]]) and prod email being enabled (root TODO "Re-enable email later") — build key-optional/fail-soft regardless.

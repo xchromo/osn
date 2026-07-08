@@ -12,6 +12,8 @@ last-reviewed: 2026-07-08
 
 Build-out of the organiser portal into a full wedding management platform. Architecture, schema sketches, and rationale in [[platform-plan]] — this shard is the actionable checklist. Phases land in order; P1 and the vendor-CRM half of P2 are parallelisable after P0.
 
+**Picking up a phase in a fresh session?** Read [[platform-plan]] §12 (Agent pick-up guide) first — code map, invariants, per-PR definition of done, and per-phase entry points.
+
 ## Phase 0 — core-domain refactor (invite decoupling)
 
 PR slicing + dependency order in [[platform-plan]] §3.6 (PRs 0–2 parallel; IA shell lands **early** so CRUD is built into its module home).
