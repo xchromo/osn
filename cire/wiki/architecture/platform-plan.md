@@ -53,7 +53,9 @@ Everything else builds on this. No new product surface; pure re-foundation.
 
 ### 3.1 Wedding profile
 
-Add to `weddings`: `wedding_date` (nullable — engaged couples often don't have one yet), `location_name`, `location_lat` / `location_lng` (nullable REAL, canonical point for vendor search), `guest_count_estimate` (nullable int), `currency` (ISO 4217, default `AUD`), `budget_total_minor` (nullable int). New Settings view in the portal (name, slug, profile fields, map-pin picker for the location — manual pin first, geocoding API later, see §9). The profile drives vendor radius search, pricing estimates, and checklist lead-time seeding.
+Add to `weddings`: `wedding_date` (nullable — engaged couples often don't have one yet), `location_name`, `location_lat` / `location_lng` (nullable REAL, canonical point for vendor search), `pricing_region` (nullable key into the checked-in pricing dataset, §6), `guest_count_estimate` (nullable int), `currency` (ISO 4217, default `AUD`), `budget_total_minor` (nullable int). New Settings view in the portal (name, slug, profile fields). The profile drives vendor radius search, pricing estimates, and checklist lead-time seeding.
+
+**Location capture (decided 2026-07-08): key-optional Geocoding API now.** The Settings form geocodes the organiser-typed address to lat/lng + locality server-side (Google Geocoding, same key-optional fail-soft pattern as Maps Embed / Turnstile: no key ⇒ manual lat/lng entry fallback, form still works). `pricing_region` derives from the geocoded state/locality via a checked-in mapping (`lib/pricing-regions.ts`), so Phase 3 needs no second lookup. Compliance: Geocoding is a new subprocessor + data-map row (§10).
 
 ### 3.2 Households ≠ claim codes
 
@@ -61,7 +63,10 @@ Make `families.publicId` **nullable** (partial unique index `WHERE public_id IS 
 
 - A household can be created with **no code**; the Guests module creates/edits households and guests directly.
 - "Issue invite" (per household or bulk = the existing re-mint machinery in `services/remint-codes.ts`) mints the code — this is the moment a guest-list record acquires an invite credential.
+- **Import keeps auto-minting (decided 2026-07-08)**: spreadsheet-imported households still get a code at apply time (`generateFamilyCode`, `services/import.ts:152`) — the sheet *is* the invite list and the current workflow is preserved. Only manually-created households start code-less. Import revert is unaffected (it restores snapshot `publicId`s).
 - `sessionAuth` / `POST /api/claim` are unchanged (they already look up by `publicId`; null simply never matches).
+- **Migration mechanics**: SQLite can't `ALTER` away `NOT NULL` — this is a full `families` rebuild, and `families` parents `guests` + `sessions` with `ON DELETE CASCADE` under D1's enforced FKs. Use the `__keep_*` snapshot/restore idiom from `0006_multi_tenant.sql`; recreate the unique index as partial (`WHERE public_id IS NOT NULL`); mirror all three DDL surfaces (schema.ts / migration / test `setup.ts`). This is the riskiest artifact in Phase 0 — land the T-S1 lockstep test **before** it.
+- Code-lifecycle columns (`codeSharedAt`/`firstOpenedAt`/`deactivatedAt`) stay on `families` as "invite state, null until an invite exists"; deactivation remains strictly an invite concept (kills the code, guest data untouched) — no household archiving in Phase 0.
 - Alternative considered: extracting a 1:1 `family_invites` table. Cleaner conceptually, but the migration + join tax across ~10 services isn't justified when three nullable columns and a partial index express the same thing. Revisit only if invite-channel state grows (e.g. per-channel delivery tracking).
 - UI language: "Households" in the Guests module; "families" stays as the table name (rename cost > benefit).
 
@@ -71,12 +76,13 @@ The import stays (it's a strength) but stops being the only writer:
 
 - `POST/PATCH/DELETE .../guests/households`, `.../guests/households/:familyId/guests`, per-guest `PUT .../attendance` (replaces direct `guest_events` manipulation), household notes/tags.
 - `POST/PATCH/DELETE .../schedule/events` with the same fields the import writes today.
-- **Organiser-recorded RSVPs**: `PUT .../guests/:guestId/rsvps/:eventId` — phone/paper RSVPs land in the same `rsvps` table the invite writes to. Dietary free-text via this path needs the same Art. 9 consent capture the guest flow has (`dietaryConsentAt`) — record the organiser attestation variant (see §10).
-- Import diff logic (`diffAgainstDb`) is unaffected — it already reconciles against live DB state regardless of how rows got there.
+- **Organiser-recorded RSVPs**: `PUT .../guests/:guestId/rsvps/:eventId` — phone/paper RSVPs land in the same `rsvps` table the invite writes to. Add `consent_source` (`'guest' | 'organiser_attested'`) so dietary free-text keeps its Art. 9 story (§10), and record the writer so organiser-entered answers stay distinguishable from (and visibly overwrite) guest-submitted ones.
+- **Provenance column (decided 2026-07-08)**: `source: 'import' | 'manual'` on `families` + `guests`. Once organisers can hand-add rows, a re-applied sheet that lacks them would otherwise propose deleting them — `diffAgainstDb` reconciles the whole wedding. The diff manages `import`-sourced rows only by default, with an explicit "also remove manual rows" toggle; free "added by hand" badge in the UI. (`guests.externalId` already half-anticipated this.)
+- **Un-invite guard**: deleting a `guest_events` row for a pair that has an RSVP gets the same explicit state-loss confirm the import preview shows — no silent discarding of real answers.
 
 ### 3.4 API + portal re-organisation
 
-- Module routers under `/api/organiser/weddings/:weddingId/{guests|schedule|invite|vendors|budget|tasks|seating|settings}`. Existing routes move in lockstep with the portal (the portal is the only client of `/api/organiser/*`; guest-site public routes are untouched). Keep a thin alias layer for one release if the deploy cadence makes lockstep risky.
+- Module routers under `/api/organiser/weddings/:weddingId/{guests|schedule|invite|vendors|budget|tasks|seating|settings}`; guest-site public routes untouched. **Alias layer for one release (decided 2026-07-08)**: mount the same factories at old + new prefixes, delete the old prefix next release. Lockstep-only was rejected — the Worker and Pages bundles deploy in one CI run but not atomically, and organisers hold cached portal bundles after the Worker flips, so a lockstep move guarantees a broken window.
 - Portal IA: replace the flat `DashboardTabs` with a **module sidebar** — Overview (new home: countdown, RSVP totals, open tasks, budget snapshot), Guests, Schedule, Invite, Vendors, Budget, Checklist, Settings. Extend `lib/dashboard-route.ts` hash routing to `#/w/:weddingId/:module/:sub`. `GettingStarted` becomes the Overview's empty-state.
 - Fix P-I3 (root Performance Backlog) as part of this: lift guests/events fetches to the dashboard shell so module navigation doesn't refetch.
 
@@ -90,7 +96,20 @@ Implement `wedding_hosts.role` `editor`/`viewer` + a `weddingEditor()` gate (bet
 | Write guests/schedule/invite/vendors/budget/tasks/seating | — | ✅ | ✅ |
 | Codes (mint/regenerate/deactivate), hosts add/remove, settings, delete wedding | — | — | ✅ |
 
-Existing co-hosts map to `editor` (they already have import + invite-builder write via `weddingMember()` — see [[status]]). This closes the root-TODO co-host-roles item and matters doubly here: a hired *wedding planner* is exactly an `editor`.
+Existing co-hosts map to `editor` (they already have import + invite-builder write via `weddingMember()` — see [[status]]). This closes the root-TODO co-host-roles item and matters doubly here: a hired *wedding planner* is exactly an `editor`. Cheap change: `wedding_hosts.role` has no DB CHECK constraint (`0013_wedding_hosts.sql` — enum is app-layer), so it's a data `UPDATE 'host' → 'editor'` + Drizzle enum widening + the new gate; no table rebuild.
+
+### 3.6 Phase 0 PR slicing
+
+| # | PR | Depends on |
+|---|---|---|
+| 0 | T-S1 migration-lockstep test | — |
+| 1 | Wedding profile (schema + Settings view + key-optional geocoding) | — |
+| 2 | Roles (`editor`/`viewer` + `weddingEditor()`) | — |
+| 3 | Portal IA shell (sidebar, Overview, hash routes; existing tabs rehomed; P-I3 fetch lift) | 1 (Settings home) |
+| 4 | Households ≠ codes (`families` rebuild + invite-module code issuance) | 0 |
+| 5 | Guest/event CRUD + organiser RSVPs + provenance | 3, 4 |
+
+PRs 0–2 are parallelisable. The IA shell deliberately lands **early** (not last) so CRUD is built directly into its module home instead of into the old tabs and moved later.
 
 ## 4. Phase 1 — planning core (Overview, Checklist, Budget v1)
 
@@ -190,17 +209,17 @@ Context-aware estimates from the wedding profile: guest count, date (season + we
 | Decision | Options | Decide when |
 |---|---|---|
 | Vendor business identity | plain OSN account (recommended start) vs OSN **org** with staff | directory v2 self-serve opens |
-| Geocoding the wedding/vendor location | manual map-pin only (recommended start) vs key-optional Geocoding API | Settings UI build |
 | External discovery overlay | none (recommended start) vs Google Places live-search layer (ToS: display-only, never stored) | after directory v1 proves thin coverage |
 | Pricing baseline sourcing + regions | hand-curated AU-first dataset vs licensed data | Phase 3 start |
 | Guest email collection point | RSVP flow (guest-entered) vs organiser-entered vs both | Comms build; consent design first |
-| Old organiser route aliases | lockstep move (recommended — portal is sole client) vs one-release alias layer | Phase 0 PR |
+
+Decided 2026-07-08 (Phase 0 review — rows moved to [[deferred]] Resolved): import keeps auto-minting codes; `source` provenance column on families/guests; **key-optional Geocoding API** for location capture; **one-release alias layer** for the route move.
 
 ## 10. Compliance deltas (new PII classes)
 
 Flag to the root compliance programme as each phase lands (root `wiki/compliance/*`):
 
-- **Phase 0**: organiser-recorded dietary RSVPs — Art. 9 consent capture variant (organiser attests guest consent; record `consent_source`).
+- **Phase 0**: organiser-recorded dietary RSVPs — Art. 9 consent capture variant (organiser attests guest consent; record `consent_source`). Geocoding API (organiser-typed wedding address sent to Google) → subprocessor + data-map rows; key-optional, so the degraded mode has no third-party flow.
 - **Phase 2**: vendor contact details (personal data for sole traders) → data-map + retention rows; enquiry message content.
 - **Phase 3 v2**: quoted-price aggregation — k-anonymity floor documented.
 - **Phase 4**: guest emails (new high-sensitivity class: contactability) → data-map, retention, DPIA delta, suppression list; comms log retention.

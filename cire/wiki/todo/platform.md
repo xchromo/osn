@@ -14,15 +14,16 @@ Build-out of the organiser portal into a full wedding management platform. Archi
 
 ## Phase 0 — core-domain refactor (invite decoupling)
 
-- [ ] **Wedding profile** — add `wedding_date`, `location_name`, `location_lat`/`location_lng`, `guest_count_estimate`, `currency`, `budget_total_minor` to `weddings`; Settings module view with manual map-pin location picker
-- [ ] **Households ≠ claim codes** — make `families.publicId` nullable (partial unique index); households creatable without a code; "issue invite" (single + bulk via existing re-mint) mints codes from the Invite module
-- [ ] **Guest + household CRUD** — organiser create/edit/delete for households and guests; per-guest event-attendance editing (`guest_events` writes); household notes
-- [ ] **Event CRUD** — organiser create/edit/delete events without the spreadsheet path
-- [ ] **Organiser-recorded RSVPs** — `PUT .../guests/:guestId/rsvps/:eventId` for phone/paper RSVPs; dietary consent-source variant recorded (compliance delta, [[platform-plan]] §10)
-- [ ] **Module routers** — reorganise `/api/organiser/weddings/:weddingId/*` into `guests|schedule|invite|vendors|budget|tasks|seating|settings` factories (portal moves in lockstep; decide alias layer — see [[deferred]])
-- [ ] **Portal IA** — module sidebar + Overview home (countdown, RSVP totals, task/budget snapshots); extend `dashboard-route.ts` to `#/w/:weddingId/:module/:sub`; `GettingStarted` becomes Overview empty-state; fold in the P-I3 fetch-lifting fix
-- [ ] **Roles** — implement `wedding_hosts.role` `editor`/`viewer` + `weddingEditor()` gate; existing co-hosts map to `editor` (closes the root-TODO co-host-roles item)
-- [ ] **Pull T-S1 forward** — migration/DDL lockstep test before the schema growth starts
+PR slicing + dependency order in [[platform-plan]] §3.6 (PRs 0–2 parallel; IA shell lands **early** so CRUD is built into its module home).
+
+- [ ] **PR 0 — T-S1 lockstep test** — migration/DDL mirror test **before** the `families` rebuild lands (the rebuild is the riskiest artifact — `__keep_*` snapshot/restore idiom under D1's enforced cascades)
+- [ ] **PR 1 — Wedding profile** — add `wedding_date`, `location_name`, `location_lat`/`location_lng`, `pricing_region`, `guest_count_estimate`, `currency`, `budget_total_minor` to `weddings`; Settings view with **key-optional Geocoding API** (no key ⇒ manual lat/lng fallback); `pricing_region` from geocoded locality via checked-in mapping; subprocessor + data-map rows
+- [ ] **PR 2 — Roles** — `wedding_hosts.role` `editor`/`viewer` + `weddingEditor()` gate; data `UPDATE 'host' → 'editor'` (no CHECK constraint, no rebuild); closes the root-TODO co-host-roles item
+- [ ] **PR 3 — Portal IA shell** — module sidebar + Overview home (countdown, RSVP totals, task/budget snapshots); extend `dashboard-route.ts` to `#/w/:weddingId/:module/:sub`; `GettingStarted` becomes Overview empty-state; fold in the P-I3 fetch-lifting fix
+- [ ] **PR 4 — Households ≠ claim codes** — `families.publicId` nullable via `__keep_*` table rebuild + partial unique index; households creatable without a code; "issue invite" (single + bulk via existing re-mint) from the Invite module; **import keeps auto-minting** (decided); deactivation stays invite-only
+- [ ] **PR 5a — Guest + household + event CRUD** — organiser create/edit/delete for households, guests, events; per-guest attendance editing with **state-loss confirm** when un-inviting over an existing RSVP; **`source: 'import'|'manual'` provenance** on families/guests, import diff manages import-sourced rows only by default
+- [ ] **PR 5b — Organiser-recorded RSVPs** — `PUT .../guests/:guestId/rsvps/:eventId`; `consent_source` (`guest`/`organiser_attested`) + writer recorded (compliance delta, [[platform-plan]] §10)
+- [ ] **Module routers** (with PR 3/5) — reorganise `/api/organiser/weddings/:weddingId/*` into `guests|schedule|invite|…|settings` factories; **one-release alias layer** at the old prefixes (decided), delete next release
 
 ## Phase 1 — planning core
 
