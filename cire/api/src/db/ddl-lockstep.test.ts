@@ -283,9 +283,19 @@ function snapshotDrizzleTable(table: SQLiteTable): { name: string; shape: TableS
 
 const drizzleTables = Object.values(cireSchema).filter((v): v is SQLiteTable => is(v, SQLiteTable));
 
+// Snapshot then release the native handle — the diffs below only need the
+// plain snapshot objects (P-I1).
+function snapshotAndClose(db: Database): Record<string, TableShape> {
+  try {
+    return snapshotSchema(db);
+  } finally {
+    db.close();
+  }
+}
+
 // ── The lockstep assertions ──────────────────────────────────────────────────
 
-const migrated = snapshotSchema(applyMigrations());
+const migrated = snapshotAndClose(applyMigrations());
 
 describe("T-S1 lockstep: migrations chain", () => {
   it("has a file for every drizzle-kit journal entry, in name order", () => {
@@ -302,7 +312,7 @@ describe("T-S1 lockstep: migrations chain", () => {
 });
 
 describe("T-S1 lockstep: setup.ts test DDL ↔ migrated D1 shape", () => {
-  const mirror = snapshotSchema(applyMirrorDdl());
+  const mirror = snapshotAndClose(applyMirrorDdl());
 
   it("declares the same set of tables", () => {
     expect(Object.keys(mirror).toSorted()).toEqual(Object.keys(migrated).toSorted());
