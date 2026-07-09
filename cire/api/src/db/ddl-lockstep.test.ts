@@ -61,6 +61,12 @@ type TableShape = {
   indexes: IndexShape[];
   checks: string[];
 };
+type SchemaSnapshot = {
+  tables: Record<string, TableShape>;
+  /** Triggers + views. None exist today — pinned so a future migration that
+   * adds one can't silently skip the mirror (indexes are diffed per-table). */
+  nonTableObjects: Array<{ type: string; name: string; sql: string }>;
+};
 
 /** Case/whitespace/identifier-quoting–insensitive form of a SQL fragment. */
 const normalizeExpr = (raw: string): string =>
@@ -88,7 +94,7 @@ function extractChecks(tableSql: string): string[] {
   return checks.toSorted();
 }
 
-function snapshotSchema(db: Database): Record<string, TableShape> {
+function snapshotSchema(db: Database): SchemaSnapshot {
   const tables = db
     .query(
       "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -175,7 +181,16 @@ function snapshotSchema(db: Database): Record<string, TableShape> {
       checks: extractChecks(table.sql),
     };
   }
-  return snapshot;
+
+  const nonTableObjects = (
+    db
+      .query(
+        "SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'view') ORDER BY type, name",
+      )
+      .all() as Array<{ type: string; name: string; sql: string }>
+  ).map((o) => ({ type: o.type, name: o.name, sql: normalizeExpr(o.sql) }));
+
+  return { tables: snapshot, nonTableObjects };
 }
 
 const migrationFiles = (): string[] =>
@@ -285,7 +300,7 @@ const drizzleTables = Object.values(cireSchema).filter((v): v is SQLiteTable => 
 
 // Snapshot then release the native handle — the diffs below only need the
 // plain snapshot objects (P-I1).
-function snapshotAndClose(db: Database): Record<string, TableShape> {
+function snapshotAndClose(db: Database): SchemaSnapshot {
   try {
     return snapshotSchema(db);
   } finally {
@@ -307,7 +322,7 @@ describe("T-S1 lockstep: migrations chain", () => {
   });
 
   it("leaves no __keep_* snapshot tables behind (rebuild recovery cleanup)", () => {
-    expect(Object.keys(migrated).filter((t) => t.startsWith("__keep_"))).toEqual([]);
+    expect(Object.keys(migrated.tables).filter((t) => t.startsWith("__keep_"))).toEqual([]);
   });
 });
 
@@ -315,14 +330,18 @@ describe("T-S1 lockstep: setup.ts test DDL ↔ migrated D1 shape", () => {
   const mirror = snapshotAndClose(applyMirrorDdl());
 
   it("declares the same set of tables", () => {
-    expect(Object.keys(mirror).toSorted()).toEqual(Object.keys(migrated).toSorted());
+    expect(Object.keys(mirror.tables).toSorted()).toEqual(Object.keys(migrated.tables).toSorted());
   });
 
-  for (const tableName of Object.keys(migrated).toSorted()) {
+  it("declares the same triggers and views (today: none)", () => {
+    expect(mirror.nonTableObjects).toEqual(migrated.nonTableObjects);
+  });
+
+  for (const tableName of Object.keys(migrated.tables).toSorted()) {
     it(`mirrors "${tableName}" exactly`, () => {
-      expect({ table: tableName, ...mirror[tableName] }).toEqual({
+      expect({ table: tableName, ...mirror.tables[tableName] }).toEqual({
         table: tableName,
-        ...migrated[tableName],
+        ...migrated.tables[tableName],
       });
     });
   }
@@ -331,14 +350,14 @@ describe("T-S1 lockstep: setup.ts test DDL ↔ migrated D1 shape", () => {
 describe("T-S1 lockstep: Drizzle schema.ts ↔ migrated D1 shape", () => {
   it("declares the same set of tables", () => {
     expect(drizzleTables.map((t) => getTableConfig(t).name).toSorted()).toEqual(
-      Object.keys(migrated).toSorted(),
+      Object.keys(migrated.tables).toSorted(),
     );
   });
 
   for (const table of drizzleTables) {
     const { name, shape } = snapshotDrizzleTable(table);
     it(`mirrors "${name}" exactly`, () => {
-      expect({ table: name, ...shape }).toEqual({ table: name, ...migrated[name] });
+      expect({ table: name, ...shape }).toEqual({ table: name, ...migrated.tables[name] });
     });
   }
 });
