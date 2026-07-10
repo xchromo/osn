@@ -335,6 +335,52 @@ describe("InviteBuilder theme", () => {
     const sent = JSON.parse(init.body as string);
     expect(sent.inviteMessage).toBe("Come celebrate with us!");
   });
+
+  it("seeds the events-section header + welcome greeting fields and sends them on Save copy", async () => {
+    authFetchMock.mockResolvedValueOnce(
+      json({
+        ...EMPTY_CUSTOMISATION,
+        details: { eyebrow: "Join Us", heading: "The Festivities" },
+        welcome: { message: "So happy you're here!" },
+      }),
+    ); // initial load
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+
+    const eyebrow = (await waitFor(() =>
+      screen.getByLabelText("Events eyebrow"),
+    )) as HTMLInputElement;
+    expect(eyebrow.value).toBe("Join Us");
+    expect((screen.getByLabelText("Events heading") as HTMLInputElement).value).toBe(
+      "The Festivities",
+    );
+    expect((screen.getByLabelText("Welcome greeting") as HTMLInputElement).value).toBe(
+      "So happy you're here!",
+    );
+
+    fireEvent.input(eyebrow, { target: { value: "Celebrate!" } });
+    fireEvent.click(screen.getByText("Save copy"));
+
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const [, init] = authFetchMock.mock.calls[1];
+    const sent = JSON.parse(init.body as string);
+    expect(sent.detailsEyebrow).toBe("Celebrate!");
+    expect(sent.detailsHeading).toBe("The Festivities");
+    expect(sent.welcomeMessage).toBe("So happy you're here!");
+  });
+
+  it("tolerates a payload without details/welcome copy (older API) — fields seed empty", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // no details/welcome keys
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+
+    const eyebrow = (await waitFor(() =>
+      screen.getByLabelText("Events eyebrow"),
+    )) as HTMLInputElement;
+    expect(eyebrow.value).toBe("");
+    expect((screen.getByLabelText("Welcome greeting") as HTMLInputElement).value).toBe("");
+  });
 });
 
 describe("InviteBuilder shown/hidden badges", () => {

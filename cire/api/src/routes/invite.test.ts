@@ -104,6 +104,9 @@ const emptyText = JSON.stringify({
   storyEyebrow: null,
   storyHeading: null,
   storyBody: null,
+  detailsEyebrow: null,
+  detailsHeading: null,
+  welcomeMessage: null,
   inviteMessage: null,
 });
 
@@ -148,6 +151,9 @@ describe("PUT /invite/text (organiser)", () => {
     storyEyebrow: null,
     storyHeading: "Where it started",
     storyBody: "  ", // whitespace ⇒ cleared to default
+    detailsEyebrow: null,
+    detailsHeading: null,
+    welcomeMessage: null,
     inviteMessage: null,
   };
 
@@ -197,6 +203,52 @@ describe("PUT /invite/text (organiser)", () => {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
       body: JSON.stringify({ ...payload, heroTitle: "x".repeat(200) }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("saves the details header + welcome greeting and surfaces them on the public read", async () => {
+    const { app } = buildApp();
+    const put = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({
+        ...payload,
+        detailsEyebrow: "Join The Celebration",
+        detailsHeading: "The Festivities",
+        welcomeMessage: "  So happy you're here!  ", // trimmed on save
+      }),
+    });
+    expect(put.status).toBe(200);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      details: { eyebrow: string | null; heading: string | null };
+      welcome: { message: string | null };
+    };
+    expect(body.details.eyebrow).toBe("Join The Celebration");
+    expect(body.details.heading).toBe("The Festivities");
+    expect(body.welcome.message).toBe("So happy you're here!");
+  });
+
+  it("reports null details/welcome copy for an uncustomised wedding (built-in defaults)", async () => {
+    const { app } = buildApp();
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      details: { eyebrow: string | null; heading: string | null };
+      welcome: { message: string | null };
+    };
+    expect(body.details.eyebrow).toBeNull();
+    expect(body.details.heading).toBeNull();
+    expect(body.welcome.message).toBeNull();
+  });
+
+  it("rejects an over-long welcome greeting with 400 (cap 300)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, welcomeMessage: "x".repeat(301) }),
     });
     expect(res.status).toBe(400);
   });
@@ -276,6 +328,9 @@ describe("co-host invite access (weddingMember)", () => {
         storyEyebrow: null,
         storyHeading: null,
         storyBody: null,
+        detailsEyebrow: null,
+        detailsHeading: null,
+        welcomeMessage: null,
         inviteMessage: null,
       }),
     });

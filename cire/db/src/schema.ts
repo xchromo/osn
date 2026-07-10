@@ -338,6 +338,15 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   storyEyebrow: text("story_eyebrow"),
   storyHeading: text("story_heading"),
   storyBody: text("story_body"),
+  // Events ("details") section header copy (migration 0028) — the eyebrow +
+  // heading above the guest's event cards, previously hardcoded to
+  // "Celebrate With Us" / "Your Events" while the hero/story copy was editable.
+  detailsEyebrow: text("details_eyebrow"),
+  detailsHeading: text("details_heading"),
+  // Post-claim welcome greeting (migration 0028) — the line under the family /
+  // guest name, previously hardcoded to "We are delighted to invite you to
+  // celebrate with us." NULL ⇒ the built-in default copy.
+  welcomeMessage: text("welcome_message"),
   heroImageKey: text("hero_image_key"),
   storyImageKey: text("story_image_key"),
   // JSON-encoded normalised crop rectangle `{x,y,w,h}` in SOURCE FRACTIONS (0..1)

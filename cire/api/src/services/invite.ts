@@ -78,6 +78,17 @@ export interface InviteCustomisation {
     imageUrl: string | null;
     imageCrop: ImageCrop | null;
   };
+  // Events ("details") section header copy (migration 0028). `null` ⇒ the guest
+  // site's built-in "Celebrate With Us" / "Your Events" defaults.
+  details: {
+    eyebrow: string | null;
+    heading: string | null;
+  };
+  // Post-claim welcome greeting (migration 0028). `null` ⇒ the built-in
+  // "We are delighted to invite you to celebrate with us." default.
+  welcome: {
+    message: string | null;
+  };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   // Optional host override for the first line of the copyable invite message
@@ -106,6 +117,8 @@ const DEFAULT_HERO_DISPLAY: HeroDisplay = {
 const EMPTY: InviteCustomisation = {
   hero: { title: null, subtitle: null, imageUrl: null, imageCrop: null },
   story: { eyebrow: null, heading: null, body: null, imageUrl: null, imageCrop: null },
+  details: { eyebrow: null, heading: null },
+  welcome: { message: null },
   heroDisplay: DEFAULT_HERO_DISPLAY,
   theme: EMPTY_THEME,
   inviteMessage: null,
@@ -132,6 +145,9 @@ function toCustomisation(
     storyEyebrow: string | null;
     storyHeading: string | null;
     storyBody: string | null;
+    detailsEyebrow: string | null;
+    detailsHeading: string | null;
+    welcomeMessage: string | null;
     heroImageKey: string | null;
     storyImageKey: string | null;
     heroImageCrop: string | null;
@@ -173,6 +189,8 @@ function toCustomisation(
       imageUrl: c.storyImageKey ? imagePath(slug, "story", version) : null,
       imageCrop: c.storyImageKey ? decodeCrop(c.storyImageCrop) : null,
     },
+    details: { eyebrow: c.detailsEyebrow, heading: c.detailsHeading },
+    welcome: { message: c.welcomeMessage },
     heroDisplay: {
       // Persisted values already passed the clamp-on-write validation; a null
       // (no row / LEFT JOIN miss) falls back to the today's-look default so an
@@ -246,6 +264,9 @@ export const inviteService = {
             storyEyebrow: weddingInviteCustomisations.storyEyebrow,
             storyHeading: weddingInviteCustomisations.storyHeading,
             storyBody: weddingInviteCustomisations.storyBody,
+            detailsEyebrow: weddingInviteCustomisations.detailsEyebrow,
+            detailsHeading: weddingInviteCustomisations.detailsHeading,
+            welcomeMessage: weddingInviteCustomisations.welcomeMessage,
             heroImageKey: weddingInviteCustomisations.heroImageKey,
             storyImageKey: weddingInviteCustomisations.storyImageKey,
             heroImageCrop: weddingInviteCustomisations.heroImageCrop,
@@ -353,6 +374,9 @@ export const inviteService = {
         storyEyebrow: normaliseCopy(fields.storyEyebrow),
         storyHeading: normaliseCopy(fields.storyHeading),
         storyBody: normaliseCopy(fields.storyBody),
+        detailsEyebrow: normaliseCopy(fields.detailsEyebrow),
+        detailsHeading: normaliseCopy(fields.detailsHeading),
+        welcomeMessage: normaliseCopy(fields.welcomeMessage),
         inviteMessage: normaliseCopy(fields.inviteMessage),
       };
       yield* dbQuery(() =>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { fontStack, sectionThemeVars, type InviteTheme } from "./invite-theme";
+import { fontStack, sectionThemeVars, sectionTokenBridge, type InviteTheme } from "./invite-theme";
 
 const fullTheme: InviteTheme = {
   headingFont: "cormorant",
@@ -109,5 +109,36 @@ describe("sectionThemeVars", () => {
     const vars = sectionThemeVars(theme, "hero");
     expect(vars["--invite-accent"]).toBeUndefined();
     expect(vars["--invite-surface"]).toBeUndefined();
+  });
+});
+
+describe("sectionTokenBridge", () => {
+  it("includes the section's --invite-* vars plus the re-pointed global tokens", () => {
+    const vars = sectionTokenBridge(fullTheme, "hero");
+    // The section vars are still present…
+    expect(vars["--invite-accent"]).toBe("#d4af37");
+    // …and the bridge re-points every themed global token at them, so utility
+    // classes (`text-gold`, `font-display`, `bg-surface`, …) inside the section
+    // resolve the organiser's theme too.
+    expect(vars["--color-gold"]).toBe("var(--invite-accent, oklch(74.99% 0.0854 82.08))");
+    expect(vars["--color-gold-dim"]).toContain("color-mix");
+    expect(vars["--color-surface"]).toBe("var(--invite-surface, oklch(22.7% 0.0275 152.78))");
+    expect(vars["--font-display"]).toContain("var(--invite-heading");
+    expect(vars["--font-body"]).toContain("var(--invite-body");
+  });
+
+  it("still emits the bridge for an un-themed invite (fallbacks reproduce the built-ins)", () => {
+    // With no --invite-* vars set, each bridged token resolves its literal
+    // fallback — the original token value — so an un-themed invite is unchanged.
+    const vars = sectionTokenBridge(null, "details");
+    expect(vars["--invite-accent"]).toBeUndefined();
+    expect(vars["--color-gold"]).toContain("oklch(74.99% 0.0854 82.08)");
+    expect(vars["--font-display"]).toContain("Cormorant Garamond");
+  });
+
+  it("never uses a self-referencing var() fallback (that would resolve to invalid, not the outer value)", () => {
+    for (const [name, value] of Object.entries(sectionTokenBridge(fullTheme, "details"))) {
+      expect(value, `${name} must not reference itself`).not.toContain(`var(${name}`);
+    }
   });
 });

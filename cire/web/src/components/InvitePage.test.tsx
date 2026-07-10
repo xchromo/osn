@@ -145,6 +145,69 @@ describe("InvitePage", () => {
     const section = getByText("Your Events").closest("section") as HTMLElement;
     expect(section.style.getPropertyValue("--invite-accent")).toBe("#abcdef");
     expect(section.style.getPropertyValue("--invite-surface")).toBe("oklch(30% 0.02 150)");
+    // The scoped token bridge re-points the global tokens on the same wrapper,
+    // so the theme reaches the EventCard utility classes (buttons, date lines)
+    // and not just the inline-styled header.
+    expect(section.style.getPropertyValue("--color-gold")).toContain("--invite-accent");
+    expect(section.style.getPropertyValue("--font-display")).toContain("--invite-heading");
+  });
+
+  it("renders the organiser's events-section header copy, and the defaults when unset", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...claim, preview: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
+
+    const { getByText, queryByText } = render(() => (
+      <InvitePage
+        apiUrl="https://api.test"
+        details={{ eyebrow: "Join The Celebration", heading: "The Festivities" }}
+      />
+    ));
+
+    await waitFor(() => expect(getByText("The Festivities")).toBeTruthy(), { timeout: 2000 });
+    expect(getByText("Join The Celebration")).toBeTruthy();
+    // The built-in defaults are fully replaced, not rendered alongside.
+    expect(queryByText("Your Events")).toBeNull();
+    expect(queryByText("Celebrate With Us")).toBeNull();
+  });
+
+  it("threads the details theme into the RSVP modal so the sheet follows the section", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...claim, preview: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
+
+    const { getByRole, getByTestId } = render(() => (
+      <InvitePage
+        apiUrl="https://api.test"
+        theme={{
+          headingFont: null,
+          bodyFont: null,
+          hero: { accentColor: null, surfaceColor: null },
+          story: { accentColor: null, surfaceColor: null },
+          details: { accentColor: "#abcdef", surfaceColor: null },
+        }}
+      />
+    ));
+
+    await waitFor(() => expect(getByRole("button", { name: /Respond/i })).toBeTruthy(), {
+      timeout: 2000,
+    });
+    fireEvent.click(getByRole("button", { name: /Respond/i }));
+    await waitFor(() => expect(getByTestId("rsvp-modal-stub")).toBeTruthy());
+
+    const themeVars = capturedProps.value?.themeVars as Record<string, string>;
+    expect(themeVars["--invite-accent"]).toBe("#abcdef");
+    expect(themeVars["--color-gold"]).toContain("--invite-accent");
   });
 
   it("applies the validated welcome-section theme to the code entry + welcome banner", () => {

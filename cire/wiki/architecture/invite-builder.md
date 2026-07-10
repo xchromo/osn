@@ -4,7 +4,7 @@ tags: [architecture, api, web, db]
 related:
   - "[[index]]"
   - "[[monorepo-structure]]"
-last-reviewed: 2026-07-08
+last-reviewed: 2026-07-09
 ---
 
 # Invite Builder
@@ -21,10 +21,17 @@ image + text + theme overrides on top of the wedding root.
 The customisable surface is a fixed, closed union — not a generic page builder.
 Single source of truth: `cire/api/src/schemas/invite.ts`.
 
-| Section   | Image slot | Text fields                                  |
-| --------- | ---------- | -------------------------------------------- |
-| Hero      | `hero`     | `heroTitle`, `heroSubtitle`                   |
-| Our Story | `story`    | `storyEyebrow`, `storyHeading`, `storyBody`  |
+| Section              | Image slot | Text fields                                  |
+| -------------------- | ---------- | -------------------------------------------- |
+| Hero                 | `hero`     | `heroTitle`, `heroSubtitle`                   |
+| Our Story            | `story`    | `storyEyebrow`, `storyHeading`, `storyBody`  |
+| Code Entry & Welcome | —          | `welcomeMessage` (post-claim greeting line)   |
+| Events ("details")   | —          | `detailsEyebrow`, `detailsHeading`            |
+
+The `details`/`welcome` copy fields landed in migration
+`0028_details_welcome_copy.sql` — they closed the last hardcoded guest-facing
+copy (the "Celebrate With Us" / "Your Events" events header and the
+"We are delighted to invite you…" greeting).
 
 Image slots: `INVITE_IMAGE_SLOTS = ["hero", "story"]`. The same union bounds the
 `:slot` route param, the R2 key namespace, and the observability span/log
@@ -140,7 +147,9 @@ partially-themed) invite renders exactly as before.
 FK ⇒ 1:1). Nullable text columns + nullable `hero_image_key` / `story_image_key` +
 nullable theme columns (`theme_heading_font`, `theme_body_font`, and
 `{hero,story,details,welcome}_{accent,surface}_color` — the `welcome` pair
-landed in `0027_welcome_theme.sql`) + the two **hero display** columns
+landed in `0027_welcome_theme.sql`) + the nullable copy columns
+`details_eyebrow` / `details_heading` / `welcome_message`
+(`0028_details_welcome_copy.sql`) + the two **hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two
 hero-display columns are NOT NULL with defaults that reproduce today's look, so a
@@ -357,16 +366,25 @@ from `InviteHeader`'s resource; the "details"/events **and** "welcome" (code
 entry + welcome banner) sections read the live theme from `InvitePage`'s own
 resource (both override the build-time snapshot above).
 
-> **Welcome section token bridge.** `LoginSection`'s states (input focus border,
-> submit-button hover fill) live in Tailwind pseudo-class utilities that inline
-> styles can't reach, so instead of per-element `var(--invite-accent, …)`
-> styles the section wrapper **re-points the scoped Tailwind tokens** at the
-> validated variables: `--color-gold: var(--invite-accent, <gold literal>)`,
-> `--font-display`/`--font-body` likewise, and `background-color:
-> var(--invite-surface, transparent)`. Every gold/font utility inside the
-> section — including hover/focus — then follows the organiser's pick, and an
-> unset variable falls through to the literal built-in token (a var()
+> **Scoped token bridge (`sectionTokenBridge`).** Section states (input focus
+> border, button hover fill, event-card date lines) live in Tailwind
+> pseudo-class utilities that inline styles can't reach, so instead of
+> per-element `var(--invite-accent, …)` styles the section wrapper
+> **re-points the scoped Tailwind tokens** at the validated variables:
+> `--color-gold: var(--invite-accent, <gold literal>)`, plus `--color-gold-dim`
+> (a `color-mix` at the original 0.35 alpha), `--color-surface`,
+> `--font-display` and `--font-body`. Every gold/surface/font utility inside
+> the wrapper — including hover/focus — then follows the organiser's pick, and
+> an unset variable falls through to the literal built-in token (a var()
 > self-reference would be a cycle, hence the literals).
+> `sectionTokenBridge(theme, section)` in `invite-theme.ts` is the shared
+> helper; it styles the **welcome** wrapper (`LoginSection`, which keeps its
+> `transparent` background default), the **events/details** wrapper in
+> `InvitePage` (this is what makes the details accent reach the `EventCard`
+> buttons — previously only the section header was themed), and — via the
+> `AnimatedModal.themeVars` prop — the RSVP + event-details modals, which
+> paint outside any themed section wrapper and would otherwise stay on the
+> built-in tokens.
 
 > **Render-boundary resilience.** `sectionThemeVars` reads the section sub-object
 > defensively (`theme[section]?` → fall back to the built-in tokens) and never

@@ -81,6 +81,11 @@ interface InviteCustomisation {
     imageUrl: string | null;
     imageCrop: ImageCrop | null;
   };
+  // Events-section header copy + post-claim welcome greeting (migration 0028).
+  // Optional on the wire so a mid-deploy payload from an older API seeds the
+  // fields as "use the defaults" instead of crashing the builder.
+  details?: { eyebrow: string | null; heading: string | null };
+  welcome?: { message: string | null };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   // Optional host override for the first line of the copyable invite message
@@ -105,6 +110,9 @@ const DEFAULTS = {
   storyEyebrow: "Our Story",
   storyHeading: "How It All Began",
   storyBody: "We met at a party three and a half years ago — and we haven't stopped smiling since…",
+  detailsEyebrow: "Celebrate With Us",
+  detailsHeading: "Your Events",
+  welcomeMessage: "We are delighted to invite you to celebrate with us.",
 };
 
 /**
@@ -134,6 +142,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   const [storyEyebrow, setStoryEyebrow] = createSignal("");
   const [storyHeading, setStoryHeading] = createSignal("");
   const [storyBody, setStoryBody] = createSignal("");
+  const [detailsEyebrow, setDetailsEyebrow] = createSignal("");
+  const [detailsHeading, setDetailsHeading] = createSignal("");
+  const [welcomeMessage, setWelcomeMessage] = createSignal("");
   const [inviteMessage, setInviteMessage] = createSignal("");
   const [seeded, setSeeded] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
@@ -171,6 +182,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     setStoryEyebrow(d.story.eyebrow ?? "");
     setStoryHeading(d.story.heading ?? "");
     setStoryBody(d.story.body ?? "");
+    setDetailsEyebrow(d.details?.eyebrow ?? "");
+    setDetailsHeading(d.details?.heading ?? "");
+    setWelcomeMessage(d.welcome?.message ?? "");
     setInviteMessage(d.inviteMessage ?? "");
     setHeadingFont(d.theme.headingFont ?? "default");
     setBodyFont(d.theme.bodyFont ?? "default");
@@ -224,6 +238,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
           storyEyebrow: storyEyebrow() || null,
           storyHeading: storyHeading() || null,
           storyBody: storyBody() || null,
+          detailsEyebrow: detailsEyebrow() || null,
+          detailsHeading: detailsHeading() || null,
+          welcomeMessage: welcomeMessage() || null,
           inviteMessage: inviteMessage() || null,
         }),
       });
@@ -473,6 +490,46 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                     class="border-border bg-bg font-body text-text focus:border-gold rounded-sm border px-3 py-2 text-[0.88rem] outline-none"
                   />
                 </label>
+              </fieldset>
+
+              {/* ── Code Entry & Welcome ─────────────────────────────── */}
+              <fieldset class="border-border flex flex-col gap-4 rounded-sm border p-4">
+                <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
+                  Code Entry &amp; Welcome
+                </legend>
+                <p class="font-body text-text-muted text-[0.82rem]">
+                  The greeting a guest sees under their name after entering their code. Leave it
+                  blank to use the default.
+                </p>
+                <TextField
+                  label="Welcome greeting"
+                  placeholder={DEFAULTS.welcomeMessage}
+                  value={welcomeMessage()}
+                  onInput={setWelcomeMessage}
+                />
+              </fieldset>
+
+              {/* ── Events section ───────────────────────────────────── */}
+              <fieldset class="border-border flex flex-col gap-4 rounded-sm border p-4">
+                <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
+                  Events Section
+                </legend>
+                <p class="font-body text-text-muted text-[0.82rem]">
+                  The header above the guest's event list. The events themselves come from your
+                  spreadsheet import.
+                </p>
+                <TextField
+                  label="Events eyebrow"
+                  placeholder={DEFAULTS.detailsEyebrow}
+                  value={detailsEyebrow()}
+                  onInput={setDetailsEyebrow}
+                />
+                <TextField
+                  label="Events heading"
+                  placeholder={DEFAULTS.detailsHeading}
+                  value={detailsHeading()}
+                  onInput={setDetailsHeading}
+                />
               </fieldset>
 
               {/* ── Invite message ───────────────────────────────────── */}

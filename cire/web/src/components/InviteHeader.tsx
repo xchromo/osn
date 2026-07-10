@@ -114,6 +114,11 @@ export interface InviteCustomisation {
     imageUrl: string | null;
     imageCrop?: ImageCrop | null;
   };
+  // Events-section header copy + post-claim greeting (rendered by InvitePage /
+  // LoginSection, not this island). Optional so a mid-deploy payload from an
+  // older API simply keeps the built-in copy.
+  details?: { eyebrow: string | null; heading: string | null };
+  welcome?: { message: string | null };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
 }
