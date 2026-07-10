@@ -4,7 +4,7 @@ tags: [architecture, api, web, db]
 related:
   - "[[index]]"
   - "[[monorepo-structure]]"
-last-reviewed: 2026-07-09
+last-reviewed: 2026-07-10
 ---
 
 # Invite Builder
@@ -399,23 +399,46 @@ renders (default `cire-wedding`, the bootstrap wedding slug).
 
 ## Organiser UI
 
-`cire/organiser/src/components/InviteBuilder.tsx`, mounted as a new **"Invite"**
-tab in `DashboardTabs.tsx`. Text inputs + per-slot image pickers (with preview +
-remove) drive the organiser endpoints via `useAuth().authFetch`; `solid-toast`
-for feedback, `isAuthExpired` / `redirectToLogin` for 401 handling — same
-patterns as `ImportPanel`. A **Theme** fieldset adds two font `<select>`s (closed
-`FONT_OPTIONS` mirror of the server enum) and, per section, two popover
-accent/surface pickers (`ColorPicker.tsx`, Kobalte ColorArea + hue slider +
-labelled hex field) each with a "Use default" clear (null ⇒ built-in token).
-The picker only emits a full `#rrggbb` (never partial input, and never
-mid-typing: the hex field commits only on a complete 6-digit value — 3/4-digit
-shorthand would otherwise parse and hijack the colour after three keystrokes —
-while shorthand still commits on blur via Kobalte's normalisation), so the UI
-can never submit a colour the server allow-list would reject. The **Hero** fieldset
-also carries two segmented toggles (`ToggleField`, a small `radiogroup`) — **Hero
-image** (Blurred / Regular) and **Title backdrop** (None / Solid). All of these —
-fonts, colours, **and the two hero display toggles** — are saved together via a
-single `PUT /invite/theme` ("Save theme" button) independent of the copy save.
+`cire/organiser/src/components/InviteBuilder.tsx`, mounted as the **"Invite"**
+tab in `DashboardTabs.tsx`. `useAuth().authFetch` drives the organiser
+endpoints; `solid-toast` for feedback, `isAuthExpired` / `redirectToLogin` for
+401 handling — same patterns as `ImportPanel`.
+
+**Structure (2026-07-10 restructure): one card per guest-page section, in the
+order guests scroll them, each owning everything about its section.** A global
+**Typography** fieldset (two font `<select>`s, closed `FONT_OPTIONS` mirror of
+the server enum) comes first, then **Hero** (image + crop, title/subtitle,
+accent + background pickers, the three hero-display sliders, and one WYSIWYG
+preview compositing all of it), **Our Story** (image, eyebrow/heading/body,
+colours, preview), **Code Entry & Welcome** (welcome greeting, colours,
+preview), **Events Section** (eyebrow/heading, colours, preview), and finally
+the copyable **Invite message** (explicitly flagged as not part of the guest
+page). Each section preview (`SectionPreview`) is wired with the same
+`--invite-*` variables the guest consumes (`lib/invite-theme-preview`) and is
+driven by the live copy buffers, so copy AND colour changes are visible
+instantly; the hero's preview additionally composites the uploaded photo, a
+client-side CSS blur (never a Cloudflare Images call) and the title panel,
+tinted by the picked Background colour (falling back to the guest's black
+panel default, not the surface token).
+
+**One save.** A sticky bottom bar carries a single **"Save invite"** button
+(plus the error message, so a failure surfaces next to the action that caused
+it): it PUTs `/invite/text` then `/invite/theme` sequentially, mutating the
+loaded data after each success — the API's two-endpoint split is an
+implementation detail the organiser never sees. (Before the restructure the
+builder had separate "Save copy" / "Save theme" buttons with the hero sliders
+saved by the distant theme button — the source of a "saved but didn't stick"
+class of confusion.) A text-half failure stops before the theme PUT and shows
+that error; a theme-half failure shows its own.
+
+Per-section colours use the popover accent/surface pickers (`ColorPicker.tsx`,
+Kobalte ColorArea + hue slider + labelled hex field) each with a "Use default"
+clear (null ⇒ built-in token). The picker only emits a full `#rrggbb` (never
+partial input, and never mid-typing: the hex field commits only on a complete
+6-digit value — 3/4-digit shorthand would otherwise parse and hijack the
+colour after three keystrokes — while shorthand still commits on blur via
+Kobalte's normalisation), so the UI can never submit a colour the server
+allow-list would reject.
 
 **Crop editor.** Per-slot "Crop" opens `ImageCropModal.tsx` (cropperjs **v2**
 web components wrapped by the `Cropper` class). Two v1→v2 behaviour gaps are
