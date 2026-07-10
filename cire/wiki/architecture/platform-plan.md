@@ -6,7 +6,7 @@ related:
   - "[[invite-builder]]"
   - "[[monorepo-structure]]"
   - "[[platform]]"
-last-reviewed: 2026-07-09
+last-reviewed: 2026-07-10
 ---
 
 # Platform Plan — from digital invite to wedding management platform
@@ -56,6 +56,8 @@ Everything else builds on this. No new product surface; pure re-foundation.
 Add to `weddings`: `wedding_date` (nullable — engaged couples often don't have one yet), `location_name`, `location_lat` / `location_lng` (nullable REAL, canonical point for vendor search), `pricing_region` (nullable key into the checked-in pricing dataset, §6), `guest_count_estimate` (nullable int), `currency` (ISO 4217, default `AUD`), `budget_total_minor` (nullable int). New Settings view in the portal (name, slug, profile fields). The profile drives vendor radius search, pricing estimates, and checklist lead-time seeding.
 
 **Location capture (decided 2026-07-08): key-optional Geocoding API now.** The Settings form geocodes the organiser-typed address to lat/lng + locality server-side (Google Geocoding, same key-optional fail-soft pattern as Maps Embed / Turnstile: no key ⇒ manual lat/lng entry fallback, form still works). `pricing_region` derives from the geocoded state/locality via a checked-in mapping (`lib/pricing-regions.ts`), so Phase 3 needs no second lookup. Compliance: Geocoding is a new subprocessor + data-map row (§10).
+
+**Shipped (PR 1, 2026-07-10).** Implementation notes: `pricing_region` landed **state-granular** (`au-nsw` … `au-nt`, `au-other`, `international`) — Google's `locality` is the suburb, not the metro area, so a metro/regional split can't be derived reliably from one geocode; state level is defensible for a hand-curated v1 dataset and the enum widens with the Phase 3 dataset work (versioned via `PRICING_REGIONS_VERSION`). The profile save is `PUT` with PATCH semantics (the app's CORS method list has no PATCH). Slug renames are allowed in Settings (validated + 409 on collision) with a breaks-shared-links warning; the Settings tab is visible to co-hosts read-only, the save + geocode are owner-only, and the geocode POST sits behind a per-IP limiter (billed upstream call).
 
 ### 3.2 Households ≠ claim codes
 

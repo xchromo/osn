@@ -3,6 +3,7 @@ import {
   sqliteTable,
   text,
   integer,
+  real,
   primaryKey,
   index,
   uniqueIndex,
@@ -34,6 +35,34 @@ export const weddings = sqliteTable(
     codeStyle: text("code_style", { enum: ["simple", "secure"] })
       .notNull()
       .default("secure"),
+    // ── Wedding profile (platform Phase 0, migration 0030) ──────────────────
+    // Organiser-provided planning facts. Everything is nullable — engaged
+    // couples often have none of this yet — and NOTHING here is guest-facing:
+    // the profile drives the planning modules (vendor radius search, pricing
+    // estimates, checklist lead-time seeding), never the invite render.
+    //
+    // `wedding_date` is a date-only ISO string (`YYYY-MM-DD`, no time/zone —
+    // the day is the planning fact; per-event timing stays on `events`).
+    weddingDate: text("wedding_date"),
+    // Free-text venue/locality as the organiser typed it (display only).
+    locationName: text("location_name"),
+    // Canonical point for vendor radius search. Set by the key-optional
+    // server-side geocode of `location_name`, or typed manually when no
+    // geocoding key is configured.
+    locationLat: real("location_lat"),
+    locationLng: real("location_lng"),
+    // Key into the checked-in pricing dataset (Phase 3). Derived from the
+    // geocoded state/country via `cire/api/src/lib/pricing-regions.ts` — a
+    // closed enum validated at the API boundary, never free text.
+    pricingRegion: text("pricing_region"),
+    guestCountEstimate: integer("guest_count_estimate"),
+    // ISO 4217 code for every money figure on this wedding (budget, payments).
+    // NOT NULL with a DEFAULT so historical rows + inserts that omit it land
+    // on AUD.
+    currency: text("currency").notNull().default("AUD"),
+    // Total budget in MINOR units (cents) of `currency` — integers only, no
+    // float money.
+    budgetTotalMinor: integer("budget_total_minor"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },

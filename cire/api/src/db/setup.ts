@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS weddings (
   display_name TEXT NOT NULL,
   owner_osn_profile_id TEXT NOT NULL,
   code_style TEXT NOT NULL DEFAULT 'secure',
+  wedding_date TEXT,
+  location_name TEXT,
+  location_lat REAL,
+  location_lng REAL,
+  pricing_region TEXT,
+  guest_count_estimate INTEGER,
+  currency TEXT NOT NULL DEFAULT 'AUD',
+  budget_total_minor INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
