@@ -4,12 +4,18 @@ tags: [todo, performance]
 related:
   - "[[index]]"
   - "[[review-findings]]"
-last-reviewed: 2026-07-08
+last-reviewed: 2026-07-10
 ---
 
 # Performance Backlog
 
 See [[review-findings]] for severity prefix conventions.
+
+### Invite customisation + builder restructure — review findings (cire-invite-customization branch)
+
+- [x] **IC-P-W1** (fixed in the same PR) — the restructured builder's single "Save invite" fired both PUTs unconditionally, so a copy-only (or no-op) save bumped `updatedAt` and busted the guest image-transform caches for zero visual change. Fixed: per-half dirty-check against a server-acknowledged snapshot — clean halves are skipped, a no-op save makes no network call. The server-side residual (a genuine colour-only change still busts the image caches) is the pre-existing [[perf|WT-P-I1]] below.
+- [ ] **IC-P-I1** — a save touching both halves is two sequential round-trips (text → theme); deliberate for the partial-failure story. If save latency ever matters, the fix is a single combined `PUT /invite` endpoint doing one upsert (which would also collapse the double `updatedAt` bump), not `Promise.all`. (invite-customization branch review)
+- [x] **IC-P-I2** (fixed in the same PR) — `detailsVars`/`welcomeVars` in the guest `InvitePage` were plain derived functions recomputed at each of their JSX consumers; now `createMemo` (single evaluation per theme change, stable object identity).
 
 ### Optional End/Location CSV spec — review findings (wedding-management-platform branch)
 

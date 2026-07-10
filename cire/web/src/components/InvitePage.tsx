@@ -1,5 +1,5 @@
 import { AuthProvider } from "@osn/client/solid";
-import { createResource, createSignal, Show, For } from "solid-js";
+import { createMemo, createResource, createSignal, Show, For } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import { OSN_ISSUER_URL } from "../lib/osn";
@@ -122,8 +122,10 @@ export default function InvitePage(props: InvitePageProps) {
   // field falls through to the built-in token via the var() fallbacks. "welcome"
   // styles the invite-code entry form + post-claim welcome banner inside
   // LoginSection.
-  const detailsVars = () => sectionTokenBridge(liveInvite().theme, "details");
-  const welcomeVars = () => sectionTokenBridge(liveInvite().theme, "welcome");
+  // Memoised: each map has several consumers (section wrapper + both modals),
+  // so compute once per theme change and share a stable object identity.
+  const detailsVars = createMemo(() => sectionTokenBridge(liveInvite().theme, "details"));
+  const welcomeVars = createMemo(() => sectionTokenBridge(liveInvite().theme, "welcome"));
 
   // Organiser copy overrides with the built-in defaults as fallback.
   const detailsEyebrow = () => liveInvite().details?.eyebrow ?? DEFAULT_DETAILS_EYEBROW;

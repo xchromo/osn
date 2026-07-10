@@ -421,15 +421,23 @@ client-side CSS blur (never a Cloudflare Images call) and the title panel,
 tinted by the picked Background colour (falling back to the guest's black
 panel default, not the surface token).
 
-**One save.** A sticky bottom bar carries a single **"Save invite"** button
-(plus the error message, so a failure surfaces next to the action that caused
-it): it PUTs `/invite/text` then `/invite/theme` sequentially, mutating the
-loaded data after each success — the API's two-endpoint split is an
-implementation detail the organiser never sees. (Before the restructure the
-builder had separate "Save copy" / "Save theme" buttons with the hero sliders
-saved by the distant theme button — the source of a "saved but didn't stick"
-class of confusion.) A text-half failure stops before the theme PUT and shows
-that error; a theme-half failure shows its own.
+**One save, dirty-checked per half.** A sticky bottom bar carries a single
+**"Save invite"** button (plus the error message, so a failure surfaces next
+to the action that caused it). Each half is compared against the last
+server-acknowledged snapshot (seeded on load, refreshed per successful PUT)
+and **skipped when unchanged**: a copy-only edit PUTs only `/invite/text`, a
+colour-only edit only `/invite/theme`, and a no-op save makes no network call.
+This matters beyond latency — the theme row's `updatedAt` doubles as the guest
+image-cache version, so a gratuitous theme PUT would bust the per-variant
+transform cache and force guests to re-download the hero for zero visual
+change (P-W1; transforms are the metered resource, see the root
+`[[wiki/runbooks/free-tier-limits]]`). Dirty halves run sequentially (text
+then theme), mutating the loaded data after each success — the API's
+two-endpoint split is an implementation detail the organiser never sees.
+(Before the restructure the builder had separate "Save copy" / "Save theme"
+buttons with the hero sliders saved by the distant theme button — the source
+of a "saved but didn't stick" class of confusion.) A text-half failure stops
+before the theme PUT and shows that error; a theme-half failure shows its own.
 
 Per-section colours use the popover accent/surface pickers (`ColorPicker.tsx`,
 Kobalte ColorArea + hue slider + labelled hex field) each with a "Use default"

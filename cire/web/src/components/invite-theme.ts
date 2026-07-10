@@ -124,3 +124,32 @@ export function sectionTokenBridge(
 ): Record<string, string> {
   return { ...sectionThemeVars(theme, section), ...TOKEN_BRIDGE };
 }
+
+/**
+ * The only style keys a theme-vars map may carry: the four validated
+ * `--invite-*` variables plus the fixed bridge tokens. Components that spread a
+ * theme map into a `style` attribute (AnimatedModal) filter through this set,
+ * so a future caller wiring unvalidated data into the prop can never smuggle an
+ * arbitrary CSS property (e.g. `background-image`) into the DOM — the sink
+ * enforces the contract instead of relying on every caller remembering it
+ * (S-L1).
+ */
+const ALLOWED_THEME_VAR_KEYS: ReadonlySet<string> = new Set([
+  "--invite-accent",
+  "--invite-surface",
+  "--invite-heading",
+  "--invite-body",
+  ...Object.keys(TOKEN_BRIDGE),
+]);
+
+/** Drop any key outside the theme-variable allow-list (undefined stays undefined). */
+export function filterThemeVars(
+  vars: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!vars) return undefined;
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(vars)) {
+    if (ALLOWED_THEME_VAR_KEYS.has(key)) safe[key] = value;
+  }
+  return safe;
+}

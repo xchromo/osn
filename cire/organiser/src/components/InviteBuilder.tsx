@@ -216,8 +216,51 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     setHeroBlur(d.heroDisplay?.blur ?? HERO_BLUR_DEFAULT);
     setTitleBackdropOpacity(d.heroDisplay?.titleBackdrop?.opacity ?? 0);
     setTitleBackdropBlur(d.heroDisplay?.titleBackdrop?.blur ?? 0);
+    // Snapshot the just-seeded state so saveInvite can dirty-check each half.
+    savedText = JSON.stringify(textPayload());
+    savedTheme = JSON.stringify(themePayload());
     setSeeded(true);
   }
+
+  /** The `/invite/text` request body from the live edit buffers. */
+  const textPayload = () => ({
+    heroTitle: heroTitle() || null,
+    heroSubtitle: heroSubtitle() || null,
+    storyEyebrow: storyEyebrow() || null,
+    storyHeading: storyHeading() || null,
+    storyBody: storyBody() || null,
+    detailsEyebrow: detailsEyebrow() || null,
+    detailsHeading: detailsHeading() || null,
+    welcomeMessage: welcomeMessage() || null,
+    inviteMessage: inviteMessage() || null,
+  });
+
+  /** The `/invite/theme` request body from the live edit buffers. */
+  const themePayload = () => ({
+    headingFont: fontOrDefault(headingFont()),
+    bodyFont: fontOrDefault(bodyFont()),
+    heroAccentColor: accent().hero,
+    heroSurfaceColor: surface().hero,
+    storyAccentColor: accent().story,
+    storySurfaceColor: surface().story,
+    detailsAccentColor: accent().details,
+    detailsSurfaceColor: surface().details,
+    welcomeAccentColor: accent().welcome,
+    welcomeSurfaceColor: surface().welcome,
+    heroBlur: heroBlur(),
+    titleBackdropOpacity: titleBackdropOpacity(),
+    titleBackdropBlur: titleBackdropBlur(),
+  });
+
+  // Serialised snapshots of the last state the server has (seeded on load,
+  // refreshed after each successful PUT). saveInvite compares against these to
+  // skip a PUT whose half hasn't changed — a copy-only save must not bump the
+  // theme row's `updatedAt` (it doubles as the guest image-cache version, so a
+  // gratuitous bump busts the per-variant transform cache and makes guests
+  // re-download the hero for zero visual change — P-W1, see
+  // [[free-tier-limits]]).
+  let savedText = "";
+  let savedTheme = "";
 
   // The live picker state as one PreviewTheme — drives every section preview,
   // wired with the SAME `--invite-*` CSS variables the guest invite consumes
@@ -250,63 +293,57 @@ export default function InviteBuilder(props: InviteBuilderProps) {
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
-   * the organiser sees ONE action: both PUTs run sequentially, each successful
-   * response mutates the loaded data immediately (so a text success followed by
-   * a theme failure leaves the UI consistent with what the server actually
-   * saved), and whichever half fails surfaces its own error.
+   * the organiser sees ONE action. Each half is DIRTY-CHECKED against the last
+   * server-acknowledged snapshot and skipped when unchanged — a copy-only edit
+   * must not touch the theme row (its `updatedAt` bump would bust the guest
+   * image caches for nothing, P-W1), and a no-op save makes no network call at
+   * all. Dirty halves run sequentially; each successful response refreshes its
+   * snapshot and mutates the loaded data immediately (so a text success
+   * followed by a theme failure leaves the UI consistent with what the server
+   * actually saved), and whichever half fails surfaces its own error.
    */
   async function saveInvite(e: Event) {
     e.preventDefault();
     setError(null);
+
+    const textBody = JSON.stringify(textPayload());
+    const themeBody = JSON.stringify(themePayload());
+    const textDirty = textBody !== savedText;
+    const themeDirty = themeBody !== savedTheme;
+    if (!textDirty && !themeDirty) {
+      toast.success("No changes to save");
+      return;
+    }
+
     setSaving(true);
     try {
-      const textRes = await authFetch(apiUrl(`${base()}/text`), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          heroTitle: heroTitle() || null,
-          heroSubtitle: heroSubtitle() || null,
-          storyEyebrow: storyEyebrow() || null,
-          storyHeading: storyHeading() || null,
-          storyBody: storyBody() || null,
-          detailsEyebrow: detailsEyebrow() || null,
-          detailsHeading: detailsHeading() || null,
-          welcomeMessage: welcomeMessage() || null,
-          inviteMessage: inviteMessage() || null,
-        }),
-      });
-      if (!textRes.ok) {
-        const body = (await textRes.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `Save failed (${textRes.status})`);
+      if (textDirty) {
+        const textRes = await authFetch(apiUrl(`${base()}/text`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: textBody,
+        });
+        if (!textRes.ok) {
+          const body = (await textRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? `Save failed (${textRes.status})`);
+        }
+        savedText = textBody;
+        mutate((await textRes.json()) as InviteCustomisation);
       }
-      mutate((await textRes.json()) as InviteCustomisation);
 
-      const a = accent();
-      const s = surface();
-      const themeRes = await authFetch(apiUrl(`${base()}/theme`), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          headingFont: fontOrDefault(headingFont()),
-          bodyFont: fontOrDefault(bodyFont()),
-          heroAccentColor: a.hero,
-          heroSurfaceColor: s.hero,
-          storyAccentColor: a.story,
-          storySurfaceColor: s.story,
-          detailsAccentColor: a.details,
-          detailsSurfaceColor: s.details,
-          welcomeAccentColor: a.welcome,
-          welcomeSurfaceColor: s.welcome,
-          heroBlur: heroBlur(),
-          titleBackdropOpacity: titleBackdropOpacity(),
-          titleBackdropBlur: titleBackdropBlur(),
-        }),
-      });
-      if (!themeRes.ok) {
-        const body = (await themeRes.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `Save failed (${themeRes.status})`);
+      if (themeDirty) {
+        const themeRes = await authFetch(apiUrl(`${base()}/theme`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: themeBody,
+        });
+        if (!themeRes.ok) {
+          const body = (await themeRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? `Save failed (${themeRes.status})`);
+        }
+        savedTheme = themeBody;
+        mutate((await themeRes.json()) as InviteCustomisation);
       }
-      mutate((await themeRes.json()) as InviteCustomisation);
       toast.success("Invite saved");
     } catch (err) {
       if (isAuthExpired(err)) return redirectToLogin();
@@ -545,7 +582,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 </legend>
                 <p class="font-body text-text-muted text-[0.82rem]">
                   The invite-code entry form, and the greeting a guest sees under their name after
-                  entering their code. Leave the greeting blank to use the default.
+                  entering their code. Leave the greeting blank to use the default. Like the rest of
+                  the invite copy, the greeting is part of the public invite page — don't put
+                  anything private in it.
                 </p>
                 <TextField
                   label="Welcome greeting"

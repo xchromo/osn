@@ -253,6 +253,38 @@ describe("PUT /invite/text (organiser)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("accepts an exactly-at-cap welcome greeting (300 chars)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, welcomeMessage: "x".repeat(300) }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  // Per-field caps are arguments to the shared copyField factory — pin each new
+  // field's specific cap so a transposed/typo'd limit can't slip through (T-S2).
+  it("rejects an over-long details eyebrow with 400 (cap 80)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, detailsEyebrow: "x".repeat(81) }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an over-long details heading with 400 (cap 160)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, detailsHeading: "x".repeat(161) }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("persists the host's invite message and returns it on the organiser GET", async () => {
     const { app } = buildApp();
     const put = await appRequest(app, `${orgBase}/text`, {

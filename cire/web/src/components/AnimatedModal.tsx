@@ -1,6 +1,7 @@
 import { onCleanup, onMount, type JSX } from "solid-js";
 
 import { Z_CLASS } from "../lib/z-index";
+import { filterThemeVars } from "./invite-theme";
 
 interface AnimatedModalProps {
   onClose: () => void;
@@ -17,7 +18,9 @@ interface AnimatedModalProps {
    * `invite-theme.ts`), applied to the panel so the modal follows its owning
    * section's theme. The modal paints outside any themed section wrapper, so
    * the variables must be re-declared here to reach its contents. Empty/absent
-   * ⇒ the built-in tokens, unchanged.
+   * ⇒ the built-in tokens, unchanged. Keys are filtered through the
+   * theme-variable allow-list (`filterThemeVars`) before touching the DOM, so
+   * this prop can never become an arbitrary inline-style sink.
    */
   themeVars?: Record<string, string>;
   children: JSX.Element;
@@ -145,7 +148,7 @@ export function AnimatedModal(props: AnimatedModalProps) {
       <div
         ref={panelRef}
         class="border-border bg-surface relative max-h-[85dvh] w-full max-w-[480px] overflow-y-auto overscroll-contain rounded-t-[1.75rem] border px-6 pt-8 pb-[max(2.5rem,env(safe-area-inset-bottom))] opacity-0 md:mb-8 md:max-h-[85vh] md:rounded-lg md:pb-10"
-        style={props.themeVars}
+        style={filterThemeVars(props.themeVars)}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

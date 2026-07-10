@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, it, expect } from "vitest";
 
-import { fontStack, sectionThemeVars, sectionTokenBridge, type InviteTheme } from "./invite-theme";
+import {
+  filterThemeVars,
+  fontStack,
+  sectionThemeVars,
+  sectionTokenBridge,
+  type InviteTheme,
+} from "./invite-theme";
 
 const fullTheme: InviteTheme = {
   headingFont: "cormorant",
@@ -140,5 +149,50 @@ describe("sectionTokenBridge", () => {
     for (const [name, value] of Object.entries(sectionTokenBridge(fullTheme, "details"))) {
       expect(value, `${name} must not reference itself`).not.toContain(`var(${name}`);
     }
+  });
+
+  it("stays in lockstep with the @theme tokens in styles/global.css (T-S1)", () => {
+    // The bridge's fallbacks are hand-copied literals of the global tokens (a
+    // self-referencing var() would be a cycle). If a designer retunes a token in
+    // global.css without updating the bridge, every UN-themed invite would
+    // silently render the stale colour inside bridged sections/modals only — a
+    // split-token bug no behavioural test can catch. Enforce the comment-only
+    // contract mechanically, same spirit as cire/api's ddl-lockstep test.
+    // vitest runs with the package root as cwd; import.meta.url is not a
+    // file: URL under this transform, so resolve from cwd instead.
+    const css = readFileSync(resolve(process.cwd(), "src/styles/global.css"), "utf8");
+    const token = (name: string): string => {
+      const match = css.match(new RegExp(`${name}:\\s*([^;]+);`));
+      expect(match, `${name} must exist in global.css @theme`).not.toBeNull();
+      return match![1].trim();
+    };
+
+    const bridge = sectionTokenBridge(null, "hero");
+    expect(bridge["--color-gold"]).toContain(token("--color-gold"));
+    expect(bridge["--color-gold-dim"]).toContain(token("--color-gold"));
+    expect(bridge["--color-surface"]).toContain(token("--color-surface"));
+    expect(bridge["--font-display"]).toContain(token("--font-display"));
+    expect(bridge["--font-body"]).toContain(token("--font-body"));
+  });
+});
+
+describe("filterThemeVars", () => {
+  it("passes through the full bridge map unchanged", () => {
+    const bridge = sectionTokenBridge(fullTheme, "details");
+    expect(filterThemeVars(bridge)).toEqual(bridge);
+  });
+
+  it("drops keys outside the theme-variable allow-list (the style-sink gate)", () => {
+    const filtered = filterThemeVars({
+      "--invite-accent": "#abcdef",
+      "background-image": "url(https://evil.example/x)",
+      color: "red",
+      "--not-a-theme-var": "x",
+    });
+    expect(filtered).toEqual({ "--invite-accent": "#abcdef" });
+  });
+
+  it("keeps undefined as undefined (absent prop stays absent)", () => {
+    expect(filterThemeVars(undefined)).toBeUndefined();
   });
 });

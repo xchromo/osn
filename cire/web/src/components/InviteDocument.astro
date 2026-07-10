@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css'
+import { inviteTitle } from '../lib/invite-title'
 import InviteHeader, { type InviteCustomisation } from './InviteHeader'
 import InvitePage from './InvitePage'
 import SiteFooter from './SiteFooter.astro'
@@ -27,9 +28,7 @@ const heroBase = initialInvite?.hero.imageUrl ? `${apiUrl}${initialInvite.hero.i
 
 // Tab title follows the couple's hero title when they've set one (e.g.
 // "Anita & Ben — You're Invited"); the built-in default otherwise.
-const pageTitle = initialInvite?.hero.title
-  ? `${initialInvite.hero.title} — You're Invited`
-  : "You're Invited"
+const pageTitle = inviteTitle(initialInvite?.hero.title)
 const heroSep = heroBase?.includes('?') ? '&' : '?'
 const preloadHeroSrcset = heroBase
   ? `${heroBase}${heroSep}variant=thumb 320w, ${heroBase}${heroSep}variant=card 800w, ${heroBase}${heroSep}variant=hero 1600w`

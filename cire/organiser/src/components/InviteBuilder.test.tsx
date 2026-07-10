@@ -6,9 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * InviteBuilder lets the organiser rewrite copy, swap images, and set a
  * per-section theme — fonts + accent/surface colours. The OSN auth + api
  * helpers + toasts are stubbed; this asserts the wiring: the loaded
- * customisation seeds the controls, and the single "Save invite" action PUTs
- * the text body then the theme body (the API's two endpoints are an
- * implementation detail the UI hides behind one button).
+ * customisation seeds the controls, and the single "Save invite" action
+ * dirty-checks each half and PUTs only what changed — the text body, the theme
+ * body, or both in order (a copy-only save must not bump the theme row's
+ * `updatedAt`, which doubles as the guest image-cache version — P-W1).
  */
 
 const authFetchMock = vi.fn();
@@ -53,20 +54,10 @@ const EMPTY_CUSTOMISATION = {
   },
 };
 
-/** Queue the two save responses (text PUT then theme PUT) after the initial load. */
-function mockSaveResponses() {
-  authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
-  authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
-}
-
-/** The parsed body of the text PUT (always the first call after the load). */
-function sentText() {
-  return JSON.parse(authFetchMock.mock.calls[1][1].body as string);
-}
-
-/** The parsed body of the theme PUT (always the second call after the load). */
-function sentTheme() {
-  return JSON.parse(authFetchMock.mock.calls[2][1].body as string);
+/** The parsed body of the PUT whose URL ends with `suffix`, or null if never fired. */
+function sentBody(suffix: string) {
+  const call = authFetchMock.mock.calls.find((c) => String(c[0]).endsWith(suffix));
+  return call ? JSON.parse(call[1].body as string) : null;
 }
 
 describe("InviteBuilder theme", () => {
@@ -95,9 +86,9 @@ describe("InviteBuilder theme", () => {
     expect(body.value).toBe("system-sans");
   });
 
-  it("PUTs the text body then the theme body (font enum + colours) on Save invite", async () => {
+  it("PUTs only the theme body when only theme fields changed (font enum + colours)", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
 
@@ -114,15 +105,15 @@ describe("InviteBuilder theme", () => {
 
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const [textUrl, textInit] = authFetchMock.mock.calls[1];
-    expect(textUrl).toBe("https://api.test/api/organiser/weddings/wed_1/invite/text");
-    expect(textInit.method).toBe("PUT");
-    const [themeUrl, themeInit] = authFetchMock.mock.calls[2];
+    // Dirty-check: the copy half is untouched, so /text must NOT be PUT — a
+    // theme-only save is exactly one write.
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const [themeUrl, themeInit] = authFetchMock.mock.calls[1];
     expect(themeUrl).toBe("https://api.test/api/organiser/weddings/wed_1/invite/theme");
     expect(themeInit.method).toBe("PUT");
+    expect(sentBody("/text")).toBeNull();
 
-    const sent = sentTheme();
+    const sent = sentBody("/theme");
     expect(sent.headingFont).toBe("cormorant");
     expect(sent.heroAccentColor).toBe("#112233");
     // Untouched fonts collapse to null ("default" ⇒ keep the built-in token).
@@ -138,6 +129,40 @@ describe("InviteBuilder theme", () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Invite saved"));
   });
 
+  it("PUTs both halves in order when copy AND theme changed", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "Anita & Ben" } });
+    fireEvent.change(screen.getByLabelText("Heading font"), { target: { value: "georgia" } });
+    fireEvent.click(screen.getByText("Save invite"));
+
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
+    // Text first, theme second — the documented ordering.
+    expect(String(authFetchMock.mock.calls[1][0])).toMatch(/\/invite\/text$/);
+    expect(String(authFetchMock.mock.calls[2][0])).toMatch(/\/invite\/theme$/);
+    expect(sentBody("/text").heroTitle).toBe("Anita & Ben");
+    expect(sentBody("/theme").headingFont).toBe("georgia");
+  });
+
+  it("skips the network entirely on a no-op save", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load only
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    fireEvent.click(screen.getByText("Save invite"));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("No changes to save"));
+    // No PUT fired — a gratuitous save must not bump `updatedAt` (it would bust
+    // the guest image-transform caches for zero change, P-W1).
+    expect(authFetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("seeds the welcome section pickers and PUTs the edited welcome accent", async () => {
     authFetchMock.mockResolvedValueOnce(
       json({
@@ -148,7 +173,7 @@ describe("InviteBuilder theme", () => {
         },
       }),
     );
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
     await waitFor(() => screen.getByText("Save invite"));
@@ -168,8 +193,8 @@ describe("InviteBuilder theme", () => {
     fireEvent.input(hex, { target: { value: "#112233" } });
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const sent = sentTheme();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/theme");
     expect(sent.welcomeAccentColor).toBe("#112233");
     // The sibling sections are untouched.
     expect(sent.heroAccentColor).toBeNull();
@@ -178,7 +203,7 @@ describe("InviteBuilder theme", () => {
 
   it("PUTs an edited welcome surface colour (the background signal lane)", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
     await waitFor(() => screen.getByText("Save invite"));
@@ -191,8 +216,8 @@ describe("InviteBuilder theme", () => {
     fireEvent.input(hex, { target: { value: "#223344" } });
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const sent = sentTheme();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/theme");
     expect(sent.welcomeSurfaceColor).toBe("#223344");
     // Sibling surface lanes untouched — guards a copy-paste slip in the updater.
     expect(sent.storySurfaceColor).toBeNull();
@@ -217,7 +242,7 @@ describe("InviteBuilder theme", () => {
 
   it("PUTs the chosen hero display slider values on Save invite", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
     await waitFor(() => screen.getByText("Save invite"));
@@ -227,8 +252,8 @@ describe("InviteBuilder theme", () => {
     fireEvent.input(screen.getByLabelText("Title backdrop blur"), { target: { value: "10" } });
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const sent = sentTheme();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/theme");
     expect(sent.heroBlur).toBe(5);
     expect(sent.titleBackdropOpacity).toBe(80);
     expect(sent.titleBackdropBlur).toBe(10);
@@ -272,7 +297,7 @@ describe("InviteBuilder theme", () => {
         },
       }),
     );
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
 
@@ -286,8 +311,8 @@ describe("InviteBuilder theme", () => {
     fireEvent.click(clears[0]);
 
     fireEvent.click(screen.getByText("Save invite"));
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const sent = sentTheme();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/theme");
     expect(sent.heroAccentColor).toBeNull();
     expect(sent.headingFont).toBeNull();
   });
@@ -345,12 +370,13 @@ describe("InviteBuilder theme", () => {
 
   it("surfaces a server validation error from the theme half (bad colour rejected)", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
-    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save OK
     authFetchMock.mockResolvedValueOnce(json({ error: "Invalid colour or font" }, 400));
 
     render(() => <InviteBuilder weddingId="wed_1" />);
     await waitFor(() => screen.getByText("Save invite"));
 
+    // Dirty the theme half so its PUT actually fires.
+    fireEvent.change(screen.getByLabelText("Heading font"), { target: { value: "georgia" } });
     fireEvent.click(screen.getByText("Save invite"));
 
     await waitFor(() => expect(screen.getByText("Invalid colour or font")).toBeTruthy());
@@ -363,18 +389,22 @@ describe("InviteBuilder theme", () => {
     render(() => <InviteBuilder weddingId="wed_1" />);
     await waitFor(() => screen.getByText("Save invite"));
 
+    // Dirty BOTH halves; the failed text PUT must stop the theme PUT.
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "A & B" } });
+    fireEvent.change(screen.getByLabelText("Heading font"), { target: { value: "georgia" } });
     fireEvent.click(screen.getByText("Save invite"));
 
     await waitFor(() => expect(screen.getByText("Missing or invalid fields")).toBeTruthy());
     // Text failed ⇒ the theme PUT never fires (load + text only).
     expect(authFetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody("/theme")).toBeNull();
   });
 
-  it("seeds the invite message field and sends it on Save invite", async () => {
+  it("seeds the invite message field and sends it on Save invite (text half only)", async () => {
     authFetchMock.mockResolvedValueOnce(
       json({ ...EMPTY_CUSTOMISATION, inviteMessage: "See you in Goa!" }),
     ); // initial load
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
 
@@ -386,11 +416,14 @@ describe("InviteBuilder theme", () => {
     fireEvent.input(field, { target: { value: "Come celebrate with us!" } });
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
+    // Copy-only edit ⇒ exactly one PUT, to /text — the theme row (and its
+    // updatedAt image-cache version) is untouched.
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
     const [url, init] = authFetchMock.mock.calls[1];
     expect(url).toBe("https://api.test/api/organiser/weddings/wed_1/invite/text");
     expect(init.method).toBe("PUT");
-    expect(sentText().inviteMessage).toBe("Come celebrate with us!");
+    expect(sentBody("/text").inviteMessage).toBe("Come celebrate with us!");
+    expect(sentBody("/theme")).toBeNull();
   });
 
   it("seeds the events-section header + welcome greeting fields and sends them on Save invite", async () => {
@@ -401,7 +434,7 @@ describe("InviteBuilder theme", () => {
         welcome: { message: "So happy you're here!" },
       }),
     ); // initial load
-    mockSaveResponses();
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
 
     render(() => <InviteBuilder weddingId="wed_1" />);
 
@@ -419,8 +452,8 @@ describe("InviteBuilder theme", () => {
     fireEvent.input(eyebrow, { target: { value: "Celebrate!" } });
     fireEvent.click(screen.getByText("Save invite"));
 
-    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(3));
-    const sent = sentText();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/text");
     expect(sent.detailsEyebrow).toBe("Celebrate!");
     expect(sent.detailsHeading).toBe("The Festivities");
     expect(sent.welcomeMessage).toBe("So happy you're here!");
