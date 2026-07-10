@@ -194,8 +194,8 @@ export default function InviteHeader(props: InviteHeaderProps) {
   const storyVars = () => sectionThemeVars(theme(), "story");
 
   // Conditional-segment gates. A hero with no image, no title and no subtitle
-  // would paint an empty full-screen section (including the built-in "V & R"
-  // default), so we render NOTHING for it. The story hides when its heading,
+  // would paint an empty full-screen section (including the built-in
+  // "You're Invited" fallback title), so we render NOTHING for it. The story hides when its heading,
   // body and image are all absent. Both mirror the shared emptiness predicates
   // the organiser builder uses for its Shown/Hidden badges.
   const showHero = () => {
@@ -379,27 +379,17 @@ export default function InviteHeader(props: InviteHeaderProps) {
             >
               <Show
                 when={hero()?.title}
+                // Neutral fallback for a shown hero with no couple title (an
+                // image/subtitle-only hero). Previously the bespoke "V & R"
+                // monogram — a multi-tenant product must never default to one
+                // couple's initials.
                 fallback={
-                  <div class="flex max-w-full items-center gap-3 select-none">
-                    <span
-                      class="font-display text-gold text-[clamp(4rem,12vw,8rem)] leading-none font-light italic"
-                      style={{ ...ACCENT_TEXT, ...HEADING_FONT }}
-                    >
-                      V
-                    </span>
-                    <span
-                      class="font-display text-gold-dim text-[clamp(2.5rem,7vw,5rem)] leading-none font-light italic"
-                      style={{ ...ACCENT_TEXT_DIM, ...HEADING_FONT }}
-                    >
-                      &amp;
-                    </span>
-                    <span
-                      class="font-display text-gold text-[clamp(4rem,12vw,8rem)] leading-none font-light italic"
-                      style={{ ...ACCENT_TEXT, ...HEADING_FONT }}
-                    >
-                      R
-                    </span>
-                  </div>
+                  <span
+                    class="font-display text-gold max-w-full text-center text-[clamp(2.5rem,8vw,5.5rem)] leading-none font-light break-words italic select-none"
+                    style={{ ...ACCENT_TEXT, ...HEADING_FONT }}
+                  >
+                    You're Invited
+                  </span>
                 }
               >
                 {(title) => (
@@ -504,18 +494,15 @@ export default function InviteHeader(props: InviteHeaderProps) {
               <div class="mx-auto max-w-[480px] group-data-[has-image=true]/story:md:mx-0">
                 <Show
                   when={story()?.body}
+                  // Neutral fallback for a shown story with no body (heading- or
+                  // image-only). Previously the original couple's bespoke story
+                  // — a multi-tenant product must never default to one couple's
+                  // personal copy.
                   fallback={
                     <p class="font-body text-text-muted text-[0.95rem] leading-[1.75] font-light">
-                      We met at a party three and a half years ago - our eyes met across the room
-                      and we smiled at each other, and we haven’t stopped smiling since. We’ve been
-                      through ups and downs but we’ve always worked through things together with
-                      patience (Hopefully the patience for Rox doesn’t run out…)
-                      <br />
-                      We crossed paths so many times in life without ever meeting - even attending
-                      the same university with the same classes and classmates. When we finally
-                      found our way to each other, it felt like a fairytale. Our relationship has
-                      been full of magical moments, and we are excited to share some of that magic
-                      with you at our fairytale wedding!
+                      Every love story is beautiful, and we can't wait to celebrate the next chapter
+                      of ours with the people we love most. Thank you for being part of our day — it
+                      wouldn't be the same without you.
                     </p>
                   }
                 >

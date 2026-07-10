@@ -3,6 +3,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
+import { contrastRatio, WCAG_TEXT_MIN } from "../lib/contrast";
 import {
   CROP_ASPECT,
   cropAspectRatio,
@@ -106,13 +107,14 @@ function fontOrDefault(value: string): string | null {
 }
 
 // The built-in default copy, shown as placeholders so an organiser can see what
-// they're overriding. Mirrors the guest site's hardcoded fallbacks.
+// they're overriding. Mirrors the guest site's neutral hardcoded fallbacks.
 const DEFAULTS = {
-  heroTitle: "V & R",
+  heroTitle: "You're Invited",
   heroSubtitle: "We can't wait to celebrate with you",
   storyEyebrow: "Our Story",
   storyHeading: "How It All Began",
-  storyBody: "We met at a party three and a half years ago — and we haven't stopped smiling since…",
+  storyBody:
+    "Every love story is beautiful, and we can't wait to celebrate the next chapter of ours with the people we love most…",
   detailsEyebrow: "Celebrate With Us",
   detailsHeading: "Your Events",
   welcomeMessage: "We are delighted to invite you to celebrate with us.",
@@ -790,7 +792,40 @@ function SectionPreview(props: {
           {props.label}
         </figcaption>
       </figure>
+      <ContrastAdvisory theme={props.theme} section={props.section} />
     </div>
+  );
+}
+
+/**
+ * Live WCAG contrast advisory (WT-C-L1): warns — never blocks — when the
+ * section's resolved accent-on-background pair drops below the AA text minimum
+ * (4.5:1), since the accent styles real text (eyebrows, headings, buttons; in
+ * the welcome section it styles the functionally-critical code-entry form).
+ * Defaults are substituted first, so it only fires on the organiser's own
+ * picks; an unparseable colour keeps it silent (advisory, not a validator —
+ * the server-side allow-list stays the only gate).
+ */
+function ContrastAdvisory(props: { theme: PreviewTheme; section: ThemeSection }) {
+  const ratio = () => {
+    const r = resolveSectionTheme(props.theme, props.section);
+    return contrastRatio(r.accent, r.surface);
+  };
+  const low = () => {
+    const c = ratio();
+    return c !== null && c < WCAG_TEXT_MIN;
+  };
+  return (
+    <Show when={low()}>
+      <p
+        role="status"
+        class="border-error/30 bg-error/5 text-error rounded-sm border px-3 py-2 text-[0.78rem] leading-relaxed"
+      >
+        Low contrast: this accent on this background is about {ratio()!.toFixed(1)}:1 — text needs
+        at least {WCAG_TEXT_MIN}:1 to stay readable for everyone. You can still save it; consider a
+        lighter/darker pick.
+      </p>
+    </Show>
   );
 }
 

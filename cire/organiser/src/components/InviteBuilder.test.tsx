@@ -368,6 +368,45 @@ describe("InviteBuilder theme", () => {
     expect(authFetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a live low-contrast advisory for a self-defeating colour pair, and clears it (WT-C-L1)", async () => {
+    // Loaded with a welcome accent ≈ background: the code-entry form's labels /
+    // focus ring would be near-invisible. The advisory must warn (never block).
+    authFetchMock.mockResolvedValueOnce(
+      json({
+        ...EMPTY_CUSTOMISATION,
+        theme: {
+          ...EMPTY_CUSTOMISATION.theme,
+          welcome: { accentColor: "#888888", surfaceColor: "#999999" },
+        },
+      }),
+    );
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    const advisory = await waitFor(() => screen.getByText(/Low contrast/));
+    expect(advisory.textContent).toContain(":1");
+    // Advisory only — the save button stays enabled.
+    expect((screen.getByText("Save invite") as HTMLButtonElement).disabled).toBe(false);
+
+    // Clearing the accent back to the default (gold on #999999 is still low…
+    // so clear the background too) removes the warning live, no save needed.
+    const clears = screen.getAllByText("Use default");
+    fireEvent.click(clears[0]);
+    fireEvent.click(screen.getAllByText("Use default")[0]);
+    await waitFor(() => expect(screen.queryByText(/Low contrast/)).toBeNull());
+    expect(authFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no contrast advisory for the built-in defaults", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+
+    render(() => <InviteBuilder weddingId="wed_1" />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    expect(screen.queryByText(/Low contrast/)).toBeNull();
+  });
+
   it("surfaces a server validation error from the theme half (bad colour rejected)", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
     authFetchMock.mockResolvedValueOnce(json({ error: "Invalid colour or font" }, 400));

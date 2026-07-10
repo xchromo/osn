@@ -165,7 +165,8 @@ CREATE TABLE IF NOT EXISTS wedding_invite_customisations (
   welcome_accent_color TEXT,
   welcome_surface_color TEXT,
   invite_message TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  images_updated_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS imports (

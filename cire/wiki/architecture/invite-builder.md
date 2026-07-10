@@ -57,8 +57,13 @@ fill a field). The single source of truth for these predicates is
 | **Event → Inspiration**       | the event has a `pinterestUrl`                             | `DetailsModal.tsx` (`hasPinterest`)     |
 | **Event → Dress Code**        | the event has a dress-code description **OR** a palette swatch | `DetailsModal.tsx` (`hasDressCode`) |
 
-Image-only or title-only heroes are valid (the empty default "V & R" only renders
-as a fallback **inside** an otherwise-shown hero). The Our-Story eyebrow is a
+Image-only or title-only heroes are valid (the neutral "You're Invited" fallback
+title only renders **inside** an otherwise-shown hero). All built-in fallback
+copy is deliberately NEUTRAL: the original bespoke defaults (the "V & R"
+monogram and the couple's personal story text) were replaced 2026-07-10 — a
+multi-tenant product must never default to one couple's content. A deployed
+wedding that silently relied on those defaults must save its own copy via the
+builder (the old values live in the PR #248 description). The Our-Story eyebrow is a
 label, not content — it does not keep the section alive on its own.
 
 **Builder reflection (no surprises):** `InviteBuilder.tsx` shows a per-section
@@ -427,11 +432,14 @@ to the action that caused it). Each half is compared against the last
 server-acknowledged snapshot (seeded on load, refreshed per successful PUT)
 and **skipped when unchanged**: a copy-only edit PUTs only `/invite/text`, a
 colour-only edit only `/invite/theme`, and a no-op save makes no network call.
-This matters beyond latency — the theme row's `updatedAt` doubles as the guest
-image-cache version, so a gratuitous theme PUT would bust the per-variant
-transform cache and force guests to re-download the hero for zero visual
-change (P-W1; transforms are the metered resource, see the root
-`[[wiki/runbooks/free-tier-limits]]`). Dirty halves run sequentially (text
+This keeps writes proportional to actual changes (P-W1) and pairs with the
+server-side decoupling below: since migration `0029` the guest image-cache
+version is a dedicated `images_updated_at` column — bumped only by image
+upload/remove/crop and a `heroBlur` change (the one theme field that alters
+the served bytes), backfilled from `updated_at`, coalesced to it when NULL —
+so copy/colour saves never bust the per-variant transform cache or force
+guests to re-download the hero (WT-P-I1; transforms are the metered resource,
+see the root `[[wiki/runbooks/free-tier-limits]]`). Dirty halves run sequentially (text
 then theme), mutating the loaded data after each success — the API's
 two-endpoint split is an implementation detail the organiser never sees.
 (Before the restructure the builder had separate "Save copy" / "Save theme"
