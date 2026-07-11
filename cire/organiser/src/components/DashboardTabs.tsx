@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 
 import { type DashboardTab, DEFAULT_TAB } from "../lib/dashboard-route";
+import EventLocationsPanel from "./EventLocationsPanel";
 import EventTable from "./EventTable";
 import GuestTable from "./GuestTable";
 import HostsPanel from "./HostsPanel";
@@ -116,7 +117,13 @@ export default function DashboardTabs(props: DashboardTabsProps) {
       </nav>
 
       <Show when={active() === "events"}>
-        <EventTable weddingId={props.weddingId} weddingSlug={props.weddingSlug} />
+        <div class="flex flex-col gap-6">
+          <EventTable weddingId={props.weddingId} weddingSlug={props.weddingSlug} />
+          {/* Per-event planning locations (member-editable, like the import).
+              Location is event-scoped — one wedding can celebrate across
+              countries — so it lives with the schedule, not in Settings. */}
+          <EventLocationsPanel weddingId={props.weddingId} />
+        </div>
       </Show>
       <Show when={active() === "guests"}>
         <GuestTable

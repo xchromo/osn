@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, weddingHosts, weddings } from "@cire/db";
+import { BOOTSTRAP_WEDDING_ID, events, weddingHosts, weddings } from "@cire/db";
 import { eq } from "drizzle-orm";
 
 import { createApp } from "../app";
@@ -14,6 +14,7 @@ import type { OsnTestAuth } from "../test-helpers/osn-token";
 const OWNER = "usr_dev_bootstrap_owner";
 const CO_HOST = "usr_cohost";
 const STRANGER = "usr_stranger";
+const OTHER_EVENT_ID = "evt_other";
 
 let auth: OsnTestAuth;
 
@@ -63,6 +64,19 @@ function buildApp(options: { geocoder?: Geocoder | null } = {}) {
       updatedAt: now,
     })
     .run();
+  db.insert(events)
+    .values({
+      id: OTHER_EVENT_ID,
+      weddingId: "wed_other",
+      slug: "other-party",
+      name: "Other Party",
+      description: "",
+      startAt: "2027-01-01T16:00:00+10:00",
+      endAt: "2027-01-01T22:00:00+10:00",
+      timezone: "Australia/Sydney",
+      sortOrder: 0,
+    })
+    .run();
   const app = createApp(db, { osnTestKey: auth.key, geocoder: options.geocoder });
   return { db, app };
 }
@@ -87,6 +101,17 @@ async function req(
 }
 
 const SETTINGS_PATH = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/settings`;
+
+/** First seeded event of the bootstrap wedding — the target for location tests. */
+function firstEventId(db: Db): string {
+  const row = db
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.weddingId, BOOTSTRAP_WEDDING_ID))
+    .get();
+  if (!row) throw new Error("no seeded event");
+  return row.id;
+}
 
 describe("GET /api/organiser/weddings/:weddingId/settings", () => {
   it("returns 401 without a token", async () => {
@@ -118,10 +143,6 @@ describe("GET /api/organiser/weddings/:weddingId/settings", () => {
       slug: "cire-wedding",
       displayName: "Cire Wedding",
       weddingDate: null,
-      locationName: null,
-      locationLat: null,
-      locationLng: null,
-      pricingRegion: null,
       guestCountEstimate: null,
       currency: "AUD",
       budgetTotalMinor: null,
@@ -160,10 +181,6 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
       displayName: "  Aisha & Ben  ",
       weddingDate: "2027-03-20",
-      locationName: "Sydney NSW",
-      locationLat: -33.8688,
-      locationLng: 151.2093,
-      pricingRegion: "au-nsw",
       guestCountEstimate: 120,
       currency: "AUD",
       budgetTotalMinor: 4_500_000,
@@ -175,8 +192,7 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
 
     const row = getWedding(db);
     expect(row.weddingDate).toBe("2027-03-20");
-    expect(row.locationLat).toBe(-33.8688);
-    expect(row.pricingRegion).toBe("au-nsw");
+    expect(row.guestCountEstimate).toBe(120);
     expect(row.budgetTotalMinor).toBe(4_500_000);
   });
 
@@ -235,9 +251,7 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
       { weddingDate: "2027-02-31" },
       { slug: "Bad Slug!" },
       { currency: "dollars" },
-      { locationLat: 123 },
       { guestCountEstimate: 2.5 },
-      { pricingRegion: "au-sydney" },
       { budgetTotalMinor: -1 },
       { displayName: "   " },
     ]) {
@@ -245,17 +259,99 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
       expect(res.status).toBe(400);
     }
   });
+});
 
-  it("rejects a merged half-coordinate (lat without lng)", async () => {
+describe("PUT /api/organiser/weddings/:weddingId/events/:eventId/location", () => {
+  const locationPath = (eventId: string) =>
+    `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/events/${eventId}/location`;
+  const POINT = { locationLat: -33.8688, locationLng: 151.2093, pricingRegion: "au-nsw" };
+
+  it("returns 401 without a token", async () => {
+    const { app, db } = buildApp();
+    expect((await req(app, "PUT", locationPath(firstEventId(db)), undefined, POINT)).status).toBe(
+      401,
+    );
+  });
+
+  it("returns 403 for a non-member", async () => {
+    const { app, db } = buildApp();
+    expect((await req(app, "PUT", locationPath(firstEventId(db)), STRANGER, POINT)).status).toBe(
+      403,
+    );
+  });
+
+  it("returns 404 for an unknown event", async () => {
     const { app } = buildApp();
-    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { locationLat: -33.8 });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toBe("location_point_incomplete");
+    const res = await req(app, "PUT", locationPath("evt_missing"), OWNER, POINT);
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toBe("event_not_found");
+  });
 
-    // …and clearing one half of a stored pair is equally incomplete.
-    await req(app, "PUT", SETTINGS_PATH, OWNER, { locationLat: -33.8, locationLng: 151.2 });
-    const clear = await req(app, "PUT", SETTINGS_PATH, OWNER, { locationLng: null });
-    expect(clear.status).toBe(400);
+  it("returns 404 for another wedding's event (tenant scoping)", async () => {
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", locationPath(OTHER_EVENT_ID), OWNER, POINT);
+    expect(res.status).toBe(404);
+    // The cross-tenant event is untouched.
+    const other = db.select().from(events).where(eq(events.id, OTHER_EVENT_ID)).get();
+    expect(other?.locationLat).toBeNull();
+  });
+
+  it("saves a location as a MEMBER (schedule-level write, like the import)", async () => {
+    const { app, db } = buildApp();
+    const eventId = firstEventId(db);
+    const res = await req(app, "PUT", locationPath(eventId), CO_HOST, POINT);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ event: { eventId, ...POINT } });
+
+    const row = db.select().from(events).where(eq(events.id, eventId)).get();
+    expect(row?.locationLat).toBe(-33.8688);
+    expect(row?.locationLng).toBe(151.2093);
+    expect(row?.pricingRegion).toBe("au-nsw");
+  });
+
+  it("clears a location with the null trio", async () => {
+    const { app, db } = buildApp();
+    const eventId = firstEventId(db);
+    await req(app, "PUT", locationPath(eventId), OWNER, POINT);
+    const res = await req(app, "PUT", locationPath(eventId), OWNER, {
+      locationLat: null,
+      locationLng: null,
+      pricingRegion: null,
+    });
+    expect(res.status).toBe(200);
+    const row = db.select().from(events).where(eq(events.id, eventId)).get();
+    expect(row?.locationLat).toBeNull();
+    expect(row?.pricingRegion).toBeNull();
+  });
+
+  it("400s a half coordinate, bad ranges, and unknown regions", async () => {
+    const { app, db } = buildApp();
+    const eventId = firstEventId(db);
+    for (const bad of [
+      { locationLat: -33.8, locationLng: null, pricingRegion: null },
+      { locationLat: null, locationLng: 151.2, pricingRegion: null },
+      { locationLat: 123, locationLng: 151.2, pricingRegion: null },
+      { locationLat: -33.8, locationLng: 999, pricingRegion: null },
+      { locationLat: -33.8, locationLng: 151.2, pricingRegion: "au-sydney" },
+      {},
+    ]) {
+      const res = await req(app, "PUT", locationPath(eventId), OWNER, bad);
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("allows a region without a point (address known, coordinates not)", async () => {
+    const { app, db } = buildApp();
+    const eventId = firstEventId(db);
+    const res = await req(app, "PUT", locationPath(eventId), OWNER, {
+      locationLat: null,
+      locationLng: null,
+      pricingRegion: "international",
+    });
+    expect(res.status).toBe(200);
+    const row = db.select().from(events).where(eq(events.id, eventId)).get();
+    expect(row?.pricingRegion).toBe("international");
+    expect(row?.locationLat).toBeNull();
   });
 });
 
@@ -267,9 +363,16 @@ describe("POST /api/organiser/weddings/:weddingId/settings/geocode", () => {
     expect((await req(app, "POST", GEOCODE_PATH, undefined, { query: "Sydney" })).status).toBe(401);
   });
 
-  it("returns 403 for a co-host", async () => {
+  it("returns 403 for a non-member", async () => {
     const { app } = buildApp({ geocoder: stubGeocoder });
-    expect((await req(app, "POST", GEOCODE_PATH, CO_HOST, { query: "Sydney" })).status).toBe(403);
+    expect((await req(app, "POST", GEOCODE_PATH, STRANGER, { query: "Sydney" })).status).toBe(403);
+  });
+
+  it("admits a co-host (geocode serves the member-editable event locations)", async () => {
+    const { app } = buildApp({ geocoder: stubGeocoder });
+    const res = await req(app, "POST", GEOCODE_PATH, CO_HOST, { query: "Sydney NSW" });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("ok");
   });
 
   it("answers unavailable when no geocoder is configured (key-optional)", async () => {

@@ -12,7 +12,8 @@ import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { weddingMember } from "../middleware/wedding-member";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
-import { GeocodeBody, UpdateSettingsBody } from "../schemas/settings";
+import { EventLocationBody, GeocodeBody, UpdateSettingsBody } from "../schemas/settings";
+import { eventLocationService } from "../services/event-location";
 import type { Geocoder } from "../services/geocode";
 import { weddingSettingsService } from "../services/wedding-settings";
 
@@ -22,7 +23,7 @@ const manualParse = { parse: () => ({}) };
 
 export interface SettingsRouteOptions {
   /** Key-optional server-side geocoder. `null`/omitted ⇒ the geocode endpoint
-   *  answers `unavailable` and the Settings form falls back to manual lat/lng. */
+   *  answers `unavailable` and the location forms fall back to manual lat/lng. */
   geocoder?: Geocoder | null;
   /** Per-IP limiter for the geocode endpoint — the upstream call is billed per
    *  request, so an authenticated organiser must not be an unbounded amplifier. */
@@ -30,14 +31,17 @@ export interface SettingsRouteOptions {
 }
 
 /**
- * Wedding-profile Settings routes (platform Phase 0, PR 1), mounted under
- * /api/organiser/weddings/:weddingId. Three siblings by authorisation level,
- * mirroring the organiser-weddings factory:
+ * Wedding-profile Settings + per-event location routes (platform Phase 0,
+ * PR 1), mounted under /api/organiser/weddings/:weddingId. Siblings by
+ * authorisation level, mirroring the organiser-weddings factory:
  *  - GET /settings — weddingMember() (owner OR co-host; read-only).
- *  - PUT /settings — weddingOwner() (settings are owner-only in the roles
- *    matrix — see platform-plan §3.5).
- *  - POST /settings/geocode — weddingOwner() + per-IP limiter (only the
- *    Settings editor drives it, and the upstream geocode is billed per call).
+ *  - PUT /settings — weddingOwner() (wedding identity + money are owner-only
+ *    in the roles matrix — see platform-plan §3.5).
+ *  - PUT /events/:eventId/location — weddingMember(): location is SCHEDULE
+ *    data (event-scoped — a wedding can span countries), and members already
+ *    write the schedule via the spreadsheet import, so the same level applies.
+ *  - POST /settings/geocode — weddingMember() + per-IP limiter (it serves the
+ *    member-editable event locations; billed upstream call).
  */
 export const createOrganiserSettingsRoutes = (
   db: Db,
@@ -49,32 +53,83 @@ export const createOrganiserSettingsRoutes = (
   return new Elysia({ prefix: "/api/organiser" })
     .use(osnAuth(osnAuthOptions))
     .group("/weddings/:weddingId", (group) =>
-      group.use(weddingMember(db)).get("/settings", ({ weddingId, set }) => {
-        if (!weddingId) {
-          set.status = 500;
-          return { error: "Internal error" };
-        }
-        return runCire(
-          weddingSettingsService.get(weddingId).pipe(
-            Effect.provideService(DbService, db),
-            // `geocodingAvailable` tells the form whether "Look up" exists or
-            // the manual lat/lng fallback should render.
-            Effect.map((wedding) => ({ wedding, geocodingAvailable: geocoder !== null })),
-            Effect.catchTag("WeddingNotFound", () =>
-              Effect.sync(() => {
-                set.status = 404;
-                return { error: "wedding_not_found" };
-              }),
+      group
+        .use(weddingMember(db))
+        .get("/settings", ({ weddingId, set }) => {
+          if (!weddingId) {
+            set.status = 500;
+            return { error: "Internal error" };
+          }
+          return runCire(
+            weddingSettingsService.get(weddingId).pipe(
+              Effect.provideService(DbService, db),
+              // `geocodingAvailable` tells the location forms whether "Look
+              // up" exists or the manual lat/lng fallback should render.
+              Effect.map((wedding) => ({ wedding, geocodingAvailable: geocoder !== null })),
+              Effect.catchTag("WeddingNotFound", () =>
+                Effect.sync(() => {
+                  set.status = 404;
+                  return { error: "wedding_not_found" };
+                }),
+              ),
+              Effect.catchAllDefect(() =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal error" };
+                }),
+              ),
             ),
-            Effect.catchAllDefect(() =>
-              Effect.sync(() => {
-                set.status = 500;
-                return { error: "Internal error" };
-              }),
-            ),
-          ),
-        );
-      }),
+          );
+        })
+        // Set/clear one event's planning location (point + pricing region).
+        // Member-level: schedule data, same as the import that writes events.
+        .put(
+          "/events/:eventId/location",
+          async ({ weddingId, params, request, set }) => {
+            if (!weddingId) {
+              set.status = 500;
+              return { error: "Internal error" };
+            }
+            const raw: unknown = await request.json().catch(() => null);
+            return runCire(
+              Effect.gen(function* () {
+                const body = yield* Schema.decodeUnknown(EventLocationBody)(raw);
+                const location = yield* eventLocationService.update(
+                  weddingId,
+                  params.eventId,
+                  body,
+                );
+                return { event: location };
+              }).pipe(
+                Effect.provideService(DbService, db),
+                Effect.catchTags({
+                  ParseError: () =>
+                    Effect.sync(() => {
+                      set.status = 400;
+                      return { error: "Missing or invalid fields" };
+                    }),
+                  EventNotInWedding: () =>
+                    Effect.sync(() => {
+                      set.status = 404;
+                      return { error: "event_not_found" };
+                    }),
+                  EventLocationWriteError: () =>
+                    Effect.sync(() => {
+                      set.status = 500;
+                      return { error: "Could not save the event location" };
+                    }),
+                }),
+                Effect.catchAllDefect(() =>
+                  Effect.sync(() => {
+                    set.status = 500;
+                    return { error: "Internal error" };
+                  }),
+                ),
+              ),
+            );
+          },
+          manualParse,
+        ),
     )
     .group("/weddings/:weddingId", (group) =>
       group.use(weddingOwner(db)).put(
@@ -97,11 +152,6 @@ export const createOrganiserSettingsRoutes = (
                   Effect.sync(() => {
                     set.status = 400;
                     return { error: "Missing or invalid fields" };
-                  }),
-                LocationPointIncomplete: () =>
-                  Effect.sync(() => {
-                    set.status = 400;
-                    return { error: "location_point_incomplete" };
                   }),
                 WeddingNotFound: () =>
                   Effect.sync(() => {
@@ -133,7 +183,7 @@ export const createOrganiserSettingsRoutes = (
     )
     .group("/weddings/:weddingId", (group) =>
       group
-        .use(weddingOwner(db))
+        .use(weddingMember(db))
         .use(rateLimitMiddleware(options.geocodeLimiter))
         .post(
           "/settings/geocode",

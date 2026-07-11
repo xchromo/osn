@@ -33,6 +33,12 @@ vi.mock("./RemintPanel", () => ({
 vi.mock("./HostsPanel", () => ({
   default: (p: { weddingId: string }) => <div data-testid="hosts">{p.weddingId}</div>,
 }));
+vi.mock("./EventLocationsPanel", () => ({
+  default: (p: { weddingId: string }) => <div data-testid="event-locations">{p.weddingId}</div>,
+}));
+vi.mock("./SettingsPanel", () => ({
+  default: (p: { weddingId: string }) => <div data-testid="settings">{p.weddingId}</div>,
+}));
 
 import DashboardTabs from "./DashboardTabs";
 

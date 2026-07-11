@@ -7,16 +7,15 @@ import { metricWeddingSettingsSaved } from "../metrics";
 import type { UpdateSettingsBody } from "../schemas/settings";
 
 /** The wedding profile as the Settings surface reads/writes it. Superset of
- *  `WeddingSummary` (the list shape) — everything an organiser edits here. */
+ *  `WeddingSummary` (the list shape) — everything an organiser edits here.
+ *  Deliberately location-free: location is EVENT-scoped (a wedding can span
+ *  countries), so the geocoded point + pricing region live on `events` and are
+ *  edited via the event-location service. */
 export type WeddingProfile = {
   id: string;
   slug: string;
   displayName: string;
   weddingDate: string | null;
-  locationName: string | null;
-  locationLat: number | null;
-  locationLng: number | null;
-  pricingRegion: string | null;
   guestCountEstimate: number | null;
   currency: string;
   budgetTotalMinor: number | null;
@@ -32,13 +31,6 @@ export class SlugTaken extends Data.TaggedError("SlugTaken")<{
   readonly weddingId: string;
 }> {}
 
-/** A merged profile that would store half a coordinate — the canonical point
- *  is only meaningful as a pair, so lat-without-lng (or vice versa) is a 400,
- *  whether the request set one half or cleared the other. */
-export class LocationPointIncomplete extends Data.TaggedError("LocationPointIncomplete")<{
-  readonly weddingId: string;
-}> {}
-
 export class SettingsWriteError extends Data.TaggedError("SettingsWriteError")<{
   readonly reason: string;
   readonly cause?: unknown;
@@ -49,10 +41,6 @@ const PROFILE_COLUMNS = {
   slug: weddings.slug,
   displayName: weddings.displayName,
   weddingDate: weddings.weddingDate,
-  locationName: weddings.locationName,
-  locationLat: weddings.locationLat,
-  locationLng: weddings.locationLng,
-  pricingRegion: weddings.pricingRegion,
   guestCountEstimate: weddings.guestCountEstimate,
   currency: weddings.currency,
   budgetTotalMinor: weddings.budgetTotalMinor,
@@ -79,17 +67,12 @@ export const weddingSettingsService = {
    * Apply a validated settings patch (PATCH semantics: only provided fields
    * change; explicit `null` clears a nullable column). The patch has already
    * passed the schema boundary, so every value is shape-valid — this enforces
-   * only the CROSS-FIELD invariant the schema can't see (the merged lat/lng
-   * pair must be both-set or both-null) and the DB-level slug uniqueness.
+   * only the DB-level slug uniqueness.
    */
   update(
     weddingId: string,
     patch: UpdateSettingsBody,
-  ): Effect.Effect<
-    WeddingProfile,
-    WeddingNotFound | SlugTaken | LocationPointIncomplete | SettingsWriteError,
-    DbService
-  > {
+  ): Effect.Effect<WeddingProfile, WeddingNotFound | SlugTaken | SettingsWriteError, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const current = yield* weddingSettingsService.get(weddingId);
@@ -99,20 +82,12 @@ export const weddingSettingsService = {
         ...(patch.displayName !== undefined && { displayName: patch.displayName }),
         ...(patch.slug !== undefined && { slug: patch.slug }),
         ...(patch.weddingDate !== undefined && { weddingDate: patch.weddingDate }),
-        ...(patch.locationName !== undefined && { locationName: patch.locationName }),
-        ...(patch.locationLat !== undefined && { locationLat: patch.locationLat }),
-        ...(patch.locationLng !== undefined && { locationLng: patch.locationLng }),
-        ...(patch.pricingRegion !== undefined && { pricingRegion: patch.pricingRegion }),
         ...(patch.guestCountEstimate !== undefined && {
           guestCountEstimate: patch.guestCountEstimate,
         }),
         ...(patch.currency !== undefined && { currency: patch.currency }),
         ...(patch.budgetTotalMinor !== undefined && { budgetTotalMinor: patch.budgetTotalMinor }),
       };
-
-      if ((next.locationLat === null) !== (next.locationLng === null)) {
-        return yield* new LocationPointIncomplete({ weddingId });
-      }
 
       yield* Effect.tryPromise({
         try: () =>
@@ -123,10 +98,6 @@ export const weddingSettingsService = {
                 slug: next.slug,
                 displayName: next.displayName,
                 weddingDate: next.weddingDate,
-                locationName: next.locationName,
-                locationLat: next.locationLat,
-                locationLng: next.locationLng,
-                pricingRegion: next.pricingRegion,
                 guestCountEstimate: next.guestCountEstimate,
                 currency: next.currency,
                 budgetTotalMinor: next.budgetTotalMinor,

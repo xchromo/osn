@@ -56,21 +56,37 @@ const BudgetTotalMinor = Schema.Number.pipe(Schema.int(), Schema.between(0, 100_
  * over PUT (the app's CORS method list has no PATCH): omitted fields keep
  * their stored value, an explicit `null` clears a nullable field. `displayName`,
  * `slug`, and `currency` are NOT NULL columns, so they can be replaced but
- * never cleared.
+ * never cleared. Location is deliberately absent — it's EVENT-scoped (see
+ * {@link EventLocationBody}); the wedding holds only the MAIN currency + budget.
  */
 export const UpdateSettingsBody = Schema.Struct({
   displayName: Schema.optional(trimmed(MAX_DISPLAY_NAME)),
   slug: Schema.optional(Slug),
   weddingDate: Schema.optional(Schema.NullOr(WeddingDate)),
-  locationName: Schema.optional(Schema.NullOr(trimmed(200))),
-  locationLat: Schema.optional(Schema.NullOr(Latitude)),
-  locationLng: Schema.optional(Schema.NullOr(Longitude)),
-  pricingRegion: Schema.optional(Schema.NullOr(PricingRegion)),
   guestCountEstimate: Schema.optional(Schema.NullOr(GuestCountEstimate)),
   currency: Schema.optional(Currency),
   budgetTotalMinor: Schema.optional(Schema.NullOr(BudgetTotalMinor)),
 });
 export type UpdateSettingsBody = Schema.Schema.Type<typeof UpdateSettingsBody>;
+
+/**
+ * Body for `PUT .../events/:eventId/location`. The full trio is
+ * required (nullable) rather than PATCH-optional — the form always submits the
+ * whole location block, and requiring both halves of the coordinate in one
+ * body lets the pair rule live here in the schema instead of needing a
+ * merge-then-check in the service: lat and lng must be both set or both null
+ * (a half coordinate is meaningless as a search point).
+ */
+export const EventLocationBody = Schema.Struct({
+  locationLat: Schema.NullOr(Latitude),
+  locationLng: Schema.NullOr(Longitude),
+  pricingRegion: Schema.NullOr(PricingRegion),
+}).pipe(
+  Schema.filter((b) => (b.locationLat === null) === (b.locationLng === null), {
+    message: () => "locationLat and locationLng must be both set or both null",
+  }),
+);
+export type EventLocationBody = Schema.Schema.Type<typeof EventLocationBody>;
 
 /** Body for `POST .../settings/geocode` — the organiser-typed address. Bounded
  *  so the upstream (billed, per-request) geocode call never sees a megabyte. */

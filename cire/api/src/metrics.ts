@@ -87,6 +87,8 @@ export const CIRE_METRICS = {
   weddingCreated: "cire.wedding.created",
   // Organiser wedding-profile (Settings) saves.
   weddingSettingsSaved: "cire.wedding.settings.saved",
+  // Organiser per-event location saves (location is event-scoped).
+  eventLocationSaved: "cire.event.location.saved",
   // Server-side geocode requests from the Settings form (billed upstream call).
   geocodeRequests: "cire.geocode.requests",
   // Co-host management (add/remove a wedding host by OSN handle).
@@ -164,6 +166,9 @@ export type WeddingCreatedResult = "ok" | "error";
 /** Outcome of a wedding-profile (Settings) save. Validation rejections are the
  *  schema's 400 upstream; `error` is a write failure. */
 export type WeddingSettingsSavedResult = "ok" | "error";
+
+/** Outcome of a per-event location save. Same contract as the settings save. */
+export type EventLocationSavedResult = "ok" | "error";
 
 /** Outcome of a server-side geocode request, mirroring `GeocodeOutcome` plus
  *  `disabled` (no key configured — the endpoint answered unavailable without an
@@ -254,6 +259,7 @@ type FamilyDeactivatedAttrs = { action: FamilyDeactivateAction; result: FamilyDe
 type InviteOpenedAttrs = { result: InviteOpenedResult };
 type WeddingCreatedAttrs = { result: WeddingCreatedResult };
 type WeddingSettingsSavedAttrs = { result: WeddingSettingsSavedResult };
+type EventLocationSavedAttrs = { result: EventLocationSavedResult };
 type GeocodeRequestsAttrs = { result: GeocodeRequestResult };
 type HostAddedAttrs = { result: HostAddResult };
 type HostRemovedAttrs = { result: HostRemoveResult };
@@ -446,6 +452,12 @@ const weddingSettingsSaved = createCounter<WeddingSettingsSavedAttrs>({
   unit: "{save}",
 });
 
+const eventLocationSaved = createCounter<EventLocationSavedAttrs>({
+  name: CIRE_METRICS.eventLocationSaved,
+  description: "Per-event location saves (location is event-scoped), by outcome",
+  unit: "{save}",
+});
+
 const geocodeRequests = createCounter<GeocodeRequestsAttrs>({
   name: CIRE_METRICS.geocodeRequests,
   description:
@@ -614,6 +626,9 @@ export const metricWeddingCreated = (result: WeddingCreatedResult): void =>
 
 export const metricWeddingSettingsSaved = (result: WeddingSettingsSavedResult): void =>
   weddingSettingsSaved.inc({ result });
+
+export const metricEventLocationSaved = (result: EventLocationSavedResult): void =>
+  eventLocationSaved.inc({ result });
 
 export const metricGeocodeRequest = (result: GeocodeRequestResult): void =>
   geocodeRequests.inc({ result });
