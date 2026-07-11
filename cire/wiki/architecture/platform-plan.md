@@ -140,6 +140,8 @@ payments:     id, budget_item_id FK↘, label ('deposit'|'balance'|free text), a
 
 All money in **minor units** + the wedding's `currency` (no FX). Views: per-category rollup vs `budget_total_minor`, upcoming-payments list (feeds Overview + Checklist nudges). "Estimate" column is seeded by the pricing engine (§6) when available, hand-editable always.
 
+**Multi-currency note (2026-07-10, follows the event-scoped-location decision in §3.1):** weddings can span countries, so foreign vendors (the Jaipur caterer) will quote/invoice in a currency other than the wedding's main one. **v1 stays single-currency on purpose** — every stored figure is in the wedding's MAIN `currency` (the one the couple budgets in), and the organiser converts a foreign quote when entering it. The rollup maths, the total comparison, and the pricing-engine seeding all stay trivial. If real multi-country weddings want more, the v2 extension is additive: optional `original_currency` + `original_amount_minor` (+ entered rate) on `budget_items`/`payments`, display-only — the converted main-currency figure stays the canonical amount every view sums. Tracked in [[deferred]]; do NOT build v2 speculatively.
+
 ### 4.3 Service-category enum
 
 One closed enum shared by vendors, budget, tasks, and pricing — single source of truth in `cire/api/src/lib/service-categories.ts` (mirroring the pulse `shareSource` pattern; bounded-cardinality metric attribute):
