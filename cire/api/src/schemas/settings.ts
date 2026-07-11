@@ -32,10 +32,6 @@ const WeddingDate = Schema.String.pipe(
   ),
 );
 
-/** Same shape `slugifyDisplayName` produces: lowercase alnum words joined by
- *  single hyphens. Guest invite URLs embed this, so no other characters. */
-const Slug = Schema.String.pipe(Schema.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), Schema.maxLength(80));
-
 const Latitude = Schema.Number.pipe(Schema.between(-90, 90));
 const Longitude = Schema.Number.pipe(Schema.between(-180, 180));
 
@@ -54,14 +50,17 @@ const BudgetTotalMinor = Schema.Number.pipe(Schema.int(), Schema.between(0, 100_
 /**
  * Body for `PUT /api/organiser/weddings/:weddingId/settings`. PATCH semantics
  * over PUT (the app's CORS method list has no PATCH): omitted fields keep
- * their stored value, an explicit `null` clears a nullable field. `displayName`,
- * `slug`, and `currency` are NOT NULL columns, so they can be replaced but
- * never cleared. Location is deliberately absent — it's EVENT-scoped (see
+ * their stored value, an explicit `null` clears a nullable field. `displayName`
+ * and `currency` are NOT NULL columns, so they can be replaced but never
+ * cleared. Location is deliberately absent — it's EVENT-scoped (see
  * {@link EventLocationBody}); the wedding holds only the MAIN currency + budget.
+ * The SLUG is deliberately absent too (read-only in Settings): renaming frees
+ * the old slug for another organiser to claim, and printed invite links can't
+ * be recalled — a rename feature needs slug tombstoning first (S-M1, tracked
+ * in cire wiki/todo/security.md).
  */
 export const UpdateSettingsBody = Schema.Struct({
   displayName: Schema.optional(trimmed(MAX_DISPLAY_NAME)),
-  slug: Schema.optional(Slug),
   weddingDate: Schema.optional(Schema.NullOr(WeddingDate)),
   guestCountEstimate: Schema.optional(Schema.NullOr(GuestCountEstimate)),
   currency: Schema.optional(Currency),

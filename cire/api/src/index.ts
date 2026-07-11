@@ -53,10 +53,13 @@ export interface Env {
   // RSVP endpoints require a valid Turnstile token (fail-closed); unset ⇒ those
   // gates are skipped. `wrangler secret put TURNSTILE_SECRET_KEY`.
   TURNSTILE_SECRET_KEY?: string;
-  // Google Geocoding API key (KEY-OPTIONAL, fail-soft). When set, the wedding
-  // Settings form can geocode the organiser-typed address server-side; unset ⇒
-  // the geocode endpoint answers `unavailable` and the form falls back to
-  // manual lat/lng entry. `wrangler secret put GOOGLE_GEOCODING_API_KEY`.
+  // Google Geocoding API key (KEY-OPTIONAL, fail-soft). When set, the
+  // organiser event-location editor can geocode a venue address server-side;
+  // unset ⇒ the geocode endpoint answers `unavailable` and the editor falls
+  // back to manual lat/lng entry. `wrangler secret put GOOGLE_GEOCODING_API_KEY`.
+  // BEFORE SETTING: restrict the key to the Geocoding API AND set a daily
+  // quota cap in the Google console (S-L2) — the per-IP limiter bounds each
+  // caller, but only a Google-side cap bounds aggregate spend across IPs.
   GOOGLE_GEOCODING_API_KEY?: string;
 }
 

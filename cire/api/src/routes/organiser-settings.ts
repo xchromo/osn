@@ -158,11 +158,6 @@ export const createOrganiserSettingsRoutes = (
                     set.status = 404;
                     return { error: "wedding_not_found" };
                   }),
-                SlugTaken: () =>
-                  Effect.sync(() => {
-                    set.status = 409;
-                    return { error: "slug_taken" };
-                  }),
                 SettingsWriteError: () =>
                   Effect.sync(() => {
                     set.status = 500;

@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 /**
  * SettingsPanel loads the wedding profile and PUTs the whole form back. The
  * OSN auth + api helpers + toasts are stubbed; this asserts the load/seed, the
- * PUT body (incl. cents conversion), the slug-conflict toast, and the co-host
- * read-only gate. Location is deliberately NOT here — it's event-scoped and
- * lives in EventLocationsPanel (see its test).
+ * PUT body (incl. cents conversion and the slug never being sent — read-only,
+ * S-M1), and the co-host read-only gate. Location is deliberately NOT here —
+ * it's event-scoped and lives in EventLocationsPanel (see its test).
  */
 
 const authFetchMock = vi.fn();
@@ -71,7 +71,10 @@ describe("SettingsPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy();
     });
-    expect(screen.getByDisplayValue("aisha-and-ben")).toBeTruthy();
+    // Slug renders read-only text (renames are deliberately unsupported — S-M1).
+    expect(screen.getByText("aisha-and-ben")).toBeTruthy();
+    expect(screen.queryByDisplayValue("aisha-and-ben")).toBeNull();
+    expect(screen.getByText(/can.t be changed/)).toBeTruthy();
     expect(screen.getByDisplayValue("2027-03-20")).toBeTruthy();
     expect(screen.getByDisplayValue("120")).toBeTruthy();
     // Budget renders in whole-currency units (minor / 100).
@@ -100,6 +103,8 @@ describe("SettingsPanel", () => {
     expect(body.displayName).toBe("Aisha & Benjamin");
     expect(body.budgetTotalMinor).toBe(4_500_000);
     expect(body.currency).toBe("AUD");
+    // The slug is never sent — read-only in Settings (S-M1).
+    expect("slug" in body).toBe(false);
     expect(onWeddingUpdated).toHaveBeenCalledWith({
       displayName: "Aisha & Benjamin",
       slug: "aisha-and-ben",
@@ -120,18 +125,6 @@ describe("SettingsPanel", () => {
     expect(body.weddingDate).toBeNull();
     expect(body.guestCountEstimate).toBeNull();
     expect(body.budgetTotalMinor).toBeNull();
-  });
-
-  it("surfaces a slug conflict as a friendly toast", async () => {
-    authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
-    render(() => <SettingsPanel weddingId="wed_1" canManage />);
-    await waitFor(() => expect(screen.getByDisplayValue("aisha-and-ben")).toBeTruthy());
-
-    authFetchMock.mockResolvedValueOnce(json({ error: "slug_taken" }, 409));
-    fireEvent.click(screen.getByText("Save settings"));
-
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
-    expect(String(toastError.mock.calls[0]?.[0])).toContain("already taken");
   });
 
   it("rejects a bad currency client-side without a request", async () => {
@@ -156,17 +149,5 @@ describe("SettingsPanel", () => {
     expect(screen.queryByText("Save settings")).toBeNull();
     expect(screen.getByText(/Only the wedding.s owner can change these settings/)).toBeTruthy();
     expect((screen.getByDisplayValue("Aisha & Ben") as HTMLInputElement).disabled).toBe(true);
-  });
-
-  it("warns when the slug differs from the saved one", async () => {
-    authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
-    render(() => <SettingsPanel weddingId="wed_1" canManage />);
-    await waitFor(() => expect(screen.getByDisplayValue("aisha-and-ben")).toBeTruthy());
-
-    expect(screen.queryByText(/Changing the link breaks/)).toBeNull();
-    fireEvent.input(screen.getByDisplayValue("aisha-and-ben"), {
-      target: { value: "new-link" },
-    });
-    await waitFor(() => expect(screen.getByText(/Changing the link breaks/)).toBeTruthy());
   });
 });

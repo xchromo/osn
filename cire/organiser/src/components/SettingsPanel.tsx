@@ -51,8 +51,10 @@ export default function SettingsPanel(props: SettingsPanelProps) {
   // Form state, seeded from the loaded profile. Numbers are kept as input
   // strings so a half-typed value never round-trips through parseFloat.
   const [displayName, setDisplayName] = createSignal("");
+  // Read-only: renaming the slug would free the old one for another organiser
+  // to claim while printed invite links still point at it (S-M1) — a rename
+  // feature needs slug tombstoning first.
   const [slug, setSlug] = createSignal("");
-  const [savedSlug, setSavedSlug] = createSignal("");
   const [weddingDate, setWeddingDate] = createSignal("");
   const [guestCount, setGuestCount] = createSignal("");
   const [currency, setCurrency] = createSignal("AUD");
@@ -65,7 +67,6 @@ export default function SettingsPanel(props: SettingsPanelProps) {
   function seed(profile: WeddingProfile) {
     setDisplayName(profile.displayName);
     setSlug(profile.slug);
-    setSavedSlug(profile.slug);
     setWeddingDate(profile.weddingDate ?? "");
     setGuestCount(profile.guestCountEstimate === null ? "" : String(profile.guestCountEstimate));
     setCurrency(profile.currency);
@@ -96,11 +97,6 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     const name = displayName().trim();
     if (!name) return { error: "Give the wedding a name." };
 
-    const nextSlug = slug().trim().toLowerCase();
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(nextSlug)) {
-      return { error: "The link can only use lowercase letters, numbers, and hyphens." };
-    }
-
     const curr = currency().trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(curr)) {
       return { error: "Currency must be a 3-letter code, like AUD." };
@@ -121,7 +117,6 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     return {
       body: {
         displayName: name,
-        slug: nextSlug,
         weddingDate: weddingDate() || null,
         guestCountEstimate: guestNum,
         currency: curr,
@@ -146,10 +141,6 @@ export default function SettingsPanel(props: SettingsPanelProps) {
         body: JSON.stringify(built.body),
       });
       if (res.status === 401) return redirectToLogin();
-      if (res.status === 409) {
-        toast.error("That link is already taken by another wedding — pick a different one.");
-        return;
-      }
       if (!res.ok) {
         toast.error("Could not save the settings. Please check the fields and try again.");
         return;
@@ -210,24 +201,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
               />
             </label>
 
-            <label class="flex flex-col gap-1.5">
+            <div class="flex flex-col gap-1.5">
               <span class={labelClass}>Invite link</span>
-              <input
-                type="text"
-                value={slug()}
-                maxLength={80}
-                autocomplete="off"
-                onInput={(e) => setSlug(e.currentTarget.value)}
-                disabled={disabled()}
-                class={inputClass}
-              />
-              <Show when={slug().trim().toLowerCase() !== savedSlug()}>
-                <span class="font-body text-error text-[0.75rem] leading-snug">
-                  Changing the link breaks any invite links you&apos;ve already shared — guests will
-                  need the new address.
-                </span>
-              </Show>
-            </label>
+              <p class="font-body text-text border-border bg-bg/50 rounded-sm border px-3 py-2 text-[0.95rem] opacity-70">
+                {slug()}
+              </p>
+              <span class={hintClass}>
+                Your invite link can&apos;t be changed — invites you&apos;ve already shared (or
+                printed) keep working.
+              </span>
+            </div>
 
             <label class="flex flex-col gap-1.5">
               <span class={labelClass}>Wedding date</span>

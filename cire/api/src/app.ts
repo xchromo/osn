@@ -87,10 +87,10 @@ const defaultHostLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000
  */
 const defaultHandleSearchLimiter = createRateLimiter({ maxRequests: 60, windowMs: 60_000 });
 /**
- * Default per-IP limiter for the Settings geocode endpoint. Owner-gated
- * already, so this just caps the billed upstream Geocoding calls an
- * authenticated organiser can drive; 20/min is generous for hand-editing one
- * address field.
+ * Default per-IP limiter for the Settings geocode endpoint. Member-gated
+ * (owner OR co-host — it serves the member-editable event locations), so this
+ * just caps the billed upstream Geocoding calls an authenticated organiser can
+ * drive; 20/min is generous for hand-looking-up a handful of event venues.
  */
 const defaultGeocodeLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 /**
@@ -318,9 +318,11 @@ export function createApp(db: Db, options: AppOptions = {}) {
         ),
       )
       .use(createOrganiserImportRoutes(db, r2, osnAuthOptions))
-      // Wedding-profile Settings (platform Phase 0). Reads admit owner OR
-      // co-host; the save is owner-only; the geocode POST is owner-only behind
-      // a per-IP limiter (billed upstream call).
+      // Wedding-profile Settings + per-event locations (platform Phase 0).
+      // Reads admit owner OR co-host; the profile save is owner-only; the
+      // event-location PUT and the geocode POST are member-level (location is
+      // schedule data, like the import), with the geocode behind a per-IP
+      // limiter (billed upstream call).
       .use(createOrganiserSettingsRoutes(db, osnAuthOptions, { geocoder, geocodeLimiter }))
       // Invite builder. Public reads (guest site) + organiser writes split into
       // sibling instances so the guest GET isn't behind osnAuth.

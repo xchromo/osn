@@ -25,12 +25,6 @@ export class WeddingNotFound extends Data.TaggedError("WeddingNotFound")<{
   readonly weddingId: string;
 }> {}
 
-/** The requested slug is already taken by another wedding (slug is globally
- *  unique — it's the guest invite URL). */
-export class SlugTaken extends Data.TaggedError("SlugTaken")<{
-  readonly weddingId: string;
-}> {}
-
 export class SettingsWriteError extends Data.TaggedError("SettingsWriteError")<{
   readonly reason: string;
   readonly cause?: unknown;
@@ -66,13 +60,15 @@ export const weddingSettingsService = {
   /**
    * Apply a validated settings patch (PATCH semantics: only provided fields
    * change; explicit `null` clears a nullable column). The patch has already
-   * passed the schema boundary, so every value is shape-valid — this enforces
-   * only the DB-level slug uniqueness.
+   * passed the schema boundary, so every value is shape-valid. The SLUG is
+   * never written here — renaming would free the old slug for another
+   * organiser to claim while printed invite links still point at it (S-M1);
+   * a rename feature needs slug tombstoning first.
    */
   update(
     weddingId: string,
     patch: UpdateSettingsBody,
-  ): Effect.Effect<WeddingProfile, WeddingNotFound | SlugTaken | SettingsWriteError, DbService> {
+  ): Effect.Effect<WeddingProfile, WeddingNotFound | SettingsWriteError, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const current = yield* weddingSettingsService.get(weddingId);
@@ -80,7 +76,6 @@ export const weddingSettingsService = {
       const next: WeddingProfile = {
         ...current,
         ...(patch.displayName !== undefined && { displayName: patch.displayName }),
-        ...(patch.slug !== undefined && { slug: patch.slug }),
         ...(patch.weddingDate !== undefined && { weddingDate: patch.weddingDate }),
         ...(patch.guestCountEstimate !== undefined && {
           guestCountEstimate: patch.guestCountEstimate,
@@ -95,7 +90,6 @@ export const weddingSettingsService = {
             db
               .update(weddings)
               .set({
-                slug: next.slug,
                 displayName: next.displayName,
                 weddingDate: next.weddingDate,
                 guestCountEstimate: next.guestCountEstimate,
@@ -106,12 +100,7 @@ export const weddingSettingsService = {
               .where(eq(weddings.id, weddingId))
               .run(),
           ),
-        catch: (cause) =>
-          // The only UNIQUE constraint this write can trip is the slug's (id is
-          // the untouched WHERE key), so a UNIQUE failure IS a slug collision.
-          String(cause).includes("UNIQUE")
-            ? new SlugTaken({ weddingId })
-            : new SettingsWriteError({ reason: "update", cause }),
+        catch: (cause) => new SettingsWriteError({ reason: "update", cause }),
       });
 
       return next;

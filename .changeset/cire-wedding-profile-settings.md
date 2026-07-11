@@ -24,8 +24,10 @@ the wedding keeps one MAIN currency the couple thinks in.
   surfaces under the T-S1 lockstep test.
 - `@cire/api`: `GET /api/organiser/weddings/:weddingId/settings` (owner or
   co-host) + `PUT …/settings` (owner-only; PATCH semantics — omitted fields
-  keep their value, explicit `null` clears; slug renames validated with 409 on
-  collision). `PUT …/events/:eventId/location` (member-level, like the import
+  keep their value, explicit `null` clears; the slug is deliberately
+  read-only — renaming would free the old slug for takeover while printed
+  invite links still point at it). `PUT …/events/:eventId/location`
+  (member-level, like the import
   that writes the schedule; lat/lng both-or-neither enforced at the schema
   boundary, tenant-scoped 404 for another wedding's event). `POST
   …/settings/geocode` (member-level, per-IP rate-limited): **key-optional +
@@ -37,9 +39,9 @@ the wedding keeps one MAIN currency the couple thinks in.
   state/country. New metrics `cire.wedding.settings.saved`,
   `cire.event.location.saved`, `cire.geocode.requests`.
 - `@cire/organiser`: a "Settings" tab on each wedding's dashboard — name,
-  invite-link slug (with a breaks-shared-links warning), date, guest count,
-  main currency, and budget; co-hosts see it read-only, and a saved rename
-  updates the header + wedding list without a refetch. A per-event location
+  invite link (shown read-only), date, guest count, main currency, and
+  budget; co-hosts see it read-only, and a saved rename updates the header +
+  wedding list without a refetch. A per-event location
   editor on the Events tab (`EventLocationsPanel`) — server-side "Look up"
   from each event's sheet address (or manual coordinates when geocoding is
   off) + a region select, member-editable, writing through the shared events

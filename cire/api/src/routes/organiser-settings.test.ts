@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 
 import { BOOTSTRAP_WEDDING_ID, events, weddingHosts, weddings } from "@cire/db";
+import { createRateLimiter } from "@shared/rate-limit";
 import { eq } from "drizzle-orm";
 
 import { createApp } from "../app";
@@ -215,23 +216,19 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect(getWedding(db).weddingDate).toBeNull();
   });
 
-  it("renames the slug and 409s a collision", async () => {
+  it("never writes the slug — a slug in the body is ignored (S-M1)", async () => {
+    // Renaming would free the old slug for another organiser to claim while
+    // printed invite links still point at it; the schema strips the field, so
+    // even a hand-crafted body can't move it.
     const { app, db } = buildApp();
-    const ok = await req(app, "PUT", SETTINGS_PATH, OWNER, { slug: "aisha-and-ben" });
-    expect(ok.status).toBe(200);
-    expect(getWedding(db).slug).toBe("aisha-and-ben");
-
-    const clash = await req(app, "PUT", SETTINGS_PATH, OWNER, { slug: "other-wedding" });
-    expect(clash.status).toBe(409);
-    expect(((await clash.json()) as { error: string }).error).toBe("slug_taken");
-    // The failed rename must not have moved the slug.
-    expect(getWedding(db).slug).toBe("aisha-and-ben");
-  });
-
-  it("keeps the same slug idempotently (no self-collision)", async () => {
-    const { app } = buildApp();
-    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { slug: "cire-wedding" });
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      slug: "squatted-slug",
+      displayName: "Renamed",
+    });
     expect(res.status).toBe(200);
+    const row = getWedding(db);
+    expect(row.slug).toBe("cire-wedding");
+    expect(row.displayName).toBe("Renamed");
   });
 
   it("400s malformed JSON, bad shapes, and impossible dates", async () => {
@@ -249,7 +246,6 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     for (const bad of [
       { weddingDate: "20-03-2027" },
       { weddingDate: "2027-02-31" },
-      { slug: "Bad Slug!" },
       { currency: "dollars" },
       { guestCountEstimate: 2.5 },
       { budgetTotalMinor: -1 },
@@ -307,6 +303,28 @@ describe("PUT /api/organiser/weddings/:weddingId/events/:eventId/location", () =
     expect(row?.locationLat).toBe(-33.8688);
     expect(row?.locationLng).toBe(151.2093);
     expect(row?.pricingRegion).toBe("au-nsw");
+
+    // Round-trip through the organiser events read — the contract the
+    // portal's EventLocationsPanel seeds its form from. Dropping the columns
+    // from listEvents would pass every other test while blanking the UI.
+    const list = await req(
+      app,
+      "GET",
+      `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/events`,
+      CO_HOST,
+    );
+    expect(list.status).toBe(200);
+    const rows = (await list.json()) as {
+      id: string;
+      locationLat: number | null;
+      locationLng: number | null;
+      pricingRegion: string | null;
+    }[];
+    const saved = rows.find((r) => r.id === eventId);
+    expect(saved).toMatchObject(POINT);
+    const untouched = rows.find((r) => r.id !== eventId);
+    expect(untouched?.locationLat).toBeNull();
+    expect(untouched?.pricingRegion).toBeNull();
   });
 
   it("clears a location with the null trio", async () => {
@@ -404,6 +422,23 @@ describe("POST /api/organiser/weddings/:weddingId/settings/geocode", () => {
   it("400s an empty query", async () => {
     const { app } = buildApp({ geocoder: stubGeocoder });
     expect((await req(app, "POST", GEOCODE_PATH, OWNER, { query: "   " })).status).toBe(400);
+  });
+
+  it("429s once the per-IP limit is exhausted (the spend cap on the billed upstream)", async () => {
+    // The limiter is the only in-code bound on per-request-billed Google
+    // calls — this pins that the middleware is actually wired to THIS route.
+    const db = createDb(":memory:");
+    seedDb(db);
+    const app = createApp(db, {
+      osnTestKey: auth.key,
+      geocoder: stubGeocoder,
+      geocodeLimiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }),
+    });
+    const first = await req(app, "POST", GEOCODE_PATH, OWNER, { query: "Sydney" });
+    expect(first.status).toBe(200);
+    const second = await req(app, "POST", GEOCODE_PATH, OWNER, { query: "Sydney" });
+    expect(second.status).toBe(429);
+    expect(second.headers.get("retry-after")).toBe("60");
   });
 });
 
