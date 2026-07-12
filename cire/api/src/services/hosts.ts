@@ -158,31 +158,23 @@ export const hostsService = {
   }): Effect.Effect<WeddingHostRow, HostNotFound | HostWriteError, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      const [existing] = yield* dbQuery(() =>
-        db
-          .select({ id: weddingHosts.id, createdAt: weddingHosts.createdAt })
-          .from(weddingHosts)
-          .where(
-            and(
-              eq(weddingHosts.weddingId, input.weddingId),
-              eq(weddingHosts.osnProfileId, input.osnProfileId),
-            ),
-          )
-          .limit(1)
-          .all(),
-      );
-      if (!existing) {
-        return yield* Effect.fail(new HostNotFound({ weddingId: input.weddingId }));
-      }
-
-      yield* Effect.tryPromise({
+      // Single round trip (P-I1): the UPDATE is scoped to the (wedding, profile)
+      // pair and RETURNING reports whether a seat existed — zero rows maps to
+      // HostNotFound with no separate existence SELECT (D1 bills per query).
+      const [updated] = yield* Effect.tryPromise({
         try: () =>
           Promise.resolve(
             db
               .update(weddingHosts)
               .set({ role: input.role })
-              .where(eq(weddingHosts.id, existing.id))
-              .run(),
+              .where(
+                and(
+                  eq(weddingHosts.weddingId, input.weddingId),
+                  eq(weddingHosts.osnProfileId, input.osnProfileId),
+                ),
+              )
+              .returning({ id: weddingHosts.id, createdAt: weddingHosts.createdAt })
+              .all(),
           ),
         catch: (e) => new HostWriteError({ op: "update", reason: String(e) }),
       }).pipe(
@@ -190,12 +182,15 @@ export const hostsService = {
           Effect.logError("host role update failed", { reason: err.reason }),
         ),
       );
+      if (!updated) {
+        return yield* Effect.fail(new HostNotFound({ weddingId: input.weddingId }));
+      }
 
       return {
-        id: existing.id,
+        id: updated.id,
         osnProfileId: input.osnProfileId,
         role: input.role,
-        createdAt: existing.createdAt,
+        createdAt: updated.createdAt,
       };
     }).pipe(Effect.withSpan("cire.host.setRole"));
   },

@@ -520,4 +520,24 @@ describe("co-host dashboard access (weddingMember)", () => {
       { id: WEDDING_ID, slug: "hosts-wedding", displayName: "Hosts Wedding", role: "editor" },
     ]);
   });
+
+  it("tags a viewer seat's wedding role:viewer in the list (the string the portal gates UI on)", async () => {
+    const { db, app } = buildApp();
+    db.insert(weddingHosts)
+      .values({
+        id: "whost_list_viewer",
+        weddingId: WEDDING_ID,
+        osnProfileId: "usr_list_viewer",
+        addedByOsnProfileId: OWNER,
+        role: "viewer",
+        createdAt: new Date(),
+      })
+      .run();
+    const res = await req(app, "GET", "/api/organiser/weddings", "usr_list_viewer");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { weddings: { id: string; role: string }[] };
+    expect(body.weddings).toEqual([
+      { id: WEDDING_ID, slug: "hosts-wedding", displayName: "Hosts Wedding", role: "viewer" },
+    ]);
+  });
 });

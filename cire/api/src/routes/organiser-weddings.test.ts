@@ -832,7 +832,7 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/deactivate 
     expect(stored!.deactivatedAt).toBeNull();
   });
 
-  it("403s a co-host on deactivate (code management is owner-only in the roles matrix)", async () => {
+  it("403s a co-host on deactivate AND reactivate (code management is owner-only)", async () => {
     const { db, app } = buildApp();
     seedCohost(db);
     const fam = aBootstrapFamily(db);
@@ -845,6 +845,18 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/deactivate 
       .where(eq(families.id, fam.id))
       .all();
     expect(stored!.deactivatedAt).toBeNull();
+
+    // Same rule on the restore direction — a future split of the owner-gated
+    // instance must not silently drop the gate on reactivate.
+    await toggle(app, BOOTSTRAP_WEDDING_ID, fam.id, "deactivate", BOOTSTRAP_OWNER);
+    const react = await toggle(app, BOOTSTRAP_WEDDING_ID, fam.id, "reactivate", COHOST);
+    expect(react.status).toBe(403);
+    const [still] = db
+      .select({ deactivatedAt: families.deactivatedAt })
+      .from(families)
+      .where(eq(families.id, fam.id))
+      .all();
+    expect(still!.deactivatedAt).not.toBeNull();
   });
 
   it("returns 404 when the family does not belong to the wedding", async () => {
