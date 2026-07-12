@@ -1,5 +1,12 @@
 import { Effect, Data } from "effect";
 
+import {
+  EVENT_SHEET_REQUIRED_HEADERS,
+  FAMILY_CODE_HEADER,
+  GUEST_ID_HEADER,
+  GUEST_NICKNAME_HEADER,
+  GUEST_SHEET_FIXED_HEADERS,
+} from "../lib/sheet-headers";
 import { bucketParseReason, metricImportParseRejected } from "../metrics";
 import type { ParsedEvent, ParsedFamily, ParsedGuest, PaletteSwatch } from "../schemas/import";
 
@@ -358,7 +365,7 @@ function parseHttpUrl(raw: string): string | null | undefined {
 // from `Address` (see `cire/web/src/components/event-details.ts`), and a
 // provided Location is only used as the address fallback at import-write time
 // when Address is blank (see `services/import.ts`).
-const REQUIRED_EVENT_COLUMNS = ["Event Name", "Start", "Timezone"] as const;
+const REQUIRED_EVENT_COLUMNS = EVENT_SHEET_REQUIRED_HEADERS;
 
 export function parseEventsCsv(
   content: string,
@@ -498,12 +505,7 @@ export function parseEventsCsv(
   );
 }
 
-const REQUIRED_GUEST_COLUMNS = [
-  "Family ID",
-  "Family Name",
-  "Guest First Name",
-  "Guest Last Name",
-] as const;
+const REQUIRED_GUEST_COLUMNS = GUEST_SHEET_FIXED_HEADERS;
 
 export function parseGuestsCsv(
   content: string,
@@ -536,13 +538,20 @@ export function parseGuestsCsv(
     const idxFirst = indexOf("Guest First Name");
     const idxLast = indexOf("Guest Last Name");
     // Optional: an informal name for the single-guest greeting. Absent ⇒ -1.
-    const idxNickname = indexOf("Guest Nickname");
+    const idxNickname = indexOf(GUEST_NICKNAME_HEADER);
+    // Fixed (non-event) columns. Includes the full-fidelity export/snapshot
+    // columns (Guest ID / Family Code) so a `?fidelity=full` download
+    // round-trips — they are IGNORED here today; the E2 ID-aware diff starts
+    // honouring them. Absent lookups are -1, which `fixedCols.has(c)` (c ≥ 0)
+    // never matches.
     const fixedCols = new Set([
       indexOf("Family ID"),
       idxFamilyName,
       idxFirst,
       idxLast,
       idxNickname,
+      indexOf(GUEST_ID_HEADER),
+      indexOf(FAMILY_CODE_HEADER),
     ]);
 
     // Map event-column index → canonical event name. Strict match — any

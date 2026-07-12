@@ -121,7 +121,7 @@ Each PR lands green with a changeset; order matters (later PRs consume earlier m
 
 | # | PR | Contents | Schema change |
 |---|---|---|---|
-| E1 | Round-trip export | Canonical serialiser + `export/*.csv` routes + UI buttons + template lockstep test | — |
+| E1 ✅ | Round-trip export (**shipped 2026-07-12**) | Canonical serialiser (`services/state-export.ts`) + `lib/sheet-headers.ts` + `export/{events,guests}.csv` routes (`?fidelity=full`) + ImportPanel buttons + round-trip fixpoint tests. Deltas from this page: the parser **ignores** the fidelity columns for now (honouring is E2's job), and the import-fidelity `Family ID` column carries neutral `fam-001` keys — claim codes appear only under `fidelity=full`. | — |
 | E2 | Validation + ID-aware diff | Extract `guest-event-validation.ts`; DesiredState schema; optional ID/fidelity columns in parser; diff id-matching | — |
 | E3 | Change history + revert fix | `imports` additive migration (`kind`, before-keys); checkpoint-on-apply; before-image revert + legacy fallback; prune | additive |
 | E4 | Provenance + changes endpoints | `source` column migration; provenance-aware diff default + toggle; `changes/{preview,apply,revert,list}` + aliases | additive |

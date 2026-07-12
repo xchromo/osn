@@ -218,3 +218,41 @@ describe("ImportPanel — download templates", () => {
     await waitFor(() => expect(revoked.length).toBeGreaterThan(0));
   });
 });
+
+describe("ImportPanel — download current data (round-trip export)", () => {
+  it("fetches the server export and downloads its bytes", async () => {
+    const csv = "Event Name,Start,Timezone\r\nCeremony,2026-11-14T15:00:00+11:00,Australia/Sydney";
+    authFetchMock.mockResolvedValueOnce(
+      new Response(csv, { status: 200, headers: { "Content-Type": "text/csv" } }),
+    );
+    render(() => <ImportPanel weddingId="wed_a" />);
+    fireEvent.click(screen.getByRole("button", { name: /download current events/i }));
+
+    await waitFor(() => expect(createdBlobs.length).toBeGreaterThan(0));
+    expect(authFetchMock).toHaveBeenCalledWith(
+      "https://api.test/api/organiser/weddings/wed_a/export/events.csv",
+    );
+    expect(await blobText(createdBlobs[0]!)).toBe(csv);
+  });
+
+  it("hits the guests export URL for the guests button", async () => {
+    authFetchMock.mockResolvedValueOnce(new Response("Family ID", { status: 200 }));
+    render(() => <ImportPanel weddingId="wed_a" />);
+    fireEvent.click(screen.getByRole("button", { name: /download current guests/i }));
+
+    await waitFor(() =>
+      expect(authFetchMock).toHaveBeenCalledWith(
+        "https://api.test/api/organiser/weddings/wed_a/export/guests.csv",
+      ),
+    );
+  });
+
+  it("surfaces a failed export inline instead of downloading", async () => {
+    authFetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+    render(() => <ImportPanel weddingId="wed_a" />);
+    fireEvent.click(screen.getByRole("button", { name: /download current events/i }));
+
+    await waitFor(() => expect(screen.getByText(/export failed \(500\)/i)).toBeTruthy());
+    expect(createdBlobs).toHaveLength(0);
+  });
+});
