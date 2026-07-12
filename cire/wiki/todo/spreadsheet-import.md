@@ -5,7 +5,8 @@ related:
   - "[[index]]"
   - "[[api]]"
   - "[[db]]"
-last-reviewed: 2026-07-08
+  - "[[guest-event-editor]]"
+last-reviewed: 2026-07-12
 ---
 
 # Organiser Spreadsheet Import
