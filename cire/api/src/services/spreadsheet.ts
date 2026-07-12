@@ -539,27 +539,47 @@ export function parseGuestsCsv(
     const idxLast = indexOf("Guest Last Name");
     // Optional: an informal name for the single-guest greeting. Absent ⇒ -1.
     const idxNickname = indexOf(GUEST_NICKNAME_HEADER);
-    // Fixed (non-event) columns. Includes the full-fidelity export/snapshot
-    // columns (Guest ID / Family Code) so a `?fidelity=full` download
-    // round-trips — they are IGNORED here today; the E2 ID-aware diff starts
-    // honouring them. Absent lookups are -1, which `fixedCols.has(c)` (c ≥ 0)
-    // never matches.
+    // Fixed (non-event) columns. Absent lookups are -1, which
+    // `fixedCols.has(c)` (c ≥ 0) never matches.
     const fixedCols = new Set([
       indexOf("Family ID"),
       idxFamilyName,
       idxFirst,
       idxLast,
       idxNickname,
-      indexOf(GUEST_ID_HEADER),
-      indexOf(FAMILY_CODE_HEADER),
     ]);
 
     // Map event-column index → canonical event name. Strict match — any
     // unmatched event column surfaces as `UnmatchedEventColumn`.
     const eventByNorm = new Map(events.map((e) => [normaliseName(e.name), e.name]));
+
+    // Full-fidelity export/snapshot columns (Guest ID / Family Code) are
+    // accepted-and-IGNORED here (the E2 ID-aware diff starts honouring them).
+    // An event may legitimately share one of these labels, making its
+    // attendance column ambiguous — resolve deterministically, biased against
+    // silently dropping invitations: when the label is ALSO a known event
+    // name, only the LAST occurrence is fidelity metadata (the exporter
+    // appends fidelity columns after the event columns), and a single
+    // occurrence stays the event's attendance column. A label that matches no
+    // event is fidelity metadata at every occurrence.
+    const fidelityCols = new Set<number>();
+    for (const label of [GUEST_ID_HEADER, FAMILY_CODE_HEADER]) {
+      const norm = normaliseName(label);
+      const indices: number[] = [];
+      headerNorm.forEach((h, i) => {
+        if (h === norm) indices.push(i);
+      });
+      if (indices.length === 0) continue;
+      if (eventByNorm.has(norm)) {
+        if (indices.length >= 2) fidelityCols.add(indices[indices.length - 1]!);
+      } else {
+        for (const i of indices) fidelityCols.add(i);
+      }
+    }
+
     const eventColumns: { idx: number; eventName: string }[] = [];
     for (let c = 0; c < header.length; c += 1) {
-      if (fixedCols.has(c)) continue;
+      if (fixedCols.has(c) || fidelityCols.has(c)) continue;
       const colHeader = header[c]!;
       if (colHeader.length === 0) continue;
       const matched = eventByNorm.get(normaliseName(colHeader));

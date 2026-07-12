@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, events, families, guests } from "@cire/db";
+import { BOOTSTRAP_WEDDING_ID, events, families, guestEvents, guests, weddings } from "@cire/db";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
@@ -207,4 +207,155 @@ describe("round trip: export → parse → diff is a fixpoint", () => {
   // fidelity=full adds the ID/code columns — the parser must accept-and-ignore
   // them (they are fixed columns, never mistaken for event columns).
   it("holds at full fidelity", assertFixpoint("full"));
+});
+
+describe("round trip: hostile + sparse inputs (T-S1/T-S2)", () => {
+  it(
+    "survives events named after the fidelity columns and sparse optional fields, at both fidelities",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        // T-S1: event names colliding with the reserved fidelity headers. The
+        // guests parser must keep their attendance columns (only the LAST
+        // occurrence — the exporter-appended fidelity column — is ignored).
+        db.insert(events)
+          .values({
+            id: "evt_guest_id",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            slug: "guest-id",
+            name: "Guest ID",
+            description: "",
+            startAt: "2026-12-01T10:00:00+11:00",
+            endAt: "",
+            timezone: "Australia/Sydney",
+            sortOrder: 90,
+          })
+          .run();
+        db.insert(events)
+          .values({
+            id: "evt_family_code",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            slug: "family-code",
+            name: "Family Code",
+            description: "",
+            // T-S2: open-ended "" endAt sentinel + null address/URLs/palette.
+            startAt: "2026-12-02T10:00:00+11:00",
+            endAt: "",
+            timezone: "Australia/Sydney",
+            sortOrder: 91,
+          })
+          .run();
+        // Invite an existing guest to both colliding events — the links are
+        // exactly what T-S1's silent-drop bug would lose.
+        const [someGuest] = db
+          .select({ id: guests.id })
+          .from(guests)
+          .innerJoin(families, eq(guests.familyId, families.id))
+          .where(eq(families.weddingId, BOOTSTRAP_WEDDING_ID))
+          .all();
+        db.insert(guestEvents).values({ guestId: someGuest!.id, eventId: "evt_guest_id" }).run();
+        db.insert(guestEvents).values({ guestId: someGuest!.id, eventId: "evt_family_code" }).run();
+        // T-S2: a non-null nickname must round-trip too.
+        db.update(guests).set({ nickname: "Nicky" }).where(eq(guests.id, someGuest!.id)).run();
+
+        for (const fidelity of ["import", "full"] as const) {
+          const eventsCsv = yield* stateExportService.eventsCsv(BOOTSTRAP_WEDDING_ID, fidelity);
+          const guestsCsv = yield* stateExportService.guestsCsv(BOOTSTRAP_WEDDING_ID, fidelity);
+          const parsedEvents = yield* parseEventsCsv(eventsCsv);
+          const parsedFamilies = yield* parseGuestsCsv(guestsCsv, parsedEvents);
+          const plan = yield* diffAgainstDb(
+            parsedEvents,
+            parsedFamilies as ParsedFamily[],
+            BOOTSTRAP_WEDDING_ID,
+          );
+          expect(plan.eventCreates).toHaveLength(0);
+          expect(plan.eventRemoves).toHaveLength(0);
+          expect(plan.familyCreates).toHaveLength(0);
+          expect(plan.familyRemoves).toHaveLength(0);
+          expect(plan.guestCreates).toHaveLength(0);
+          expect(plan.guestUpdates).toHaveLength(0);
+          expect(plan.guestRemoves).toHaveLength(0);
+          expect(plan.eventLinkCreates).toHaveLength(0);
+          expect(plan.eventLinkRemoves).toHaveLength(0);
+          // The "" end sentinel survived the round trip.
+          const sparse = plan.eventUpdates.find((eu) => eu.id === "evt_family_code")!;
+          expect(sparse.event.endAt).toBe("");
+          expect(sparse.event.address).toBeNull();
+        }
+      }),
+    ),
+  );
+});
+
+describe("defensive normalisation (T-S3)", () => {
+  it(
+    "strips palette delimiters and drops non-http(s) URLs so the export stays importable",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const [anyEvent] = db
+          .select({ id: events.id })
+          .from(events)
+          .where(eq(events.weddingId, BOOTSTRAP_WEDDING_ID))
+          .all();
+        // Hostile values a future writer (the E5 editor) could store — the
+        // import parser could never have produced these.
+        db.update(events)
+          .set({
+            dressCodePalette: JSON.stringify([{ name: "Blue|Gold: dusk", color: "#123456" }]),
+            pinterestUrl: "javascript:alert(1)",
+          })
+          .where(eq(events.id, anyEvent!.id))
+          .run();
+
+        const csv = yield* stateExportService.eventsCsv(BOOTSTRAP_WEDDING_ID);
+        const parsed = yield* parseEventsCsv(csv);
+        const row = db.select().from(events).where(eq(events.id, anyEvent!.id)).all()[0]!;
+        const reParsed = parsed.find((e) => e.name === row.name)!;
+        // Still ONE swatch (delimiters stripped, not split into extra swatches)
+        // with the colour intact, and the unsafe URL exported as blank.
+        expect(reParsed.dressCodePalette).toHaveLength(1);
+        expect(reParsed.dressCodePalette[0]!.color).toBe("#123456");
+        expect(reParsed.pinterestUrl).toBeNull();
+      }),
+    ),
+  );
+});
+
+describe("empty wedding (T-S4)", () => {
+  it(
+    "exports header-only sheets for a wedding with no events or guests",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date();
+        db.insert(weddings)
+          .values({
+            id: "wed_empty",
+            slug: "empty-wedding",
+            displayName: "Empty Wedding",
+            ownerOsnProfileId: "usr_empty",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+
+        const eventsCsv = yield* stateExportService.eventsCsv("wed_empty");
+        const guestsCsv = yield* stateExportService.guestsCsv("wed_empty");
+        expect(lines(eventsCsv)).toHaveLength(1);
+        expect(lines(guestsCsv)).toHaveLength(1);
+        // With zero events there are no attendance columns — just the fixed
+        // guest columns + nickname.
+        expect(lines(guestsCsv)[0]).toBe(
+          "Family ID,Family Name,Guest First Name,Guest Last Name,Guest Nickname",
+        );
+        // Both empty sheets still parse (the parser rejects zero ROWS, not
+        // zero data rows).
+        const parsedEvents = yield* parseEventsCsv(eventsCsv);
+        expect(parsedEvents).toHaveLength(0);
+        const parsedFamilies = yield* parseGuestsCsv(guestsCsv, parsedEvents);
+        expect(parsedFamilies).toHaveLength(0);
+      }),
+    ),
+  );
 });

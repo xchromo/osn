@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const authFetchMock = vi.fn();
+const redirectToLoginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@osn/client/solid", () => ({
   useAuth: () => ({ authFetch: authFetchMock }),
@@ -19,7 +20,7 @@ vi.mock("@osn/client/solid", () => ({
 vi.mock("../lib/api", () => ({
   apiUrl: (path: string) => `https://api.test${path}`,
   isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
-  redirectToLogin: () => undefined,
+  redirectToLogin: redirectToLoginMock,
 }));
 
 import ImportPanel from "./ImportPanel";
@@ -49,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   authFetchMock.mockReset();
+  redirectToLoginMock.mockReset();
   URL.createObjectURL = realCreate;
   URL.revokeObjectURL = realRevoke;
 });
@@ -245,6 +247,16 @@ describe("ImportPanel — download current data (round-trip export)", () => {
         "https://api.test/api/organiser/weddings/wed_a/export/guests.csv",
       ),
     );
+  });
+
+  it("redirects to login on a 401 export instead of surfacing an error", async () => {
+    authFetchMock.mockResolvedValueOnce(new Response("unauthorised", { status: 401 }));
+    render(() => <ImportPanel weddingId="wed_a" />);
+    fireEvent.click(screen.getByRole("button", { name: /download current events/i }));
+
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(createdBlobs).toHaveLength(0);
+    expect(screen.queryByText(/export failed/i)).toBeNull();
   });
 
   it("surfaces a failed export inline instead of downloading", async () => {
