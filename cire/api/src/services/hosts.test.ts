@@ -52,9 +52,14 @@ describe("normaliseHostRole", () => {
     expect(normaliseHostRole("viewer")).toBe("viewer");
   });
 
-  it("degrades the legacy 'host' value (and anything unknown) to editor", () => {
+  it("degrades the legacy 'host' value to editor (what pre-roles co-hosts were)", () => {
     expect(normaliseHostRole("host")).toBe("editor");
-    expect(normaliseHostRole("")).toBe("editor");
+  });
+
+  it("degrades unknown/corrupted values to viewer — least privilege, never fail-open (S-L1)", () => {
+    expect(normaliseHostRole("")).toBe("viewer");
+    expect(normaliseHostRole("admin")).toBe("viewer");
+    expect(normaliseHostRole("EDITOR")).toBe("viewer");
   });
 });
 

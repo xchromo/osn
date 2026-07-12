@@ -16,10 +16,13 @@ export type HostRole = "editor" | "viewer";
  * pre-roles value (and still the column's DDL DEFAULT — unchangeable without a
  * table rebuild): migration 0031 rewrote all rows to `editor`, but a stray
  * legacy value degrades to `editor` (what every pre-roles co-host effectively
- * was) rather than crashing or silently over-restricting.
+ * was). Anything ELSE — an unknown or corrupted value no code path writes —
+ * degrades to `viewer`, the least-privilege role, so the gate chain never
+ * fails open (S-L1).
  */
 export function normaliseHostRole(role: string): HostRole {
-  return role === "viewer" ? "viewer" : "editor";
+  if (role === "editor" || role === "host") return "editor";
+  return "viewer";
 }
 
 /** A co-host row surfaced to the management panel. Never echoes the account id —
