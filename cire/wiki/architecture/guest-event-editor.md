@@ -51,7 +51,7 @@ Editor draft ─build─▶                      │                            
 - **`diffAgainstDb` becomes ID-aware** (fixes G4): match by id when present, fall back to normalised-name matching. A rename with an id is an *update*; the existing name-matched path is untouched. This also finally implements the long-anticipated optional `Guest ID` sheet column (`guests.externalId`, see [[spreadsheet-import]]) plus optional `Family ID` / `Event ID` columns — honoured when present, never required.
 - **Apply is unchanged**: same FK-ordered write set, same chunked `db.batch` commits, same partial-apply-reconciled-by-revert tradeoff.
 
-**Why batch reconcile instead of per-row CRUD endpoints** (amendment to [[platform-plan]] §3.3's `POST/PATCH/DELETE` sketch, needs sign-off): (a) preview-diff, impact warnings, and checkpointing fall out of the one pipeline instead of being rebuilt per endpoint; (b) one checkpoint per save session rather than per keystroke; (c) attendance-matrix edits are naturally batchy (tick 12 boxes, save once); (d) per-row CRUD can still be added later as sugar that compiles to a one-row reconcile. Everything else in §3.3 (provenance, un-invite guard, organiser-recorded RSVPs) stands — organiser RSVPs (PR 5b) stay a separate follow-up since RSVPs are deliberately outside the reconcile's blast radius (§5).
+**Why batch reconcile instead of per-row CRUD endpoints** (amendment to [[platform-plan]] §3.3's `POST/PATCH/DELETE` sketch — **decided 2026-07-12**, see [[deferred]]): (a) preview-diff, impact warnings, and checkpointing fall out of the one pipeline instead of being rebuilt per endpoint; (b) one checkpoint per save session rather than per keystroke; (c) attendance-matrix edits are naturally batchy (tick 12 boxes, save once); (d) per-row CRUD can still be added later as sugar that compiles to a one-row reconcile. Everything else in §3.3 (provenance, un-invite guard, organiser-recorded RSVPs) stands — organiser RSVPs (PR 5b) stay a separate follow-up since RSVPs are deliberately outside the reconcile's blast radius (§5).
 
 ## 4. Checkpoints + revert — before-image model (fixes G3)
 
@@ -62,7 +62,7 @@ Generalise `imports` into a **change history**:
 - **Revert change N** = run the reconcile with N's before-image as the DesiredState. This restores exactly the pre-N state regardless of what interleaved between imports and editor saves. The current "re-apply the previous import's sheets" heuristic survives only as the fallback for legacy rows without a before-image.
 - **Snapshot fidelity**: the snapshot CSV is the organiser schema **plus fidelity columns** — `Family Code` (`publicId`, so a revert restores codes instead of re-minting), `Family ID` / `Guest ID` / `Event ID` (id-exact restore, rename-proof), `Source` (provenance survives the round trip). The parser accepts these as optional columns; the organiser-facing template (`import-templates.ts`) is unchanged.
 - **Explicit non-goals, surfaced as preview warnings**: a revert never *restores* deleted RSVPs (cascade deletes are gone — same as today) and cannot restore an image/crop/location of an event it re-creates. Id-matched updates leave those columns untouched, so the common cases (rename, time change) are safe.
-- **Retention**: snapshots are small text objects, but unbounded per-save growth needs a cap on the Free tier — prune before-images beyond the most recent **50** changes per wedding (constant, revisit with `[[free-tier-limits]]` if weddings prove chattier). The history list keeps all rows; only old R2 before-images (and thus their revertability) age out, marked in the UI.
+- **Retention** (**decided 2026-07-12**): snapshots are small text objects, but unbounded per-save growth needs a cap on the Free tier — prune before-images beyond the most recent **10** changes per wedding (constant, revisit with `[[free-tier-limits]]` if 10 proves too shallow for real editing sessions). The history list keeps all rows; only old R2 before-images (and thus their revertability) age out, marked in the UI.
 
 ## 5. Round-trip export (fixes G2)
 
@@ -130,9 +130,9 @@ Each PR lands green with a changeset; order matters (later PRs consume earlier m
 
 **Dependencies on platform PRs: none hard.** Platform PR 4 (code-less households) is orthogonal — until it lands, editor-created households auto-mint codes exactly like the import (consistent with the decided "import keeps auto-minting"); PR 2 (roles) just flips the gate; PR 3 (IA shell) rehomes the tabs without touching this machinery.
 
-## 11. Open decisions (confirm before E3/E4)
+## 11. Decisions (resolved 2026-07-12, product owner sign-off)
 
-1. **Amend [[platform-plan]] §3.3** endpoint shape: batch reconcile (this plan) vs per-row CRUD. Recommendation: batch reconcile, per-row sugar later.
-2. **Checkpoint retention**: keep-50-before-images default, or keep-all until R2 usage proves otherwise.
-3. **Revert vs manual rows**: under the before-image model, reverting an import also restores manual rows that import deleted (with the toggle) — confirm that's the wanted semantics (it is the literal "restore the previous state").
-4. **Code minting for editor-created households pre-PR-4**: auto-mint (recommended) vs block manual creation until PR 4.
+1. **Endpoint shape: batch draft-save (reconcile).** [[platform-plan]] §3.3's per-row `POST/PATCH/DELETE` sketch is amended; per-row CRUD may land later as sugar over the same reconcile.
+2. **Checkpoint retention: keep the last 10 before-images** per wedding; older history rows stay listed but lose revertability (marked in the UI).
+3. **Revert vs manual rows**: stands as designed — the before-image model does a literal "restore the previous state", so reverting an import also restores manual rows that import deleted (via the provenance toggle).
+4. **Editor-created households auto-mint claim codes**, exactly like the import, until platform PR 4 (code-less households) lands — at which point manual creation switches to code-less per the decided §3.2 model.
