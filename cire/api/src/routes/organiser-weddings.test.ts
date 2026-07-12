@@ -473,10 +473,28 @@ describe("POST /api/organiser/weddings/:weddingId/preview-code", () => {
     expect(second.publicId).toBe(first.publicId);
   });
 
-  it("returns 403 for a non-owner", async () => {
+  it("returns 403 for a non-member", async () => {
     const { app } = buildApp();
     const res = await post(app, path, OTHER_OWNER);
     expect(res.status).toBe(403);
+  });
+
+  it("lets a viewer co-host preview (weddingMember gate — previewing is the read experience)", async () => {
+    const { db, app } = buildApp();
+    db.insert(weddingHosts)
+      .values({
+        id: "whost_preview_viewer",
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        osnProfileId: "usr_preview_viewer",
+        addedByOsnProfileId: BOOTSTRAP_OWNER,
+        role: "viewer",
+        createdAt: new Date(),
+      })
+      .run();
+    const res = await post(app, path, "usr_preview_viewer");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { publicId: string };
+    expect(body.publicId).toMatch(/^HOST-/);
   });
 
   it("returns 404 for an unknown wedding", async () => {
@@ -814,12 +832,19 @@ describe("POST /api/organiser/weddings/:weddingId/families/:familyId/deactivate 
     expect(stored!.deactivatedAt).toBeNull();
   });
 
-  it("allows a co-host to deactivate too (weddingMember gate)", async () => {
+  it("403s a co-host on deactivate (code management is owner-only in the roles matrix)", async () => {
     const { db, app } = buildApp();
     seedCohost(db);
     const fam = aBootstrapFamily(db);
     const res = await toggle(app, BOOTSTRAP_WEDDING_ID, fam.id, "deactivate", COHOST);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    // The family's code still claims — nothing was cut off.
+    const [stored] = db
+      .select({ deactivatedAt: families.deactivatedAt })
+      .from(families)
+      .where(eq(families.id, fam.id))
+      .all();
+    expect(stored!.deactivatedAt).toBeNull();
   });
 
   it("returns 404 when the family does not belong to the wedding", async () => {

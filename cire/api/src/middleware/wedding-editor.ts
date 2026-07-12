@@ -5,15 +5,12 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { runCire } from "../observability";
 import { hostsService } from "../services/hosts";
-import type { HostRole } from "../services/hosts";
+import type { WeddingRole } from "./wedding-member";
 
 interface GateError {
   status: number;
   body: { error: string };
 }
-
-/** The caller's effective role on the wedding, derived by the member gate. */
-export type WeddingRole = "owner" | HostRole;
 
 const fail = (status: number, error: string) => ({
   weddingId: undefined as string | undefined,
@@ -30,20 +27,19 @@ const pass = (weddingId: string, role: WeddingRole) => ({
 });
 
 /**
- * Authz gate for /api/organiser/weddings/:weddingId/* — admits the wedding's
- * OWNER **or** a CO-HOST (editor or viewer). Requires osnAuth() upstream
- * (osnProfileId derived). 404 for unknown weddings, 403 for callers who are
- * neither owner nor host. Derives `weddingId` (on success), `weddingIsOwner`,
- * and `weddingRole` so a route can keep an owner-only action (e.g. host
- * management) gated even though co-hosts reach the shared dashboard reads.
- * Viewers pass this gate — routes that WRITE must sit behind `weddingEditor()`
- * (see `wedding-editor.ts`) or `weddingOwner()` instead.
+ * Authz gate for /api/organiser/weddings/:weddingId/* WRITE routes — sits
+ * between `weddingMember()` (any role, reads) and `weddingOwner()` (owner-only
+ * destructive/management actions). Admits the OWNER or an `editor` co-host;
+ * a `viewer` co-host is rejected with 403 `read_only_role` (a distinct error
+ * string so the portal can say "ask the owner for editor access" instead of a
+ * generic forbidden). 404 for unknown weddings, 403 `forbidden` for
+ * non-members — the same contract as the member gate.
  *
- * Mirrors `weddingOwner()`'s lifecycle: the derive runs before osnAuth's
+ * Mirrors `weddingMember()`'s lifecycle: the derive runs before osnAuth's
  * onBeforeHandle fires, so it tolerates an unauthenticated request (records the
  * gate failure; osnAuth's 401 wins).
  */
-export function weddingMember(db: Db) {
+export function weddingEditor(db: Db) {
   return new Elysia()
     .derive({ as: "scoped" }, async (ctx) => {
       const { params, osnProfileId } = ctx as unknown as {
@@ -61,6 +57,7 @@ export function weddingMember(db: Db) {
 
       if (!result) return fail(404, "wedding_not_found");
       if (!result.role) return fail(403, "forbidden");
+      if (result.role === "viewer") return fail(403, "read_only_role");
       return pass(weddingId, result.role);
     })
     .onBeforeHandle({ as: "scoped" }, ({ weddingGateError, set }) => {

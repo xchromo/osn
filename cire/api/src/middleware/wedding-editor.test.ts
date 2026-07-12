@@ -6,11 +6,13 @@ import { Elysia } from "elysia";
 import type { Db } from "../db";
 import { createDb } from "../db/setup";
 import { appRequest } from "../test-helpers";
-import { weddingMember } from "./wedding-member";
+import { weddingEditor } from "./wedding-editor";
 
 const WEDDING_ID = "wed_alice";
 const OWNER = "usr_alice";
-const COHOST = "usr_bob";
+const EDITOR = "usr_bob";
+const VIEWER = "usr_carol";
+const LEGACY_HOST = "usr_dora";
 
 function buildDb(): Db {
   const db = createDb(":memory:");
@@ -29,7 +31,29 @@ function buildDb(): Db {
     .values({
       id: "whost_bob",
       weddingId: WEDDING_ID,
-      osnProfileId: COHOST,
+      osnProfileId: EDITOR,
+      addedByOsnProfileId: OWNER,
+      role: "editor",
+      createdAt: now,
+    })
+    .run();
+  db.insert(weddingHosts)
+    .values({
+      id: "whost_carol",
+      weddingId: WEDDING_ID,
+      osnProfileId: VIEWER,
+      addedByOsnProfileId: OWNER,
+      role: "viewer",
+      createdAt: now,
+    })
+    .run();
+  // Pre-0031 seat shape: no explicit role → the column's legacy DDL DEFAULT
+  // 'host'. The gate must treat it as an editor.
+  db.insert(weddingHosts)
+    .values({
+      id: "whost_dora",
+      weddingId: WEDDING_ID,
+      osnProfileId: LEGACY_HOST,
       addedByOsnProfileId: OWNER,
       createdAt: now,
     })
@@ -43,50 +67,52 @@ function buildApp(profileId?: string) {
   return new Elysia({ aot: false })
     .derive(() => ({ osnProfileId: profileId }))
     .group("/weddings/:weddingId", (group) =>
-      group
-        .use(weddingMember(db))
-        .get("/probe", ({ weddingId, weddingIsOwner }) => ({ weddingId, weddingIsOwner })),
+      group.use(weddingEditor(db)).get("/probe", ({ weddingId, weddingIsOwner, weddingRole }) => ({
+        weddingId,
+        weddingIsOwner,
+        weddingRole,
+      })),
     );
 }
 
-describe("weddingMember", () => {
-  it("admits the owner and marks weddingIsOwner:true", async () => {
+describe("weddingEditor", () => {
+  it("admits the owner", async () => {
     const app = buildApp(OWNER);
     const res = await appRequest(app, `/weddings/${WEDDING_ID}/probe`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ weddingId: WEDDING_ID, weddingIsOwner: true });
+    expect(await res.json()).toEqual({
+      weddingId: WEDDING_ID,
+      weddingIsOwner: true,
+      weddingRole: "owner",
+    });
   });
 
-  it("admits a co-host and marks weddingIsOwner:false", async () => {
-    const app = buildApp(COHOST);
+  it("admits an editor co-host", async () => {
+    const app = buildApp(EDITOR);
     const res = await appRequest(app, `/weddings/${WEDDING_ID}/probe`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ weddingId: WEDDING_ID, weddingIsOwner: false });
+    expect(await res.json()).toEqual({
+      weddingId: WEDDING_ID,
+      weddingIsOwner: false,
+      weddingRole: "editor",
+    });
   });
 
-  it("admits a VIEWER co-host too (reads are role-agnostic)", async () => {
-    const db = buildDb();
-    db.insert(weddingHosts)
-      .values({
-        id: "whost_viewer",
-        weddingId: WEDDING_ID,
-        osnProfileId: "usr_viewer",
-        addedByOsnProfileId: OWNER,
-        role: "viewer",
-        createdAt: new Date(),
-      })
-      .run();
-    const app = new Elysia({ aot: false })
-      .derive(() => ({ osnProfileId: "usr_viewer" }))
-      .group("/weddings/:weddingId", (group) =>
-        group.use(weddingMember(db)).get("/probe", ({ weddingRole }) => ({ weddingRole })),
-      );
+  it("admits a legacy 'host' seat as an editor (normalisation)", async () => {
+    const app = buildApp(LEGACY_HOST);
     const res = await appRequest(app, `/weddings/${WEDDING_ID}/probe`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ weddingRole: "viewer" });
+    expect(((await res.json()) as { weddingRole: string }).weddingRole).toBe("editor");
   });
 
-  it("returns 403 for a stranger (neither owner nor host)", async () => {
+  it("rejects a viewer co-host with 403 read_only_role", async () => {
+    const app = buildApp(VIEWER);
+    const res = await appRequest(app, `/weddings/${WEDDING_ID}/probe`);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "read_only_role" });
+  });
+
+  it("returns 403 forbidden for a stranger (neither owner nor host)", async () => {
     const app = buildApp("usr_mallory");
     const res = await appRequest(app, `/weddings/${WEDDING_ID}/probe`);
     expect(res.status).toBe(403);
