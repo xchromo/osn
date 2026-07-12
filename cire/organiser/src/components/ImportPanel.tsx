@@ -72,6 +72,7 @@ export default function ImportPanel(props: { weddingId: string }) {
   const [eventsFile, setEventsFile] = createSignal<File | null>(null);
   const [guestsFile, setGuestsFile] = createSignal<File | null>(null);
   const [busy, setBusy] = createSignal(false);
+  const [exporting, setExporting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [preview, setPreview] = createSignal<PreviewResponse | null>(null);
   const [applied, setApplied] = createSignal<ApplyResponse["summary"] | null>(null);
@@ -156,6 +157,10 @@ export default function ImportPanel(props: { weddingId: string }) {
    * it back through this panel.
    */
   async function downloadCurrent(kind: "events" | "guests") {
+    // In-flight guard (P-I3): a double-click must not fire duplicate export
+    // fetches — same shape as EventTable's export button.
+    if (exporting()) return;
+    setExporting(true);
     setError(null);
     try {
       const res = await authFetch(
@@ -167,6 +172,8 @@ export default function ImportPanel(props: { weddingId: string }) {
     } catch (err) {
       if (isAuthExpired(err)) return redirectToLogin();
       setError(err instanceof Error ? err.message : "Export failed.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -223,14 +230,16 @@ export default function ImportPanel(props: { weddingId: string }) {
           <button
             type="button"
             onClick={() => void downloadCurrent("events")}
-            class="border-border font-body text-text-muted hover:border-gold hover:text-gold rounded-sm border px-4 py-2 text-[0.82rem] tracking-[0.1em] uppercase transition"
+            disabled={exporting()}
+            class="border-border font-body text-text-muted hover:border-gold hover:text-gold rounded-sm border px-4 py-2 text-[0.82rem] tracking-[0.1em] uppercase transition disabled:opacity-40"
           >
             Download current events
           </button>
           <button
             type="button"
             onClick={() => void downloadCurrent("guests")}
-            class="border-border font-body text-text-muted hover:border-gold hover:text-gold rounded-sm border px-4 py-2 text-[0.82rem] tracking-[0.1em] uppercase transition"
+            disabled={exporting()}
+            class="border-border font-body text-text-muted hover:border-gold hover:text-gold rounded-sm border px-4 py-2 text-[0.82rem] tracking-[0.1em] uppercase transition disabled:opacity-40"
           >
             Download current guests
           </button>
