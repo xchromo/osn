@@ -16,6 +16,7 @@ import {
   ensureTasksLoaded,
   openTaskCount,
   peekCachedTasks,
+  taskCounts,
   type TaskRow,
 } from "../lib/tasks-store";
 import GettingStarted from "./GettingStarted";
@@ -119,6 +120,27 @@ function formatWeddingDate(isoDate: string): string {
     month: "long",
     year: "numeric",
   }).format(date);
+}
+
+/** A thin meter used by the RSVP / Budget / Checklist cards. `over` renders in a
+ *  warning tone and is used when a value exceeds its max (e.g. over-budget). */
+function ProgressBar(props: { value: number; max: number; tone?: "gold" | "over" }) {
+  const pct = () =>
+    props.max <= 0 ? 0 : Math.min(100, Math.max(0, (props.value / props.max) * 100));
+  return (
+    <div
+      class="bg-surface/60 h-1.5 w-full overflow-hidden rounded-full"
+      role="progressbar"
+      aria-valuenow={Math.round(pct())}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div
+        class={`h-full rounded-full ${props.tone === "over" ? "bg-red-500/80" : "bg-gold"}`}
+        style={{ width: `${pct()}%` }}
+      />
+    </div>
+  );
 }
 
 export default function Overview(props: {
@@ -534,6 +556,16 @@ export default function Overview(props: {
                       </span>{" "}
                       open {openTaskCount(props.weddingId) === 1 ? "task" : "tasks"}
                     </p>
+                    <Show when={taskCounts(props.weddingId)}>
+                      {(tc) => (
+                        <>
+                          <p class="text-text-muted text-[0.76rem]">
+                            {tc().done} of {tc().total} done
+                          </p>
+                          <ProgressBar value={tc().done} max={tc().total} />
+                        </>
+                      )}
+                    </Show>
                   </Show>
                 </Show>
               </button>
@@ -577,6 +609,24 @@ export default function Overview(props: {
                         )}
                       </span>
                     </p>
+                    {(() => {
+                      const cap =
+                        peekCachedBudget(props.weddingId)?.budgetTotalMinor ??
+                        data()?.profile?.budgetTotalMinor;
+                      const spent = spentSoFar(props.weddingId) ?? 0;
+                      return (
+                        <Show when={cap != null}>
+                          <ProgressBar
+                            value={spent}
+                            max={cap!}
+                            tone={spent > cap! ? "over" : "gold"}
+                          />
+                          <Show when={spent > cap!}>
+                            <p class="text-[0.72rem] text-red-400">Over budget</p>
+                          </Show>
+                        </Show>
+                      );
+                    })()}
                   </Show>
                   <Show when={upcomingPayments(props.weddingId).length > 0}>
                     <p class="text-text-muted text-[0.78rem]">
