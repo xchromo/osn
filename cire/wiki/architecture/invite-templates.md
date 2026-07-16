@@ -169,25 +169,67 @@ Record the crop when each ornament is drawn; it is not derivable later.
 ## Ground texture — scene light + grain
 
 A flat fill reads as a slab. Both templates already commit to a scene, and both
-scenes are inherently non-flat, so the texture is derived rather than decorative:
+scenes are inherently non-flat, so the texture is derived rather than decorative.
+It works at **three layers** — page grain, ambient light, and surface dimension —
+and **how much of it a template takes is itself part of the template's identity.**
 
-| Template | Light | Grain |
-|---|---|---|
-| `hindu-jewel` | lamp falloff behind the hero — `radial-gradient` marigold → bougainvillea → transparent, ~15% peak. The rest of the page stays inky. | `feTurbulence` fractalNoise, `baseFrequency` 0.8, 3 octaves, **opacity 0.11–0.13** |
-| `minimal` | fog gathering at the **base** of the page — `linear-gradient` transparent → fog → deeper fog at 100% | `feTurbulence` fractalNoise, `baseFrequency` 0.85–0.9, 4 octaves, **opacity 0.05** |
+### Layer 1 — page grain (both templates)
 
-Rules that make this work:
+One grain layer per artboard, not per section: an inline `<svg>` with
+`feTurbulence` fractalNoise at child **index 0** (behind content),
+`position: absolute` covering the artboard, `pointer-events: none`,
+`preserveAspectRatio="none"`.
 
-- **One grain layer per artboard**, not per section: an inline `<svg>` at child
-  **index 0** (so it sits behind content), `position: absolute` covering the
-  artboard, `pointer-events: none`, `preserveAspectRatio="none"`.
-- **The glow belongs to the hero only.** One intense moment — the marigold — stays
-  the page's colour event; the grain must never compete with it.
-- **`minimal`'s fog is bottom-anchored, not top.** A top wash is invisible because
-  the hero's fog-coloured image block already occupies that zone. Bottom-anchored
-  also matches the copy ("done before the fog rolls in").
-- Grain is what stops a large dark gradient banding. `hindu-jewel` needs roughly
-  **2× the grain opacity** of `minimal` for this reason.
+| Template | baseFrequency | octaves | opacity |
+|---|---|---|---|
+| `hindu-jewel` | 0.75–0.8 | 3 | **0.15–0.17** |
+| `minimal` | 0.85–0.9 | 4 | **0.07** |
+
+Grain is also what stops a large dark gradient banding — `hindu-jewel` runs it
+roughly **2×** `minimal` for that reason, and because dark grounds swallow low-
+opacity noise.
+
+### Layer 2 — ambient light (`hindu-jewel` only)
+
+The scene is a lit courtyard, and a courtyard has **many lamps, not one**. So
+light pools down the whole page, not just the hero:
+
+- **Hero:** the brightest pool — `radial-gradient` marigold → bougainvillea →
+  transparent, ~15% peak.
+- **Story / events sections:** faint off-axis warm pools (`~0.045–0.055` marigold
+  / bougainvillea, alternating side) so light carries down the page.
+
+The hero stays the **brightest** moment — the marigold remains the single colour
+event; the section pools are ambient bounce, never a second focal glow.
+
+`minimal` gets no light pools. Its scene is flat daylight; the only light move is
+the base fog wash (Layer 3).
+
+### Layer 3 — surface dimension (`hindu-jewel` only)
+
+Event cards were flat `--color-hindu-surface` slabs sitting on the grain — the
+grain couldn't lift them. They now use a **top-lit gradient**
+(`linear-gradient(165deg, #262038 → #1B172A → #191527)`) with a lighter top
+border edge (`--color-hindu-gold` @ ~40%), so each reads as a surface catching
+light from above.
+
+`minimal`'s "cards" are hairline `border-top` separators, not slabs — there is no
+surface to light, and adding one would break the template's restraint. **This is
+deliberate: forcing hindu's treatment onto minimal would erase the difference the
+palettes work to create.**
+
+### `minimal`'s base fog
+
+`linear-gradient` transparent → fog → deeper fog, **bottom-anchored**. A top wash
+is invisible because the hero's fog-coloured image block already occupies that
+zone; the base also matches the copy ("done before the fog rolls in").
+
+### The principle
+
+Texture amount tracks template character: `hindu-jewel` (dark, ornate, ceremonial)
+takes all three layers; `minimal` (bright, restrained) takes grain only. "More
+texture everywhere" is wrong when it flattens the distinction between templates —
+the right amount is whatever each template's scene actually contains.
 
 ## Tracking
 
