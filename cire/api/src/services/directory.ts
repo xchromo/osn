@@ -433,11 +433,7 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
      */
     getClaimPreview(
       token: string,
-    ): Effect.Effect<
-      { directoryVendorId: string; name: string; email: string } | null,
-      never,
-      DbService
-    > {
+    ): Effect.Effect<{ directoryVendorId: string; name: string } | null, never, DbService> {
       return Effect.gen(function* () {
         const db = yield* DbService;
         const tokenHash = yield* hashToken(token);
@@ -475,7 +471,6 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
         return {
           directoryVendorId: claimRow.directoryVendorId,
           name: dvRow.name,
-          email: claimRow.email,
         };
       }).pipe(Effect.withSpan("cire.directory.getClaimPreview"));
     },

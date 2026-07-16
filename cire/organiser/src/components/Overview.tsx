@@ -341,6 +341,8 @@ export default function Overview(props: {
     }),
   );
 
+  const vendorCountValue = createMemo(() => vendorCount(props.weddingId));
+
   const WhatsNext = () => (
     <div class="border-border bg-surface/20 flex flex-col gap-3 rounded-sm border p-5">
       <p class="font-body text-gold text-[0.7rem] tracking-[0.18em] uppercase">What&rsquo;s next</p>
@@ -660,20 +662,20 @@ export default function Overview(props: {
                   Vendors
                 </p>
                 <Show
-                  when={vendorCount(props.weddingId) !== null}
+                  when={vendorCountValue() !== null}
                   fallback={<p class="text-text-muted text-[0.82rem]">Loading your vendors…</p>}
                 >
                   <Show
-                    when={(vendorCount(props.weddingId) ?? 0) > 0}
+                    when={(vendorCountValue() ?? 0) > 0}
                     fallback={
                       <p class="text-text-muted text-[0.82rem]">No vendors yet — add your first.</p>
                     }
                   >
                     <p class="text-text text-[0.95rem]">
                       <span class="text-gold text-[1.3rem] font-semibold">
-                        {vendorCount(props.weddingId)}
+                        {vendorCountValue()}
                       </span>{" "}
-                      {vendorCount(props.weddingId) === 1 ? "vendor" : "vendors"} tracked
+                      {vendorCountValue() === 1 ? "vendor" : "vendors"} tracked
                     </p>
                   </Show>
                 </Show>

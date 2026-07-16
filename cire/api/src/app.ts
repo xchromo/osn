@@ -94,6 +94,12 @@ const defaultHostLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000
  */
 const defaultHandleSearchLimiter = createRateLimiter({ maxRequests: 60, windowMs: 60_000 });
 /**
+ * Default per-IP limiter for the vendor portal routes (S-L1). Covers both the
+ * unauthenticated claim preview (DB-query amplifier) and the ARC-calling consume
+ * endpoint; 20 req/min is generous for hand-use while bounding amplification.
+ */
+const defaultVendorPortalLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
+/**
  * Default per-IP limiter for the PUBLIC CSP report collector. The endpoint is
  * unauthenticated (browsers POST here with no creds), so this is a generous
  * bucket purely to cap a log-spam DoS — a real visitor emits a handful of
@@ -125,6 +131,8 @@ export interface AppOptions {
   handleSearchLimiter?: RateLimiterBackend;
   /** Override the public CSP-report collector rate limiter (useful for testing). */
   cspReportLimiter?: RateLimiterBackend;
+  /** Override the vendor portal rate limiter (useful for testing). */
+  vendorPortalLimiter?: RateLimiterBackend;
   /** R2 bucket binding for the organiser import flow. */
   r2?: R2Bucket;
   /** R2 bucket binding for invite-builder images (separate from `r2`). */
@@ -214,6 +222,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     hostLimiter = defaultHostLimiter,
     handleSearchLimiter = defaultHandleSearchLimiter,
     cspReportLimiter = defaultCspReportLimiter,
+    vendorPortalLimiter = defaultVendorPortalLimiter,
     r2,
     assets,
     images,
@@ -397,6 +406,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
           db,
           { directoryService: vendorDirectoryService, orgMembership: vendorOrgMembership },
           osnAuthOptions,
+          vendorPortalLimiter,
         ),
       )
   );

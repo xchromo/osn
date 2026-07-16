@@ -1,3 +1,4 @@
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect, Schema } from "effect";
 import { Elysia } from "elysia";
 
@@ -5,6 +6,7 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { runCire } from "../observability";
 import { ConsumeClaimBody, UpsertListingBody } from "../schemas/vendors";
 import type { createDirectoryService } from "../services/directory";
@@ -70,11 +72,13 @@ export function createVendorPortalRoutes(
   db: Db,
   deps: VendorPortalDeps,
   osnAuthOptions: OsnAuthOptions,
+  limiter: RateLimiterBackend,
 ) {
   const { directoryService, orgMembership } = deps;
 
   return (
     new Elysia({ prefix: "/api/vendor" })
+      .use(rateLimitMiddleware(limiter))
       // ── Public: claim preview (no auth) ────────────────────────────────────
       .get("/claims/:token", async ({ params, set }) => {
         return runCire(

@@ -343,7 +343,7 @@ describe("directoryService.getClaimPreview", () => {
     expect(previewRes.value).not.toBeNull();
     expect(previewRes.value!.directoryVendorId).toBe(directoryVendorId);
     expect(previewRes.value!.name).toBe("Preview Listing");
-    expect(previewRes.value!.email).toBe("preview@vendor.com");
+    expect("email" in previewRes.value!).toBe(false);
   });
 
   it("returns null for an unknown token", async () => {

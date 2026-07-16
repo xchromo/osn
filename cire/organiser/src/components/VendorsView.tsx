@@ -1,5 +1,5 @@
 import { useAuth } from "@osn/client/solid";
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { categoryLabel, SERVICE_CATEGORIES, type ServiceCategory } from "../lib/service-categories";
@@ -100,14 +100,14 @@ export default function VendorsView(props: VendorsViewProps) {
     if (cur) setCachedVendors(props.weddingId, fn(cur));
   };
 
-  // Vendors grouped by status in pipeline order.
-  const grouped = () => {
+  // Vendors grouped by status in pipeline order (memoised — O(n×statuses) work).
+  const grouped = createMemo(() => {
     const rows = vendors() ?? [];
     return VENDOR_STATUSES.map((s) => ({
       status: s,
       vendors: rows.filter((v) => v.status === s.key).toSorted((a, b) => a.sortOrder - b.sortOrder),
     })).filter((g) => g.vendors.length > 0);
-  };
+  });
 
   // ── Add vendor ────────────────────────────────────────────────────────────
   const addVendor = async (e: Event) => {

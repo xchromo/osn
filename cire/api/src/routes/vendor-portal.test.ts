@@ -190,6 +190,28 @@ describe("vendor portal routes", () => {
     });
   });
 
+  // ── Rate limiting ──────────────────────────────────────────────────────────
+
+  describe("rate limiting", () => {
+    it("applies rate limiting on vendor portal routes", async () => {
+      // 1-request budget: first request burns the budget (404 = unknown token),
+      // second must be 429.
+      const { createRateLimiter } = await import("@shared/rate-limit");
+      const tightLimiter = createRateLimiter({ maxRequests: 1, windowMs: 60_000 });
+      const db2 = createDb(":memory:");
+      seedDb(db2);
+      const limitedApp = createApp(db2, {
+        osnTestKey: auth.key,
+        orgMembership: stubOrgMembership,
+        vendorPortalLimiter: tightLimiter,
+      });
+      const first = await req(limitedApp, "GET", `/api/vendor/claims/any-token`);
+      expect(first.status).toBe(404); // burned the budget
+      const second = await req(limitedApp, "GET", `/api/vendor/claims/any-token`);
+      expect(second.status).toBe(429); // rate limited
+    });
+  });
+
   // ── POST /api/vendor/claims/:token/consume ────────────────────────────────
 
   describe("POST /api/vendor/claims/:token/consume", () => {
