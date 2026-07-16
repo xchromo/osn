@@ -24,7 +24,7 @@ Give organisers a private per-wedding vendor CRM, and give vendors a self-servic
 - **One profile per org, many categories per profile.** A listing carries a *set* of service categories via a join table, so a decor-and-catering business is one profile discoverable under both categories. A genuinely separate brand creates a second org.
 - **CRM rows are single-category** (the organiser's private note; other services go in `notes`).
 - **Claim = email verification.** Organiser-initiated for this slice (no browse UI needed): seed a listing + email the vendor a claim link. The vendor-initiated "search & claim" path arrives with S3; both consume the same claim token.
-- **cire-api gains its own transactional email** via `@shared/email` Resend (new `RESEND_API_KEY` secret) for the claim link.
+- **The claim link is returned to the organiser** (the primary share path — they already have the vendor relationship). cire-api email via `@shared/email` Resend is a **fail-soft enhancement** — net-new for cire-api (no email dependency today; prod delivery waits on a `RESEND_API_KEY` secret + sender-domain verification). A missing transport never blocks the invite.
 - **RP ID unchanged** (`cireweddings.com` apex) → vendor OSN passkeys work on `vendor.` with no re-registration.
 
 ## Data model (cire/db, additive migration)
@@ -95,7 +95,7 @@ Index: `vendor_claims_vendor_idx (directory_vendor_id)`; unique on `token_hash`.
 
 ## Identity + org rails (S0)
 
-- **osn-side (small prod-config change):** grant cire-api's `service_accounts` row the **`org:read`** scope (currently `graph:read,graph:resolve-account`). This is a one-row config change on osn-db-prod — flagged for explicit prod authorization at merge time.
+- **osn-side (versioned `@osn/api` change + manual prod step):** `org:read` is **not yet in osn-api's permitted-scopes allowlist** — add it there and confirm the `/organisations/internal/*` routes are mounted (a versioned `@osn/api` change → **split changesets**, osn patch + empty cire). Then **re-register cire-api's service account per environment** with the widened scope (`graph:read,graph:resolve-account,org:read`) via the runbook §6.2 registration curl — a **manual, authorized prod step** (cannot be automated; flagged at merge). cire-api's existing bridge only holds `graph:read`/`graph:resolve-account` today.
 - **cire-api osn-bridge additions:** two resolvers over ARC (scope `org:read`, aud `osn-api`):
   - `listProfileOrgs(profileId): string[]` → `GET /organisations/internal/profile-orgs?profileId=…`
   - `orgMembership(orgId, profileId): "admin" | "member" | null` → `GET /organisations/internal/membership?…`
@@ -104,7 +104,7 @@ Index: `vendor_claims_vendor_idx (directory_vendor_id)`; unique on `token_hash`.
 
 ## Claim flow (email verification)
 
-1. **Seed + invite (organiser, in CRM):** organiser adds a CRM vendor and chooses **"list in directory + invite to claim"**, entering the vendor's email. cire-api creates a `draft` `directory_vendors` (categories from the CRM row), links `vendors.directory_vendor_id`, mints a `vendor_claims` token (random, hashed at rest, 7-day TTL), and **emails the vendor** a link: `https://vendor.cireweddings.com/claim?token=<token>`.
+1. **Seed + invite (organiser, in CRM):** organiser adds a CRM vendor and chooses **"list in directory + invite to claim"**, entering the vendor's email. cire-api creates a `draft` `directory_vendors` (categories from the CRM row), links `vendors.directory_vendor_id`, mints a `vendor_claims` token (random, hashed at rest, 7-day TTL), and **returns the claim link to the organiser** (`https://vendor.cireweddings.com/claim?token=<token>`) so they can share it directly. If a Resend key is configured, cire-api ALSO emails the vendor the link (fail-soft).
 2. **Claim (vendor, in portal):** vendor opens the link → OSN passkey sign-in → **create a new OSN org or pick one they own/admin** → confirm. cire-api validates the token (unconsumed, unexpired, matches), sets `directory_vendors.owner_org_id = orgId`, flips `listed` to `live`, stamps `consumed_at`. The vendor can now edit the listing.
 3. **Self-registration (no seed):** vendor signs in → create/pick org → create a fresh listing they own outright (`owner_org_id` set immediately, `listed = live`).
 
@@ -153,7 +153,7 @@ Soft-fail throughout: an osn-api/ARC outage degrades org resolution to 503 on wr
 ## Ship shape
 
 Two PRs, each independently reviewable and green:
-- **PR A — foundation + CRM + claim backend:** migration + schema + `directory_vendors`/`vendors`/`vendor_claims` services + `/api/organiser/.../vendors` + `/api/vendor/*` routes + osn-bridge org resolvers + cire-api email + the organiser `VendorsView` module. Ships organiser value with no new subdomain. (The osn `org:read` scope grant is a small separate prod-config step, authorized at merge.)
+- **PR A — foundation + CRM + claim backend:** migration + schema + `directory_vendors`/`vendors`/`vendor_claims` services + `/api/organiser/.../vendors` + `/api/vendor/*` routes + osn-bridge org resolvers + fail-soft cire-api email + the organiser `VendorsView` module, **plus the osn-api `org:read` scope-allowlist change** (split changesets: `@osn/api` patch + empty cire). Ships organiser value with no new subdomain. The manual per-env cire-api service-account **re-registration** (widened scope) is authorized at merge; until it runs, org-gated listing writes degrade to 503 (fail-soft).
 - **PR B — the vendor portal app + infra:** the `cire/vendor` Astro app + `deploy-cire-vendor` job + DNS + allowlist entries.
 
 Each PR: additive migration (PR A), empty/patch changesets per package versioning class, `/prep-pr` perf + security reviews before merge, subagent-driven-development execution.
