@@ -86,6 +86,7 @@ Phase 1 surfaces:
 | Work on Pulse | `[[wiki/apps/pulse]]` |
 | Work on Zap | `[[wiki/apps/zap]]` |
 | Work on cire (wedding invites) | `[[wiki/apps/cire]]`, `[[wiki/systems/cire-auth]]` |
+| Work on cire invite templates / the template picker (primitives, per-script type, cultural-review gate) | `[[cire/wiki/architecture/invite-templates]]` |
 | Work on the cire marketing site / apex landing page (`@cire/landing`) | `[[wiki/apps/cire-landing]]` |
 | Work on the OSN marketing site (`@osn/landing`) | `[[wiki/apps/osn-landing]]` |
 | Work on the Pulse marketing site (`@pulse/landing`) | `[[wiki/apps/pulse-landing]]` |
