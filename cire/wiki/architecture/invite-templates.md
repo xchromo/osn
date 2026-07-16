@@ -166,6 +166,29 @@ The fix is **one artwork, a viewBox crop per breakpoint** — not a second drawi
 So the registry's ornament entry is `{key → svg + per-breakpoint viewBox}`.
 Record the crop when each ornament is drawn; it is not derivable later.
 
+## Ground texture — scene light + grain
+
+A flat fill reads as a slab. Both templates already commit to a scene, and both
+scenes are inherently non-flat, so the texture is derived rather than decorative:
+
+| Template | Light | Grain |
+|---|---|---|
+| `hindu-jewel` | lamp falloff behind the hero — `radial-gradient` marigold → bougainvillea → transparent, ~15% peak. The rest of the page stays inky. | `feTurbulence` fractalNoise, `baseFrequency` 0.8, 3 octaves, **opacity 0.11–0.13** |
+| `minimal` | fog gathering at the **base** of the page — `linear-gradient` transparent → fog → deeper fog at 100% | `feTurbulence` fractalNoise, `baseFrequency` 0.85–0.9, 4 octaves, **opacity 0.05** |
+
+Rules that make this work:
+
+- **One grain layer per artboard**, not per section: an inline `<svg>` at child
+  **index 0** (so it sits behind content), `position: absolute` covering the
+  artboard, `pointer-events: none`, `preserveAspectRatio="none"`.
+- **The glow belongs to the hero only.** One intense moment — the marigold — stays
+  the page's colour event; the grain must never compete with it.
+- **`minimal`'s fog is bottom-anchored, not top.** A top wash is invisible because
+  the hero's fog-coloured image block already occupies that zone. Bottom-anchored
+  also matches the copy ("done before the fog rolls in").
+- Grain is what stops a large dark gradient banding. `hindu-jewel` needs roughly
+  **2× the grain opacity** of `minimal` for this reason.
+
 ## Tracking
 
 | Token | Value | Use |
@@ -259,7 +282,21 @@ rather than a vine.
 - Only screenshots catch either of these. Trust the render, not the computed styles.
 - **`get_screenshot` returns empty output above roughly 1900px of node height** —
   it fails silently rather than erroring. Screenshot sections, not whole tall
-  artboards.
+  artboards. To see a whole artboard, `export` it to a jpg and read the file — a
+  node screenshot also renders transparent backgrounds as **black**, so a
+  ground-level gradient behind transparent children is invisible in a screenshot
+  but correct in an export.
+- **CSS gradients work as `backgroundImage`; data-URI SVG (`url("data:…")`) does
+  not** — Paper treats it as a failed image load and paints a broken-image fill.
+  For grain use an **inline `<svg>` node with `feTurbulence`**, which does render.
+- **The lazy-font-binding bug (F3) also corrupts layout, not just colour.** If a
+  display line is measured before its font loads, Paper caches a one-line height
+  and then renders wrapped text into it, overlapping the line below. A file
+  restart re-triggers this on every display node. The reliable repair: set the
+  literal family, then in a second call set the token **and nudge `fontSize` by
+  1px** to force a re-measure with the real font. Also give every display line an
+  explicit `white-space: nowrap` where it's meant to stay one line — Devanagari
+  metrics shift enough between renders to wrap a previously-fitting line.
 
 ## Out of scope
 
