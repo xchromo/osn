@@ -55,9 +55,10 @@ export function invalidateTasks(weddingId: string): void {
   cache.delete(weddingId);
 }
 
-/** Reactive open-task count for the Overview widget: `null` until first load. */
+/** Reactive open-task count for the Overview widget: `null` until first load.
+ *  Reads without allocating a dangling signal for a never-loaded weddingId. */
 export function openTaskCount(weddingId: string): number | null {
-  const rows = entryFor(weddingId).tasks();
+  const rows = cache.get(weddingId)?.tasks() ?? null;
   if (rows == null) return null;
   return rows.filter((t) => t.status === "open").length;
 }
