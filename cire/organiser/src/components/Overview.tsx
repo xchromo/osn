@@ -496,37 +496,3 @@ export default function Overview(props: {
     </div>
   );
 }
-
-/** An honest "not built yet" snapshot card for a planning module that lands in a
- *  later phase. It reads as a promise, not as data — no numbers are invented (the
- *  repo's no-mock-data rule). */
-function SnapshotComingSoon(props: {
-  label: string;
-  blurb: string;
-  action?: { label: string; onClick: () => void };
-}) {
-  return (
-    <div class="border-border bg-surface/15 flex flex-col gap-2 rounded-sm border border-dashed p-5">
-      <div class="flex items-center justify-between gap-2">
-        <p class="font-body text-gold-dim text-[0.7rem] tracking-[0.18em] uppercase">
-          {props.label}
-        </p>
-        <span class="border-border text-text-muted font-body rounded-sm border px-1.5 py-0.5 text-[0.58rem] tracking-[0.14em] uppercase">
-          Soon
-        </span>
-      </div>
-      <p class="font-body text-text-muted text-[0.82rem] leading-relaxed">{props.blurb}</p>
-      <Show when={props.action}>
-        {(action) => (
-          <button
-            type="button"
-            onClick={() => action().onClick()}
-            class="font-body text-gold-dim hover:text-gold self-start text-[0.78rem] underline-offset-4 transition hover:underline"
-          >
-            {action().label}
-          </button>
-        )}
-      </Show>
-    </div>
-  );
-}
