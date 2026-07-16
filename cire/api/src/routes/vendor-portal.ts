@@ -32,9 +32,9 @@ const internal = (set: { status?: number | string }) =>
     return { error: "Internal error" };
   });
 
-function internalSync(set: { status?: number | string }) {
-  set.status = 500;
-  return { error: "Internal error" };
+function unauthorisedSync(set: { status?: number | string }) {
+  set.status = 401;
+  return { error: "unauthorised" };
 }
 
 function forbiddenNotMember(set: { status?: number | string }) {
@@ -99,7 +99,7 @@ export function createVendorPortalRoutes(
         "/claims/:token/consume",
         async ({ params, request, set, ...ctx }) => {
           const profileId = (ctx as unknown as { osnProfileId?: string }).osnProfileId;
-          if (!profileId) return internalSync(set);
+          if (!profileId) return unauthorisedSync(set);
 
           const raw: unknown = await request.json().catch(() => null);
 
@@ -127,7 +127,7 @@ export function createVendorPortalRoutes(
       // GET /api/vendor/orgs/:orgId/listing
       .get("/orgs/:orgId/listing", async ({ params, set, ...ctx }) => {
         const profileId = (ctx as unknown as { osnProfileId?: string }).osnProfileId;
-        if (!profileId) return internalSync(set);
+        if (!profileId) return unauthorisedSync(set);
 
         const role = await orgMembership(params.orgId, profileId);
         if (!role) return forbiddenNotMember(set);
@@ -145,7 +145,7 @@ export function createVendorPortalRoutes(
         "/orgs/:orgId/listing",
         async ({ params, request, set, ...ctx }) => {
           const profileId = (ctx as unknown as { osnProfileId?: string }).osnProfileId;
-          if (!profileId) return internalSync(set);
+          if (!profileId) return unauthorisedSync(set);
 
           const role = await orgMembership(params.orgId, profileId);
           if (!role) return forbiddenNotMember(set);

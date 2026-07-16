@@ -498,3 +498,37 @@ export function createArcOrgMembershipResolver(
     }
   };
 }
+
+/**
+ * Builds the org-membership resolver from raw env material — the sibling of
+ * {@link createHandleSearchResolverFromEnv}. Returns the fail-soft default
+ * (`() => Promise.resolve(null)`) when any ARC piece is absent so a deployment
+ * without the ARC key simply denies all org-gated requests (fail-closed in
+ * practice, since `null` from the resolver means "not a member"), never
+ * failing to boot. A present-but-invalid key degrades the same way.
+ *
+ * Unlike the account/handle resolvers (which return `null` to signal "feature
+ * disabled → 503"), this returns the null-resolver directly because 403
+ * (not-a-member) is already the safe failure mode for org-gated routes — a
+ * missing ARC key means no vendor portal access, not a 503 boot failure.
+ */
+export async function createOrgMembershipResolverFromEnv(env: {
+  osnApiUrl?: string;
+  arcPrivateKeyJwk?: string;
+  arcKeyId?: string;
+}): Promise<OsnOrgMembershipResolver> {
+  const failSoft: OsnOrgMembershipResolver = () => Promise.resolve(null);
+  if (!env.osnApiUrl || !env.arcPrivateKeyJwk || !env.arcKeyId) {
+    return failSoft;
+  }
+  // Present-but-INVALID key ⇒ degrade like absent (all org-gated routes answer
+  // 403) instead of throwing on every request. See createAccountResolverFromEnv
+  // for the incident this guards against.
+  const arcPrivateKey = await importKeyFromJwk(env.arcPrivateKeyJwk).catch(() => null);
+  if (!arcPrivateKey) return failSoft;
+  return createArcOrgMembershipResolver({
+    osnApiUrl: env.osnApiUrl,
+    arcPrivateKey,
+    arcKeyId: env.arcKeyId,
+  });
+}
