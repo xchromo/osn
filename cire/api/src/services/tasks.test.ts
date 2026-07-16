@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { BOOTSTRAP_WEDDING_ID, tasks, weddings } from "@cire/db";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 
 import { DbService } from "../db";

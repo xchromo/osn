@@ -170,8 +170,13 @@ export const tasksService = {
       );
 
       const [updated] = yield* dbQuery(() =>
-        db.select().from(tasks).where(eq(tasks.id, taskId)).all(),
+        db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.id, taskId), eq(tasks.weddingId, weddingId)))
+          .all(),
       );
+      if (!updated) return yield* Effect.fail(new TaskNotInWedding());
       return toDto(updated as TaskRow);
     }).pipe(Effect.withSpan("cire.tasks.update"));
   },
