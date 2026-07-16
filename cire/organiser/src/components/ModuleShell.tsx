@@ -15,6 +15,7 @@ import Overview from "./Overview";
 import RemintPanel from "./RemintPanel";
 import RsvpView from "./RsvpView";
 import SettingsPanel from "./SettingsPanel";
+import VendorsView from "./VendorsView";
 
 interface ModuleShellProps {
   weddingId: string;
@@ -170,6 +171,15 @@ export default function ModuleShell(props: ModuleShellProps) {
         {/* ── Budget: per-category items + payments ────────────────────── */}
         <Show when={props.module === "budget"}>
           <BudgetView
+            weddingId={props.weddingId}
+            canEdit={props.canEdit}
+            canManage={props.canManage}
+          />
+        </Show>
+
+        {/* ── Vendors: CRM — research → book your suppliers ────────────── */}
+        <Show when={props.module === "vendors"}>
+          <VendorsView
             weddingId={props.weddingId}
             canEdit={props.canEdit}
             canManage={props.canManage}

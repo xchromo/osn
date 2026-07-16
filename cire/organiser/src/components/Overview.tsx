@@ -13,6 +13,7 @@ import { ensureEventsLoaded, type EventRow, eventsAccessor } from "../lib/events
 import { ensureGuestsLoaded, guestsAccessor, type OrganiserGuestRow } from "../lib/guests-store";
 import { buildAgenda, type AgendaItem } from "../lib/overview-agenda";
 import { ensureTasksLoaded, peekCachedTasks, taskCounts, type TaskRow } from "../lib/tasks-store";
+import { ensureVendorsLoaded, vendorCount, type VendorRow } from "../lib/vendors-store";
 import GettingStarted from "./GettingStarted";
 import SectionIntro from "./SectionIntro";
 
@@ -157,7 +158,7 @@ export default function Overview(props: {
   /** Jump to another module (+ optional sub) — wired to the shell's navigation
    *  so an Overview card can send the organiser to the right place. */
   onNavigate: (
-    module: "guests" | "schedule" | "checklist" | "budget" | "invite" | "settings",
+    module: "guests" | "schedule" | "checklist" | "budget" | "vendors" | "invite" | "settings",
     sub?: string,
   ) => void;
 }) {
@@ -206,6 +207,16 @@ export default function Overview(props: {
           // Soft-fail: a missing budget endpoint never blocks the rest of Overview.
           if (!res.ok) return { items: [], payments: [], budgetTotalMinor: null, currency: "AUD" };
           return (await res.json()) as BudgetSnapshot;
+        }),
+        // Vendors — soft-fail: unavailable vendors never block Overview.
+        ensureVendorsLoaded(props.weddingId, async () => {
+          const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/vendors`));
+          if (res.status === 401) {
+            redirectToLogin();
+            return [];
+          }
+          if (!res.ok) return [];
+          return ((await res.json()) as { vendors: VendorRow[] }).vendors;
         }),
       ]);
 
@@ -629,6 +640,35 @@ export default function Overview(props: {
                       />
                     </Show>
                   )}
+                </Show>
+              </button>
+
+              {/* ── Vendors snapshot (live count) ─────────────────────────── */}
+              <button
+                type="button"
+                onClick={() => props.onNavigate("vendors")}
+                class="border-border bg-surface/15 hover:border-gold/40 flex flex-col gap-2 rounded-sm border p-5 text-left transition-colors"
+              >
+                <p class="font-body text-gold-dim text-[0.7rem] tracking-[0.18em] uppercase">
+                  Vendors
+                </p>
+                <Show
+                  when={vendorCount(props.weddingId) !== null}
+                  fallback={<p class="text-text-muted text-[0.82rem]">Loading your vendors…</p>}
+                >
+                  <Show
+                    when={(vendorCount(props.weddingId) ?? 0) > 0}
+                    fallback={
+                      <p class="text-text-muted text-[0.82rem]">No vendors yet — add your first.</p>
+                    }
+                  >
+                    <p class="text-text text-[0.95rem]">
+                      <span class="text-gold text-[1.3rem] font-semibold">
+                        {vendorCount(props.weddingId)}
+                      </span>{" "}
+                      {vendorCount(props.weddingId) === 1 ? "vendor" : "vendors"} tracked
+                    </p>
+                  </Show>
                 </Show>
               </button>
 
