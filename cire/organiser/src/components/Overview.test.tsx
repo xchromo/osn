@@ -99,8 +99,26 @@ const GUESTS = [
 ];
 const EVENTS = [{ id: "e1", name: "Ceremony" }];
 const RSVPS = [
-  { invited: 10, attending: 6, declined: 2, maybe: 1, responded: 9, noResponse: 1 },
-  { invited: 8, attending: 4, declined: 1, maybe: 0, responded: 5, noResponse: 3 },
+  {
+    id: "e1",
+    name: "Ceremony",
+    invited: 10,
+    attending: 6,
+    declined: 2,
+    maybe: 1,
+    responded: 9,
+    noResponse: 1,
+  },
+  {
+    id: "e2",
+    name: "Reception",
+    invited: 8,
+    attending: 4,
+    declined: 1,
+    maybe: 0,
+    responded: 5,
+    noResponse: 3,
+  },
 ];
 
 describe("Overview", () => {
