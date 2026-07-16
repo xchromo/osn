@@ -34,6 +34,11 @@ const ARC_SCOPE = "graph:read";
  * pulse-onboarding: least privilege on the multi-account privacy invariant).
  */
 const ARC_RESOLVE_ACCOUNT_SCOPE = "graph:resolve-account";
+/**
+ * Scope for org-membership resolution — osn-api's
+ * `/organisations/internal/*` requires this dedicated scope.
+ */
+const ARC_ORG_READ_SCOPE = "org:read";
 
 /** Outcome of resolving an OSN profile id to its owning account id. */
 export type OsnAccountResolution =
@@ -394,4 +399,102 @@ export async function createHandleSearchResolverFromEnv(env: {
     arcPrivateKey,
     arcKeyId: env.arcKeyId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Org-membership resolvers (Vendors platform — uses `org:read` scope)
+// ---------------------------------------------------------------------------
+
+/**
+ * Lists the organisation ids that a profile belongs to.
+ * FAIL-SOFT: any transport/infra failure resolves to an EMPTY array — the
+ * caller treats an absent org list as "no org memberships" rather than
+ * propagating an error. Mirrors {@link createArcProfileDisplayResolver}.
+ */
+export type OsnProfileOrgsResolver = (profileId: string) => Promise<string[]>;
+
+/**
+ * Builds an {@link OsnProfileOrgsResolver} backed by a real ARC-authenticated
+ * call to `GET /organisations/internal/profile-orgs`. Uses the `org:read`
+ * scope (distinct from `graph:read`) — cire-api's registration must include
+ * `org:read` in `allowedScopes` for this call to succeed.
+ */
+export function createArcProfileOrgsResolver(config: ArcResolverConfig): OsnProfileOrgsResolver {
+  const base = config.osnApiUrl.replace(/\/+$/, "");
+
+  return async (profileId) => {
+    try {
+      const token = await signArcToken(config.arcPrivateKey, {
+        iss: ARC_ISSUER,
+        aud: ARC_AUDIENCE,
+        scope: ARC_ORG_READ_SCOPE,
+        kid: config.arcKeyId,
+      });
+
+      const res = await instrumentedFetch(
+        `${base}/organisations/internal/profile-orgs?profileId=${encodeURIComponent(profileId)}`,
+        { headers: { authorization: `ARC ${token}` } },
+      );
+
+      if (!res.ok) return [];
+
+      const data = (await res.json()) as { organisationIds?: unknown };
+      if (!Array.isArray(data.organisationIds)) return [];
+
+      return (data.organisationIds as unknown[]).filter(
+        (id): id is string => typeof id === "string",
+      );
+    } catch {
+      // FAIL-SOFT: never let an org-list lookup failure break the caller.
+      return [];
+    }
+  };
+}
+
+/**
+ * Resolves the role a profile holds in an organisation, or `null` when they
+ * are not a member. FAIL-SOFT: any transport/infra failure returns `null` —
+ * the caller treats a missing role as "not a member / access denied" rather
+ * than propagating an error.
+ */
+export type OsnOrgMembershipResolver = (
+  orgId: string,
+  profileId: string,
+) => Promise<"admin" | "member" | null>;
+
+/**
+ * Builds an {@link OsnOrgMembershipResolver} backed by a real ARC-authenticated
+ * call to `GET /organisations/internal/membership`. Same `org:read` scope as
+ * {@link createArcProfileOrgsResolver}.
+ */
+export function createArcOrgMembershipResolver(
+  config: ArcResolverConfig,
+): OsnOrgMembershipResolver {
+  const base = config.osnApiUrl.replace(/\/+$/, "");
+
+  return async (orgId, profileId) => {
+    try {
+      const token = await signArcToken(config.arcPrivateKey, {
+        iss: ARC_ISSUER,
+        aud: ARC_AUDIENCE,
+        scope: ARC_ORG_READ_SCOPE,
+        kid: config.arcKeyId,
+      });
+
+      const res = await instrumentedFetch(
+        `${base}/organisations/internal/membership?orgId=${encodeURIComponent(orgId)}&profileId=${encodeURIComponent(profileId)}`,
+        { headers: { authorization: `ARC ${token}` } },
+      );
+
+      if (!res.ok) return null;
+
+      const data = (await res.json()) as { role?: unknown };
+      if (data.role === "admin" || data.role === "member") return data.role;
+      return null;
+    } catch {
+      // FAIL-SOFT: a non-member or unreachable osn-api is treated identically —
+      // access denied.
+      return null;
+    }
+  };
 }
