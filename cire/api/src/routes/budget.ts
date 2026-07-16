@@ -42,6 +42,12 @@ const paymentNotFound = (set: { status?: number | string }) =>
     return { error: "payment_not_found" };
   });
 
+const weddingNotFound = (set: { status?: number | string }) =>
+  Effect.sync(() => {
+    set.status = 404;
+    return { error: "wedding_not_found" };
+  });
+
 const internal = (set: { status?: number | string }) =>
   Effect.sync(() => {
     set.status = 500;
@@ -264,14 +270,14 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               return runCire(
                 Effect.gen(function* () {
                   const body = yield* Schema.decodeUnknown(SetBudgetTotalBody)(raw);
-                  const profile = yield* weddingSettingsService.update(weddingId, {
+                  const settings = yield* weddingSettingsService.update(weddingId, {
                     budgetTotalMinor: body.budgetTotalMinor,
                   });
-                  return { budgetTotalMinor: profile.budgetTotalMinor };
+                  return { budgetTotalMinor: settings.budgetTotalMinor };
                 }).pipe(
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
-                  Effect.catchTag("WeddingNotFound", () => itemNotFound(set)),
+                  Effect.catchTag("WeddingNotFound", () => weddingNotFound(set)),
                   Effect.catchTag("SettingsWriteError", () => internal(set)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
