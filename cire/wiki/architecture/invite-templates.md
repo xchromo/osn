@@ -59,8 +59,63 @@ Derived from the probe comps, not invented upfront.
 |---|---|---|
 | `hero` | `full-bleed` \| `split` \| `framed` \| `block` | image+overlay / halves / ornament frame / colour-block type-first |
 | `story` | `photo-left` \| `photo-bleed` \| `text-rule` | |
-| `events` | `stack` \| `timeline` | |
+| `events` | `stack` \| `timeline` | **arrangement only** — the card is invariant. See below. |
 | `ornament` | closed union + `none` | per-template SVG. No free-form values reach rendered CSS. |
+
+## `EventCard` is invariant — `events` only arranges it
+
+**The card is not a variant of `events`. It is the atom every arrangement
+contains.** Every event, every template, always renders the full card:
+
+| Card slot | Source | Notes |
+|---|---|---|
+| name | `events.name` | template display face |
+| meta | `events.startAt` | **full day + time in `stack`; time only in `timeline`** — the day header owns the date, so repeating it is noise |
+| venue | `venueLine(event)` | |
+| description | `events.description` | |
+| image | `events.imageUrl` + `imageCrop` | **optional** — card collapses to a single text column when absent (prod behaviour) |
+| `Respond` | → RSVP modal | **mandatory** |
+| `View Event` | → DetailsModal | **mandatory** |
+
+Desktop cards are two-column (text ∥ image) with prod's **alternating rhythm** —
+even rows text-left/image-right, odd rows reversed. Ignored when the event has no
+image.
+
+**Dress code and dress palette are NOT on the card.** They live in the
+DetailsModal behind *View Event* — see [[invite-builder]].
+
+> **Why this is stated so forcefully:** the first pass modelled `stack` and
+> `timeline` as alternatives ("`stack` = today's EventCard; `timeline` = 4+
+> events"). That framing quietly dropped `Respond`, `View Event`, the image and
+> the description from every multi-day invite — i.e. it produced an invite a
+> guest **cannot RSVP from**. Treating the card as invariant makes that class of
+> mistake unrepresentable, and means future invite features touch one card rather
+> than one card per arrangement.
+
+### `events: timeline` — one value, two states
+
+Same shape as `story: photo-left`: a single primitive whose expression differs by
+breakpoint.
+
+- **Desktop:** day-grouped rail threading the cards. Rail
+  `position: absolute; left: 6px; top/bottom` on a `position: relative` container
+  — **never a fixed height**, which overshoots the last dot. Dot lane: fixed
+  **13px** slot, `flexShrink: 0`; event dots 11px round (accent), day-header marks
+  5px square (gold). Cards sit beside the lane at ~940px column width.
+- **Mobile:** **no rail.** Day headers (label + hairline rule) span full width;
+  cards render full-bleed beneath them. At 390px a rail would cost ~27px off every
+  card for a thread that reads as decoration.
+
+**Verified:** 5 events across 3 day groups at both breakpoints, every card
+carrying image, description and both buttons.
+
+### `events: stack`
+
+Plain list of the same cards, hairline `border-top` separators rather than filled
+boxes — information on the surface, minimal boxing. ≤3 events, no day grouping.
+
+**Desktop:** stacked in a centred column, **not** side by side. Two events side by
+side at 1440 reads as a pricing table.
 
 ### `story: photo-left` — both states are part of the primitive
 
@@ -74,35 +129,6 @@ Encodes the standing feedback in `wiki/Wedding Invite Notes.md`:
 Both probe templates use `photo-left` unchanged and it reads as ornate on
 `hindu-jewel` and austere on `minimal`. That is the clearest evidence the preset
 approach works.
-
-### `events: timeline` — the one real build
-
-No equivalent exists in `@cire/web` today. Everything else re-composes existing
-surface.
-
-- Vertical rail: `position: absolute; left: 5px; top: 10px; bottom: 14px; width: 1px`
-  on a `position: relative` container. **Use `top`/`bottom`, never a fixed
-  height** — a fixed height overshoots the last dot.
-- Dot lane: fixed **11px** slot, `flexShrink: 0`, `justify-content: center`,
-  `padding-top: 5px`. Event dots 9px round (accent); day-header marks 5px square
-  (gold). Never rely on `gap` alone — the lane must hold across rows.
-- Day-group headers between event sets; 16px row gap; 20px intra-group gap.
-
-**Verified:** carries 5 events across 3 day groups at 390px with time, venue,
-dress code and a palette row per event, and still reads as a schedule. `stack`
-fails this content outright — which is why `timeline` is a separate primitive and
-not a variant.
-
-**Desktop:** the rail stays **single-column** in a centred 680px column. A
-multi-column rail stops reading as a timeline.
-
-### `events: stack`
-
-Today's `EventCard` shape. Probe used hairline `border-top` separators rather
-than filled cards — information on the surface, minimal boxing. ≤3 events.
-
-**Desktop:** stacked in a centred 680px column, **not** side by side. Two events
-side by side at 1440 reads as a pricing table.
 
 ## Per-script faces — `type` is not one key
 
@@ -207,6 +233,12 @@ read as different invites rather than two skins.
   preset approach.
 - `timeline` carries 5 events across 3 days at 390px.
 
+**Revised after review (2026-07-16):** the first pass had `timeline` *replacing*
+the event card rather than arranging it, which dropped `Respond` / `View Event` —
+an invite a guest cannot RSVP from. `EventCard` is now the invariant atom and
+`events` only chooses the arrangement. All four comps rebuilt against prod's card
+anatomy. See "`EventCard` is invariant" above.
+
 **Still open:** the probe proves *two* templates can share primitives. It does
 not prove *ten* can. `nikah-geometric` is the next real test — it is the first
 template to stress the ornament slot with a non-figurative geometric system
@@ -225,6 +257,9 @@ rather than a vine.
   carried its 1280px width and bled through the hero frame. Set explicit
   `width`/`height` on **both** the clone wrapper and the inner SVG node.
 - Only screenshots catch either of these. Trust the render, not the computed styles.
+- **`get_screenshot` returns empty output above roughly 1900px of node height** —
+  it fails silently rather than erroring. Screenshot sections, not whole tall
+  artboards.
 
 ## Out of scope
 
