@@ -430,6 +430,39 @@ describe("directoryService.consumeClaim", () => {
     ).toBe(true);
   });
 
+  it("single-use guarantee: consumed_at stamped AND listing bound atomically on success", async () => {
+    const db = db0();
+    const { claimToken, directoryVendorId } = await seedVendorAndClaim(db);
+
+    const res = await run(db, directoryService.consumeClaim(claimToken, "org_atomic"));
+    expect(Exit.isSuccess(res)).toBe(true);
+    if (!Exit.isSuccess(res)) throw new Error("consume failed");
+
+    // Both writes must have landed: token burned and listing bound.
+    const claimRow = db
+      .select()
+      .from(vendorClaims)
+      .where(eq(vendorClaims.directoryVendorId, directoryVendorId))
+      .get();
+    expect(claimRow!.consumedAt).not.toBeNull(); // token burned
+
+    const dvRow = db
+      .select()
+      .from(directoryVendors)
+      .where(eq(directoryVendors.id, directoryVendorId))
+      .get();
+    expect(dvRow!.ownerOrgId).toBe("org_atomic"); // listing bound
+    expect(dvRow!.listed).toBe("live"); // flipped live
+
+    // Reuse attempt must fail — consumed_at gate fires before any write.
+    const reuse = await run(db, directoryService.consumeClaim(claimToken, "org_reuse"));
+    expect(
+      Exit.isFailure(reuse) &&
+        reuse.cause._tag === "Fail" &&
+        reuse.cause.error instanceof ClaimInvalid,
+    ).toBe(true);
+  });
+
   it("fails ClaimInvalid for an expired token", async () => {
     const db = db0();
     // Manually insert a claim that expired in the past

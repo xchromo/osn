@@ -22,7 +22,7 @@ import { directoryVendorCategories, directoryVendors, vendorClaims, vendors } fr
 import { and, eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { DbService, dbQuery } from "../db";
+import { commitBatch, DbService, dbQuery } from "../db";
 import { VendorNotInWedding } from "./vendors";
 
 // ── Tagged errors ────────────────────────────────────────────────────────────
@@ -74,8 +74,9 @@ export interface UpsertListingBody {
 }
 
 export interface SeedFromCrmBody extends UpsertListingBody {
-  // email is the claim recipient (may differ from the listing email)
-  email: string | null;
+  // email is the claim recipient (may differ from the listing email); non-null
+  // because SeedListingBody (the HTTP boundary) requires a non-empty email.
+  email: string;
 }
 
 export interface DirectoryServiceConfig {
@@ -410,7 +411,7 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
               id: claimId,
               directoryVendorId: dvId,
               tokenHash,
-              email: body.email ?? "",
+              email: body.email,
               createdAt: now,
               expiresAt,
               consumedAt: null,
@@ -509,23 +510,29 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
 
         const now = new Date();
 
-        // Bind listing to org, flip to live
-        yield* dbQuery(() =>
-          db
-            .update(directoryVendors)
-            .set({ ownerOrgId: orgId, listed: "live", updatedAt: now })
-            .where(eq(directoryVendors.id, claimRow.directoryVendorId))
-            .run(),
-        );
+        // Burn the token first, then bind the listing — fail-closed ordering.
+        //
+        // On D1 (production) both writes are submitted as a single atomic batch
+        // so they either both commit or both roll back. The consumed_at update
+        // is first in the batch array so that if the batch itself is interrupted
+        // the token is guaranteed to be burned before the listing is bound.
+        //
+        // On bun:sqlite (tests/local) commitBatch runs them sequentially in the
+        // same order: consumed_at first, then owner_org_id / listed='live'.
+        //
+        // Either way: a crash between writes leaves the token consumed-but-unbound
+        // (a new invite is needed — safe) rather than bound-but-reusable (unsafe).
+        const burnStmt = db
+          .update(vendorClaims)
+          .set({ consumedAt: now })
+          .where(eq(vendorClaims.id, claimRow.id));
 
-        // Stamp consumed_at
-        yield* dbQuery(() =>
-          db
-            .update(vendorClaims)
-            .set({ consumedAt: now })
-            .where(eq(vendorClaims.id, claimRow.id))
-            .run(),
-        );
+        const bindStmt = db
+          .update(directoryVendors)
+          .set({ ownerOrgId: orgId, listed: "live", updatedAt: now })
+          .where(eq(directoryVendors.id, claimRow.directoryVendorId));
+
+        yield* dbQuery(() => commitBatch(db, [burnStmt, bindStmt]));
 
         // Fetch updated listing + categories
         const [updated] = yield* dbQuery(() =>
