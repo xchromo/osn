@@ -13,7 +13,7 @@ import { Effect, Exit } from "effect";
 
 import { DbService } from "../db";
 import { createDb, seedDb } from "../db/setup";
-import { createDirectoryService, ListingNotFound, ClaimInvalid } from "./directory";
+import { createDirectoryService, ClaimInvalid } from "./directory";
 import { VendorNotInWedding } from "./vendors";
 
 const OTHER_WEDDING = "wed_other";

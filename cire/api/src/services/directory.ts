@@ -19,10 +19,10 @@
  * are enforced upstream (Task 8).
  */
 import { directoryVendorCategories, directoryVendors, vendorClaims, vendors } from "@cire/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { commitBatch, DbService, dbQuery } from "../db";
+import { DbService, dbQuery } from "../db";
 import { VendorNotInWedding } from "./vendors";
 
 // ── Tagged errors ────────────────────────────────────────────────────────────
@@ -510,29 +510,44 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
 
         const now = new Date();
 
-        // Burn the token first, then bind the listing — fail-closed ordering.
+        // Compare-and-swap burn: the UPDATE itself is the exclusive guard.
+        // The WHERE clause on `consumed_at IS NULL` means only one concurrent
+        // caller can change 0→1 rows; all others get 0 rows changed and bail.
         //
-        // On D1 (production) both writes are submitted as a single atomic batch
-        // so they either both commit or both roll back. The consumed_at update
-        // is first in the batch array so that if the batch itself is interrupted
-        // the token is guaranteed to be burned before the listing is bound.
+        // Fail-closed ordering: burn FIRST, bind SECOND. A crash between the
+        // two writes leaves the token consumed-but-unbound (safe — a new invite
+        // is needed) rather than bound-but-reusable (unsafe).
         //
-        // On bun:sqlite (tests/local) commitBatch runs them sequentially in the
-        // same order: consumed_at first, then owner_org_id / listed='live'.
-        //
-        // Either way: a crash between writes leaves the token consumed-but-unbound
-        // (a new invite is needed — safe) rather than bound-but-reusable (unsafe).
-        const burnStmt = db
-          .update(vendorClaims)
-          .set({ consumedAt: now })
-          .where(eq(vendorClaims.id, claimRow.id));
+        // `rowsChanged` normalises the run-result across drivers:
+        //   bun:sqlite  → `{ changes: number }`
+        //   Cloudflare D1 → `{ meta: { changes: number } }`
+        function rowsChanged(result: unknown): number {
+          if (typeof result !== "object" || result === null) return 0;
+          const r = result as { changes?: number; meta?: { changes?: number } };
+          return r.meta?.changes ?? r.changes ?? 0;
+        }
 
-        const bindStmt = db
-          .update(directoryVendors)
-          .set({ ownerOrgId: orgId, listed: "live", updatedAt: now })
-          .where(eq(directoryVendors.id, claimRow.directoryVendorId));
+        const burnResult = yield* dbQuery(() =>
+          db
+            .update(vendorClaims)
+            .set({ consumedAt: now })
+            .where(and(eq(vendorClaims.id, claimRow.id), sql`consumed_at IS NULL`))
+            .run(),
+        );
 
-        yield* dbQuery(() => commitBatch(db, [burnStmt, bindStmt]));
+        if (rowsChanged(burnResult) === 0) {
+          // Token was consumed by a concurrent or prior caller — fail closed.
+          return yield* Effect.fail(new ClaimInvalid());
+        }
+
+        // Burn succeeded — now bind the listing.
+        yield* dbQuery(() =>
+          db
+            .update(directoryVendors)
+            .set({ ownerOrgId: orgId, listed: "live", updatedAt: now })
+            .where(eq(directoryVendors.id, claimRow.directoryVendorId))
+            .run(),
+        );
 
         // Fetch updated listing + categories
         const [updated] = yield* dbQuery(() =>
