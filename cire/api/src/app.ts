@@ -31,6 +31,7 @@ import {
 import { createPrimaryWeddingRoutes } from "./routes/primary-wedding";
 import { createRsvpRoutes } from "./routes/rsvp";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
+import { createVendorPortalRoutes } from "./routes/vendor-portal";
 import { createVendorReadRoutes, createVendorWriteRoutes } from "./routes/vendors";
 import { createDirectoryService } from "./services/directory";
 import type { AssetsBucket } from "./services/invite-assets";
@@ -39,6 +40,7 @@ import type {
   OsnAccountResolver,
   OsnHandleResolver,
   OsnHandleSearchResolver,
+  OsnOrgMembershipResolver,
   OsnProfileDisplayResolver,
 } from "./services/osn-bridge";
 import type { R2Bucket } from "./services/r2-imports";
@@ -190,6 +192,13 @@ export interface AppOptions {
    * `RESEND_API_KEY` is set.
    */
   emailLayer?: Layer.Layer<EmailService>;
+  /**
+   * Resolves whether an OSN profile is a member of an org (server-to-server,
+   * ARC) for the vendor portal org-gate. When omitted, the vendor portal
+   * routes answer 403 for all org-gated requests (fail-closed — no ARC key
+   * means no vendor portal access). Tests inject a stub.
+   */
+  orgMembership?: OsnOrgMembershipResolver;
 }
 
 export function createApp(db: Db, options: AppOptions = {}) {
@@ -218,6 +227,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     turnstileVerifier = null,
     directoryService: directoryServiceOption,
     emailLayer: emailLayerOption,
+    orgMembership,
   } = options;
   const corsOrigins = allowedOrigins ?? [webOrigin];
 
@@ -226,6 +236,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
   // inject one still work without network access.
   const vendorDirectoryService = directoryServiceOption ?? createDirectoryService();
   const vendorEmailLayer = emailLayerOption ?? makeLogEmailLive().layer;
+  // Fail-closed default: no ARC key means no org membership can be verified.
+  const vendorOrgMembership = orgMembership ?? (() => Promise.resolve(null));
 
   const osnAuthOptions = {
     jwksUrl: osnJwksUrl,
@@ -376,6 +388,15 @@ export function createApp(db: Db, options: AppOptions = {}) {
           accountLinkLimiter,
           resolveOsnAccountId,
           webOrigin,
+        ),
+      )
+      // Vendor-facing portal: listing self-management + claim redemption.
+      // Mounted at /api/vendor (NOT under the wedding/organiser group).
+      .use(
+        createVendorPortalRoutes(
+          db,
+          { directoryService: vendorDirectoryService, orgMembership: vendorOrgMembership },
+          osnAuthOptions,
         ),
       )
   );
