@@ -1,5 +1,5 @@
 import { useAuth } from "@osn/client/solid";
-import { createMemo, createResource, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import {
@@ -12,13 +12,7 @@ import {
 import { ensureEventsLoaded, type EventRow, eventsAccessor } from "../lib/events-store";
 import { ensureGuestsLoaded, guestsAccessor, type OrganiserGuestRow } from "../lib/guests-store";
 import { buildAgenda, type AgendaItem } from "../lib/overview-agenda";
-import {
-  ensureTasksLoaded,
-  openTaskCount,
-  peekCachedTasks,
-  taskCounts,
-  type TaskRow,
-} from "../lib/tasks-store";
+import { ensureTasksLoaded, peekCachedTasks, taskCounts, type TaskRow } from "../lib/tasks-store";
 import GettingStarted from "./GettingStarted";
 import SectionIntro from "./SectionIntro";
 
@@ -285,12 +279,44 @@ export default function Overview(props: {
   const budgetCurrency = () =>
     peekCachedBudget(props.weddingId)?.currency ?? data()?.profile?.currency ?? "AUD";
 
+  // Reactive clock so the agenda's "today" boundary follows the real calendar
+  // day even if the dashboard is left open across midnight (P-W2). Only the
+  // date matters to buildAgenda, so we refresh once per local midnight rather
+  // than ticking continuously.
+  const [nowMs, setNowMs] = createSignal(Date.now());
+  if (typeof window !== "undefined") {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleMidnight = () => {
+      const now = new Date();
+      // 5s past the next local midnight, guarding against sub-second drift.
+      const next = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        5,
+      ).getTime();
+      timer = setTimeout(
+        () => {
+          setNowMs(Date.now());
+          scheduleMidnight();
+        },
+        Math.max(1000, next - now.getTime()),
+      );
+    };
+    scheduleMidnight();
+    onCleanup(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+  }
+
   const agenda = createMemo(() =>
     buildAgenda({
       events: (data()?.events ?? []).map((e) => ({ id: e.id, name: e.name, startAt: e.startAt })),
       payments: peekCachedBudget(props.weddingId)?.payments ?? [],
       tasks: peekCachedTasks(props.weddingId) ?? [],
-      now: Date.now(),
+      now: nowMs(),
       currency: budgetCurrency(),
       horizonDays: 90,
       limit: 6,
@@ -579,36 +605,30 @@ export default function Overview(props: {
                   Checklist
                 </p>
                 <Show
-                  when={openTaskCount(props.weddingId) !== null}
+                  when={taskCounts(props.weddingId)}
                   fallback={<p class="text-text-muted text-[0.82rem]">Loading your tasks…</p>}
                 >
-                  <Show
-                    when={(openTaskCount(props.weddingId) ?? 0) > 0}
-                    fallback={
-                      <p class="text-text-muted text-[0.82rem]">No tasks yet — add your first.</p>
-                    }
-                  >
-                    <p class="text-text text-[0.95rem]">
-                      <span class="text-gold text-[1.3rem] font-semibold">
-                        {openTaskCount(props.weddingId)}
-                      </span>{" "}
-                      open {openTaskCount(props.weddingId) === 1 ? "task" : "tasks"}
-                    </p>
-                    <Show when={taskCounts(props.weddingId)}>
-                      {(tc) => (
-                        <>
-                          <p class="text-text-muted text-[0.76rem]">
-                            {tc().done} of {tc().total} done
-                          </p>
-                          <ProgressBar
-                            value={tc().done}
-                            max={tc().total}
-                            label="Checklist completion"
-                          />
-                        </>
-                      )}
+                  {(tc) => (
+                    <Show
+                      when={tc().open > 0}
+                      fallback={
+                        <p class="text-text-muted text-[0.82rem]">No tasks yet — add your first.</p>
+                      }
+                    >
+                      <p class="text-text text-[0.95rem]">
+                        <span class="text-gold text-[1.3rem] font-semibold">{tc().open}</span> open{" "}
+                        {tc().open === 1 ? "task" : "tasks"}
+                      </p>
+                      <p class="text-text-muted text-[0.76rem]">
+                        {tc().done} of {tc().total} done
+                      </p>
+                      <ProgressBar
+                        value={tc().done}
+                        max={tc().total}
+                        label="Checklist completion"
+                      />
                     </Show>
-                  </Show>
+                  )}
                 </Show>
               </button>
 
