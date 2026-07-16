@@ -124,7 +124,12 @@ function formatWeddingDate(isoDate: string): string {
 
 /** A thin meter used by the RSVP / Budget / Checklist cards. `over` renders in a
  *  warning tone and is used when a value exceeds its max (e.g. over-budget). */
-function ProgressBar(props: { value: number; max: number; tone?: "gold" | "over" }) {
+function ProgressBar(props: {
+  value: number;
+  max: number;
+  tone?: "gold" | "over";
+  label?: string;
+}) {
   const pct = () =>
     props.max <= 0 ? 0 : Math.min(100, Math.max(0, (props.value / props.max) * 100));
   return (
@@ -134,6 +139,7 @@ function ProgressBar(props: { value: number; max: number; tone?: "gold" | "over"
       aria-valuenow={Math.round(pct())}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-label={props.label ?? "Progress"}
     >
       <div
         class={`h-full rounded-full ${props.tone === "over" ? "bg-red-500/80" : "bg-gold"}`}
@@ -562,7 +568,11 @@ export default function Overview(props: {
                           <p class="text-text-muted text-[0.76rem]">
                             {tc().done} of {tc().total} done
                           </p>
-                          <ProgressBar value={tc().done} max={tc().total} />
+                          <ProgressBar
+                            value={tc().done}
+                            max={tc().total}
+                            label="Checklist completion"
+                          />
                         </>
                       )}
                     </Show>
@@ -620,6 +630,7 @@ export default function Overview(props: {
                             value={spent}
                             max={cap!}
                             tone={spent > cap! ? "over" : "gold"}
+                            label="Budget spend"
                           />
                           <Show when={spent > cap!}>
                             <p class="text-[0.72rem] text-red-400">Over budget</p>
