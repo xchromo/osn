@@ -208,15 +208,22 @@ export default function Overview(props: {
           if (!res.ok) return { items: [], payments: [], budgetTotalMinor: null, currency: "AUD" };
           return (await res.json()) as BudgetSnapshot;
         }),
-        // Vendors — soft-fail: unavailable vendors never block Overview.
+        // Vendors — soft-fail: unavailable vendors never block Overview and never
+        // cache an empty array on error (which would show "0 vendors" on a backend
+        // error). A non-ok / 401 response throws so ensureVendorsLoaded rejects
+        // without populating the cache, leaving vendorCount() as null
+        // (loading/unknown). The .catch() swallows the rejection so it never
+        // bubbles out of the outer Promise.all.
         ensureVendorsLoaded(props.weddingId, async () => {
           const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/vendors`));
           if (res.status === 401) {
             redirectToLogin();
-            return [];
+            throw new Error("unauthenticated");
           }
-          if (!res.ok) return [];
+          if (!res.ok) throw new Error(`vendors ${res.status}`);
           return ((await res.json()) as { vendors: VendorRow[] }).vendors;
+        }).catch(() => {
+          // Swallow the rejection — the cache stays unpopulated (vendorCount null).
         }),
       ]);
 

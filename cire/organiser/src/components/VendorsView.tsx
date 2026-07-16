@@ -25,17 +25,19 @@ type VendorStatus = (typeof VENDOR_STATUSES)[number]["key"];
 
 interface VendorsViewProps {
   weddingId: string;
+  /** Currency code from the budget cache (e.g. "AUD"). Defaults to "AUD" when absent. */
+  currency?: string;
   /** Owner/editor may add/edit/delete vendors and list in directory. */
   canEdit?: boolean;
   /** Owner-only operations (reserved; pass through canManage for parity). */
   canManage?: boolean;
 }
 
-function fmtMinor(minor: number): string {
+function fmtMinor(minor: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
-      currency: "AUD",
+      currency,
       maximumFractionDigits: 0,
     }).format(minor / 100);
   } catch {
@@ -361,7 +363,9 @@ export default function VendorsView(props: VendorsViewProps) {
                           </span>
                         </Show>
                         <Show when={v.quotedMinor != null}>
-                          <span class="text-text text-[0.82rem]">{fmtMinor(v.quotedMinor!)}</span>
+                          <span class="text-text text-[0.82rem]">
+                            {fmtMinor(v.quotedMinor!, props.currency ?? "AUD")}
+                          </span>
                         </Show>
 
                         <Show when={props.canEdit}>

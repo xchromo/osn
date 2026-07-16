@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 
+import { peekCachedBudget } from "../lib/budget-store";
 import { defaultSub, isSubOf, type Module } from "../lib/dashboard-route";
 import BudgetView from "./BudgetView";
 import ChecklistView from "./ChecklistView";
@@ -181,6 +182,7 @@ export default function ModuleShell(props: ModuleShellProps) {
         <Show when={props.module === "vendors"}>
           <VendorsView
             weddingId={props.weddingId}
+            currency={peekCachedBudget(props.weddingId)?.currency ?? "AUD"}
             canEdit={props.canEdit}
             canManage={props.canManage}
           />
