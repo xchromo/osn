@@ -149,6 +149,43 @@ describe("budget routes", () => {
     expect(res.status).toBe(404);
   });
 
+  it("404 patching a payment under the wrong parent item or wrong wedding (tenancy)", async () => {
+    const app = buildApp();
+
+    // Create item A with a payment under it.
+    const createdA = await req(app, "POST", `${base}/items`, EDITOR, ITEM);
+    const { item: itemA } = (await createdA.json()) as { item: { id: string } };
+    const payRes = await req(app, "POST", `${base}/items/${itemA.id}/payments`, EDITOR, {
+      label: "Deposit",
+      amountMinor: 100000,
+      dueAt: "2026-06-01",
+    });
+    const { payment: paymentA } = (await payRes.json()) as { payment: { id: string } };
+
+    // Create item B (same wedding).
+    const createdB = await req(app, "POST", `${base}/items`, EDITOR, {
+      ...ITEM,
+      name: "Catering",
+    });
+    const { item: itemB } = (await createdB.json()) as { item: { id: string } };
+
+    // PATCH paymentA via item B's path — wrong parent item → 404 payment_not_found.
+    const wrongItem = await req(
+      app,
+      "PATCH",
+      `${base}/items/${itemB.id}/payments/${paymentA.id}`,
+      EDITOR,
+      { paid: true },
+    );
+    expect(wrongItem.status).toBe(404);
+    expect(((await wrongItem.json()) as { error: string }).error).toBe("payment_not_found");
+
+    // PATCH paymentA via wed_other's budget path — wrong wedding → 404 budget_item_not_found.
+    const otherPath = `/api/organiser/weddings/wed_other/budget/items/${itemA.id}/payments/${paymentA.id}`;
+    const wrongWedding = await req(app, "PATCH", otherPath, "usr_bob", { paid: true });
+    expect(wrongWedding.status).toBe(404);
+  });
+
   it("owner may set the cap; editor may not (403)", async () => {
     const app = buildApp();
     const editorTry = await req(app, "PUT", `${base}/total`, EDITOR, { budgetTotalMinor: 4500000 });

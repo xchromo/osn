@@ -17,10 +17,11 @@ import SectionIntro from "./SectionIntro";
 
 /** The Overview home — the module shell's landing view. It answers "how's the
  *  wedding tracking?" at a glance: a countdown to the date, RSVP totals rolled
- *  up across events, and honest "coming soon" snapshot cards for the planning
- *  modules that don't exist yet (Checklist + Budget land in Phase 1). When the
- *  wedding is brand new — no events, no guests — it shows the Getting-started
- *  checklist as its empty-state instead of empty stat cards.
+ *  up across events, a Checklist card showing the live open-task count, and a
+ *  Budget card showing real spend-vs-cap and the next upcoming payment. Both
+ *  Checklist and Budget are live sidebar modules with live Overview cards.
+ *  When the wedding is brand new — no events, no guests — it shows the
+ *  Getting-started checklist as its empty-state instead of empty stat cards.
  *
  *  Data is read from the SHARED weddingId-keyed caches (events + guests stores)
  *  so opening Overview costs nothing extra once another module has loaded, and a
@@ -457,8 +458,8 @@ export default function Overview(props: {
               >
                 <Show
                   when={
-                    peekCachedBudget(props.weddingId)?.budgetTotalMinor ??
-                    data()?.profile?.budgetTotalMinor
+                    (peekCachedBudget(props.weddingId)?.budgetTotalMinor ??
+                      data()?.profile?.budgetTotalMinor) != null
                   }
                   fallback={
                     <p class="text-text-muted text-[0.82rem]">
@@ -468,16 +469,19 @@ export default function Overview(props: {
                     </p>
                   }
                 >
-                  {(totalMinor) => (
-                    <p class="text-text text-[0.95rem]">
-                      <span class="text-gold text-[1.2rem] font-semibold">
-                        {fmtBudget(spentSoFar(props.weddingId) ?? 0, budgetCurrency())}
-                      </span>{" "}
-                      <span class="text-text-muted">
-                        of {fmtBudget(totalMinor(), budgetCurrency())}
-                      </span>
-                    </p>
-                  )}
+                  <p class="text-text text-[0.95rem]">
+                    <span class="text-gold text-[1.2rem] font-semibold">
+                      {fmtBudget(spentSoFar(props.weddingId) ?? 0, budgetCurrency())}
+                    </span>{" "}
+                    <span class="text-text-muted">
+                      of{" "}
+                      {fmtBudget(
+                        (peekCachedBudget(props.weddingId)?.budgetTotalMinor ??
+                          data()?.profile?.budgetTotalMinor)!,
+                        budgetCurrency(),
+                      )}
+                    </span>
+                  </p>
                 </Show>
                 <Show when={upcomingPayments(props.weddingId).length > 0}>
                   <p class="text-text-muted text-[0.78rem]">
