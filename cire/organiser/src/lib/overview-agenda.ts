@@ -27,7 +27,13 @@ export interface AgendaItem {
 
 export interface AgendaInput {
   events: { id: string; name: string; startAt: string }[];
-  payments: { id: string; label: string; amountMinor: number; dueAt: string | null; paidAt: number | null }[];
+  payments: {
+    id: string;
+    label: string;
+    amountMinor: number;
+    dueAt: string | null;
+    paidAt: number | null;
+  }[];
   tasks: { id: string; title: string; dueAt: string | null; status: "open" | "done" }[];
   /** Injected clock, ms epoch. */
   now: number;
@@ -41,8 +47,6 @@ export interface AgendaInput {
 
 const KIND_ORDER: Record<AgendaKind, number> = { event: 0, payment: 1, task: 2 };
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 /** Normalise an ISO datetime, a `YYYY-MM-DD` string, or an ms-epoch number to a
  *  local `YYYY-MM-DD` key (or null if unparseable). A bare date string is read
  *  as local midnight (not UTC) so it lands on the organiser's calendar day. */
@@ -53,9 +57,7 @@ export function toLocalDateKey(value: string | number): string | null {
     d = new Date(value);
   } else {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    d = m
-      ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-      : new Date(value);
+    d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(value);
   }
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
@@ -78,7 +80,13 @@ function fmtAmount(minor: number, currency: string): string {
 
 export function buildAgenda(input: AgendaInput): AgendaItem[] {
   const todayKey = toLocalDateKey(input.now)!;
-  const horizonKey = toLocalDateKey(input.now + input.horizonDays * MS_PER_DAY)!;
+  const nowDate = new Date(input.now);
+  const horizonDate = new Date(
+    nowDate.getFullYear(),
+    nowDate.getMonth(),
+    nowDate.getDate() + input.horizonDays,
+  );
+  const horizonKey = toLocalDateKey(horizonDate.getTime())!;
 
   const items: AgendaItem[] = [];
 

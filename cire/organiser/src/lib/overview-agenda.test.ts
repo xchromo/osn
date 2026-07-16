@@ -30,6 +30,11 @@ describe("toLocalDateKey", () => {
     expect(toLocalDateKey("not-a-date")).toBeNull();
     expect(toLocalDateKey(Number.NaN)).toBeNull();
   });
+
+  it("buckets ISO datetime with explicit offset to its LOCAL calendar day", () => {
+    const lateLocal = new Date(2026, 7, 3, 23, 30, 0); // 2026-08-03 23:30 local
+    expect(toLocalDateKey(lateLocal.toISOString())).toBe("2026-08-03");
+  });
 });
 
 describe("buildAgenda", () => {
@@ -38,7 +43,13 @@ describe("buildAgenda", () => {
       input({
         events: [{ id: "e1", name: "Rehearsal", startAt: new Date(2026, 7, 12, 18).toISOString() }],
         payments: [
-          { id: "p1", label: "Venue balance", amountMinor: 800000, dueAt: "2026-08-03", paidAt: null },
+          {
+            id: "p1",
+            label: "Venue balance",
+            amountMinor: 800000,
+            dueAt: "2026-08-03",
+            paidAt: null,
+          },
         ],
         tasks: [{ id: "t1", title: "Confirm florist", dueAt: "2026-08-09", status: "open" }],
       }),
@@ -130,5 +141,15 @@ describe("buildAgenda", () => {
 
   it("returns [] for empty input", () => {
     expect(buildAgenda(input({}))).toEqual([]);
+  });
+
+  it("includes items dated exactly today (not excluded as past) and not overdue", () => {
+    const a = buildAgenda(
+      input({
+        tasks: [{ id: "t1", title: "Today task", dueAt: "2026-07-16", status: "open" }],
+      }),
+    );
+    expect(a.map((i) => i.label)).toEqual(["Today task"]);
+    expect(a[0]!.overdue).toBe(false);
   });
 });
