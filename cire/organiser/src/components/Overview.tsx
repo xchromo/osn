@@ -43,12 +43,20 @@ interface WeddingProfile {
 }
 
 interface RsvpEventTally {
+  id: string;
+  name: string;
   invited: number;
   attending: number;
   declined: number;
   maybe: number;
   responded: number;
   noResponse: number;
+}
+
+interface RsvpEventBreakdown {
+  id: string;
+  name: string;
+  attending: number;
 }
 
 interface RsvpTotals {
@@ -64,6 +72,7 @@ interface RsvpTotals {
 interface OverviewData {
   profile: WeddingProfile | null;
   rsvps: RsvpTotals | null;
+  rsvpEvents: RsvpEventBreakdown[];
   events: EventRow[];
   guests: OrganiserGuestRow[];
 }
@@ -215,8 +224,10 @@ export default function Overview(props: {
         : null;
 
       let rsvps: RsvpTotals | null = null;
+      let rsvpEvents: RsvpEventBreakdown[] = [];
       if (rsvpsRes.ok) {
         const body = (await rsvpsRes.json()) as { events: RsvpEventTally[] };
+        rsvpEvents = body.events.map((e) => ({ id: e.id, name: e.name, attending: e.attending }));
         rsvps = body.events.reduce<RsvpTotals>(
           (acc, e) => ({
             invited: acc.invited + e.invited,
@@ -242,13 +253,14 @@ export default function Overview(props: {
       return {
         profile,
         rsvps,
+        rsvpEvents,
         events: eventsAccessor(props.weddingId)() ?? [],
         guests: guestsAccessor(props.weddingId)() ?? [],
       };
     } catch (err) {
       if (isAuthExpired(err)) redirectToLogin();
       // Soft-fail: an unavailable snapshot shouldn't blank the whole home.
-      return { profile: null, rsvps: null, events: [], guests: [] };
+      return { profile: null, rsvps: null, rsvpEvents: [], events: [], guests: [] };
     }
   });
 
@@ -476,6 +488,7 @@ export default function Overview(props: {
                             {r.eventCount === 1 ? "event" : "events"}
                           </span>
                         </div>
+                        <ProgressBar value={r.responded} max={r.invited} label="RSVP responses" />
                         <dl class="font-body text-text-muted grid grid-cols-2 gap-x-4 gap-y-1 text-[0.78rem]">
                           <div class="flex justify-between gap-2">
                             <dt>Declined</dt>
@@ -494,6 +507,25 @@ export default function Overview(props: {
                             <dd class="text-text font-mono">{r.invited}</dd>
                           </div>
                         </dl>
+                        <Show when={data()!.rsvpEvents.length > 0}>
+                          <ul class="font-body text-text-muted flex flex-col gap-0.5 text-[0.78rem]">
+                            <For each={data()!.rsvpEvents.slice(0, 5)}>
+                              {(e) => (
+                                <li class="flex justify-between gap-2">
+                                  <span class="truncate">{e.name}</span>
+                                  <span class="text-text font-mono tabular-nums">
+                                    {e.attending} attending
+                                  </span>
+                                </li>
+                              )}
+                            </For>
+                            <Show when={data()!.rsvpEvents.length > 5}>
+                              <li class="text-text-muted/70">
+                                +{data()!.rsvpEvents.length - 5} more
+                              </li>
+                            </Show>
+                          </ul>
+                        </Show>
                         <button
                           type="button"
                           onClick={() => props.onNavigate("guests", "rsvps")}
