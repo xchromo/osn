@@ -1,8 +1,9 @@
 import { cors } from "@elysiajs/cors";
+import { EmailService, makeLogEmailLive } from "@shared/email";
 import { createRateLimiter } from "@shared/rate-limit";
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import type { TurnstileVerifier } from "@shared/turnstile";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { Elysia } from "elysia";
 
 import type { Db } from "./db";
@@ -30,6 +31,8 @@ import {
 import { createPrimaryWeddingRoutes } from "./routes/primary-wedding";
 import { createRsvpRoutes } from "./routes/rsvp";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
+import { createVendorReadRoutes, createVendorWriteRoutes } from "./routes/vendors";
+import { createDirectoryService } from "./services/directory";
 import type { AssetsBucket } from "./services/invite-assets";
 import type { ImagesBindingLike } from "./services/invite-image-transform";
 import type {
@@ -174,6 +177,19 @@ export interface AppOptions {
    * and fail-closed. Built once per isolate in `index.ts`; tests inject a stub.
    */
   turnstileVerifier?: TurnstileVerifier | null;
+  /**
+   * Directory service for vendor listing + claim flow. Defaults to the
+   * singleton `directoryService` (prod config). Tests inject a stub with a
+   * local `vendorPortalOrigin`.
+   */
+  directoryService?: ReturnType<typeof createDirectoryService>;
+  /**
+   * Email transport layer for vendor claim-invite emails. Defaults to
+   * `LogEmailLive` (no network). Tests inject their own `LogEmailLive`
+   * instance; production index.ts injects `ResendEmailLive` when
+   * `RESEND_API_KEY` is set.
+   */
+  emailLayer?: Layer.Layer<EmailService>;
 }
 
 export function createApp(db: Db, options: AppOptions = {}) {
@@ -200,8 +216,16 @@ export function createApp(db: Db, options: AppOptions = {}) {
     resolveOsnProfileDisplays,
     resolveOsnHandleSearch,
     turnstileVerifier = null,
+    directoryService: directoryServiceOption,
+    emailLayer: emailLayerOption,
   } = options;
   const corsOrigins = allowedOrigins ?? [webOrigin];
+
+  // Vendor CRM deps — use injected instances (tests) or module-level defaults
+  // (production). The email layer defaults to LogEmailLive so tests that don't
+  // inject one still work without network access.
+  const vendorDirectoryService = directoryServiceOption ?? createDirectoryService();
+  const vendorEmailLayer = emailLayerOption ?? makeLogEmailLive().layer;
 
   const osnAuthOptions = {
     jwksUrl: osnJwksUrl,
@@ -324,6 +348,18 @@ export function createApp(db: Db, options: AppOptions = {}) {
       .use(createTaskWriteRoutes(db, osnAuthOptions))
       .use(createBudgetReadRoutes(db, osnAuthOptions))
       .use(createBudgetWriteRoutes(db, osnAuthOptions))
+      // Vendor CRM (platform Phase 1). Reads admit any member role (weddingMember);
+      // writes require editor or owner (weddingEditor; viewer gets 403
+      // read_only_role). Split into sibling instances so the read gate never
+      // cross-contaminates with the write gate. Write factory carries
+      // directoryService + emailLayer for the list-in-directory endpoint.
+      .use(createVendorReadRoutes(db, osnAuthOptions))
+      .use(
+        createVendorWriteRoutes(db, osnAuthOptions, {
+          directoryService: vendorDirectoryService,
+          emailLayer: vendorEmailLayer,
+        }),
+      )
       // Invite builder. Public reads (guest site) + organiser writes split into
       // sibling instances so the guest GET isn't behind osnAuth.
       .use(createInvitePublicRoutes(db, assets, images))
