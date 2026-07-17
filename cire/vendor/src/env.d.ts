@@ -8,8 +8,8 @@ interface ImportMetaEnv {
   /** Legacy name for the cire/api origin; still honoured as a fallback. */
   readonly PUBLIC_API_URL?: string;
   /**
-   * Cloudflare Turnstile sitekey (public, build-time) for organiser passkey
-   * sign-in + registration. When set, the SignIn / Register forms render the
+   * Cloudflare Turnstile sitekey (public, build-time) for passkey sign-in +
+   * registration in this app. When set, the SignIn / Register forms render the
    * Turnstile challenge and gate on it; osn-api enforces siteverify. Unset ⇒
    * key-optional no-op.
    */

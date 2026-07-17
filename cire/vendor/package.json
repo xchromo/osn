@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev --port 4323",
+    "dev": "astro dev --port 4326",
     "build": "astro build",
     "preview": "astro preview",
     "test": "bunx --bun vitest",
