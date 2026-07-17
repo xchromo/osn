@@ -47,6 +47,12 @@ describe("OrgPicker", () => {
     expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: "o2" }));
   });
 
+  it("shows an error message when listMyOrgs rejects", async () => {
+    vi.spyOn(store, "listMyOrgs").mockRejectedValue(new Error("Network error"));
+    renderPicker();
+    await waitFor(() => expect(screen.getByText("Network error")).toBeInTheDocument());
+  });
+
   it("creates a new organisation and picks it", async () => {
     vi.spyOn(store, "listMyOrgs").mockResolvedValue([]);
     const created = org("o9", "NewCo");

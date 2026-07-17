@@ -10,7 +10,15 @@ interface OrgPickerProps {
 export default function OrgPicker(props: OrgPickerProps) {
   const { authFetch } = useAuth();
 
-  const [orgs, { mutate }] = createResource(() => listMyOrgs(authFetch));
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [orgs, { mutate }] = createResource(async () => {
+    try {
+      return await listMyOrgs(authFetch);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Failed to load your organisations.");
+      return [];
+    }
+  });
 
   // Create-form state.
   const [handle, setHandle] = createSignal("");
@@ -50,6 +58,20 @@ export default function OrgPicker(props: OrgPickerProps) {
 
   return (
     <div class="font-body flex flex-col gap-6">
+      {/* Org load error */}
+      <Show when={loadError()}>
+        <p class="border-error/40 text-error rounded-sm border px-3 py-2 text-[0.82rem]">
+          {loadError()}
+        </p>
+      </Show>
+
+      {/* Org loading */}
+      <Show when={orgs.loading}>
+        <p class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase">
+          Loading your organisations…
+        </p>
+      </Show>
+
       {/* Org list */}
       <Show when={(orgs() ?? []).length > 0}>
         <div class="flex flex-col gap-2">
@@ -100,6 +122,8 @@ export default function OrgPicker(props: OrgPickerProps) {
             value={handle()}
             onInput={(e) => setHandle(e.currentTarget.value)}
             placeholder="my-org"
+            required
+            aria-required="true"
             class="border-border bg-bg text-text rounded-sm border px-3 py-2 text-[0.9rem]"
           />
         </label>
@@ -114,6 +138,8 @@ export default function OrgPicker(props: OrgPickerProps) {
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
             placeholder="My Organisation"
+            required
+            aria-required="true"
             class="border-border bg-bg text-text rounded-sm border px-3 py-2 text-[0.9rem]"
           />
         </label>
