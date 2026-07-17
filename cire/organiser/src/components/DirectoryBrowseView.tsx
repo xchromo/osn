@@ -58,6 +58,24 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
   // Debounce timer
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Safe href: only allow http/https URLs (prevents javascript: XSS)
+  const safeHref = (u: string | null | undefined): string | null => {
+    if (!u) return null;
+    try {
+      const p = new URL(u);
+      return p.protocol === "https:" || p.protocol === "http:" ? u : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Safe Instagram handle: strip leading @/whitespace, accept only [A-Za-z0-9._]+
+  const safeInstagramHref = (handle: string | null | undefined): string | null => {
+    if (!handle) return null;
+    const cleaned = handle.replace(/^[@\s]+/, "");
+    return /^[A-Za-z0-9._]+$/.test(cleaned) ? `https://instagram.com/${cleaned}` : null;
+  };
+
   // Focus-return: track the element that triggered the modal open
   let modalOpener: HTMLElement | null = null;
 
@@ -199,7 +217,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
             value={category()}
             onChange={(e) => {
               setCategory(e.currentTarget.value);
-              scheduleSearch();
+              resetAndFetch();
             }}
             class="border-border bg-bg text-text rounded-sm border px-3 py-2 text-[0.9rem]"
           >
@@ -278,7 +296,9 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
 
       {/* Empty state */}
       <Show when={!loading() && listings().length === 0 && !error()}>
-        <p class="text-text-muted text-[0.85rem] italic">No vendors match your filters.</p>
+        <p role="status" class="text-text-muted text-[0.85rem] italic">
+          No vendors match your filters.
+        </p>
       </Show>
 
       {/* Results grid */}
@@ -333,6 +353,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
                         <button
                           type="button"
                           disabled
+                          aria-label="Already added to this wedding"
                           class="text-text-muted text-[0.78rem] opacity-60"
                         >
                           Added ✓
@@ -385,6 +406,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
                             </button>
                             <button
                               type="button"
+                              aria-label="Cancel category selection"
                               onClick={() => {
                                 setPickerListingId(null);
                                 setPickerCategory("");
@@ -409,6 +431,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
           <div class="flex justify-center pt-2">
             <button
               type="button"
+              aria-label={`Load more vendors, showing ${listings().length} of ${total()}`}
               onClick={() => void fetchPage(offset() + PAGE_SIZE, true)}
               disabled={loading()}
               class="border-border text-text-muted hover:text-text rounded-sm border px-4 py-2 text-[0.82rem] disabled:opacity-60"
@@ -427,7 +450,6 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
             onClick={(e) => {
               if (e.target === e.currentTarget) closeModal();
             }}
-            onKeyDown={handleModalKeyDown}
           >
             <div
               role="dialog"
@@ -435,6 +457,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
               aria-label={ml().name}
               tabIndex={-1}
               ref={(el) => el?.focus()}
+              onKeyDown={handleModalKeyDown}
               class="border-border bg-bg flex max-h-[90vh] w-full max-w-lg flex-col gap-4 overflow-y-auto rounded-sm border p-6"
             >
               <div class="flex items-start justify-between gap-4">
@@ -488,25 +511,29 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
 
               {/* Contact details */}
               <div class="flex flex-col gap-1">
-                <Show when={ml().website}>
-                  <a
-                    href={ml().website!}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-gold-dim hover:text-gold text-[0.82rem] underline-offset-2 hover:underline"
-                  >
-                    Website
-                  </a>
+                <Show when={safeHref(ml().website)}>
+                  {(href) => (
+                    <a
+                      href={href()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-gold-dim hover:text-gold text-[0.82rem] underline-offset-2 hover:underline"
+                    >
+                      Website
+                    </a>
+                  )}
                 </Show>
-                <Show when={ml().instagram}>
-                  <a
-                    href={`https://instagram.com/${ml().instagram!.replace(/^@/, "")}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-gold-dim hover:text-gold text-[0.82rem] underline-offset-2 hover:underline"
-                  >
-                    Instagram
-                  </a>
+                <Show when={safeInstagramHref(ml().instagram)}>
+                  {(href) => (
+                    <a
+                      href={href()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-gold-dim hover:text-gold text-[0.82rem] underline-offset-2 hover:underline"
+                    >
+                      Instagram
+                    </a>
+                  )}
                 </Show>
                 <Show when={ml().email}>
                   <span class="text-text-muted text-[0.82rem]">{ml().email}</span>
@@ -524,6 +551,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
                     <button
                       type="button"
                       disabled
+                      aria-label="Already added to this wedding"
                       class="text-text-muted text-[0.82rem] opacity-60"
                     >
                       Added ✓
@@ -575,6 +603,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
                         </button>
                         <button
                           type="button"
+                          aria-label="Cancel category selection"
                           onClick={() => {
                             setPickerListingId(null);
                             setPickerCategory("");
