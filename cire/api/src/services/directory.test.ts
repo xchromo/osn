@@ -716,4 +716,63 @@ describe("directoryService.browse + getLiveListingById", () => {
     expect(await run(svc.getLiveListingById("LD"))).toBeNull(); // draft
     expect(await run(svc.getLiveListingById("nope"))).toBeNull();
   });
+
+  it("keyword filter treats % literally (escapeLike fires)", async () => {
+    // Seed a fresh db with two live listings whose names distinguish literal vs wildcard matching.
+    // "100% Cotton Linens" contains a literal '%'.
+    // "10000 Roses" does NOT — but an unescaped '%' in the query "100%" would act as a wildcard
+    // and match both ("100" + anything). With escapeLike the '%' is escaped so only the listing
+    // that literally contains "100%" in its name is returned.
+    const db = makeDb();
+    const now = new Date();
+    db.insert(directoryVendors)
+      .values({
+        id: "LC",
+        ownerOrgId: "org_lc",
+        name: "100% Cotton Linens",
+        description: null,
+        email: "lc@test.com",
+        phone: null,
+        website: null,
+        instagram: null,
+        locationText: null,
+        priceBand: null,
+        priceMinMinor: null,
+        priceMaxMinor: null,
+        listed: "live",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(directoryVendors)
+      .values({
+        id: "LE",
+        ownerOrgId: "org_le",
+        name: "10000 Roses",
+        description: null,
+        email: "le@test.com",
+        phone: null,
+        website: null,
+        instagram: null,
+        locationText: null,
+        priceBand: null,
+        priceMinMinor: null,
+        priceMaxMinor: null,
+        listed: "live",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const { listings } = await Effect.runPromise(
+      svc
+        .browse("W1", { q: "100%", limit: 24, offset: 0 })
+        .pipe(Effect.provideService(DbService, db)),
+    );
+    const ids = listings.map((l) => l.id);
+    // Must match "100% Cotton Linens" (literal %)
+    expect(ids).toContain("LC");
+    // Must NOT match "10000 Roses" (a wildcard % would make "100%" match "10000...")
+    expect(ids).not.toContain("LE");
+  });
 });
