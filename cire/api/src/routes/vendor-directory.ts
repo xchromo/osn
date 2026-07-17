@@ -1,5 +1,5 @@
 import type { RateLimiterBackend } from "@shared/rate-limit";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { Elysia } from "elysia";
 
 import { DbService } from "../db";
@@ -8,14 +8,12 @@ import { SERVICE_CATEGORIES } from "../lib/service-categories";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
+import { weddingEditor } from "../middleware/wedding-editor";
 import { weddingMember } from "../middleware/wedding-member";
 import { runCire } from "../observability";
+import { AddFromDirectoryBody } from "../schemas/vendors";
 import { directoryService } from "../services/directory";
-
-// NOTE: Task 4 adds the `weddingEditor` import + `Schema` (effect) +
-// `AddFromDirectoryBody` / `vendorsService` imports when it adds the write
-// factory to this same file. Do NOT add them in Task 3 — an unused import
-// fails the lint gate on Task 3's commit.
+import { vendorsService } from "../services/vendors";
 
 const CATEGORY_KEYS = new Set(SERVICE_CATEGORIES.map((c) => c.key));
 
@@ -35,6 +33,33 @@ const internal = (set: { status?: number | string }) =>
     set.status = 500;
     return { error: "Internal error" };
   });
+
+const manualParse = { parse: () => ({}) };
+
+const badRequest = (set: { status?: number | string }, code = "invalid_category") =>
+  Effect.sync(() => {
+    set.status = 400;
+    return { error: code };
+  });
+const notFound = (set: { status?: number | string }) =>
+  Effect.sync(() => {
+    set.status = 404;
+    return { error: "listing_not_found" };
+  });
+const conflict = (set: { status?: number | string }) =>
+  Effect.sync(() => {
+    set.status = 409;
+    return { error: "already_in_wedding" };
+  });
+
+/** UNIQUE-constraint backstop for a double-click race (bun:sqlite + D1 both
+ *  carry "UNIQUE constraint" in the message). The pre-check handles the common
+ *  case; this maps the rare concurrent collision to 409 instead of 500. */
+function isUniqueViolation(defect: unknown): boolean {
+  return String((defect as { message?: unknown })?.message ?? defect)
+    .toLowerCase()
+    .includes("unique constraint");
+}
 
 export const createVendorDirectoryReadRoutes = (
   db: Db,
@@ -66,4 +91,62 @@ export const createVendorDirectoryReadRoutes = (
               ),
           );
         }),
+    );
+
+export const createVendorDirectoryWriteRoutes = (
+  db: Db,
+  osnAuthOptions: OsnAuthOptions,
+  limiter: RateLimiterBackend,
+) =>
+  new Elysia({ prefix: "/api/organiser" })
+    .use(osnAuth(osnAuthOptions))
+    .group("/weddings/:weddingId", (group) =>
+      group.guard((write) =>
+        write
+          .use(weddingEditor(db))
+          .use(rateLimitMiddlewareByUser(limiter))
+          .post(
+            "/directory/:directoryVendorId/add",
+            async ({ weddingId, params, request, set }) => {
+              if (!weddingId) return internalSync(set);
+              const raw: unknown = await request.json().catch(() => null);
+              return runCire(
+                Effect.gen(function* () {
+                  const body = yield* Schema.decodeUnknown(AddFromDirectoryBody)(raw);
+                  const listing = yield* directoryService.getLiveListingById(
+                    params.directoryVendorId,
+                  );
+                  if (!listing) return yield* notFound(set);
+                  if (!listing.categories.includes(body.category)) return yield* badRequest(set);
+                  const already = yield* vendorsService.existsForDirectory(
+                    weddingId,
+                    params.directoryVendorId,
+                  );
+                  if (already) return yield* conflict(set);
+                  const vendor = yield* vendorsService.create({
+                    weddingId,
+                    name: listing.name,
+                    category: body.category,
+                    status: "researching",
+                    contactName: null,
+                    email: listing.email,
+                    phone: listing.phone,
+                    notes: null,
+                    quotedMinor: null,
+                    directoryVendorId: listing.id,
+                  });
+                  set.status = 201;
+                  return { vendor };
+                }).pipe(
+                  Effect.provideService(DbService, db),
+                  Effect.catchTag("ParseError", () => badRequest(set)),
+                  Effect.catchAllDefect((d) =>
+                    isUniqueViolation(d) ? conflict(set) : internal(set),
+                  ),
+                ),
+              );
+            },
+            manualParse,
+          ),
+      ),
     );

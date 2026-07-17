@@ -32,7 +32,10 @@ import {
 import { createPrimaryWeddingRoutes } from "./routes/primary-wedding";
 import { createRsvpRoutes } from "./routes/rsvp";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
-import { createVendorDirectoryReadRoutes } from "./routes/vendor-directory";
+import {
+  createVendorDirectoryReadRoutes,
+  createVendorDirectoryWriteRoutes,
+} from "./routes/vendor-directory";
 import { createVendorPortalRoutes } from "./routes/vendor-portal";
 import { createVendorReadRoutes, createVendorWriteRoutes } from "./routes/vendors";
 import { createDirectoryService } from "./services/directory";
@@ -408,6 +411,9 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // any wedding member (weddingMember). Per-user rate limiter to cap the
       // D1 query amplifier from scripted callers with valid organiser tokens.
       .use(createVendorDirectoryReadRoutes(db, osnAuthOptions, directoryLimiter))
+      // Vendor directory add-from-directory write route (platform Phase 2).
+      // weddingEditor-gated (viewer gets 403 read_only_role).
+      .use(createVendorDirectoryWriteRoutes(db, osnAuthOptions, directoryLimiter))
       // Invite builder. Public reads (guest site) + organiser writes split into
       // sibling instances so the guest GET isn't behind osnAuth.
       .use(createInvitePublicRoutes(db, assets, images))
