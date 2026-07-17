@@ -8,15 +8,17 @@ import {
   guestEvents,
   rsvps,
   weddings,
+  weddingEntitlements,
 } from "@cire/db";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
 import { createDb, seedBootstrapWedding, seedDb } from "../db/setup";
 import type { ParsedEvent, ParsedFamily } from "../schemas/import";
 import { claimService } from "./claim";
+import { entitlementService } from "./entitlements";
 import { hostCodeService } from "./host-code";
 import { applyImport, diffAgainstDb } from "./import";
 import { parseEventsCsv, parseGuestsCsv } from "./spreadsheet";
@@ -653,5 +655,201 @@ describe("applyImport: optional End + Location → Address fallback", () => {
       .find((r) => r.name === "Catholic Ceremony")!;
     expect(row.address).toBe("Example Parish");
     expect(row.endAt).toBe("");
+  });
+});
+
+// ── Capacity enforcement ──────────────────────────────────────────────────────
+
+/**
+ * Build a minimal ParsedFamily with N guests (no events), for capacity tests.
+ */
+function planCreatingNGuests(
+  db: ReturnType<typeof createDb>,
+  n: number,
+  weddingId = BOOTSTRAP_WEDDING_ID,
+): Effect.Effect<import("../schemas/import").ImportPlan, never, DbService> {
+  return Effect.gen(function* () {
+    // One family, N guests, no events.
+    const parsedFamily: ParsedFamily = {
+      familyName: "CapTestFamily",
+      guests: Array.from({ length: n }, (_, i) => ({
+        firstName: `Guest${i}`,
+        lastName: "Cap",
+        nickname: null,
+        eventNames: [],
+      })),
+    };
+    return yield* diffAgainstDb([], [parsedFamily], weddingId);
+  }).pipe(Effect.provideService(DbService, db));
+}
+
+describe("applyImport — capacity enforcement", () => {
+  it("applyImport fails with CapacityExceeded when net-new guests breach the derived cap, writing nothing", async () => {
+    const db = createDb();
+    seedBootstrapWedding(db);
+    // cap 100 (no capacity entitlement), plan creates 101 guests
+    const plan = await Effect.runPromise(planCreatingNGuests(db, 101));
+    const exit = await Effect.runPromiseExit(
+      applyImport("imp_cap_1", plan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    // Atomic: no guests were written.
+    const n = (db.$client.query("SELECT COUNT(*) AS n FROM guests").get() as { n: number }).n;
+    expect(n).toBe(0);
+  });
+
+  it("applyImport succeeds at exactly the cap (100 guests)", async () => {
+    const db = createDb();
+    seedBootstrapWedding(db);
+    const plan = await Effect.runPromise(planCreatingNGuests(db, 100));
+    const exit = await Effect.runPromiseExit(
+      applyImport("imp_cap_2", plan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const n = (db.$client.query("SELECT COUNT(*) AS n FROM guests").get() as { n: number }).n;
+    expect(n).toBe(100);
+  });
+
+  it("host-preview family guests do NOT count toward the cap", async () => {
+    // Seed 99 real guests directly (bypassing diff so they aren't removed by
+    // subsequent diffAgainstDb calls). Then create a host family with 1 guest.
+    // The entitlementService must exclude host guests from the count:
+    //   real=99, host=1 → adding 1 real guest = 100 (≤100) → OK
+    //   then adding 1 more real guest = 101 (>100) → CapacityExceeded
+    const db = createDb();
+    seedBootstrapWedding(db);
+    const now = new Date();
+    const layer = Layer.succeed(DbService, db);
+
+    // Insert 99 real guests directly.
+    const realFamilyId = crypto.randomUUID();
+    db.insert(families)
+      .values({
+        id: realFamilyId,
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        publicId: "REAL-FAM-CAP",
+        familyName: "RealFamily",
+        kind: "guest",
+        source: "import",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    for (let i = 0; i < 99; i++) {
+      db.insert(guests)
+        .values({
+          id: crypto.randomUUID(),
+          familyId: realFamilyId,
+          firstName: `RealGuest${i}`,
+          lastName: "Real",
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    // Provision a host family (kind='host') with its synthetic guest.
+    await Effect.runPromise(
+      hostCodeService
+        .ensureForWedding(BOOTSTRAP_WEDDING_ID)
+        .pipe(Effect.provideService(DbService, db)),
+    );
+
+    // Adding 1 real guest → 99+1=100 ≤ 100 → should succeed.
+    const addOnePlan: import("../schemas/import").ImportPlan = {
+      eventCreates: [],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [{ id: crypto.randomUUID(), publicId: "ONE-MORE-CAP", familyName: "OneMore" }],
+      familyRemoves: [],
+      guestCreates: [],
+      guestUpdates: [],
+      guestRemoves: [],
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+    const oneMoreFamilyId = addOnePlan.familyCreates[0]!.id;
+    addOnePlan.guestCreates.push({
+      id: crypto.randomUUID(),
+      familyId: oneMoreFamilyId,
+      firstName: "Last",
+      lastName: "Guest",
+      nickname: null,
+      sortOrder: 0,
+    });
+    const exit1 = await Effect.runPromiseExit(
+      applyImport("imp_cap_host_2", addOnePlan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isSuccess(exit1)).toBe(true);
+
+    // Now adding 1 more real guest → 100+1=101 > 100 → should fail.
+    const overflowPlan: import("../schemas/import").ImportPlan = {
+      eventCreates: [],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [{ id: crypto.randomUUID(), publicId: "TOO-MANY-CAP", familyName: "TooMany" }],
+      familyRemoves: [],
+      guestCreates: [],
+      guestUpdates: [],
+      guestRemoves: [],
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+    overflowPlan.guestCreates.push({
+      id: crypto.randomUUID(),
+      familyId: overflowPlan.familyCreates[0]!.id,
+      firstName: "Overflow",
+      lastName: "Guest",
+      nickname: null,
+      sortOrder: 0,
+    });
+    const exit2 = await Effect.runPromiseExit(
+      applyImport("imp_cap_host_3", overflowPlan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isFailure(exit2)).toBe(true);
+
+    // The overflow guest must NOT have been persisted (atomic).
+    const n = (
+      db.$client
+        .query(
+          `SELECT COUNT(*) AS n FROM guests g
+         JOIN families f ON g.family_id = f.id
+         WHERE f.kind != 'host' AND f.wedding_id = '${BOOTSTRAP_WEDDING_ID}'`,
+        )
+        .get() as { n: number }
+    ).n;
+    // 99 real + 1 "Last" from the succeeded import = 100.
+    expect(n).toBe(100);
+  });
+
+  it("upgraded wedding (capacity_500) allows more guests", async () => {
+    const db = createDb();
+    seedBootstrapWedding(db);
+    const layer = Layer.succeed(DbService, db);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        // Grant capacity_500
+        yield* entitlementService.grant(BOOTSTRAP_WEDDING_ID, "capacity_500", {
+          source: "comp",
+          grantedBy: "usr_admin",
+        });
+        // 101 guests under cap of 500 → succeeds.
+        const plan = yield* planCreatingNGuests(db, 101, BOOTSTRAP_WEDDING_ID);
+        const exit = yield* Effect.exit(applyImport("imp_cap_up", plan, BOOTSTRAP_WEDDING_ID));
+        expect(Exit.isSuccess(exit)).toBe(true);
+      }).pipe(Effect.provide(layer)),
+    );
   });
 });
