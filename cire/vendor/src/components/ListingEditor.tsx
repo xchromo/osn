@@ -1,5 +1,5 @@
 import { useAuth } from "@osn/client/solid";
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
 import { categoryLabel, SERVICE_CATEGORIES } from "../lib/service-categories";
@@ -48,13 +48,11 @@ export default function ListingEditor(props: ListingEditorProps) {
   const [seeded, setSeeded] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
 
-  // Seed form once the resource resolves (including null → empty form).
-  const listingData = () => {
-    const data = listing();
-    if (listing.loading || seeded()) return;
-    // listing() may be undefined while loading; null means no listing exists.
-    if (data !== undefined) {
-      if (data !== null) {
+  // Seed form once when the resource settles (idiomatic SolidJS — no reactive side-effects).
+  createEffect(() => {
+    if (!listing.loading && !seeded()) {
+      const data = listing();
+      if (data) {
         setName(data.name ?? "");
         setDescription(data.description ?? "");
         setEmail(data.email ?? "");
@@ -67,17 +65,10 @@ export default function ListingEditor(props: ListingEditorProps) {
         setPriceMax(data.priceMaxMinor != null ? String(data.priceMaxMinor / 100) : "");
         setCheckedCategories(data.categories ?? []);
       }
-      // null (no listing yet) → form stays empty; mark as seeded so we don't re-run.
+      // data === null means no listing yet → form stays empty; mark seeded either way.
       setSeeded(true);
     }
-  };
-
-  // Reactive derivation: call listingData() inside JSX to trigger seeding.
-  // We use a derived signal so the form seeds once on resource resolution.
-  const isSeedReady = () => {
-    listingData();
-    return seeded();
-  };
+  });
 
   // ── Category toggle ───────────────────────────────────────────────────────
   const toggleCategory = (key: string, checked: boolean) => {
@@ -161,7 +152,7 @@ export default function ListingEditor(props: ListingEditorProps) {
       </Show>
 
       {/* Form — rendered once seeded (includes empty-form case for new orgs) */}
-      <Show when={!listing.loading && !listing.error && (isSeedReady() || listing() === null)}>
+      <Show when={!listing.loading && !listing.error && seeded()}>
         <form class="flex flex-col gap-5" noValidate onSubmit={handleSave}>
           {/* Name */}
           <label class="flex flex-col gap-1.5" for="listing-name">
