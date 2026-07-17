@@ -103,13 +103,11 @@ function Dashboard() {
     redirectToLogin();
   }
 
-  const org = () => selectedOrg();
-
   return (
     <div class="flex flex-col gap-8">
       {/* Top bar */}
       <div class="flex flex-wrap items-center justify-between gap-4">
-        <Show when={org()}>
+        <Show when={selectedOrg()}>
           {(o) => (
             <button
               type="button"
@@ -130,7 +128,7 @@ function Dashboard() {
       </div>
 
       {/* Main content */}
-      <Show when={org()} fallback={<OrgPicker onPick={(o) => selectAndHash(o)} />}>
+      <Show when={selectedOrg()} fallback={<OrgPicker onPick={(o) => selectAndHash(o)} />}>
         {(o) => <ListingEditor orgId={o().id} orgName={o().name} />}
       </Show>
     </div>
