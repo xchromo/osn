@@ -614,38 +614,45 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
         }
         const whereExpr = and(...conds);
 
-        const [countRow] = yield* dbQuery(() =>
-          db
-            .select({ n: sql<number>`count(*)` })
-            .from(directoryVendors)
-            .where(whereExpr)
-            .all(),
+        // count(*) and the page SELECT share the same whereExpr but have no
+        // data dependency — run them concurrently to save one D1 round-trip.
+        const [countResult, rows] = yield* Effect.all(
+          [
+            dbQuery(() =>
+              db
+                .select({ n: sql<number>`count(*)` })
+                .from(directoryVendors)
+                .where(whereExpr)
+                .all(),
+            ),
+            dbQuery(() =>
+              db
+                .select({
+                  id: directoryVendors.id,
+                  name: directoryVendors.name,
+                  description: directoryVendors.description,
+                  locationText: directoryVendors.locationText,
+                  priceBand: directoryVendors.priceBand,
+                  priceMinMinor: directoryVendors.priceMinMinor,
+                  priceMaxMinor: directoryVendors.priceMaxMinor,
+                  website: directoryVendors.website,
+                  instagram: directoryVendors.instagram,
+                  email: directoryVendors.email,
+                  phone: directoryVendors.phone,
+                  inWedding: sql<number>`EXISTS (SELECT 1 FROM ${vendors} v WHERE v.wedding_id = ${weddingId} AND v.directory_vendor_id = "directory_vendors"."id")`,
+                })
+                .from(directoryVendors)
+                .where(whereExpr)
+                .orderBy(asc(directoryVendors.name), asc(directoryVendors.id))
+                .limit(filter.limit)
+                .offset(filter.offset)
+                .all(),
+            ),
+          ],
+          { concurrency: 2 },
         );
+        const [countRow] = countResult;
         const total = (countRow as { n: number } | undefined)?.n ?? 0;
-
-        const rows = yield* dbQuery(() =>
-          db
-            .select({
-              id: directoryVendors.id,
-              name: directoryVendors.name,
-              description: directoryVendors.description,
-              locationText: directoryVendors.locationText,
-              priceBand: directoryVendors.priceBand,
-              priceMinMinor: directoryVendors.priceMinMinor,
-              priceMaxMinor: directoryVendors.priceMaxMinor,
-              website: directoryVendors.website,
-              instagram: directoryVendors.instagram,
-              email: directoryVendors.email,
-              phone: directoryVendors.phone,
-              inWedding: sql<number>`EXISTS (SELECT 1 FROM ${vendors} v WHERE v.wedding_id = ${weddingId} AND v.directory_vendor_id = "directory_vendors"."id")`,
-            })
-            .from(directoryVendors)
-            .where(whereExpr)
-            .orderBy(asc(directoryVendors.name), asc(directoryVendors.id))
-            .limit(filter.limit)
-            .offset(filter.offset)
-            .all(),
-        );
 
         const pageRows = rows as {
           id: string;
