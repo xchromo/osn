@@ -203,14 +203,14 @@ Shipped 2026-07-18. Adds a **Browse** sub-tab inside the organiser Vendors modul
 
 Gate: `weddingMember()` (any role — owner, editor, or viewer can browse).
 
-Returns **live-only** (`status = 'active'`) directory listings. Filters:
+Returns **live-only** (`listed = 'live'`) directory listings. Filters:
 
 | Query param | Behaviour |
 |---|---|
-| `category` | Exact match against `directory_vendor_categories.id` |
-| `keyword` | Case-insensitive substring match on `name` + `description` |
-| `location` | Case-insensitive substring match on `location` |
-| `limit` / `offset` | Pagination (clamped; `total` count returned) |
+| `category` | Exact match against `directory_vendor_categories.category` (EXISTS subquery) |
+| `q` | Case-insensitive substring match on `name` + `description` (LIKE with escaped wildcards) |
+| `location` | Case-insensitive substring match on `location_text` |
+| `limit` / `offset` | Pagination (`limit` clamped 1..50 default 24; `offset` ≥0; `total` count returned) |
 
 Each listing in the response includes an `inWedding` boolean — `true` if a `vendors` CRM row already links this listing to the requesting wedding (i.e. it was previously added via the `/add` endpoint below). Organiser contact details (`email`, `phone`) from `directory_vendors` are included in the response and displayed to the wedding's authenticated organisers.
 
@@ -222,11 +222,11 @@ Gate: `weddingEditor()` (owner or editor; viewers get 403).
 
 Adds a directory listing to the wedding's Vendor CRM. The handler:
 
-1. Resolves the listing via `directoryService.getLiveListingById` — returns 404 if missing or not `status = 'active'` (draft listings cannot be added).
-2. Snapshots the listing's contact details (`name`, `category`, `email`, `phone`, `website_url`) into a new `vendors` CRM row for the wedding, with `status = 'researching'`.
-3. Deduplication: the `vendors_wedding_directory_uniq` **partial unique index** (`UNIQUE (wedding_id, directory_vendor_id) WHERE directory_vendor_id IS NOT NULL`) causes a D1 `UNIQUE constraint` error on a duplicate add. The route catches that and returns **409** `duplicate_vendor` — the listing is already in the wedding's CRM.
+1. Resolves the listing via `directoryService.getLiveListingById` — returns 404 `listing_not_found` if missing or not `listed = 'live'` (draft listings cannot be added).
+2. Validates the request body's `category` is one of the listing's categories (400 `invalid_category` otherwise), then snapshots the listing's `name`, `email`, `phone` into a new `vendors` CRM row for the wedding under the chosen `category`, with `status = 'researching'` and `directory_vendor_id` linked.
+3. Deduplication: an `existsForDirectory` pre-check returns **409** `already_in_wedding` for the common case; the `vendors_wedding_directory_uniq` **partial unique index** (`UNIQUE (wedding_id, directory_vendor_id) WHERE directory_vendor_id IS NOT NULL`) is the hard backstop for a concurrent race (the route maps that `UNIQUE constraint` defect to the same **409** `already_in_wedding`).
 
-Service: `vendorsService.existsForDirectory` (pre-check, optional fast path) + the add path in `cire/api/src/routes/organiser-directory.ts`.
+Service: `vendorsService.existsForDirectory` (pre-check) + `directoryService.getLiveListingById` + `vendorsService.create`; routes in `cire/api/src/routes/vendor-directory.ts`.
 
 ### Migration 0041
 
