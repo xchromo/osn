@@ -6,7 +6,7 @@ related:
   - "[[cire]]"
   - "[[cire-auth]]"
   - "[[index]]"
-last-reviewed: 2026-07-16
+last-reviewed: 2026-07-17
 ---
 
 # Invite Templates
@@ -224,12 +224,49 @@ palettes work to create.**
 is invisible because the hero's fog-coloured image block already occupies that
 zone; the base also matches the copy ("done before the fog rolls in").
 
+### Layer 4 — wallpaper motif
+
+A subtle tiling pattern behind the content, sat **above the grain, below the
+sections** (`position: absolute`, `pointer-events: none`, full artboard, child
+index 1). It shows in section margins and between cards — wallpaper behind
+framed pictures — while opaque surfaces (hero, image blocks) cover it.
+
+| Template | Motif | Colour | Alpha |
+|---|---|---|---|
+| `hindu-jewel` | **jali diamond lattice** (thin diagonals + centre dot, 56px tile) — echoes the Udaipur-palace screen and the ornament's gold | `--color-hindu-gold` | ~0.34 |
+| `minimal` | **whisper dot grid** (single slate dot, 26px tile) — reads as fine paper, not ornament | `--color-minimal-slate` | ~0.20 |
+
+The two motifs keep the templates distinct: an ornate lattice would flatten
+`minimal`, so `minimal` gets the plainest possible mark — a dot, not a line —
+and far fainter. This still honours "texture tracks character": `minimal`'s
+wallpaper is the least-patterned pattern that reads at all.
+
+**Generated as tiled PNGs, not drawn in-tool** — see the Paper notes for why. The
+tiles are reproducible via ImageMagick:
+
+```
+# hindu jali tile (56px), then tile across the artboard
+magick -size 56x56 xc:none \
+  -stroke '#C9A96157' -strokewidth 1 -fill none -draw "polyline 28,0 56,28 28,56 0,28 28,0" \
+  -stroke none -fill '#C9A96157' -draw "circle 28,28 28,29.6" jali_tile.png
+magick -size <W>x<H> tile:jali_tile.png hindu_wallpaper.png
+
+# minimal dot tile (26px)
+magick -size 26x26 xc:none -fill '#6B737833' -draw "circle 13,13 13,14.2" dot_tile.png
+magick -size <W>x<H> tile:dot_tile.png minimal_wallpaper.png
+```
+
+Alpha is baked into the PNG (`#RRGGBBAA` — `57`≈0.34, `33`≈0.20); the Paper `<img>`
+node stays at full opacity.
+
 ### The principle
 
-Texture amount tracks template character: `hindu-jewel` (dark, ornate, ceremonial)
-takes all three layers; `minimal` (bright, restrained) takes grain only. "More
-texture everywhere" is wrong when it flattens the distinction between templates —
-the right amount is whatever each template's scene actually contains.
+Texture amount tracks template character. `hindu-jewel` (dark, ornate,
+ceremonial) takes all four layers — grain, ambient light, lit surfaces, an ornate
+jali wallpaper. `minimal` (bright, restrained) takes two — grain and a whisper dot
+grid — and nothing else. "More texture everywhere" is wrong when it flattens the
+distinction between templates; the right amount is whatever each template's scene
+actually contains, expressed in that template's own vocabulary.
 
 ## Tracking
 
@@ -322,15 +359,29 @@ rather than a vine.
   carried its 1280px width and bled through the hero frame. Set explicit
   `width`/`height` on **both** the clone wrapper and the inner SVG node.
 - Only screenshots catch either of these. Trust the render, not the computed styles.
-- **`get_screenshot` returns empty output above roughly 1900px of node height** —
-  it fails silently rather than erroring. Screenshot sections, not whole tall
-  artboards. To see a whole artboard, `export` it to a jpg and read the file — a
-  node screenshot also renders transparent backgrounds as **black**, so a
-  ground-level gradient behind transparent children is invisible in a screenshot
-  but correct in an export.
-- **CSS gradients work as `backgroundImage`; data-URI SVG (`url("data:…")`) does
-  not** — Paper treats it as a failed image load and paints a broken-image fill.
-  For grain use an **inline `<svg>` node with `feTurbulence`**, which does render.
+- **A node screenshot renders that node in ISOLATION** — sibling background
+  layers (grain, glow, wallpaper) that live at the artboard level do **not** appear
+  behind a child section's screenshot, and transparency renders as **black**. So a
+  section can look flat-black in a screenshot while its artboard background is
+  correct. To judge any background layer you **must `export` the whole artboard**
+  to a jpg and read the file. (`get_screenshot` also returns empty silently above
+  ~1900px of node height, and `export` returns empty when the render is wedged —
+  see below.)
+- **Only single gradients render. `repeating-linear-gradient` does NOT**, and SVG
+  `<pattern>`/`<defs>` are dropped on import. So a tiled motif cannot be made
+  in-tool — neither a repeating-gradient nor an SVG pattern shows. The working
+  route is a **pre-tiled PNG embedded via `<img src="paper-asset:///…">`** (see
+  Layer 4). Plain `radial-`/`linear-gradient` (non-repeating) do work — that's what
+  the glow/fog/card gradients use.
+- **Data-URI SVG (`url("data:…")`) does not load** — Paper paints a broken-image
+  fill. Local `paper-asset://` images and inline `<svg>` (e.g. `feTurbulence`
+  grain) do render.
+- **Background/gradient edits reliably wedge the renderer.** After a batch of
+  background changes, `get_screenshot`/`export` start returning empty and reopening
+  the file does not clear it — only an app restart does. Edits still SAVE (the
+  `update_styles` calls succeed); only rendering stalls. Plan for a restart between
+  a batch of background work and verifying it, and set values to their intended
+  (not test) state before the restart so one export confirms the real result.
 - **The lazy-font-binding bug (F3) also corrupts layout, not just colour.** If a
   display line is measured before its font loads, Paper caches a one-line height
   and then renders wrapped text into it, overlapping the line below. A file
