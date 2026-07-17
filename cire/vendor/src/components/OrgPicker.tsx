@@ -1,6 +1,7 @@
 import { useAuth } from "@osn/client/solid";
 import { createResource, createSignal, For, Show } from "solid-js";
 
+import { friendlyError } from "../lib/api";
 import { createOrg, listMyOrgs, type OrgSummary } from "../lib/vendor-store";
 
 interface OrgPickerProps {
@@ -15,7 +16,7 @@ export default function OrgPicker(props: OrgPickerProps) {
     try {
       return await listMyOrgs(authFetch);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Failed to load your organisations.");
+      setLoadError(friendlyError(err));
       return [];
     }
   });
@@ -50,7 +51,7 @@ export default function OrgPicker(props: OrgPickerProps) {
       setDescription("");
       props.onPick(created);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create organisation.");
+      setError(friendlyError(err));
     } finally {
       setCreating(false);
     }
@@ -60,14 +61,20 @@ export default function OrgPicker(props: OrgPickerProps) {
     <div class="font-body flex flex-col gap-6">
       {/* Org load error */}
       <Show when={loadError()}>
-        <p class="border-error/40 text-error rounded-sm border px-3 py-2 text-[0.82rem]">
+        <p
+          role="alert"
+          class="border-error/40 text-error rounded-sm border px-3 py-2 text-[0.82rem]"
+        >
           {loadError()}
         </p>
       </Show>
 
       {/* Org loading */}
       <Show when={orgs.loading}>
-        <p class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase">
+        <p
+          role="status"
+          class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase"
+        >
           Loading your organisations…
         </p>
       </Show>
@@ -107,7 +114,10 @@ export default function OrgPicker(props: OrgPickerProps) {
         </h2>
 
         <Show when={error()}>
-          <p class="border-error/40 text-error rounded-sm border px-3 py-2 text-[0.82rem]">
+          <p
+            role="alert"
+            class="border-error/40 text-error rounded-sm border px-3 py-2 text-[0.82rem]"
+          >
             {error()}
           </p>
         </Show>

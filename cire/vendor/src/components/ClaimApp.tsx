@@ -84,7 +84,10 @@ function ClaimContent() {
 
       {/* Loading state */}
       <Show when={preview.loading}>
-        <p class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase">
+        <p
+          role="status"
+          class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase"
+        >
           Checking invite…
         </p>
       </Show>

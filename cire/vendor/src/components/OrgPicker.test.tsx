@@ -47,10 +47,21 @@ describe("OrgPicker", () => {
     expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: "o2" }));
   });
 
-  it("shows an error message when listMyOrgs rejects", async () => {
+  it("shows a friendly error message when listMyOrgs rejects", async () => {
     vi.spyOn(store, "listMyOrgs").mockRejectedValue(new Error("Network error"));
     renderPicker();
-    await waitFor(() => expect(screen.getByText("Network error")).toBeInTheDocument());
+    // Raw server/network errors are mapped to a generic friendly message.
+    await waitFor(() =>
+      expect(screen.getByText("Something went wrong. Please try again.")).toBeInTheDocument(),
+    );
+  });
+
+  it("shows a specific friendly message for known error codes", async () => {
+    vi.spyOn(store, "listMyOrgs").mockRejectedValue(new Error("not_org_member"));
+    renderPicker();
+    await waitFor(() =>
+      expect(screen.getByText("You don't have access to that organisation.")).toBeInTheDocument(),
+    );
   });
 
   it("creates a new organisation and picks it", async () => {

@@ -14,24 +14,22 @@ const jsonRes = (body: unknown, status = 200) =>
 
 describe("vendor-store", () => {
   it("listMyOrgs GETs osn-api /organisations and returns the array", async () => {
-    const authFetch = vi
-      .fn()
-      .mockResolvedValue(
-        jsonRes({
-          organisations: [
-            {
-              id: "o1",
-              handle: "h",
-              name: "N",
-              description: null,
-              avatarUrl: null,
-              ownerId: "p",
-              createdAt: "",
-              updatedAt: "",
-            },
-          ],
-        }),
-      );
+    const authFetch = vi.fn().mockResolvedValue(
+      jsonRes({
+        organisations: [
+          {
+            id: "o1",
+            handle: "h",
+            name: "N",
+            description: null,
+            avatarUrl: null,
+            ownerId: "p",
+            createdAt: "",
+            updatedAt: "",
+          },
+        ],
+      }),
+    );
     const orgs = await listMyOrgs(authFetch);
     expect(orgs).toHaveLength(1);
     expect(orgs[0]!.id).toBe("o1");
@@ -39,20 +37,18 @@ describe("vendor-store", () => {
   });
 
   it("createOrg POSTs handle+name and returns the org", async () => {
-    const authFetch = vi
-      .fn()
-      .mockResolvedValue(
-        jsonRes({
-          id: "o2",
-          handle: "acme",
-          name: "Acme",
-          description: null,
-          avatarUrl: null,
-          ownerId: "p",
-          createdAt: "",
-          updatedAt: "",
-        }),
-      );
+    const authFetch = vi.fn().mockResolvedValue(
+      jsonRes({
+        id: "o2",
+        handle: "acme",
+        name: "Acme",
+        description: null,
+        avatarUrl: null,
+        ownerId: "p",
+        createdAt: "",
+        updatedAt: "",
+      }),
+    );
     const org = await createOrg(authFetch, { handle: "acme", name: "Acme" });
     expect(org.id).toBe("o2");
     const init = authFetch.mock.calls[0]![1];
@@ -92,12 +88,19 @@ describe("vendor-store", () => {
     expect(JSON.parse(init.body)).toMatchObject({ name: "New", categories: ["venue", "catering"] });
   });
 
-  it("fetchClaimPreview returns the preview on 200 and null on 404", async () => {
+  it("fetchClaimPreview returns the preview on 200 and null on any non-2xx", async () => {
     const g = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonRes({ listing: { directoryVendorId: "d1", name: "Preview Co" } }));
     expect(await fetchClaimPreview("tok")).toEqual({ directoryVendorId: "d1", name: "Preview Co" });
+    // 404 → null (token not found / already consumed)
     g.mockResolvedValueOnce(jsonRes({ error: "claim_not_found" }, 404));
+    expect(await fetchClaimPreview("tok")).toBeNull();
+    // 500 → null (server error — show same generic "no longer valid" UI)
+    g.mockResolvedValueOnce(jsonRes({ error: "internal_error" }, 500));
+    expect(await fetchClaimPreview("tok")).toBeNull();
+    // 429 → null (rate limited — same treatment)
+    g.mockResolvedValueOnce(jsonRes({ error: "rate_limited" }, 429));
     expect(await fetchClaimPreview("tok")).toBeNull();
     g.mockRestore();
   });

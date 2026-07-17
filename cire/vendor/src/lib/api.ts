@@ -23,3 +23,18 @@ export function isAuthExpired(err: unknown): boolean {
 export function redirectToLogin(): void {
   window.location.href = "/login";
 }
+
+/**
+ * Map a caught error to a user-friendly message.
+ * Known server codes → specific copy; everything else → generic fallback.
+ * This maps at the display boundary only — the store still throws raw errors.
+ */
+const FRIENDLY: Record<string, string> = {
+  not_org_member: "You don't have access to that organisation.",
+  claim_invalid: "This invite link is no longer valid.",
+};
+
+export function friendlyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return FRIENDLY[msg] ?? "Something went wrong. Please try again.";
+}

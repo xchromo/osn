@@ -10,7 +10,10 @@ import OrgPicker from "./OrgPicker";
 
 function Loading(props: { label: string }) {
   return (
-    <p class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase">
+    <p
+      role="status"
+      class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase"
+    >
       {props.label}
     </p>
   );

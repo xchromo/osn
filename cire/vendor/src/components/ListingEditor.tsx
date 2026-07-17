@@ -2,6 +2,7 @@ import { useAuth } from "@osn/client/solid";
 import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
+import { friendlyError } from "../lib/api";
 import { categoryLabel, SERVICE_CATEGORIES } from "../lib/service-categories";
 import { fetchListing, putListing } from "../lib/vendor-store";
 
@@ -105,7 +106,7 @@ export default function ListingEditor(props: ListingEditorProps) {
       await putListing(authFetch, props.orgId, input);
       toast.success("Listing saved");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save listing.");
+      toast.error(friendlyError(err));
     } finally {
       setSaving(false);
     }
@@ -139,14 +140,20 @@ export default function ListingEditor(props: ListingEditorProps) {
 
       {/* Loading state */}
       <Show when={listing.loading}>
-        <p class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase">
+        <p
+          role="status"
+          class="font-body text-text-muted animate-pulse text-[0.88rem] tracking-[0.1em] uppercase"
+        >
           Loading listing…
         </p>
       </Show>
 
       {/* Error state */}
       <Show when={listing.error}>
-        <p class="border-error/20 bg-error/5 text-error rounded-sm border p-4 text-[0.88rem]">
+        <p
+          role="alert"
+          class="border-error/20 bg-error/5 text-error rounded-sm border p-4 text-[0.88rem]"
+        >
           Could not load your listing. Please refresh.
         </p>
       </Show>

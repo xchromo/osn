@@ -129,8 +129,7 @@ export async function putListing(
 
 export async function fetchClaimPreview(token: string): Promise<ClaimPreview | null> {
   const res = await fetch(apiUrl(`/api/vendor/claims/${encodeURIComponent(token)}`));
-  if (res.status === 404) return null;
-  await ensureOk(res);
+  if (!res.ok) return null;
   const body = await safeJson<{ listing: ClaimPreview }>(res);
   return body?.listing ?? null;
 }
