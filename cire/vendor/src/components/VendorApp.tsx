@@ -108,7 +108,7 @@ function Dashboard() {
       {/* Top bar */}
       <div class="flex flex-wrap items-center justify-between gap-4">
         <Show when={selectedOrg()}>
-          {(o) => (
+          {() => (
             <button
               type="button"
               onClick={() => clearSelection()}

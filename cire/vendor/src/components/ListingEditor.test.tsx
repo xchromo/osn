@@ -79,4 +79,44 @@ describe("ListingEditor", () => {
     renderEditor();
     await waitFor(() => expect(screen.getByLabelText(/^name/i)).toHaveValue(""));
   });
+
+  it("money round-trip: loads major units from minor, saves back to minor, blank → null", async () => {
+    vi.spyOn(store, "fetchListing").mockResolvedValue(
+      listing({ priceMinMinor: 125000, priceMaxMinor: 500000 }),
+    );
+    const put = vi
+      .spyOn(store, "putListing")
+      .mockResolvedValue(listing({ priceMinMinor: 150000, priceMaxMinor: 500000 }));
+    renderEditor();
+
+    // Wait for load — minor→major conversion: 125000/100 = 1250, 500000/100 = 5000
+    const minInput = await waitFor(() => screen.getByLabelText(/price min/i) as HTMLInputElement);
+    expect(minInput.value).toBe("1250");
+    expect((screen.getByLabelText(/price max/i) as HTMLInputElement).value).toBe("5000");
+
+    // Change min to 1500 (major) → putListing should receive priceMinMinor: 150000
+    fireEvent.input(minInput, { target: { value: "1500" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        expect.anything(),
+        "o1",
+        expect.objectContaining({ priceMinMinor: 150000 }),
+      ),
+    );
+
+    put.mockClear();
+    put.mockResolvedValue(listing({ priceMinMinor: null, priceMaxMinor: 500000 }));
+
+    // Clear min to empty → putListing should receive priceMinMinor: null (not 0 or NaN)
+    fireEvent.input(minInput, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        expect.anything(),
+        "o1",
+        expect.objectContaining({ priceMinMinor: null }),
+      ),
+    );
+  });
 });
