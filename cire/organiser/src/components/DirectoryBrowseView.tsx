@@ -1,5 +1,5 @@
 import { useAuth } from "@osn/client/solid";
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { categoryLabel, SERVICE_CATEGORIES } from "../lib/service-categories";
@@ -58,6 +58,9 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
   // Debounce timer
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Focus-return: track the element that triggered the modal open
+  let modalOpener: HTMLElement | null = null;
+
   const buildUrl = (currentOffset: number) => {
     const params = new URLSearchParams();
     if (category()) params.set("category", category());
@@ -107,6 +110,8 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
   onMount(() => {
     void fetchPage(0, false);
   });
+
+  onCleanup(() => clearTimeout(debounceTimer));
 
   const clearFilters = () => {
     setCategory("");
@@ -173,6 +178,9 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
     setModalListing(null);
     setPickerListingId(null);
     setPickerCategory("");
+    // Return focus to the element that opened the modal
+    modalOpener?.focus();
+    modalOpener = null;
   };
 
   const handleModalKeyDown = (e: KeyboardEvent) => {
@@ -309,7 +317,10 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
                 <div class="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => setModalListing(item)}
+                    onClick={(e) => {
+                      modalOpener = e.currentTarget;
+                      setModalListing(item);
+                    }}
                     class="text-gold-dim hover:text-gold text-[0.78rem] underline-offset-2 hover:underline"
                   >
                     View
@@ -422,6 +433,8 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
               role="dialog"
               aria-modal="true"
               aria-label={ml().name}
+              tabIndex={-1}
+              ref={(el) => el?.focus()}
               class="border-border bg-bg flex max-h-[90vh] w-full max-w-lg flex-col gap-4 overflow-y-auto rounded-sm border p-6"
             >
               <div class="flex items-start justify-between gap-4">
