@@ -130,6 +130,16 @@ Soft-fail throughout: a browse query error resolves to empty results (never a 50
 - **migration:** `0041` applies; `ddl-lockstep.test.ts` green (migration ↔ schema.ts ↔ setup.ts); the partial unique index rejects a second (wedding, directory_vendor_id) row and permits multiple `NULL` directory refs.
 - **cire/organiser:** `DirectoryBrowseView` renders results, filters refetch, "Added ✓" reflects `inWedding`, multi-category add prompts, add invalidates the CRM store; viewer sees no Add control. Store fetch-lift once-only.
 
+## Future directions (captured in review — out of scope for S3, none blocks it)
+
+S3 is deliberately the **location-optional** foundation these build on; all filters are optional, so browse works before a venue is chosen.
+
+1. **Location-aware surfacing (extends S5 "directory search").** Beyond the free-text `location_text` filter, rank/surface vendors **near the wedding's events** — lat/lng bounding-box prefilter + haversine ordering from the wedding's canonical point (the S5 item in [[todo/platform]]). This is an additive ranking layer over the same `browse` endpoint; S3's free-text filter is the manual fallback.
+
+2. **Venue-discovery when there is no location yet.** A wedding/event may be created before a venue is chosen (no `location_text`/coords). In that state, location-aware surfacing can't run, so the couple uses **manual browse (S3) to choose a venue**. A later flow can let "add a venue vendor" optionally **set the event's location** from the chosen listing (ties into the `events.venue_vendor_id` "Venue link" item in [[todo/platform]]). Additive; S3 already handles the no-location case because its filters are optional.
+
+3. **Free (invites) vs paid (wedding-management platform) tiering.** The management modules (Checklist, Budget, Vendors incl. this directory) may become a **paid tier** layered over the free invite product. If so, the directory browse becomes a **tier-gated feature**. This is a distinct product + billing decision with its own brainstorm (recorded in [[todo/deferred]]); S3 ships **ungated** for now (single live wedding, no billing system exists), with the tier gate a later wrapper around the Vendors module — not a change to S3's internals or endpoints.
+
 ## Ship shape
 
 **One PR** — `feat/cire-vendors-directory-browse` — all additive:
