@@ -1,12 +1,11 @@
 import { Elysia } from "elysia";
 
 /**
- * Phase-2 landing spot for the payment provider's purchase webhook. Phase 2
- * uses Lemon Squeezy (merchant of record; Paddle fallback) — this skeleton is
- * PROVIDER-NEUTRAL so a swap is an adapter change. In Phase 1 it is INERT: it
- * verifies nothing and grants nothing, returning 501. createApp mounts it ONLY
- * when the webhook flag is set, so no unverified endpoint is ever exposed by
- * default.
+ * Phase-2 landing spot for the payment provider's purchase webhook. This
+ * skeleton is PROVIDER-NEUTRAL so the provider is an adapter-level choice. In
+ * Phase 1 it is INERT: it verifies nothing and grants nothing, returning 501.
+ * createApp mounts it ONLY when the webhook flag is set, so no unverified
+ * endpoint is ever exposed by default.
  *
  * Phase 2 will: verify the provider signature, map the purchased product →
  * entitlement key, and call entitlementService.grant({ source: "purchase",
