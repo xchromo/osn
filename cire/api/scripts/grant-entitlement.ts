@@ -11,7 +11,12 @@
 import { ENTITLEMENT_KEYS } from "../src/services/entitlements";
 import type { EntitlementKey } from "../src/services/entitlements";
 
+const WEDDING_ID_RE = /^wed_[A-Za-z0-9_]+$/;
+const GRANTED_BY_RE = /^[A-Za-z0-9_]+$/;
+
 export function buildGrants(weddingId: string, keys: EntitlementKey[], grantedBy: string) {
+  if (!WEDDING_ID_RE.test(weddingId)) throw new Error("invalid weddingId");
+  if (!GRANTED_BY_RE.test(grantedBy)) throw new Error("invalid grantedBy");
   for (const k of keys) {
     if (!ENTITLEMENT_KEYS.includes(k)) throw new Error(`unknown entitlement key: ${k}`);
   }

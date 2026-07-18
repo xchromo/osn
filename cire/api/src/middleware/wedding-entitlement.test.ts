@@ -11,6 +11,17 @@ import { entitlementService } from "../services/entitlements";
 import { appRequest } from "../test-helpers";
 import { weddingEntitlement } from "./wedding-entitlement";
 
+/** A stub Db whose every query throws a transient error — simulates D1 defect. */
+function buildThrowingDb(): Db {
+  return new Proxy({} as Db, {
+    get() {
+      return () => {
+        throw new Error("simulated D1 transient failure");
+      };
+    },
+  });
+}
+
 function buildDb(): Db {
   const db = createDb(":memory:");
   const now = new Date();
@@ -44,6 +55,16 @@ function appFor(db: Db) {
 }
 
 describe("weddingEntitlement", () => {
+  it("fails closed (402) when the DB throws a defect — never grants on error", async () => {
+    const throwingDb = buildThrowingDb();
+    const app = new Elysia({ aot: false }).group("/w/:weddingId", (g) =>
+      g.use(weddingEntitlement(throwingDb, "vendors")).get("/thing", () => ({ ok: true })),
+    );
+    const res = await appRequest(app, "/w/wed_x/thing");
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: "payment_required", entitlement: "vendors" });
+  });
+
   it("402 payment_required + entitlement when the wedding lacks the pack", async () => {
     const db = buildDb();
     const res = await appRequest(appFor(db), "/w/wed_x/thing");
