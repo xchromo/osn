@@ -518,7 +518,7 @@ describe("POST /changes/apply — 402 on capacity breach", () => {
     expect(db.select().from(guests).all()).toHaveLength(101);
   });
 
-  it("the /import alias also returns 402 on capacity breach", async () => {
+  it("the /import alias also returns 402 on capacity breach — full contract + atomicity", async () => {
     const { app, db } = buildApp();
 
     const guestsCsv = buildLargeGuestsCsv(101);
@@ -533,10 +533,14 @@ describe("POST /changes/apply — 402 on capacity breach", () => {
     const applyRes = await ownerPost(app, `${IMPORT_BASE}/apply`, { importId });
     expect(applyRes.status).toBe(402);
     const body = (await applyRes.json()) as Record<string, unknown>;
+    // Full 402 body contract — must match /changes/apply exactly.
     expect(body.error).toBe("payment_required");
     expect(body.entitlement).toBe("capacity");
+    expect(body.limit).toBe(100);
+    expect(typeof body.current).toBe("number");
 
-    // Atomic: no guests persisted via either path.
+    // Atomic: neither guests nor families persisted via the /import alias.
     expect(db.select().from(guests).all()).toHaveLength(0);
+    expect(db.select().from(families).all()).toHaveLength(0);
   });
 });

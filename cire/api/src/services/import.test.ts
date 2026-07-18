@@ -658,6 +658,73 @@ describe("applyImport: optional End + Location → Address fallback", () => {
   });
 });
 
+// ── diffAgainstDb capacity warning (non-blocking) ───────────────────────────
+
+describe("diffAgainstDb — non-blocking capacity warning", () => {
+  it("adds a warning when the resulting headcount exceeds the cap, but does NOT fail", async () => {
+    const db = createDb(":memory:");
+    seedBootstrapWedding(db);
+    const layer = Layer.succeed(DbService, db);
+
+    // Seed 95 real guests directly so the next import of 10 guests
+    // produces a resulting count of 105, which exceeds the default cap of 100.
+    // Use source='manual' so the CSV import (removeManual=false by default)
+    // leaves these guests in place — they count toward existingGuests.length
+    // without being added to guestRemoves.
+    const now = new Date();
+    const seedFamilyId = crypto.randomUUID();
+    db.insert(families)
+      .values({
+        id: seedFamilyId,
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        publicId: "WARN-SEED-FAM",
+        familyName: "SeedFamily",
+        kind: "guest",
+        source: "manual",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    for (let i = 0; i < 95; i++) {
+      db.insert(guests)
+        .values({
+          id: crypto.randomUUID(),
+          familyId: seedFamilyId,
+          firstName: `SeedGuest${i}`,
+          lastName: "Seed",
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    // diffAgainstDb a plan that adds 10 new guests → resulting = 95 + 10 = 105 > 100.
+    const parsedFamily: ParsedFamily = {
+      familyName: "WarnTestFamily",
+      guests: Array.from({ length: 10 }, (_, i) => ({
+        firstName: `WarnGuest${i}`,
+        lastName: "Warn",
+        nickname: null,
+        eventNames: [],
+      })),
+    };
+
+    // Must succeed (non-blocking) — no exception or failure.
+    const plan = await Effect.runPromise(
+      diffAgainstDb([], [parsedFamily], BOOTSTRAP_WEDDING_ID).pipe(Effect.provide(layer)),
+    );
+
+    // The warning must be present and contain the stable "capped at 100" phrase.
+    expect(plan.warnings.length).toBeGreaterThan(0);
+    const capacityWarning = plan.warnings.find((w) => /capped at 100/i.test(w));
+    expect(capacityWarning).toBeDefined();
+
+    // The plan still contains the creates (diff is not blocked).
+    expect(plan.guestCreates).toHaveLength(10);
+  });
+});
+
 // ── Capacity enforcement ──────────────────────────────────────────────────────
 
 /**
