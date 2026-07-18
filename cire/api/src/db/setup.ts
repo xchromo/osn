@@ -290,7 +290,7 @@ CREATE TABLE IF NOT EXISTS wedding_entitlements (
   source TEXT NOT NULL,
   granted_at INTEGER NOT NULL,
   granted_by TEXT NOT NULL,
-  stripe_ref TEXT,
+  provider_ref TEXT,
   PRIMARY KEY (wedding_id, entitlement)
 );
 `;

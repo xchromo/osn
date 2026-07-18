@@ -24,7 +24,7 @@ Added by migration 0042.
 | `source` | `text NOT NULL` | `'purchase'` or `'comp'` |
 | `granted_at` | `integer` (timestamp) | When the row was written |
 | `granted_by` | `text NOT NULL` | Operator identifier (for comp rows) or system label |
-| `stripe_ref` | `text` | External provider reference on `source = 'purchase'`; `NULL` on `source = 'comp'` |
+| `provider_ref` | `text` | External provider reference on `source = 'purchase'`; `NULL` on `source = 'comp'` |
 
 **Primary key:** composite `(wedding_id, entitlement)` — one row per (wedding, capability) pair. Duplicate grants via `INSERT OR IGNORE` / `onConflictDoNothing` are idempotent.
 
@@ -69,10 +69,10 @@ All methods are Effect programs returning `Effect.Effect<A, E, DbService>`. Impl
 | `has` | `(weddingId, key) → Effect<boolean, never, DbService>` | Returns `true` if the row `(weddingId, key)` exists |
 | `setsForWeddings` | `(weddingIds[]) → Effect<Map<weddingId, EntitlementKey[]>, never, DbService>` | Batch-fetches all entitlement rows for a list of wedding IDs; used to annotate wedding-list responses |
 | `deriveCap` | `(keys: string[]) → number` | Pure — derives the effective guest ceiling from an entitlement key array |
-| `grant` | `(weddingId, key, { source, grantedBy, stripeRef? }) → Effect<void, never, DbService>` | Inserts a row; idempotent on conflict |
+| `grant` | `(weddingId, key, { source, grantedBy, providerRef? }) → Effect<void, never, DbService>` | Inserts a row; idempotent on conflict |
 | `assertGuestCapacity` | `(weddingId, incomingNewGuests) → Effect<void, CapacityExceeded, DbService>` | Fetches the wedding's entitlement set, derives the cap, counts current (non-host) guests, fails with `CapacityExceeded { limit, current }` if the import would breach the ceiling |
 
-`CapacityExceeded` is a tagged error (`Data.TaggedError`); handlers map it to a 422 response.
+`CapacityExceeded` is a tagged error (`Data.TaggedError`); handlers map it to a **402** response with body `{ error: "payment_required", entitlement: "capacity", limit, current }`.
 
 ---
 
@@ -105,7 +105,7 @@ A missing `weddingId` in `params` (should not occur after the role gate validate
 
 ## Capacity enforcement in `applyImport`
 
-`applyImport` (in `cire/api/src/services/import.ts`) calls `entitlementService.assertGuestCapacity(weddingId, plan.guestCreates.length)` **before** writing any rows. The check and the subsequent D1 batch write are sequenced atomically: if the capacity check fails, no guests are written. There are no partial writes.
+`applyImport` (in `cire/api/src/services/import.ts`) calls `entitlementService.assertGuestCapacity(weddingId, netGuestDelta)` — where `netGuestDelta = guestCreates.length - guestRemoves.length` — **before** writing any rows. The check is skipped when the net delta is zero or negative (a churn import that removes K and adds K at cap succeeds). The check and the subsequent D1 batch write are sequenced atomically: if the capacity check fails, no guests are written. There are no partial writes.
 
 The check counts real guests only — the synthetic `host`-kind family row used for invite previews is excluded from the count via a `ne(families.kind, 'host')` filter.
 
@@ -133,7 +133,7 @@ A prod D1 write requires explicit human authorization naming `cire-db` before ru
 
 ## Phase-2 payment seam
 
-`grant()` accepts `source: 'purchase'` and a `stripeRef` field. A webhook skeleton (`cire/api/src/routes/payment-webhook.ts`) exists but is inert in Phase 1 — all Phase-1 grants use `source: 'comp'`. The `stripeRef` column is the idempotency anchor for Phase-2 event-driven grants. Provider selection is tracked outside this repository.
+`grant()` accepts `source: 'purchase'` and a `providerRef` field. A webhook skeleton (`cire/api/src/routes/payment-webhook.ts`) exists but is inert in Phase 1 — all Phase-1 grants use `source: 'comp'`. The `provider_ref` column is the idempotency anchor for Phase-2 event-driven grants. Provider selection is tracked outside this repository.
 
 ---
 

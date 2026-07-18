@@ -9,7 +9,7 @@ import { Elysia } from "elysia";
  *
  * Phase 2 will: verify the provider signature, map the purchased product →
  * entitlement key, and call entitlementService.grant({ source: "purchase",
- * stripeRef: <provider order id> }) — idempotent on the provider order id.
+ * providerRef: <provider order id> }) — idempotent on the provider order id.
  */
 export function createPaymentWebhookSkeleton() {
   return new Elysia().post("/api/payments/webhook", ({ set }) => {

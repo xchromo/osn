@@ -919,4 +919,150 @@ describe("applyImport — capacity enforcement", () => {
       }).pipe(Effect.provide(layer)),
     );
   });
+
+  // SWAP-AT-CAP: remove K guests and add K guests when already at the cap.
+  // Net delta = 0, so the capacity gate must NOT fire even though guestCreates.length > 0.
+  it("swap-at-cap: remove K and add K at exactly cap → succeeds (net delta = 0)", async () => {
+    const db = createDb();
+    seedBootstrapWedding(db);
+    const layer = Layer.succeed(DbService, db);
+    const now = new Date();
+
+    // Seed exactly 100 real guests (= default cap) directly as import-sourced.
+    const seedFamilyId = crypto.randomUUID();
+    db.insert(families)
+      .values({
+        id: seedFamilyId,
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        publicId: "SWAP-SEED-FAM",
+        familyName: "SwapSeedFamily",
+        kind: "guest",
+        source: "import",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    const seedGuestIds: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const id = crypto.randomUUID();
+      seedGuestIds.push(id);
+      db.insert(guests)
+        .values({
+          id,
+          familyId: seedFamilyId,
+          firstName: `SwapGuest${i}`,
+          lastName: "Seed",
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    const K = 5;
+    // Build a plan that removes K existing guests and adds K new guests (net = 0).
+    const swapPlan: import("../schemas/import").ImportPlan = {
+      eventCreates: [],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [],
+      familyRemoves: [],
+      guestCreates: Array.from({ length: K }, (_, i) => ({
+        id: crypto.randomUUID(),
+        familyId: seedFamilyId,
+        firstName: `NewSwapGuest${i}`,
+        lastName: "New",
+        nickname: null,
+        sortOrder: 100 + i,
+      })),
+      guestUpdates: [],
+      guestRemoves: seedGuestIds.slice(0, K).map((id) => ({ id, firstName: "SwapGuest" })),
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+
+    // Net delta = 0 → must succeed even at cap.
+    const exit = await Effect.runPromiseExit(
+      applyImport("imp_swap_at_cap", swapPlan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+
+    // Still at cap: 100 - K + K = 100.
+    const n = (db.$client.query("SELECT COUNT(*) AS n FROM guests").get() as { n: number }).n;
+    expect(n).toBe(100);
+  });
+
+  it("swap-at-cap: remove K and add K+1 at exactly cap → CapacityExceeded", async () => {
+    const db = createDb();
+    seedBootstrapWedding(db);
+    const now = new Date();
+
+    // Seed exactly 100 real guests.
+    const seedFamilyId = crypto.randomUUID();
+    db.insert(families)
+      .values({
+        id: seedFamilyId,
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        publicId: "SWAP-OVER-FAM",
+        familyName: "SwapOverFamily",
+        kind: "guest",
+        source: "import",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    const seedGuestIds: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const id = crypto.randomUUID();
+      seedGuestIds.push(id);
+      db.insert(guests)
+        .values({
+          id,
+          familyId: seedFamilyId,
+          firstName: `OverGuest${i}`,
+          lastName: "Seed",
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    const K = 5;
+    // Remove K, add K+1 → net delta = +1, which breaches the cap.
+    const overPlan: import("../schemas/import").ImportPlan = {
+      eventCreates: [],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [],
+      familyRemoves: [],
+      guestCreates: Array.from({ length: K + 1 }, (_, i) => ({
+        id: crypto.randomUUID(),
+        familyId: seedFamilyId,
+        firstName: `NewOverGuest${i}`,
+        lastName: "New",
+        nickname: null,
+        sortOrder: 100 + i,
+      })),
+      guestUpdates: [],
+      guestRemoves: seedGuestIds.slice(0, K).map((id) => ({ id, firstName: "OverGuest" })),
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+
+    const exit = await Effect.runPromiseExit(
+      applyImport("imp_swap_over_cap", overPlan, BOOTSTRAP_WEDDING_ID).pipe(
+        Effect.provideService(DbService, db),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+
+    // Atomic: still 100 guests (no partial write).
+    const n = (db.$client.query("SELECT COUNT(*) AS n FROM guests").get() as { n: number }).n;
+    expect(n).toBe(100);
+  });
 });

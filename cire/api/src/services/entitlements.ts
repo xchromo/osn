@@ -89,7 +89,7 @@ export const entitlementService = {
   grant(
     weddingId: string,
     key: EntitlementKey,
-    opts: { source: "purchase" | "comp"; grantedBy: string; stripeRef?: string | null },
+    opts: { source: "purchase" | "comp"; grantedBy: string; providerRef?: string | null },
   ): Effect.Effect<void, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
@@ -102,7 +102,7 @@ export const entitlementService = {
             source: opts.source,
             grantedAt: new Date(),
             grantedBy: opts.grantedBy,
-            stripeRef: opts.stripeRef ?? null,
+            providerRef: opts.providerRef ?? null,
           })
           .onConflictDoNothing()
           .run(),

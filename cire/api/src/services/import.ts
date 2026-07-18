@@ -725,9 +725,13 @@ export function applyImport(
 
     // Capacity gate — enforce the wedding's derived guest ceiling on the NET new
     // guests this plan introduces, before any write. Atomic: a breach fails the
-    // whole apply, nothing is committed.
-    if (plan.guestCreates.length > 0) {
-      yield* entitlementService.assertGuestCapacity(weddingId, plan.guestCreates.length);
+    // whole apply, nothing is committed. We pass the NET delta (creates minus
+    // removals) so a churn import that removes K guests and adds K guests at cap
+    // is correctly allowed: assertGuestCapacity does `current + incoming > cap`,
+    // and a negative or zero incoming can never exceed.
+    const netGuestDelta = plan.guestCreates.length - plan.guestRemoves.length;
+    if (netGuestDelta > 0) {
+      yield* entitlementService.assertGuestCapacity(weddingId, netGuestDelta);
     }
 
     yield* Effect.tryPromise({

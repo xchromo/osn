@@ -7,6 +7,6 @@ CREATE TABLE `wedding_entitlements` (
   `source` text NOT NULL,
   `granted_at` integer NOT NULL,
   `granted_by` text NOT NULL,
-  `stripe_ref` text,
+  `provider_ref` text,
   PRIMARY KEY (`wedding_id`, `entitlement`)
 );

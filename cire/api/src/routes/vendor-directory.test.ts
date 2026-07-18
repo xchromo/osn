@@ -119,7 +119,7 @@ function buildApp({ grantVendors = true }: { grantVendors?: boolean } = {}) {
         source: "comp",
         grantedAt: now,
         grantedBy: OWNER,
-        stripeRef: null,
+        providerRef: null,
       })
       .onConflictDoNothing()
       .run();
@@ -131,7 +131,7 @@ function buildApp({ grantVendors = true }: { grantVendors?: boolean } = {}) {
         source: "comp",
         grantedAt: now,
         grantedBy: "usr_bob",
-        stripeRef: null,
+        providerRef: null,
       })
       .onConflictDoNothing()
       .run();
@@ -347,7 +347,7 @@ function buildWriteApp({ grantVendors = true }: { grantVendors?: boolean } = {})
         source: "comp",
         grantedAt: now,
         grantedBy: OWNER,
-        stripeRef: null,
+        providerRef: null,
       })
       .onConflictDoNothing()
       .run();

@@ -136,7 +136,7 @@ describe("GET /api/organiser/weddings", () => {
         source: "comp",
         grantedAt: new Date(),
         grantedBy: "usr_admin",
-        stripeRef: null,
+        providerRef: null,
       })
       .run();
     const res = await get(app, "/api/organiser/weddings", BOOTSTRAP_OWNER);
@@ -159,7 +159,7 @@ describe("GET /api/organiser/weddings", () => {
         source: "comp",
         grantedAt: new Date(),
         grantedBy: "usr_admin",
-        stripeRef: null,
+        providerRef: null,
       })
       .run();
     const res = await get(app, "/api/organiser/weddings", BOOTSTRAP_OWNER);

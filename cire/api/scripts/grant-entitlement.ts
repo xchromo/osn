@@ -28,7 +28,7 @@ export function grantsToSql(
   return buildGrants(weddingId, keys, grantedBy)
     .map(
       (g) =>
-        `INSERT OR IGNORE INTO wedding_entitlements (wedding_id, entitlement, source, granted_at, granted_by, stripe_ref) ` +
+        `INSERT OR IGNORE INTO wedding_entitlements (wedding_id, entitlement, source, granted_at, granted_by, provider_ref) ` +
         `VALUES ('${weddingId}', '${g.key}', 'comp', ${nowMs}, '${grantedBy}', NULL);`,
     )
     .join("\n");

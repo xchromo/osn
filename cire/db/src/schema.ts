@@ -426,9 +426,9 @@ export const vendorClaims = sqliteTable(
 // `ai`) gate features by presence; capacity is LEVELED — the effective guest
 // ceiling is DERIVED from the highest capacity_* row (none→100, capacity_500→500,
 // capacity_1000→1000), so there is deliberately no guest_cap column to drift.
-// `source` distinguishes a Stripe purchase from a comp/manual grant (V&R,
-// "contact us" capacity, support goodwill). `stripe_ref` carries the
-// checkout_session/payment_intent id on purchases (NULL on comp) and is the
+// `source` distinguishes a provider purchase from a comp/manual grant (V&R,
+// "contact us" capacity, support goodwill). `provider_ref` carries the
+// external provider reference on purchases (NULL on comp) and is the
 // Phase-2 webhook idempotency key.
 export const weddingEntitlements = sqliteTable(
   "wedding_entitlements",
@@ -442,7 +442,7 @@ export const weddingEntitlements = sqliteTable(
     source: text("source", { enum: ["purchase", "comp"] }).notNull(),
     grantedAt: integer("granted_at", { mode: "timestamp" }).notNull(),
     grantedBy: text("granted_by").notNull(),
-    stripeRef: text("stripe_ref"),
+    providerRef: text("provider_ref"),
   },
   (t) => [primaryKey({ columns: [t.weddingId, t.entitlement] })],
 );
