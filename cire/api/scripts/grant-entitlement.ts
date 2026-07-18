@@ -8,9 +8,7 @@
  *         using the SQL this prints (a prod D1 write — requires explicit human
  *         authorization naming cire-db before running).
  */
-import { Effect } from "effect";
-
-import { ENTITLEMENT_KEYS, entitlementService } from "../src/services/entitlements";
+import { ENTITLEMENT_KEYS } from "../src/services/entitlements";
 import type { EntitlementKey } from "../src/services/entitlements";
 
 export function buildGrants(weddingId: string, keys: EntitlementKey[], grantedBy: string) {
