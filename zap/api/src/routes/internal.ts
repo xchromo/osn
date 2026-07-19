@@ -1,6 +1,6 @@
-import { chatMembers } from "@zap/db/schema";
+import { chatMembers, chats, messages } from "@zap/db/schema";
 import { DbLive, Db, type Db as DbType } from "@zap/db/service";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -68,6 +68,63 @@ const loadChatMemberships = (
       joinedAt: r.joinedAt ? r.joinedAt.toISOString() : null,
     }));
   }).pipe(Effect.withSpan("zap.internal.account_export"));
+
+/**
+ * A single DSAR export line for a c2b (server-visible) message body.
+ * `messages.ciphertext` is NEVER read here — only `body` is selected.
+ */
+interface ExportC2bMessageRecord {
+  readonly chatId: string;
+  readonly body: string;
+  readonly createdAt: string;
+}
+
+/**
+ * Reads c2b message bodies for all c2b chats the exported profiles are members
+ * of. `messages.ciphertext` is deliberately NOT selected — c2c ciphertext
+ * stays excluded from all DSAR exports.
+ *
+ * Scope: chats.class = 'c2b' AND chatMembers.profileId IN profileIds.
+ */
+const loadC2bMessages = (
+  profileIds: readonly string[],
+): Effect.Effect<ExportC2bMessageRecord[], never, DbType> =>
+  Effect.gen(function* () {
+    if (profileIds.length === 0) return [];
+    const { db } = yield* Db;
+    // First find the c2b chat IDs this set of profiles belongs to.
+    const memberRows = yield* Effect.promise(
+      (): Promise<{ chatId: string }[]> =>
+        db
+          .select({ chatId: chatMembers.chatId })
+          .from(chatMembers)
+          .innerJoin(chats, and(eq(chats.id, chatMembers.chatId), eq(chats.class, "c2b")))
+          .where(inArray(chatMembers.profileId, [...profileIds])) as Promise<{ chatId: string }[]>,
+    );
+    if (memberRows.length === 0) return [];
+    const c2bChatIds = [...new Set(memberRows.map((r) => r.chatId))];
+    // Read only `body` — never `ciphertext` or `nonce`.
+    const msgRows = yield* Effect.promise(
+      (): Promise<{ chatId: string; body: string | null; createdAt: Date }[]> =>
+        db
+          .select({
+            chatId: messages.chatId,
+            body: messages.body,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .where(inArray(messages.chatId, c2bChatIds)) as Promise<
+          { chatId: string; body: string | null; createdAt: Date }[]
+        >,
+    );
+    return msgRows
+      .filter((r) => r.body !== null)
+      .map((r) => ({
+        chatId: r.chatId,
+        body: r.body as string,
+        createdAt: r.createdAt.toISOString(),
+      }));
+  }).pipe(Effect.withSpan("zap.internal.account_export_c2b_messages"));
 
 /**
  * Internal zap-api endpoints — ARC-gated (account-export) and
@@ -172,13 +229,19 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<DbType> = DbLive) => {
           );
           if (!caller) return { error: "Unauthorized" };
 
-          const records = await runtime.runPromise(loadChatMemberships(body.profile_ids));
+          const [membershipRecords, c2bMessageRecords] = await runtime.runPromise(
+            Effect.all([loadChatMemberships(body.profile_ids), loadC2bMessages(body.profile_ids)]),
+          );
 
           // Buffered NDJSON — one JSON object per line, no trailing newline
           // beyond each record's own. Empty profile set → empty body.
-          const ndjson = records
-            .map((record) => JSON.stringify({ section: "zap.chats", record }))
-            .join("\n");
+          const ndjsonLines: string[] = [
+            ...membershipRecords.map((record) => JSON.stringify({ section: "zap.chats", record })),
+            ...c2bMessageRecords.map((record) =>
+              JSON.stringify({ section: "zap.c2b_messages", record }),
+            ),
+          ];
+          const ndjson = ndjsonLines.join("\n");
 
           set.status = 200;
           set.headers["content-type"] = "application/x-ndjson";

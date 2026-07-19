@@ -5,7 +5,14 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
 import { _resetServiceKeysForTests } from "../../src/lib/arc-middleware";
 import { createInternalRoutes } from "../../src/routes/internal";
-import { createTestLayer, seedChat, seedMember } from "../helpers/db";
+import {
+  createTestLayer,
+  seedChat,
+  seedMember,
+  seedC2bChat,
+  seedC2bMessage,
+  seedMessage,
+} from "../helpers/db";
 
 /**
  * Route-level coverage for the `/internal` group: the shared-secret
@@ -185,6 +192,90 @@ describe("zap internal routes — ARC-gated account-export", () => {
     );
     // requireArc reports every failure as an opaque 401 (no scope oracle).
     expect(res.status).toBe(401);
+  });
+
+  it("includes c2b message bodies in the export but not c2c ciphertext", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+
+    const reg = await post(app, "/internal/register-service", registerBody(), `Bearer ${SECRET}`);
+    expect(reg.status).toBe(200);
+
+    // Seed a c2b chat with two members and two plaintext messages.
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_exported", "member").pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_host", "admin").pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_host", "Hello from host!").pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_exported", "Hi there!").pipe(Effect.provide(layer)),
+    );
+
+    // Seed a c2c chat with a ciphertext message — this must NOT appear in the export.
+    const c2cChat = await Effect.runPromise(
+      seedChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2cChat.id, "usr_exported", "member").pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMessage(c2cChat.id, "usr_exported", "SECRET_CIPHERTEXT_XYZ", new Date()).pipe(
+        Effect.provide(layer),
+      ),
+    );
+
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await post(
+      app,
+      "/internal/account-export",
+      { account_id: "acc_exported", profile_ids: ["usr_exported"] },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+
+    const text = await res.text();
+
+    // Must contain c2b message bodies.
+    expect(text).toContain("Hello from host!");
+    expect(text).toContain("Hi there!");
+
+    // Must contain the new zap.c2b_messages section.
+    expect(text).toContain("zap.c2b_messages");
+
+    // The c2c ciphertext must NEVER appear.
+    expect(text).not.toContain("SECRET_CIPHERTEXT_XYZ");
+    expect(text).not.toContain("ciphertext");
+
+    // Parse and validate structure of c2b_messages lines.
+    const lines = text.split("\n").filter(Boolean);
+    const c2bLines = lines.filter((l) => {
+      const parsed = JSON.parse(l) as { section: string };
+      return parsed.section === "zap.c2b_messages";
+    });
+    expect(c2bLines).toHaveLength(2);
+    for (const line of c2bLines) {
+      const parsed = JSON.parse(line) as {
+        section: string;
+        record: { chatId: string; body: string; createdAt: string };
+      };
+      expect(parsed.section).toBe("zap.c2b_messages");
+      expect(parsed.record.chatId).toBe(c2bChat.id);
+      expect(typeof parsed.record.body).toBe("string");
+      expect(typeof parsed.record.createdAt).toBe("string");
+    }
   });
 });
 

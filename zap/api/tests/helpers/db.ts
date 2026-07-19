@@ -135,3 +135,51 @@ export const seedMessage = (
     yield* Effect.promise(() => db.insert(messages).values(row));
     return row;
   });
+
+/**
+ * Seed a c2b chat directly into the DB (class = 'c2b').
+ */
+export const seedC2bChat = (input: Omit<SeedChatInput, never>): Effect.Effect<Chat, never, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const id = "chat_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const now = input.createdAt ?? new Date();
+    const row: Chat = {
+      id,
+      type: input.type,
+      class: "c2b",
+      title: input.title ?? null,
+      eventId: input.eventId ?? null,
+      createdByProfileId: input.createdByProfileId ?? "usr_alice",
+      createdAt: now,
+      updatedAt: now,
+    };
+    yield* Effect.promise(() => db.insert(chats).values(row));
+    return row;
+  });
+
+/**
+ * Seed a c2b (plaintext body) message directly into the DB.
+ */
+export const seedC2bMessage = (
+  chatId: string,
+  senderProfileId: string,
+  body: string,
+  createdAt?: Date,
+): Effect.Effect<Message, never, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const row: Message = {
+      id,
+      chatId,
+      senderProfileId,
+      ciphertext: null,
+      nonce: null,
+      body,
+      createdAt: createdAt ?? new Date(),
+      expiresAt: null,
+    };
+    yield* Effect.promise(() => db.insert(messages).values(row));
+    return row;
+  });
