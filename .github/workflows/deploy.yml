@@ -423,10 +423,13 @@ jobs:
       - name: Detect zap prod provisioning
         id: zapcheck
         run: |
-          if grep -q 'placeholder-replace-after-d1-create' zap/api/wrangler.toml; then
+          # Check ONLY the production D1 id — dev/staging legitimately keep placeholders.
+          PROD_ID=$(awk '/\[\[env\.production\.d1_databases\]\]/{f=1} f&&/^database_id/{gsub(/.*= *"|".*/,""); print; exit}' zap/api/wrangler.toml)
+          if [ -z "$PROD_ID" ] || [ "$PROD_ID" = "placeholder-replace-after-d1-create" ]; then
             echo "provisioned=false" >> "$GITHUB_OUTPUT"
             echo "zap-api prod D1 not provisioned yet — skipping deploy."
           else
+            echo "zap-api prod D1 provisioned ($PROD_ID) — deploying."
             echo "provisioned=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Apply zap D1 migrations (remote prod)

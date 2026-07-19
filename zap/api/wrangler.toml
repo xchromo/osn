@@ -26,7 +26,7 @@ migrations_dir = "../db/drizzle"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "zap-db-prod"
-database_id = "placeholder-replace-after-d1-create"
+database_id = "9b75f81a-7439-412a-9aad-cf47836bca07"
 migrations_dir = "../db/drizzle"
 
 # Production vars: OSN identity issuer for access-token JWKS verification.
