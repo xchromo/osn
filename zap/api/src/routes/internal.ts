@@ -302,7 +302,7 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<DbType> = DbLive) => {
           const caller = await requireArc(headers.authorization, set, AUDIENCE, "chat:c2b");
           if (!caller) return { error: "Unauthorized" };
 
-          const limit = query.limit ? Number(query.limit) : undefined;
+          const limit = query.limit;
           const before = query.before ?? undefined;
 
           const result = await runtime.runPromise(
@@ -340,7 +340,7 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<DbType> = DbLive) => {
         {
           params: t.Object({ chatId: t.String({ minLength: 1 }) }),
           query: t.Object({
-            limit: t.Optional(t.String()),
+            limit: t.Optional(t.Numeric()),
             before: t.Optional(t.String()),
           }),
         },

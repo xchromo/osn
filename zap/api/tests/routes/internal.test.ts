@@ -291,6 +291,58 @@ describe("zap internal routes — ARC-gated /internal/chats (chat:c2b)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("POST /internal/chats/:id/messages → 401 with an account:export-scoped token (wrong scope)", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    await post(
+      app,
+      "/internal/register-service",
+      { serviceId: "osn-api", keyId: KID, publicKeyJwk, allowedScopes: "account:export" },
+      `Bearer ${SECRET}`,
+    );
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await post(
+      app,
+      "/internal/chats/chat_fake/messages",
+      { senderProfileId: "usr_a", body: "hello" },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /internal/chats/:id/messages → 401 with an account:export-scoped token (wrong scope)", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    await post(
+      app,
+      "/internal/register-service",
+      { serviceId: "osn-api", keyId: KID, publicKeyJwk, allowedScopes: "account:export" },
+      `Bearer ${SECRET}`,
+    );
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await get(app, "/internal/chats/chat_fake/messages", `ARC ${arc}`);
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /internal/chats/:id/messages → 422 with a non-numeric limit param", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    const arc = await registerC2bAndMintToken(app, privateKey, publicKeyJwk);
+    const res = await get(app, "/internal/chats/chat_fake/messages", `ARC ${arc}`, {
+      limit: "abc",
+    });
+    // Elysia rejects the non-numeric query param before reaching the handler.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
   // ── provision ────────────────────────────────────────────────────────────
 
   it("POST /internal/chats → 201 + chatId with a valid chat:c2b token", async () => {
