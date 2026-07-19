@@ -1,6 +1,6 @@
 import { chatMembers, chats, messages } from "@zap/db/schema";
 import { DbLive, Db, type Db as DbType } from "@zap/db/service";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -16,6 +16,9 @@ import { sendC2bMessage, listC2bMessages } from "../services/messages";
 
 const AUDIENCE = "zap-api";
 const SCOPE_ACCOUNT_EXPORT = "account:export";
+// Bounds the DSAR c2b-body fetch to keep the export within Worker memory/CPU.
+// A follow-up may paginate if a real account exceeds this.
+const MAX_EXPORT_C2B_MESSAGES = 5_000;
 
 function isTimingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -104,8 +107,10 @@ const loadC2bMessages = (
     if (memberRows.length === 0) return [];
     const c2bChatIds = [...new Set(memberRows.map((r) => r.chatId))];
     // Read only `body` — never `ciphertext` or `nonce`.
+    // isNotNull(body): defence-in-depth — only c2b bodies, never a stray null.
+    // orderBy + limit: bounds the fetch to keep the export within Worker memory/CPU.
     const msgRows = yield* Effect.promise(
-      (): Promise<{ chatId: string; body: string | null; createdAt: Date }[]> =>
+      (): Promise<{ chatId: string; body: string; createdAt: Date }[]> =>
         db
           .select({
             chatId: messages.chatId,
@@ -113,17 +118,17 @@ const loadC2bMessages = (
             createdAt: messages.createdAt,
           })
           .from(messages)
-          .where(inArray(messages.chatId, c2bChatIds)) as Promise<
-          { chatId: string; body: string | null; createdAt: Date }[]
+          .where(and(inArray(messages.chatId, c2bChatIds), isNotNull(messages.body)))
+          .orderBy(desc(messages.createdAt))
+          .limit(MAX_EXPORT_C2B_MESSAGES) as Promise<
+          { chatId: string; body: string; createdAt: Date }[]
         >,
     );
-    return msgRows
-      .filter((r) => r.body !== null)
-      .map((r) => ({
-        chatId: r.chatId,
-        body: r.body as string,
-        createdAt: r.createdAt.toISOString(),
-      }));
+    return msgRows.map((r) => ({
+      chatId: r.chatId,
+      body: r.body,
+      createdAt: r.createdAt.toISOString(),
+    }));
   }).pipe(Effect.withSpan("zap.internal.account_export_c2b_messages"));
 
 /**

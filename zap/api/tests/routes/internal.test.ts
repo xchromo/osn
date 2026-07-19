@@ -277,6 +277,68 @@ describe("zap internal routes — ARC-gated account-export", () => {
       expect(typeof parsed.record.createdAt).toBe("string");
     }
   });
+
+  it("c2b export is bounded and ordered newest-first (P-W1 hardening)", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+
+    const reg = await post(app, "/internal/register-service", registerBody(), `Bearer ${SECRET}`);
+    expect(reg.status).toBe(200);
+
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_bounded", "member").pipe(Effect.provide(layer)),
+    );
+
+    // Seed 3 messages with distinct timestamps (oldest → newest).
+    const t0 = new Date("2024-01-01T00:00:00Z");
+    const t1 = new Date("2024-01-02T00:00:00Z");
+    const t2 = new Date("2024-01-03T00:00:00Z");
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_bounded", "msg-oldest", t0).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_bounded", "msg-middle", t1).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_bounded", "msg-newest", t2).pipe(Effect.provide(layer)),
+    );
+
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await post(
+      app,
+      "/internal/account-export",
+      { account_id: "acc_bounded", profile_ids: ["usr_bounded"] },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    const c2bLines = text
+      .split("\n")
+      .filter(Boolean)
+      .filter((l) => (JSON.parse(l) as { section: string }).section === "zap.c2b_messages");
+
+    // All 3 seeded bodies must be present (well under the 5 000 cap).
+    expect(c2bLines).toHaveLength(3);
+    expect(text).toContain("msg-oldest");
+    expect(text).toContain("msg-middle");
+    expect(text).toContain("msg-newest");
+
+    // Ordered newest-first: first c2b line's body should be the most recent.
+    const firstRecord = (
+      JSON.parse(c2bLines[0]!) as { record: { body: string; createdAt: string } }
+    ).record;
+    expect(firstRecord.body).toBe("msg-newest");
+    expect(firstRecord.createdAt).toBe(t2.toISOString());
+  });
 });
 
 // ---------------------------------------------------------------------------
