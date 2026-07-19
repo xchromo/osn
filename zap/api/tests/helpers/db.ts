@@ -19,6 +19,7 @@ export function createTestLayer() {
     CREATE TABLE chats (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
+      class TEXT NOT NULL DEFAULT 'c2c',
       title TEXT,
       event_id TEXT,
       created_by_profile_id TEXT NOT NULL,
@@ -27,6 +28,7 @@ export function createTestLayer() {
     )
   `);
   sqlite.run(`CREATE INDEX chats_type_idx ON chats (type)`);
+  sqlite.run(`CREATE INDEX chats_class_idx ON chats (class)`);
   sqlite.run(`CREATE INDEX chats_event_id_idx ON chats (event_id)`);
   sqlite.run(`CREATE INDEX chats_created_by_profile_id_idx ON chats (created_by_profile_id)`);
   sqlite.run(`
@@ -46,8 +48,9 @@ export function createTestLayer() {
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL REFERENCES chats(id),
       sender_profile_id TEXT NOT NULL,
-      ciphertext TEXT NOT NULL,
-      nonce TEXT NOT NULL,
+      ciphertext TEXT,
+      nonce TEXT,
+      body TEXT,
       created_at INTEGER NOT NULL,
       expires_at INTEGER
     )
@@ -79,6 +82,7 @@ export const seedChat = (input: SeedChatInput): Effect.Effect<Chat, never, Db> =
     const row: Chat = {
       id,
       type: input.type,
+      class: "c2c",
       title: input.title ?? null,
       eventId: input.eventId ?? null,
       createdByProfileId: input.createdByProfileId ?? "usr_alice",
@@ -124,6 +128,7 @@ export const seedMessage = (
       senderProfileId,
       ciphertext,
       nonce: "test_nonce",
+      body: null,
       createdAt,
       expiresAt: null,
     };

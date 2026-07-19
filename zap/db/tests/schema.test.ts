@@ -12,6 +12,7 @@ function createTestDb() {
     CREATE TABLE chats (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
+      class TEXT NOT NULL DEFAULT 'c2c',
       title TEXT,
       event_id TEXT,
       created_by_profile_id TEXT NOT NULL,
@@ -34,8 +35,9 @@ function createTestDb() {
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL REFERENCES chats(id),
       sender_profile_id TEXT NOT NULL,
-      ciphertext TEXT NOT NULL,
-      nonce TEXT NOT NULL,
+      ciphertext TEXT,
+      nonce TEXT,
+      body TEXT,
       created_at INTEGER NOT NULL,
       expires_at INTEGER
     )
