@@ -11,6 +11,8 @@ import {
   requireArc,
   revokeServiceKey,
 } from "../lib/arc-middleware";
+import { provisionC2bChat } from "../services/chats";
+import { sendC2bMessage, listC2bMessages } from "../services/messages";
 
 const AUDIENCE = "zap-api";
 const SCOPE_ACCOUNT_EXPORT = "account:export";
@@ -186,6 +188,160 @@ export const createInternalRoutes = (dbLayer: Layer.Layer<DbType> = DbLive) => {
           body: t.Object({
             account_id: t.String(),
             profile_ids: t.Array(t.String()),
+          }),
+        },
+      )
+      // ------------------------------------------------------------------
+      // ARC-gated `/internal/chats` — called by cire-api to provision
+      // consumer-to-business chats (scope: `chat:c2b`).
+      // ------------------------------------------------------------------
+      .post(
+        "/chats",
+        async ({ body, headers, set }) => {
+          const caller = await requireArc(headers.authorization, set, AUDIENCE, "chat:c2b");
+          if (!caller) return { error: "Unauthorized" };
+
+          const result = await runtime.runPromise(
+            provisionC2bChat({
+              memberProfileIds: body.memberProfileIds,
+              createdByProfileId: body.createdByProfileId,
+              title: body.title,
+            }).pipe(
+              Effect.catchTag("ValidationError", () =>
+                Effect.sync(() => {
+                  set.status = 400;
+                  return { error: "Invalid request" } as const;
+                }),
+              ),
+              Effect.catchTag("DatabaseError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal server error" } as const;
+                }),
+              ),
+            ),
+          );
+          if ("error" in result) return result;
+          set.status = 201;
+          return { chatId: result.id };
+        },
+        {
+          body: t.Object({
+            memberProfileIds: t.Array(t.String(), { minItems: 2 }),
+            createdByProfileId: t.String({ minLength: 1 }),
+            title: t.Optional(t.String()),
+          }),
+        },
+      )
+      // ------------------------------------------------------------------
+      // ARC-gated `POST /internal/chats/:chatId/messages` — send a
+      // server-visible (plaintext) message into a c2b chat.
+      // ------------------------------------------------------------------
+      .post(
+        "/chats/:chatId/messages",
+        async ({ body, headers, params, set }) => {
+          const caller = await requireArc(headers.authorization, set, AUDIENCE, "chat:c2b");
+          if (!caller) return { error: "Unauthorized" };
+
+          const result = await runtime.runPromise(
+            sendC2bMessage(params.chatId, body.senderProfileId, { body: body.body }).pipe(
+              Effect.catchTag("ValidationError", () =>
+                Effect.sync(() => {
+                  set.status = 400;
+                  return { error: "Invalid request" } as const;
+                }),
+              ),
+              Effect.catchTag("ChatNotFound", () =>
+                Effect.sync(() => {
+                  set.status = 404;
+                  return { error: "Chat not found" } as const;
+                }),
+              ),
+              Effect.catchTag("NotC2bChat", () =>
+                Effect.sync(() => {
+                  set.status = 409;
+                  return { error: "Not a c2b chat" } as const;
+                }),
+              ),
+              Effect.catchTag("NotChatMember", () =>
+                Effect.sync(() => {
+                  set.status = 403;
+                  return { error: "Sender is not a chat member" } as const;
+                }),
+              ),
+              Effect.catchTag("DatabaseError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal server error" } as const;
+                }),
+              ),
+            ),
+          );
+          if ("error" in result) return result;
+          set.status = 201;
+          return {
+            messageId: result.id,
+            createdAt: result.createdAt.toISOString(),
+          };
+        },
+        {
+          params: t.Object({ chatId: t.String({ minLength: 1 }) }),
+          body: t.Object({
+            senderProfileId: t.String({ minLength: 1 }),
+            body: t.String({ minLength: 1 }),
+          }),
+        },
+      )
+      // ------------------------------------------------------------------
+      // ARC-gated `GET /internal/chats/:chatId/messages` — list messages
+      // in a c2b chat (newest first, cursor-paginated via `before` + `limit`).
+      // ------------------------------------------------------------------
+      .get(
+        "/chats/:chatId/messages",
+        async ({ headers, params, query, set }) => {
+          const caller = await requireArc(headers.authorization, set, AUDIENCE, "chat:c2b");
+          if (!caller) return { error: "Unauthorized" };
+
+          const limit = query.limit ? Number(query.limit) : undefined;
+          const before = query.before ?? undefined;
+
+          const result = await runtime.runPromise(
+            listC2bMessages(params.chatId, { limit, before }).pipe(
+              Effect.catchTag("ChatNotFound", () =>
+                Effect.sync(() => {
+                  set.status = 404;
+                  return { error: "Chat not found" } as const;
+                }),
+              ),
+              Effect.catchTag("NotC2bChat", () =>
+                Effect.sync(() => {
+                  set.status = 409;
+                  return { error: "Not a c2b chat" } as const;
+                }),
+              ),
+              Effect.catchTag("DatabaseError", () =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal server error" } as const;
+                }),
+              ),
+            ),
+          );
+          if ("error" in result) return result;
+          return {
+            messages: result.map((m) => ({
+              id: m.id,
+              senderProfileId: m.senderProfileId,
+              body: m.body ?? "",
+              createdAt: m.createdAt.toISOString(),
+            })),
+          };
+        },
+        {
+          params: t.Object({ chatId: t.String({ minLength: 1 }) }),
+          query: t.Object({
+            limit: t.Optional(t.String()),
+            before: t.Optional(t.String()),
           }),
         },
       )

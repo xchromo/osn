@@ -1,4 +1,5 @@
 import { exportKeyToJwk, generateArcKeyPair, signArcToken } from "@shared/crypto/jwk";
+import type { Chat } from "@zap/db/schema";
 import { Effect } from "effect";
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
@@ -184,5 +185,193 @@ describe("zap internal routes — ARC-gated account-export", () => {
     );
     // requireArc reports every failure as an opaque 401 (no scope oracle).
     expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARC-gated /internal/chats* (chat:c2b scope)
+// ---------------------------------------------------------------------------
+
+const C2B_KID = "test-cire-kid";
+
+/**
+ * Helper: register cire-api's key with the chat:c2b scope and return a signed
+ * ARC token for it.  Mirrors the pattern in the account-export suite above.
+ */
+async function registerC2bAndMintToken(
+  app: ReturnType<typeof createInternalRoutes>,
+  privKey: CryptoKey,
+  pubKeyJwk: string,
+): Promise<string> {
+  const reg = await post(
+    app,
+    "/internal/register-service",
+    {
+      serviceId: "cire-api",
+      keyId: C2B_KID,
+      publicKeyJwk: pubKeyJwk,
+      allowedScopes: "chat:c2b",
+    },
+    `Bearer ${SECRET}`,
+  );
+  if (reg.status !== 200) throw new Error(`register-service failed: ${reg.status}`);
+  return signArcToken(privKey, {
+    iss: "cire-api",
+    aud: "zap-api",
+    scope: "chat:c2b",
+    kid: C2B_KID,
+  });
+}
+
+function get(
+  app: ReturnType<typeof createInternalRoutes>,
+  path: string,
+  auth?: string,
+  query?: Record<string, string>,
+) {
+  const url = new URL(`http://localhost${path}`);
+  if (query) for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+  return app.handle(
+    new Request(url.toString(), {
+      method: "GET",
+      headers: auth ? { authorization: auth } : {},
+    }),
+  );
+}
+
+describe("zap internal routes — ARC-gated /internal/chats (chat:c2b)", () => {
+  // ── 401 guards ──────────────────────────────────────────────────────────
+
+  it("POST /internal/chats → 401 without any token", async () => {
+    const res = await post(createInternalRoutes(createTestLayer()), "/internal/chats", {
+      memberProfileIds: ["usr_a", "usr_b"],
+      createdByProfileId: "usr_a",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /internal/chats/:id/messages → 401 without any token", async () => {
+    const res = await post(
+      createInternalRoutes(createTestLayer()),
+      "/internal/chats/chat_fake/messages",
+      { senderProfileId: "usr_a", body: "hello" },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /internal/chats/:id/messages → 401 without any token", async () => {
+    const res = await get(
+      createInternalRoutes(createTestLayer()),
+      "/internal/chats/chat_fake/messages",
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /internal/chats → 401 with an account:export-scoped token (wrong scope)", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    // Register with account:export — not chat:c2b.
+    await post(
+      app,
+      "/internal/register-service",
+      { serviceId: "osn-api", keyId: KID, publicKeyJwk, allowedScopes: "account:export" },
+      `Bearer ${SECRET}`,
+    );
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await post(
+      app,
+      "/internal/chats",
+      { memberProfileIds: ["usr_a", "usr_b"], createdByProfileId: "usr_a" },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  // ── provision ────────────────────────────────────────────────────────────
+
+  it("POST /internal/chats → 201 + chatId with a valid chat:c2b token", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    const arc = await registerC2bAndMintToken(app, privateKey, publicKeyJwk);
+
+    const res = await post(
+      app,
+      "/internal/chats",
+      { memberProfileIds: ["usr_guest", "usr_host"], createdByProfileId: "usr_host" },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { chatId: string };
+    expect(typeof body.chatId).toBe("string");
+    expect(body.chatId).toMatch(/^chat_/);
+  });
+
+  // ── send + list roundtrip ────────────────────────────────────────────────
+
+  it("POST messages → 201, GET messages returns the body", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+    const arc = await registerC2bAndMintToken(app, privateKey, publicKeyJwk);
+
+    // Provision a c2b chat first.
+    const provRes = await post(
+      app,
+      "/internal/chats",
+      { memberProfileIds: ["usr_guest", "usr_host"], createdByProfileId: "usr_host" },
+      `ARC ${arc}`,
+    );
+    expect(provRes.status).toBe(201);
+    const { chatId } = (await provRes.json()) as { chatId: string };
+
+    // Send a message.
+    const sendRes = await post(
+      app,
+      `/internal/chats/${chatId}/messages`,
+      { senderProfileId: "usr_host", body: "Hello from host!" },
+      `ARC ${arc}`,
+    );
+    expect(sendRes.status).toBe(201);
+    const sent = (await sendRes.json()) as { messageId: string; createdAt: string };
+    expect(typeof sent.messageId).toBe("string");
+    expect(sent.messageId).toMatch(/^msg_/);
+    expect(typeof sent.createdAt).toBe("string");
+
+    // List messages — should include the one we just sent.
+    const listRes = await get(app, `/internal/chats/${chatId}/messages`, `ARC ${arc}`);
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as {
+      messages: { id: string; senderProfileId: string; body: string; createdAt: string }[];
+    };
+    expect(listed.messages).toHaveLength(1);
+    expect(listed.messages[0]!.id).toBe(sent.messageId);
+    expect(listed.messages[0]!.body).toBe("Hello from host!");
+    expect(listed.messages[0]!.senderProfileId).toBe("usr_host");
+  });
+
+  // ── 409 on c2c chat ──────────────────────────────────────────────────────
+
+  it("POST messages to a c2c chat → 409", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+    const arc = await registerC2bAndMintToken(app, privateKey, publicKeyJwk);
+
+    // Seed a c2c (default class) chat with a member.
+    const c2cChat = await Effect.runPromise(
+      seedChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2cChat.id, "usr_host", "member").pipe(Effect.provide(layer)),
+    );
+
+    const res = await post(
+      app,
+      `/internal/chats/${c2cChat.id}/messages`,
+      { senderProfileId: "usr_host", body: "should be rejected" },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(409);
   });
 });
