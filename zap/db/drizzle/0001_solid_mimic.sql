@@ -11,7 +11,7 @@ CREATE TABLE `__new_messages` (
 	FOREIGN KEY (`chat_id`) REFERENCES `chats`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-INSERT INTO `__new_messages`("id", "chat_id", "sender_profile_id", "ciphertext", "nonce", "body", "created_at", "expires_at") SELECT "id", "chat_id", "sender_profile_id", "ciphertext", "nonce", "body", "created_at", "expires_at" FROM `messages`;--> statement-breakpoint
+INSERT INTO `__new_messages`("id", "chat_id", "sender_profile_id", "ciphertext", "nonce", "body", "created_at", "expires_at") SELECT "id", "chat_id", "sender_profile_id", "ciphertext", "nonce", NULL, "created_at", "expires_at" FROM `messages`;--> statement-breakpoint
 DROP TABLE `messages`;--> statement-breakpoint
 ALTER TABLE `__new_messages` RENAME TO `messages`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
