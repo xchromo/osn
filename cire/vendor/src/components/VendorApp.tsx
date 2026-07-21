@@ -8,6 +8,7 @@ import type { OrgSummary } from "../lib/vendor-store";
 import ListingEditor from "./ListingEditor";
 import OrgPicker from "./OrgPicker";
 import VendorEnquiryInbox from "./VendorEnquiryInbox";
+import VendorEnquiryThread from "./VendorEnquiryThread";
 
 function Loading(props: { label: string }) {
   return (
@@ -65,7 +66,7 @@ function initialView(): "listings" | "enquiries" {
 }
 
 function Dashboard() {
-  const { logout } = useAuth();
+  const { logout, session } = useAuth();
 
   // ── View toggle (account-level: "listings" | "enquiries") ────────────────
   const [view, setView] = createSignal<"listings" | "enquiries">(initialView());
@@ -115,8 +116,10 @@ function Dashboard() {
       return;
     }
 
-    // Any other hash → listings view.
+    // Any other hash → listings view. Clear stale thread selection so a Back/
+    // Forward navigation doesn't reopen the thread when the user navigates away.
     setView("listings");
+    setSelectedEnquiryId(null);
 
     const id = hashOrgId();
     if (!id) {
@@ -209,19 +212,11 @@ function Dashboard() {
           fallback={<VendorEnquiryInbox onOpen={setSelectedEnquiryId} />}
         >
           {(id) => (
-            // PLACEHOLDER — Task 10 replaces this with <VendorEnquiryThread>.
-            <div class="border-border bg-surface/30 rounded-sm border p-6">
-              <button
-                type="button"
-                onClick={() => setSelectedEnquiryId(null)}
-                class="text-text-muted hover:text-gold text-[0.78rem] uppercase"
-              >
-                ← Back to enquiries
-              </button>
-              <p class="text-text-muted mt-4 text-[0.9rem]">
-                Thread {id()} — coming in the next step.
-              </p>
-            </div>
+            <VendorEnquiryThread
+              enquiryId={id()}
+              ownProfileId={session()?.profile?.id ?? ""}
+              onBack={() => setSelectedEnquiryId(null)}
+            />
           )}
         </Show>
       </Show>
