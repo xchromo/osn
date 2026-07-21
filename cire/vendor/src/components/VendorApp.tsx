@@ -66,13 +66,12 @@ function initialView(): "listings" | "enquiries" {
 }
 
 function Dashboard() {
-  const { logout, session } = useAuth();
+  const { logout, activeProfileId } = useAuth();
 
   // ── View toggle (account-level: "listings" | "enquiries") ────────────────
   const [view, setView] = createSignal<"listings" | "enquiries">(initialView());
 
-  // Selected enquiry id — Task 10 will replace the placeholder with the real
-  // thread component once this signal is non-null.
+  // Selected enquiry id — null when the inbox is shown; set to render the thread.
   const [selectedEnquiryId, setSelectedEnquiryId] = createSignal<string | null>(null);
 
   function goEnquiries() {
@@ -214,7 +213,7 @@ function Dashboard() {
           {(id) => (
             <VendorEnquiryThread
               enquiryId={id()}
-              ownProfileId={session()?.profile?.id ?? ""}
+              ownProfileId={activeProfileId() ?? ""}
               onBack={() => setSelectedEnquiryId(null)}
             />
           )}
