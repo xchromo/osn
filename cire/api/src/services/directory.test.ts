@@ -8,7 +8,7 @@ import {
   vendors,
   weddings,
 } from "@cire/db";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 
 import { DbService } from "../db";
