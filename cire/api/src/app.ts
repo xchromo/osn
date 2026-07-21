@@ -52,6 +52,7 @@ import type {
   OsnHandleSearchResolver,
   OsnOrgMembershipResolver,
   OsnProfileDisplayResolver,
+  OsnProfileOrgsResolver,
 } from "./services/osn-bridge";
 import type { R2Bucket } from "./services/r2-imports";
 import type { ZapChatClient } from "./services/zap-bridge";
@@ -265,6 +266,13 @@ export interface AppOptions {
    */
   orgMembership?: OsnOrgMembershipResolver;
   /**
+   * Resolves the org ids an OSN profile belongs to (server-to-server, ARC,
+   * `org:read`). Scopes the vendor enquiry LIST query to the caller's own
+   * tenants before the scan. When omitted, the list route fails closed (empty
+   * list — no cross-tenant scan). Tests inject a stub.
+   */
+  profileOrgs?: OsnProfileOrgsResolver;
+  /**
    * Zap c2b chat client for the couple-side enquiry routes (Vendors S4).
    * KEY-OPTIONAL: `null`/omitted ⇒ the ZAP_API_URL/ARC config is absent and the
    * enquiry routes still mount, but open/reply against a claimed listing answer
@@ -317,6 +325,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     directoryService: directoryServiceOption,
     emailLayer: emailLayerOption,
     orgMembership,
+    profileOrgs,
     enquiryZapClient = null,
     enquiryEmailLayer: enquiryEmailLayerOption,
     enquiryLimiter = defaultEnquiryLimiter,
@@ -331,6 +340,9 @@ export function createApp(db: Db, options: AppOptions = {}) {
   const vendorEmailLayer = emailLayerOption ?? makeLogEmailLive().layer;
   // Fail-closed default: no ARC key means no org membership can be verified.
   const vendorOrgMembership = orgMembership ?? (() => Promise.resolve(null));
+  // Fail-closed default: no ARC key ⇒ caller resolves to no orgs ⇒ the vendor
+  // enquiry list is empty (never an unscoped cross-tenant scan).
+  const vendorProfileOrgs = profileOrgs ?? (() => Promise.resolve([]));
 
   // Couple-side enquiry BFF service (Vendors S4). Its zap client + email sender
   // are injected (tests) or built from env (index.ts). The email layer reuses the
@@ -561,6 +573,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
         createVendorEnquiriesRoutes(db, osnAuthOptions, {
           enquiryService,
           orgMembership: vendorOrgMembership,
+          profileOrgs: vendorProfileOrgs,
           limiter: enquiryLimiter,
         }),
       );

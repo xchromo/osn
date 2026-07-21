@@ -405,7 +405,11 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
           if (!deps.zap) return yield* Effect.fail(new ZapUnavailable());
           const zap = deps.zap;
           const chatId = enquiry.zapChatId;
-          const { messages } = yield* Effect.promise(() => zap.listC2bMessages(chatId));
+          // Cap the fetch (P-W2): an unbounded thread could blow the Workers 6MB
+          // response wall. v1 has no cursor UI — just the ceiling.
+          const { messages } = yield* Effect.promise(() =>
+            zap.listC2bMessages(chatId, { limit: 50 }),
+          );
           return messages.map((m) => ({
             id: m.id,
             senderProfileId: m.senderProfileId,
@@ -590,11 +594,14 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
             .all(),
         );
 
-        for (const raw of buffered as EnquiryRow[]) {
-          const enq = raw;
-          if (enq.pendingBody === null) continue;
+        // Flush one buffered enquiry. Per-enquiry isolation: catchAll +
+        // catchAllDefect collapse any failure to a logged no-op so one bad
+        // enquiry never aborts the others — the effect's error channel is
+        // `never`, which lets the bounded `Effect.all` below keep going.
+        const flushOne = (enq: EnquiryRow): Effect.Effect<void, never, never> => {
+          if (enq.pendingBody === null) return Effect.void;
           const body = enq.pendingBody;
-          yield* Effect.gen(function* () {
+          return Effect.gen(function* () {
             const { chatId } = yield* Effect.promise(() =>
               zap.provisionC2bChat({
                 memberProfileIds: [enq.createdBy, input.vendorProfileId],
@@ -614,6 +621,7 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
                 .run(),
             );
           }).pipe(
+            Effect.provideService(DbService, db),
             // Best-effort: a single enquiry's failure must not abort the claim.
             Effect.catchAll((cause) =>
               Effect.logError("[enquiries] flush-on-claim failed for one enquiry").pipe(
@@ -626,7 +634,12 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
               ),
             ),
           );
-        }
+        };
+
+        // Bounded-concurrency flush (P-W3): don't block the claim response
+        // linearly in N. Each flush is self-isolating (never-fails), so the pool
+        // drains every buffered enquiry regardless of individual outcomes.
+        yield* Effect.all((buffered as EnquiryRow[]).map(flushOne), { concurrency: 5 });
       }).pipe(Effect.withSpan("cire.enquiries.onVendorClaimed"));
     },
   };

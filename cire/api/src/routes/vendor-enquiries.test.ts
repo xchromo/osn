@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import { createApp } from "../app";
 import type { Db } from "../db";
 import { createDb, seedDb } from "../db/setup";
-import type { OsnOrgMembershipResolver } from "../services/osn-bridge";
+import type { OsnOrgMembershipResolver, OsnProfileOrgsResolver } from "../services/osn-bridge";
 import type { ZapChatClient } from "../services/zap-bridge";
 import { appRequest } from "../test-helpers";
 import { makeOsnTestAuth } from "../test-helpers/osn-token";
@@ -45,6 +45,17 @@ const OTHER_WEDDING_ID = "wed_other";
 const stubOrgMembership: OsnOrgMembershipResolver = async (orgId, profileId) => {
   if (orgId === ORG_OK && profileId === VENDOR) return "admin";
   return null;
+};
+
+/**
+ * Stub `profileOrgs(profileId)` — the caller's org ids, used to SCOPE the list
+ * query before the scan:
+ *   - VENDOR → [ORG_OK]   (member of the org that owns DV_CLAIMED)
+ *   - anyone else → []    (fail-closed: empty list, no cross-tenant scan)
+ */
+const stubProfileOrgs: OsnProfileOrgsResolver = async (profileId) => {
+  if (profileId === VENDOR) return [ORG_OK];
+  return [];
 };
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -173,6 +184,7 @@ function buildApp(opts: BuildOpts = {}) {
   const app = createApp(db, {
     osnTestKey: auth.key,
     orgMembership: stubOrgMembership,
+    profileOrgs: stubProfileOrgs,
     enquiryZapClient: zap,
     enquiryEmailLayer: email.layer,
     ...(opts.enquiryLimiter ? { enquiryLimiter: opts.enquiryLimiter } : {}),
@@ -260,7 +272,7 @@ describe("GET /api/vendor/enquiries", () => {
     expect(res.status).toBe(401);
   });
 
-  it("lists only enquiries on the caller's claimed listings", async () => {
+  it("lists only enquiries on the caller's own org's listings (scoped, not full scan)", async () => {
     const { app, db } = buildApp();
     // Mine (DV_CLAIMED / ORG_OK) + a foreign one (DV_OTHER / ORG_X).
     const mine = seedProvisionedEnquiry(db, { directoryVendorId: DV_CLAIMED });
@@ -273,9 +285,29 @@ describe("GET /api/vendor/enquiries", () => {
     const res = await req(app, "GET", "/api/vendor/enquiries", VENDOR);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { enquiries: { id: string; directoryVendorId: string }[] };
+    // VENDOR's profileOrgs is [ORG_OK]; the query is scoped to ORG_OK's listings,
+    // so only the ORG_OK enquiry surfaces — the ORG_X row is never read.
     expect(body.enquiries).toHaveLength(1);
     expect(body.enquiries[0]!.id).toBe(mine.enquiryId);
     expect(body.enquiries.every((e) => e.directoryVendorId === DV_CLAIMED)).toBe(true);
+  });
+
+  it("fails closed to an empty list when the caller resolves to no orgs", async () => {
+    const { app, db } = buildApp();
+    // Seed enquiries in BOTH orgs — none belong to a caller with no memberships.
+    seedProvisionedEnquiry(db, { directoryVendorId: DV_CLAIMED });
+    seedProvisionedEnquiry(db, {
+      directoryVendorId: DV_OTHER,
+      weddingId: OTHER_WEDDING_ID,
+      enquiryId: "enq_foreign",
+    });
+
+    // OTHER_OWNER is authenticated but stubProfileOrgs returns [] → empty list,
+    // never an unscoped cross-tenant scan.
+    const res = await req(app, "GET", "/api/vendor/enquiries", OTHER_OWNER);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { enquiries: unknown[] };
+    expect(body.enquiries).toHaveLength(0);
   });
 });
 

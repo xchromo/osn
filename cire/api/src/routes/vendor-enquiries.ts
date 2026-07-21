@@ -1,6 +1,6 @@
 import { directoryVendors, vendorEnquiries, vendors, weddings } from "@cire/db";
 import type { RateLimiterBackend } from "@shared/rate-limit";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import { Elysia } from "elysia";
 
@@ -11,7 +11,7 @@ import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
 import { runCire } from "../observability";
 import type { createEnquiryService, EnquiryRow } from "../services/enquiries";
-import type { OsnOrgMembershipResolver } from "../services/osn-bridge";
+import type { OsnOrgMembershipResolver, OsnProfileOrgsResolver } from "../services/osn-bridge";
 
 // Sentinel parse hook: stops Elysia consuming the body so the handler parses it
 // by hand — a malformed payload degrades to the schema's 400. Same idiom as the
@@ -37,6 +37,14 @@ export interface VendorEnquiryRoutesDeps {
    * portal org-gate but resolves the org from the enquiry's listing.
    */
   orgMembership: OsnOrgMembershipResolver;
+  /**
+   * Resolves the org ids a profile belongs to, used to SCOPE the list query to
+   * the caller's own tenants BEFORE the scan (no cross-tenant full-table read,
+   * no per-org membership fan-out). Fail-soft (empty array) on any ARC/infra
+   * failure — the list then degrades to empty rather than falling back to an
+   * unscoped scan.
+   */
+  profileOrgs: OsnProfileOrgsResolver;
   limiter: RateLimiterBackend;
 }
 
@@ -142,25 +150,34 @@ export function createVendorEnquiriesRoutes(
   osnAuthOptions: OsnAuthOptions,
   deps: VendorEnquiryRoutesDeps,
 ) {
-  const { enquiryService, orgMembership, limiter } = deps;
+  const { enquiryService, orgMembership, profileOrgs, limiter } = deps;
 
   return (
     new Elysia({ prefix: "/api/vendor" })
       .use(osnAuth(osnAuthOptions))
       // GET /enquiries — enquiries across the caller's claimed listings.
-      // Resolve the owning org per distinct listing and keep only those the
-      // caller is a member of (mirrors the per-enquiry gate at list scope).
+      // SCOPED to the caller's own org(s) BEFORE the scan: resolve the caller's
+      // org ids, then read only enquiries whose listing's `owner_org_id` is one
+      // of them (indexed by `directory_vendors_owner_idx`). No cross-tenant
+      // full-table read, no per-org membership fan-out. Fail-closed: if the
+      // profile-orgs resolver yields no orgs (absent ARC key / infra failure),
+      // the list is empty — never an unscoped scan.
       .get("/enquiries", async ({ set, ...ctx }) => {
         const profileId = (ctx as unknown as { osnProfileId?: string }).osnProfileId;
         if (!profileId) return unauthorisedSync(set);
 
         return runCire(
           Effect.gen(function* () {
+            const callerOrgIds = yield* Effect.promise(() => profileOrgs(profileId));
+            // No memberships (or resolver unavailable) → empty, never an
+            // unscoped scan. Preserves the "any member of the owner org sees the
+            // org's enquiries" semantic: the DB filter below keys on membership.
+            if (callerOrgIds.length === 0) return { enquiries: [] };
+
             const rows = yield* dbQuery(() =>
               db
                 .select({
                   enquiry: vendorEnquiries,
-                  ownerOrgId: directoryVendors.ownerOrgId,
                   vendorName: vendors.name,
                   category: vendors.category,
                 })
@@ -170,33 +187,16 @@ export function createVendorEnquiriesRoutes(
                   eq(vendorEnquiries.directoryVendorId, directoryVendors.id),
                 )
                 .innerJoin(vendors, eq(vendorEnquiries.vendorId, vendors.id))
+                .where(inArray(directoryVendors.ownerOrgId, callerOrgIds))
                 .all(),
             );
             const all = rows as Array<{
               enquiry: EnquiryRow;
-              ownerOrgId: string | null;
               vendorName: string;
               category: string;
             }>;
 
-            // Resolve membership once per distinct owning org (bounded fan-out).
-            const orgIds = [
-              ...new Set(all.map((r) => r.ownerOrgId).filter((o): o is string => o !== null)),
-            ];
-            const memberships = yield* Effect.all(
-              orgIds.map((orgId) =>
-                Effect.promise(() => orgMembership(orgId, profileId)).pipe(
-                  Effect.map((role) => [orgId, role] as const),
-                ),
-              ),
-              { concurrency: "unbounded" },
-            );
-            const memberOf = new Set(
-              memberships.filter(([, role]) => role !== null).map(([orgId]) => orgId),
-            );
-
             const enquiries = all
-              .filter((r) => r.ownerOrgId !== null && memberOf.has(r.ownerOrgId))
               .map((r) => ({
                 ...toVendorDto(r.enquiry),
                 vendorName: r.vendorName,

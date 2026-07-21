@@ -6,6 +6,7 @@ import {
   directoryVendors,
   vendorEnquiries,
   vendors,
+  weddings,
 } from "@cire/db";
 import type { SendEmailInput } from "@shared/email";
 import { eq } from "drizzle-orm";
@@ -83,6 +84,7 @@ interface SendCall {
 function fakeZap() {
   const provisionCalls: ProvisionCall[] = [];
   const sendCalls: SendCall[] = [];
+  const listCalls: Array<{ chatId: string; opts?: { limit?: number; before?: number } }> = [];
   let chatSeq = 0;
   let msgSeq = 0;
   const listed: Record<
@@ -107,11 +109,12 @@ function fakeZap() {
       });
       return { messageId: `msg_${msgSeq}`, createdAt };
     },
-    async listC2bMessages(chatId) {
+    async listC2bMessages(chatId, opts) {
+      listCalls.push({ chatId, ...(opts ? { opts } : {}) });
       return { messages: listed[chatId] ?? [] };
     },
   };
-  return { client, provisionCalls, sendCalls };
+  return { client, provisionCalls, sendCalls, listCalls };
 }
 
 function fakeEmail() {
@@ -407,6 +410,11 @@ describe("enquiryService.getMessages", () => {
     expect(res.value).toHaveLength(1);
     expect(res.value[0]!.body).toBe("Are you free on our date?");
     expect(res.value[0]!.id).not.toBe("pending");
+
+    // P-W2: the fetch is capped (limit 50) to stay under the Workers 6MB wall.
+    const listCall = zap.listCalls.find((c) => c.chatId === enq.zapChatId);
+    expect(listCall).toBeDefined();
+    expect(listCall!.opts?.limit).toBe(50);
   });
 });
 
@@ -572,6 +580,96 @@ describe("enquiryService.onVendorClaimed", () => {
     ]);
     expect(zap.sendCalls).toHaveLength(1);
     expect(zap.sendCalls[0]!.body).toBe("Are you free on our date?");
+  });
+
+  it("flushes ALL buffered enquiries under bounded concurrency (parallel, not serial)", async () => {
+    const db = db0();
+    const zap = fakeZap();
+    const email = fakeEmail();
+    const svc = createEnquiryService({
+      zap: zap.client,
+      sendEmail: email.sendEmail,
+      threadBaseUrl: THREAD_BASE,
+    });
+
+    // Seed 12 buffered enquiries against the SAME unclaimed listing, each under
+    // its own wedding (the (wedding, listing) uniq index forbids duplicates on
+    // one wedding). All: open, zapChatId null, pendingBody set.
+    const now = new Date();
+    const N = 12;
+    const ids: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const wid = `wed_flush_${i}`;
+      const vid = `ven_flush_${i}`;
+      const eid = `enq_flush_${i}`;
+      ids.push(eid);
+      db.insert(weddings)
+        .values({
+          id: wid,
+          slug: `flush-${i}`,
+          displayName: `Flush ${i}`,
+          ownerOsnProfileId: ORGANISER_PROFILE_ID,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      db.insert(vendors)
+        .values({
+          id: vid,
+          weddingId: wid,
+          directoryVendorId: UNCLAIMED_VENDOR_ID,
+          name: "CRM",
+          category: "florist",
+          status: "researching",
+          contactName: null,
+          email: null,
+          phone: null,
+          notes: null,
+          quotedMinor: null,
+          sortOrder: 0,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      db.insert(vendorEnquiries)
+        .values({
+          id: eid,
+          weddingId: wid,
+          directoryVendorId: UNCLAIMED_VENDOR_ID,
+          vendorId: vid,
+          zapChatId: null,
+          pendingBody: `body ${i}`,
+          status: "open",
+          createdBy: ORGANISER_PROFILE_ID,
+          quotedMinor: null,
+          lastMessageAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    const res = await run(
+      db,
+      svc.onVendorClaimed({
+        directoryVendorId: UNCLAIMED_VENDOR_ID,
+        vendorProfileId: VENDOR_PROFILE_ID,
+      }),
+    );
+    expect(Exit.isSuccess(res)).toBe(true);
+
+    // Every buffered enquiry provisioned a chat + flushed its pending body.
+    expect(zap.provisionCalls).toHaveLength(N);
+    expect(zap.sendCalls).toHaveLength(N);
+    for (const eid of ids) {
+      const after = readEnquiry(db, eid);
+      expect(after.zapChatId).not.toBeNull();
+      expect(after.pendingBody).toBeNull();
+    }
+    // The bodies match one-to-one (order-agnostic — the flush runs concurrently).
+    expect(new Set(zap.sendCalls.map((c) => c.body))).toEqual(
+      new Set(Array.from({ length: N }, (_, i) => `body ${i}`)),
+    );
   });
 
   it("is a no-op (never fails) when zap is null", async () => {

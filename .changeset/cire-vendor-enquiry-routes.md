@@ -18,3 +18,11 @@ binds `owner_org_id`, so a production-claimed listing reads as CLAIMED by the
 enquiry service. After a successful claim, the vendor-portal consume handler
 flushes any enquiries buffered against the listing via
 `enquiryService.onVendorClaimed` (best-effort).
+
+Perf/security fix pass (prep-pr): scope the `/api/vendor/enquiries` list to the
+caller's own org(s) before the scan (reuses the `profile-orgs` ARC resolver,
+indexed `owner_org_id IN (...)` predicate — removes the cross-tenant full-table
+scan + unbounded ARC fan-out; fail-closed to an empty list when the caller has
+no orgs), cap `getMessages` at `{ limit: 50 }` (Workers 6MB wall), and flush
+buffered enquiries on claim with bounded concurrency (`Effect.all({ concurrency:
+5 })`) instead of a serial loop.

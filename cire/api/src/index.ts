@@ -16,6 +16,7 @@ import {
   createHandleSearchResolverFromEnv,
   createOrgMembershipResolverFromEnv,
   createProfileDisplayResolverFromEnv,
+  createProfileOrgsResolverFromEnv,
 } from "./services/osn-bridge";
 import { retentionService } from "./services/retention";
 import { sessionService } from "./services/session";
@@ -207,6 +208,15 @@ const handler: ExportedHandler<Env> = {
         arcPrivateKeyJwk: env.CIRE_API_ARC_PRIVATE_KEY,
         arcKeyId: env.CIRE_API_ARC_KEY_ID,
       });
+      // Profile→orgs resolver: scopes the vendor enquiry LIST query to the
+      // caller's own tenants (org:read scope, ARC). Fail-soft (no orgs) when the
+      // ARC config is absent — the list is then empty (fail-closed), never an
+      // unscoped cross-tenant scan.
+      const profileOrgs = await createProfileOrgsResolverFromEnv({
+        osnApiUrl: env.OSN_API_URL,
+        arcPrivateKeyJwk: env.CIRE_API_ARC_PRIVATE_KEY,
+        arcKeyId: env.CIRE_API_ARC_KEY_ID,
+      });
       // Email layer for vendor claim-invite emails. Uses Resend when the API key
       // is present (deployed tiers); falls back to LogEmailLive (no network) so
       // the worker boots cleanly without the key (local dev + bun:sqlite tests).
@@ -263,6 +273,7 @@ const handler: ExportedHandler<Env> = {
           resolveOsnHandleSearch,
           turnstileVerifier,
           orgMembership,
+          profileOrgs,
           emailLayer,
           // Vendor-enquiry deps (Vendors S4). The zap client degrades to 503 for
           // open/reply when null; the enquiry email layer reuses the shared
