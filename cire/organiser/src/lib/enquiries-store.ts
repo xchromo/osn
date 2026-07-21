@@ -72,7 +72,7 @@ export function upsertCachedEnquiry(weddingId: string, next: EnquiryListItem): v
   const without = cur.filter((e) => e.id !== next.id);
   setCachedEnquiries(
     weddingId,
-    [next, ...without].sort((a, b) => b.lastMessageAt - a.lastMessageAt),
+    [next, ...without].toSorted((a, b) => b.lastMessageAt - a.lastMessageAt),
   );
 }
 
