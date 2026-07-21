@@ -48,6 +48,11 @@ export interface Env {
   OSN_API_URL?: string;
   CIRE_API_ARC_PRIVATE_KEY?: string;
   CIRE_API_ARC_KEY_ID?: string;
+  // Optional — base URL of zap-api for the vendor enquiry c2b chat bridge.
+  // Absent (or combined with a missing ARC key) ⇒ vendor chat disabled (503).
+  // The ARC signing key is shared with the osn-api bridge above; no new key
+  // env vars are introduced.
+  ZAP_API_URL?: string;
   // Native Workers Rate Limiting binding (C1/C4). When present, the claim
   // limiter is the global, atomic edge limiter. Absent ⇒ the per-isolate
   // in-memory fallback — allowed ONLY in the `local` tier (`bun run dev` /
