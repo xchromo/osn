@@ -14,7 +14,12 @@ import { Effect, Exit } from "effect";
 import { DbService } from "../db";
 import type { Db } from "../db";
 import { createDb, seedDb } from "../db/setup";
-import { createEnquiryService, EnquiryAwaitingVendor, type EnquiryRow } from "./enquiries";
+import {
+  createEnquiryService,
+  EnquiryAwaitingVendor,
+  type EnquiryRow,
+  ZapUnavailable,
+} from "./enquiries";
 import type { ZapChatClient } from "./zap-bridge";
 
 // ---------------------------------------------------------------------------
@@ -235,6 +240,34 @@ describe("enquiryService.open", () => {
     expect(data.claimUrl).toBe("https://claim.test/abc");
     // A separate copy to the lead-forward address.
     expect(email.sent.some((m) => m.to === "leads@wildflower.test")).toBe(true);
+  });
+
+  it("on a CLAIMED listing with zap null fails ZapUnavailable and writes no enquiry/vendor row", async () => {
+    const db = db0();
+    const email = fakeEmail();
+    const svc = createEnquiryService({
+      zap: null,
+      sendEmail: email.sendEmail,
+      threadBaseUrl: THREAD_BASE,
+    });
+
+    const res = await run(db, svc.open(openInput({ directoryVendorId: CLAIMED_VENDOR_ID })));
+
+    // Fails ZapUnavailable — the message must not strand (a claimed listing gets
+    // no future onVendorClaimed flush), so the route surfaces 503 to retry.
+    expect(Exit.isFailure(res)).toBe(true);
+    if (Exit.isFailure(res)) {
+      expect(res.cause._tag === "Fail" && res.cause.error instanceof ZapUnavailable).toBe(true);
+    }
+
+    // No orphaned rows: the failure happens BEFORE the enquiry INSERT, and no
+    // vendors CRM row is left behind for the claimed listing either.
+    expect(db.select().from(vendorEnquiries).all()).toHaveLength(0);
+    expect(
+      db.select().from(vendors).where(eq(vendors.directoryVendorId, CLAIMED_VENDOR_ID)).all(),
+    ).toHaveLength(0);
+    // No email went out.
+    expect(email.sent).toHaveLength(0);
   });
 
   it("is idempotent on (weddingId, directoryVendorId) — repeat reuses the thread, no second provision/email", async () => {

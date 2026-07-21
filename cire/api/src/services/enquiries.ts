@@ -29,6 +29,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { DbService, dbQuery } from "../db";
+import type { ServiceCategory } from "../lib/service-categories";
 import { budgetService } from "./budget";
 import { vendorsService } from "./vendors";
 import type { ZapChatClient } from "./zap-bridge";
@@ -157,7 +158,7 @@ export interface QuoteEnquiryInput {
 export interface AddToBudgetInput {
   enquiry: EnquiryRow;
   vendorName: string;
-  category: string;
+  category: ServiceCategory;
 }
 
 export interface OnVendorClaimedInput {
@@ -274,6 +275,15 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
         );
         if (existing) return toDto(existing as EnquiryRow);
 
+        // A CLAIMED listing has no future onVendorClaimed flush (the claim already
+        // happened), so if zap is disabled we must NOT buffer — that message would
+        // strand forever. Fail ZapUnavailable up front, BEFORE any write (no CRM
+        // vendors row, no enquiry INSERT), so nothing is orphaned; the route
+        // surfaces it as 503 and the couple retries. Only genuinely UNCLAIMED
+        // listings buffer.
+        const claimedBy = (listing as { claimedByProfileId: string | null }).claimedByProfileId;
+        if (claimedBy && !deps.zap) return yield* Effect.fail(new ZapUnavailable());
+
         // (1) Create-if-missing the CRM vendor row.
         const vendorId = yield* ensureVendorRow(
           input.weddingId,
@@ -283,11 +293,10 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
         );
 
         // (3) Claimed → provision + send now; unclaimed → buffer pendingBody.
-        const claimedBy = (listing as { claimedByProfileId: string | null }).claimedByProfileId;
         let zapChatId: string | null = null;
         let pendingBody: string | null = null;
-        if (claimedBy && deps.zap) {
-          const zap = deps.zap;
+        if (claimedBy) {
+          const zap = deps.zap!;
           const { chatId } = yield* Effect.promise(() =>
             zap.provisionC2bChat({
               memberProfileIds: [input.createdBy, claimedBy],
@@ -538,7 +547,7 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
         const { enquiry } = input;
         const item = yield* budgetService.createItem({
           weddingId: enquiry.weddingId,
-          category: input.category as never,
+          category: input.category,
           name: input.vendorName,
           estimateMinor: null,
           quotedMinor: enquiry.quotedMinor,
