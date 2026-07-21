@@ -34,12 +34,13 @@ interface VendorEnquiryInboxProps {
   onOpen: (id: string) => void;
 }
 
+// Module-scoped so the formatter is built once, not on every mount/view-switch.
+const aud = new Intl.NumberFormat(undefined, { style: "currency", currency: "AUD" });
+
 export default function VendorEnquiryInbox(props: VendorEnquiryInboxProps) {
   const { authFetch } = useAuth();
 
   const [rows] = createResource(() => listEnquiries(authFetch));
-
-  const aud = new Intl.NumberFormat(undefined, { style: "currency", currency: "AUD" });
 
   return (
     <div class="flex flex-col gap-4">
