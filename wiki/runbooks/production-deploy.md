@@ -10,7 +10,7 @@ related:
   - "[[redis]]"
   - "[[email]]"
   - "[[vendors]]"
-last-reviewed: 2026-07-17
+last-reviewed: 2026-07-21
 ---
 
 # Production Deploy Runbook — osn + cire
@@ -924,3 +924,37 @@ After the first `deploy-zap-api` run completes:
 1. **Health check.** `curl https://<zap-api-prod-url>/health` → 200 (confirms the Worker booted, D1 binding is present, JWKS URL is set).
 2. **D1 row count.** `bunx wrangler d1 execute zap-db-prod --remote --command "SELECT count(*) FROM chats;"` → `0` (empty schema, migrations applied).
 3. **ARC registration (smoke).** After §9.3, a test `POST /internal/chats` from cire-api should return 201 (not 401/403/503). Confirm the `class` column on the returned row is `'c2b'`.
+
+---
+
+## 10. cire→zap ARC registration (Vendors S4 PR B follow-up) — requires explicit authorization; prod writes.
+
+> ⚠️ **Requires explicit authorization; prod writes.** This step modifies production infrastructure. Do NOT execute without explicit human authorization from the team. It is documented here as a deploy-time checklist, not an automated task.
+
+This step is the PR B counterpart to §9.3. Once zap-api is live (§9 completed), cire-api must register its ARC public key with zap-api so that `chat:c2b` tokens issued by cire-api are accepted by zap-api's internal ARC verifier.
+
+**Trigger condition:** zap-api is deployed and `POST https://zap.cireweddings.com/internal/register-service` returns 501 (secret not yet set) → set `INTERNAL_SERVICE_SECRET` on zap-api per §9.2, then re-attempt this step.
+
+### 10.1 Register cire-api's ARC public key with zap-api
+
+This mirrors the cire↔osn `org:read` registration in §6.2. After generating a key pair (§9.3 / §1.2 — or reusing an existing cire ARC key pair):
+
+```bash
+curl -X POST "https://zap.cireweddings.com/internal/register-service" \
+  -H "Authorization: Bearer $INTERNAL_SERVICE_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceId": "cire-api",
+    "publicKeyJwk": "<cire-api ARC public JWK>",
+    "allowedScopes": "chat:c2b"
+  }'
+```
+
+- **`serviceId`** — `"cire-api"` (the same serviceId registered with osn-api in §6.2).
+- **`publicKeyJwk`** — the ES256 public JWK half of cire-api's ARC key pair. Store the private half as `CIRE_ZAP_ARC_PRIVATE_KEY` (Worker secret on cire-api, §9.3) and note the `kid` as `CIRE_ZAP_ARC_KEY_ID`.
+- **`allowedScopes`** — `"chat:c2b"` only. The enquiry routes use this scope to provision and message c2b threads; no broader zap access is needed.
+- The endpoint upserts — re-running is safe and idempotent.
+
+> Until this step runs per environment, cire-api's vendor-enquiry open/reply paths call `ZAP_API_URL` and receive 401 (unregistered key), causing the couple-side `POST /api/organiser/weddings/:id/enquiries` and vendor-side `POST /api/vendor/enquiries/:id/messages` to return 503 (fail-soft). The couple-enquiry read routes and the vendor listing/browse routes are unaffected.
+
+**This is a human-executed deploy-time step** — it is not run by CI or triggered by this PR. Perform it once per environment (dev / staging / prod) after zap-api is deployed and `INTERNAL_SERVICE_SECRET` is set.
