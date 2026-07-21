@@ -350,6 +350,41 @@ describe("POST /api/vendor/enquiries/:id/quote", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it("formats the quote in the wedding's own currency (USD, not hardcoded AUD)", async () => {
+    const { app, db, fakeZap } = buildApp();
+    // A wedding that thinks in USD, plus a claimed-listing enquiry under it.
+    const now = new Date();
+    const usdWeddingId = "wed_usd";
+    db.insert(weddings)
+      .values({
+        id: usdWeddingId,
+        slug: "usd-wedding",
+        displayName: "USD Wedding",
+        ownerOsnProfileId: COUPLE,
+        currency: "USD",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    const mine = seedProvisionedEnquiry(db, {
+      weddingId: usdWeddingId,
+      enquiryId: "enq_usd",
+    });
+
+    const res = await req(app, "POST", `/api/vendor/enquiries/${mine.enquiryId}/quote`, VENDOR, {
+      amountMinor: 250_000,
+    });
+    expect(res.status).toBe(201);
+
+    // The quote message forwarded into the zap chat carries the USD-formatted
+    // amount ($2,500.00), never the AUD glyph (A$).
+    const chatMessages = fakeZap.messagesByChat.get("chat_seeded") ?? [];
+    const quoteMsg = chatMessages.find((m) => m.body.startsWith("Quote:"));
+    expect(quoteMsg).toBeDefined();
+    expect(quoteMsg!.body).toContain("$2,500.00");
+    expect(quoteMsg!.body).not.toContain("A$");
+  });
 });
 
 describe("POST /api/vendor/enquiries/:id/messages (reply)", () => {

@@ -26,6 +26,20 @@ const ARC_ISSUER = "cire-api";
 const ARC_AUDIENCE = "zap-api";
 const ARC_SCOPE = "chat:c2b";
 
+/**
+ * zap-api serializes message `createdAt` as an ISO 8601 **string**
+ * (`Date.toISOString()`); our public contract is epoch **milliseconds** (a
+ * `number`, consumed downstream by PR C). Normalize at this bridge boundary so
+ * `MessageDto.createdAt` genuinely holds a number. A wire value that is already
+ * numeric is passed through defensively; anything unparseable falls back to
+ * `0` rather than leaking a `NaN` into the DTO.
+ */
+function toEpochMs(value: unknown): number {
+  if (typeof value === "number") return value;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
@@ -108,11 +122,12 @@ export function createZapChatClient(config: ZapChatClientConfig): ZapChatClient 
     },
 
     async sendC2bMessage(chatId, input) {
+      // zap wires `createdAt` as an ISO string — normalize to epoch ms here.
       const data = (await send("POST", `/internal/chats/${encodeURIComponent(chatId)}/messages`, {
         senderProfileId: input.senderProfileId,
         body: input.body,
-      })) as { messageId: string; createdAt: number };
-      return { messageId: data.messageId, createdAt: data.createdAt };
+      })) as { messageId: string; createdAt: string | number };
+      return { messageId: data.messageId, createdAt: toEpochMs(data.createdAt) };
     },
 
     async listC2bMessages(chatId, opts) {
@@ -121,10 +136,23 @@ export function createZapChatClient(config: ZapChatClientConfig): ZapChatClient 
       if (opts?.before !== undefined) params.set("before", String(opts.before));
       const qs = params.toString();
       const path = `/internal/chats/${encodeURIComponent(chatId)}/messages${qs ? `?${qs}` : ""}`;
+      // zap wires each `createdAt` as an ISO string — normalize to epoch ms here.
       const data = (await send("GET", path)) as {
-        messages: Array<{ id: string; senderProfileId: string; body: string; createdAt: number }>;
+        messages: Array<{
+          id: string;
+          senderProfileId: string;
+          body: string;
+          createdAt: string | number;
+        }>;
       };
-      return { messages: data.messages };
+      return {
+        messages: data.messages.map((m) => ({
+          id: m.id,
+          senderProfileId: m.senderProfileId,
+          body: m.body,
+          createdAt: toEpochMs(m.createdAt),
+        })),
+      };
     },
   };
 }

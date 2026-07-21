@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 
-import { generateKeyPair, exportJWK } from "jose";
+import { generateKeyPair } from "jose";
 
 import { createZapChatClient } from "./zap-bridge";
 
@@ -48,8 +48,30 @@ describe("zap-bridge createZapChatClient", () => {
     });
   });
 
-  it("sendC2bMessage POSTs the body + returns messageId/createdAt", async () => {
-    const { impl, calls } = fakeFetch(201, { messageId: "msg_9", createdAt: 1700 });
+  it("sendC2bMessage POSTs the body + normalizes zap's ISO createdAt to epoch ms", async () => {
+    // REGRESSION GUARD: zap-api wires `createdAt` as an ISO 8601 STRING
+    // (`Date.toISOString()`), but our public contract is epoch-ms `number`.
+    // The bridge must parse the string, not pass it through.
+    const iso = "2026-07-21T04:05:06.000Z";
+    const { impl, calls } = fakeFetch(201, { messageId: "msg_9", createdAt: iso });
+    const client = createZapChatClient({
+      zapApiUrl: "https://zap.example",
+      arcPrivateKey: await testKey(),
+      arcKeyId: "kid_test",
+      fetchImpl: impl,
+    });
+    const res = await client.sendC2bMessage("cht_123", { senderProfileId: "usr_a", body: "hi" });
+    expect(res).toEqual({ messageId: "msg_9", createdAt: Date.parse(iso) });
+    expect(typeof res.createdAt).toBe("number");
+    expect(calls[0].url).toBe("https://zap.example/internal/chats/cht_123/messages");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      senderProfileId: "usr_a",
+      body: "hi",
+    });
+  });
+
+  it("sendC2bMessage passes an already-numeric createdAt through unchanged", async () => {
+    const { impl } = fakeFetch(201, { messageId: "msg_9", createdAt: 1700 });
     const client = createZapChatClient({
       zapApiUrl: "https://zap.example",
       arcPrivateKey: await testKey(),
@@ -58,16 +80,12 @@ describe("zap-bridge createZapChatClient", () => {
     });
     const res = await client.sendC2bMessage("cht_123", { senderProfileId: "usr_a", body: "hi" });
     expect(res).toEqual({ messageId: "msg_9", createdAt: 1700 });
-    expect(calls[0].url).toBe("https://zap.example/internal/chats/cht_123/messages");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
-      senderProfileId: "usr_a",
-      body: "hi",
-    });
   });
 
-  it("listC2bMessages GETs with limit/before query + returns messages", async () => {
+  it("listC2bMessages GETs with limit/before query + normalizes ISO createdAt to epoch ms", async () => {
+    const iso = "2026-07-21T04:05:06.000Z";
     const { impl, calls } = fakeFetch(200, {
-      messages: [{ id: "m1", senderProfileId: "usr_a", body: "hi", createdAt: 1 }],
+      messages: [{ id: "m1", senderProfileId: "usr_a", body: "hi", createdAt: iso }],
     });
     const client = createZapChatClient({
       zapApiUrl: "https://zap.example",
@@ -77,6 +95,9 @@ describe("zap-bridge createZapChatClient", () => {
     });
     const res = await client.listC2bMessages("cht_123", { limit: 20, before: 999 });
     expect(res.messages).toHaveLength(1);
+    // REGRESSION GUARD: the listed message's createdAt is epoch ms, not the ISO string.
+    expect(res.messages[0]!.createdAt).toBe(Date.parse(iso));
+    expect(typeof res.messages[0]!.createdAt).toBe("number");
     expect(calls[0].url).toBe(
       "https://zap.example/internal/chats/cht_123/messages?limit=20&before=999",
     );

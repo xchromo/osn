@@ -1,4 +1,4 @@
-import { directoryVendors, vendorEnquiries, vendors } from "@cire/db";
+import { directoryVendors, vendorEnquiries, vendors, weddings } from "@cire/db";
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import { eq } from "drizzle-orm";
 import { Effect, Schema } from "effect";
@@ -287,6 +287,17 @@ export function createVendorEnquiriesRoutes(
                   .all(),
               );
               const vendorName = (vendorRow as { name: string } | undefined)?.name ?? "Vendor";
+              // The quote is formatted in the wedding's own currency (NOT NULL,
+              // default 'AUD'); only the display string is affected — stored
+              // `quoted_minor` is currency-agnostic integer cents.
+              const [weddingRow] = yield* dbQuery(() =>
+                db
+                  .select({ currency: weddings.currency })
+                  .from(weddings)
+                  .where(eq(weddings.id, enquiry.weddingId))
+                  .all(),
+              );
+              const currency = (weddingRow as { currency: string } | undefined)?.currency ?? "AUD";
               const enquiryDto = yield* enquiryService.quote({
                 enquiry,
                 senderProfileId: profileId,
@@ -295,7 +306,7 @@ export function createVendorEnquiriesRoutes(
                 // Recipient resolution deferred; null suppresses the notify.
                 coupleEmail: null,
                 vendorName,
-                currency: "AUD",
+                currency,
               });
               set.status = 201;
               return { enquiry: enquiryDto };
