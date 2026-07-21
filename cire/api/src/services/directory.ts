@@ -567,10 +567,21 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
     },
 
     /**
-     * Redeem a claim token: bind `owner_org_id=orgId`, flip `listed='live'`,
-     * stamp `consumed_at`. Fails `ClaimInvalid` if unknown/expired/already consumed.
+     * Redeem a claim token: bind `owner_org_id=orgId` AND
+     * `claimed_by_profile_id=claimingProfileId`, flip `listed='live'`, stamp
+     * `consumed_at`. Fails `ClaimInvalid` if unknown/expired/already consumed.
+     *
+     * `claimedByProfileId` is load-bearing: the enquiry service decides
+     * claimed-vs-unclaimed on it (`enquiries.open` branches on
+     * `claimedByProfileId`, and it becomes the vendor-side member of any c2b
+     * chat), so it MUST be written in the same UPDATE that binds `ownerOrgId` —
+     * otherwise a production-claimed listing reads as "unclaimed" forever.
      */
-    consumeClaim(token: string, orgId: string): Effect.Effect<ListingDto, ClaimInvalid, DbService> {
+    consumeClaim(
+      token: string,
+      orgId: string,
+      claimingProfileId: string,
+    ): Effect.Effect<ListingDto, ClaimInvalid, DbService> {
       return Effect.gen(function* () {
         const db = yield* DbService;
         const tokenHash = yield* hashToken(token);
@@ -626,11 +637,18 @@ export function createDirectoryService(config: DirectoryServiceConfig = {}) {
           return yield* Effect.fail(new ClaimInvalid());
         }
 
-        // Burn succeeded — now bind the listing.
+        // Burn succeeded — now bind the listing. `claimedByProfileId` is set in
+        // the SAME UPDATE as `ownerOrgId` so the enquiry service reads this
+        // listing as CLAIMED immediately (never a bound-but-unclaimed window).
         yield* dbQuery(() =>
           db
             .update(directoryVendors)
-            .set({ ownerOrgId: orgId, listed: "live", updatedAt: now })
+            .set({
+              ownerOrgId: orgId,
+              claimedByProfileId: claimingProfileId,
+              listed: "live",
+              updatedAt: now,
+            })
             .where(eq(directoryVendors.id, claimRow.directoryVendorId))
             .run(),
         );

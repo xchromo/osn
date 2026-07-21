@@ -39,6 +39,7 @@ import {
   createVendorDirectoryReadRoutes,
   createVendorDirectoryWriteRoutes,
 } from "./routes/vendor-directory";
+import { createVendorEnquiriesRoutes } from "./routes/vendor-enquiries";
 import { createVendorPortalRoutes } from "./routes/vendor-portal";
 import { createVendorReadRoutes, createVendorWriteRoutes } from "./routes/vendors";
 import { createDirectoryService } from "./services/directory";
@@ -536,18 +537,44 @@ export function createApp(db: Db, options: AppOptions = {}) {
         ),
       )
       // Vendor-facing portal: listing self-management + claim redemption.
-      // Mounted at /api/vendor (NOT under the wedding/organiser group).
+      // Mounted at /api/vendor (NOT under the wedding/organiser group). The
+      // enquiry service is threaded in so a successful claim flushes any
+      // enquiries buffered against the just-claimed listing (onVendorClaimed).
       .use(
         createVendorPortalRoutes(
           db,
-          { directoryService: vendorDirectoryService, orgMembership: vendorOrgMembership },
+          {
+            directoryService: vendorDirectoryService,
+            orgMembership: vendorOrgMembership,
+            enquiryService,
+          },
           osnAuthOptions,
           vendorPortalLimiter,
         ),
+      )
+      // Vendor-side enquiry routes (Vendors S4): list + thread + reply + quote,
+      // mounted at /api/vendor. osnAuth()-gated; the per-enquiry org gate
+      // resolves the owning org from the enquiry's listing and 404s on a
+      // cross-tenant id (no enumeration). Writes behind the shared per-user
+      // enquiry limiter.
+      .use(
+        createVendorEnquiriesRoutes(db, osnAuthOptions, {
+          enquiryService,
+          orgMembership: vendorOrgMembership,
+          limiter: enquiryLimiter,
+        }),
       );
   // Phase-2 seam: mount the inert payment-webhook skeleton ONLY when the flag
   // is explicitly set. Default is false — the POST /api/payments/webhook route
   // is never reachable unless a deployment opts in. This keeps Phase 1 safe
   // (no unverified endpoint is ever exposed by default).
-  return paymentWebhookEnabled ? app.use(createPaymentWebhookSkeleton()) : app;
+  //
+  // `app` is widened to a bare `Elysia` (via `unknown`) before the final
+  // conditional mount: adding the vendor-enquiry routes above grew the fluent
+  // chain's inferred type to the point where threading it through one more
+  // `.use()` tips TS past its instantiation-depth limit (TS2589). Erasing the
+  // accumulated route-type surface here caps the depth; it's runtime-inert
+  // (`.use()` only needs an Elysia instance) and scoped to this final mount.
+  const rootApp = app as unknown as Elysia;
+  return paymentWebhookEnabled ? rootApp.use(createPaymentWebhookSkeleton()) : rootApp;
 }
