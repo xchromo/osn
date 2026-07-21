@@ -39,7 +39,7 @@
     "@vitest/coverage-istanbul": "^4.1.6",
     "happy-dom": "^20.9.0",
     "typescript": "^6.0.3",
-    "vite": "^7.3.5",
+    "vite": "^8.0.13",
     "vite-plugin-solid": "^2.11.12",
     "vitest": "^4.1.8"
   }
