@@ -362,6 +362,67 @@ describe("POST /api/organiser/weddings/:weddingId/enquiries", () => {
   });
 });
 
+describe("enquiry-new email links (host/path correctness)", () => {
+  // The default createApp origins apply here (buildApp injects no override):
+  //   organiserOrigin = https://host.cireweddings.com  (thread deep-link)
+  //   vendorPortalOrigin = https://vendor.cireweddings.com (claim CTA)
+  const ORGANISER_ORIGIN = "https://host.cireweddings.com";
+  const VENDOR_PORTAL_ORIGIN = "https://vendor.cireweddings.com";
+
+  it("unclaimed listing: claim CTA is a consumable vendor-portal /claim?token= link", async () => {
+    const { app, email } = buildApp();
+    const res = await req(app, enquiriesPath, {
+      method: "POST",
+      profileId: BOOTSTRAP_OWNER,
+      body: JSON.stringify({
+        directoryVendorId: DV_UNCLAIMED,
+        category: "florals",
+        message: "hello unclaimed vendor",
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    // The enquiry-new email to the unclaimed listing carries the claim CTA.
+    const sent = email.recorded().find((e) => e.to === "unclaimed@vendor.test");
+    expect(sent).toBeDefined();
+    expect(sent!.template).toBe("enquiry-new");
+
+    // CTA lives on the vendor portal origin and uses the canonical token flow —
+    // consumable by POST /api/vendor/claims/:token/consume. Assert the exact
+    // consumable shape and reject the old dead-link shape.
+    const claimRe = new RegExp(
+      `${VENDOR_PORTAL_ORIGIN.replace(/[.]/g, "\\.")}/claim\\?token=[A-Za-z0-9_-]+`,
+    );
+    expect(sent!.text).toMatch(claimRe);
+    expect(sent!.html).toMatch(claimRe);
+    // NOT the guest invite origin, and NOT the hand-rolled ?listing= URL.
+    expect(sent!.text).not.toContain("?listing=");
+    expect(sent!.text).not.toContain("/vendor/claim?listing=");
+    expect(sent!.text).not.toContain("localhost:4321");
+    expect(sent!.text).not.toContain("invite.cireweddings.com");
+  });
+
+  it("claimed listing: Reply link is a thread URL on the organiser origin", async () => {
+    const { app, email } = buildApp();
+    const opened = await openClaimed(app);
+    expect(opened.status).toBe(201);
+
+    const sent = email.recorded().find((e) => e.to === "claimed@vendor.test");
+    expect(sent).toBeDefined();
+    expect(sent!.template).toBe("enquiry-new");
+
+    // The thread deep-link is an ORGANISER surface → host.cireweddings.com,
+    // never the guest invite origin.
+    const threadRe = new RegExp(
+      `${ORGANISER_ORIGIN.replace(/[.]/g, "\\.")}/vendors/enquiries/${opened.id}`,
+    );
+    expect(sent!.text).toMatch(threadRe);
+    expect(sent!.html).toMatch(threadRe);
+    expect(sent!.text).not.toContain("localhost:4321");
+    expect(sent!.text).not.toContain("invite.cireweddings.com");
+  });
+});
+
 describe("POST /api/organiser/weddings/:weddingId/enquiries/:id/messages (reply)", () => {
   it("posts a reply into a provisioned thread → 201", async () => {
     const { app } = buildApp();

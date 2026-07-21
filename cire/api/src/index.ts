@@ -242,6 +242,12 @@ const handler: ExportedHandler<Env> = {
         dbBinding: env.DB,
         app: createApp(db, {
           webOrigin: origins[0],
+          // WEB_ORIGIN is a comma-list: [guest invite, organiser host, vendor
+          // portal]. Enquiry thread links live on the organiser origin; vendor
+          // claim links on the vendor portal. Fall back to createApp's prod
+          // defaults if a tier only configures the guest origin.
+          ...(origins[1] ? { organiserOrigin: origins[1] } : {}),
+          ...(origins[2] ? { vendorPortalOrigin: origins[2] } : {}),
           allowedOrigins: origins,
           claimLimiter: edgeLimiter,
           accountLinkLimiter: edgeLimiter,

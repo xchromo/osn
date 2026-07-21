@@ -143,6 +143,19 @@ const defaultEnquiryLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_
 export interface AppOptions {
   /** Primary origin (used for the session cookie's `secure` flag). */
   webOrigin?: string;
+  /**
+   * Organiser portal origin (`host.cireweddings.com`) — base for the enquiry
+   * thread deep-link vendors/couples receive. Distinct from `webOrigin` (the
+   * guest invite site). Defaults to the prod organiser origin.
+   */
+  organiserOrigin?: string;
+  /**
+   * Vendor portal origin (`vendor.cireweddings.com`) — base for the vendor
+   * claim link (`/claim?token=…`). Threaded into the default directory service
+   * so dev/staging tiers mint claim URLs on the correct host. Ignored when a
+   * `directoryService` instance is injected. Defaults to the prod vendor origin.
+   */
+  vendorPortalOrigin?: string;
   /** Extra origins allowed by CORS (organiser portal, etc). Defaults to `[webOrigin]`. */
   allowedOrigins?: string[];
   /** Override the claim rate limiter (useful for testing). */
@@ -273,6 +286,8 @@ export interface AppOptions {
 export function createApp(db: Db, options: AppOptions = {}) {
   const {
     webOrigin = "http://localhost:4321",
+    organiserOrigin = "https://host.cireweddings.com",
+    vendorPortalOrigin = "https://vendor.cireweddings.com",
     allowedOrigins,
     claimLimiter = defaultClaimLimiter,
     accountLinkLimiter = defaultAccountLinkLimiter,
@@ -310,7 +325,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
   // Vendor CRM deps — use injected instances (tests) or module-level defaults
   // (production). The email layer defaults to LogEmailLive so tests that don't
   // inject one still work without network access.
-  const vendorDirectoryService = directoryServiceOption ?? createDirectoryService();
+  const vendorDirectoryService =
+    directoryServiceOption ?? createDirectoryService({ vendorPortalOrigin });
   const vendorEmailLayer = emailLayerOption ?? makeLogEmailLive().layer;
   // Fail-closed default: no ARC key means no org membership can be verified.
   const vendorOrgMembership = orgMembership ?? (() => Promise.resolve(null));
@@ -341,9 +357,10 @@ export function createApp(db: Db, options: AppOptions = {}) {
   const enquiryService = createEnquiryService({
     zap: enquiryZapClient,
     sendEmail: enquirySendEmail,
-    // Organiser portal thread deep-link base. Uses the primary origin (the
-    // organiser portal in a deployed tier; localhost in dev).
-    threadBaseUrl: `${webOrigin.replace(/\/+$/, "")}/vendors/enquiries`,
+    // Organiser portal thread deep-link base. The enquiry thread is an
+    // ORGANISER surface, so it must live on the organiser origin
+    // (host.cireweddings.com) — NOT `webOrigin`, which is the guest invite site.
+    threadBaseUrl: `${organiserOrigin.replace(/\/+$/, "")}/vendors/enquiries`,
   });
 
   const osnAuthOptions = {
@@ -497,7 +514,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
         createOrganiserEnquiriesRoutes(db, osnAuthOptions, {
           enquiryService,
           limiter: enquiryLimiter,
-          webOrigin,
+          directoryService: vendorDirectoryService,
         }),
       )
       // Invite builder. Public reads (guest site) + organiser writes split into

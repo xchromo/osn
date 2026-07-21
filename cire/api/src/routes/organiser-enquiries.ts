@@ -14,6 +14,7 @@ import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
 import { weddingEditor } from "../middleware/wedding-editor";
 import { weddingMember } from "../middleware/wedding-member";
 import { runCire } from "../observability";
+import type { createDirectoryService } from "../services/directory";
 import type { createEnquiryService, EnquiryRow } from "../services/enquiries";
 
 // Sentinel parse hook: stops Elysia from consuming the body so the handler can
@@ -37,11 +38,12 @@ export interface EnquiryRoutesDeps {
   enquiryService: ReturnType<typeof createEnquiryService>;
   limiter: RateLimiterBackend;
   /**
-   * Base URL of the organiser portal (host.cireweddings.com) — used to build the
-   * absolute claim link vendors receive in the enquiry-new email. Falls back to a
-   * localhost default in dev/tests.
+   * Directory service — used to mint the vendor's claim token for the
+   * enquiry-new email via the canonical `${vendorPortalOrigin}/claim?token=…`
+   * flow (`issueClaimForListing`). Never hand-roll a claim URL here; the CTA
+   * must be a real, consumable link on the vendor portal.
    */
-  webOrigin: string;
+  directoryService: ReturnType<typeof createDirectoryService>;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +106,7 @@ export const createOrganiserEnquiriesRoutes = (
   osnAuthOptions: OsnAuthOptions,
   deps: EnquiryRoutesDeps,
 ) => {
-  const { enquiryService, limiter, webOrigin } = deps;
-  const claimBase = webOrigin.replace(/\/+$/, "");
+  const { enquiryService, limiter, directoryService } = deps;
 
   return (
     new Elysia({ prefix: "/api/organiser" })
@@ -187,6 +188,15 @@ export const createOrganiserEnquiriesRoutes = (
                   const listingRow = listing as
                     | { email: string | null; leadForwardEmail: string | null }
                     | undefined;
+                  // Claim CTA: mint a single-use token on the listing via the
+                  // canonical directory flow → `${vendorPortalOrigin}/claim?token=…`,
+                  // consumable by `POST /api/vendor/claims/:token/consume`. Returns
+                  // null for an already-claimed (or unknown) listing, in which case
+                  // the enquiry-new email omits the CTA anyway (open() only sends it
+                  // when unclaimed). Never hand-roll a `?listing=` URL.
+                  const claim = yield* directoryService.issueClaimForListing(
+                    body.directoryVendorId,
+                  );
                   const enquiry = yield* enquiryService.open({
                     weddingId,
                     weddingName:
@@ -197,9 +207,7 @@ export const createOrganiserEnquiriesRoutes = (
                     createdBy: osnProfileId,
                     vendorEmail: listingRow?.email ?? null,
                     leadForwardEmail: listingRow?.leadForwardEmail ?? null,
-                    claimUrl: `${claimBase}/vendor/claim?listing=${encodeURIComponent(
-                      body.directoryVendorId,
-                    )}`,
+                    claimUrl: claim?.claimUrl ?? "",
                   });
                   set.status = 201;
                   return { enquiry };
