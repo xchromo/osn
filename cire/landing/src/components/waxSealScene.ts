@@ -39,8 +39,11 @@ export interface WaxSealOptions {
   onReady?: () => void;
 }
 
-// Brand gold (matches --color-gold, oklch(74.99% 0.0854 82.08)) as the wax body.
-const WAX_GOLD = 0xc9a86a;
+// Deep oxblood sealing wax — the classic letter-seal red from the reference
+// photography. The brand gold now lives in the LIGHT (key + rim + page glow),
+// not the wax body, so the palette still reads forest + gold with a burgundy
+// focal point.
+const WAX_BURGUNDY = 0x7d232c;
 const KEY_WARM = 0xffe6b0; // upper-left key — the light that carves the emboss
 const FILL_FOREST = 0x2f5a44; // cool forest fill from below-right (brand bg family)
 const RIM_GLOW = 0xf6d79a; // faint back rim so the wax edge separates from the page
@@ -67,8 +70,32 @@ function makeEmbossTexture(): CanvasTexture {
   // The knocked-back inner well the stamp presses (design sits proud of this).
   ctx.beginPath();
   ctx.arc(c, c, S * 0.4, 0, Math.PI * 2);
-  ctx.fillStyle = "#6b6b6b";
+  ctx.fillStyle = "#666666";
   ctx.fill();
+
+  // Hand-poured micro-texture: a fine speckle over the whole face so the body
+  // reads as cooled wax rather than moulded plastic, plus a few faint circular
+  // striations in the well — the drag marks a die leaves as it twists free.
+  for (let i = 0; i < 1600; i += 1) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(Math.random()) * S * 0.5;
+    const g = 100 + Math.floor(Math.random() * 24) - 12;
+    ctx.fillStyle = `rgb(${g} ${g} ${g})`;
+    ctx.globalAlpha = 0.16;
+    ctx.fillRect(c + Math.cos(a) * r, c + Math.sin(a) * r, 1.6, 1.6);
+  }
+  ctx.globalAlpha = 1;
+  for (let i = 0; i < 7; i += 1) {
+    const rr = S * (0.1 + Math.random() * 0.26);
+    const start = Math.random() * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(c, c, rr, start, start + 0.9 + Math.random() * 1.6);
+    ctx.lineWidth = 1 + Math.random() * 1.4;
+    ctx.strokeStyle = Math.random() < 0.5 ? "#5e5e5e" : "#707070";
+    ctx.globalAlpha = 0.35;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 
   // Raised decorative border ring near the rim.
   ctx.lineWidth = S * 0.03;
@@ -115,16 +142,27 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
   for (let i = 0; i < pos.count; i += 1) {
     v.fromBufferAttribute(pos, i);
     const ang = Math.atan2(v.y, v.x);
-    // Gentle low-frequency lobing so the silhouette is hand-poured, not a circle.
-    const wob = 1 + Math.sin(ang * 5) * 0.028 + Math.sin(ang * 9 + 1.3) * 0.018;
+    // Low-frequency lobing so the silhouette is hand-poured, not a circle. A
+    // touch stronger than before — the reference seals are clearly irregular.
+    const wob =
+      1 +
+      Math.sin(ang * 3 + 0.7) * 0.02 +
+      Math.sin(ang * 5) * 0.036 +
+      Math.sin(ang * 9 + 1.3) * 0.022;
     v.x *= wob;
     v.y *= wob;
     // Squash the sphere along the view axis into a thick blob (rounded rim).
     v.z *= 0.42;
-    // Raised rounded rim on the front face — a gaussian ridge near the edge.
     if (v.z > 0) {
       const rr = Math.min(1, Math.hypot(v.x, v.y) / R);
-      v.z += Math.exp(-(((rr - 0.8) / 0.16) ** 2)) * 0.12;
+      // Dish the front face: press the centre DOWN so the rim reads proud of a
+      // near-flat stamped field (a squashed sphere alone leaves the centre as
+      // the high point, which is why the old seal read like a boiled sweet).
+      v.z -= Math.exp(-((rr / 0.5) ** 2)) * 0.1;
+      // Raised rounded rim — a gaussian ridge near the edge, its height rippled
+      // around the circumference like wax squeezed unevenly from under the die.
+      const toolMarks = 1 + Math.sin(ang * 17 + 2.1) * 0.16 + Math.sin(ang * 29 + 0.5) * 0.09;
+      v.z += Math.exp(-(((rr - 0.78) / 0.19) ** 2)) * 0.16 * toolMarks;
     }
     pos.setXYZ(i, v.x, v.y, v.z);
     // Planar UV down the view axis so the monogram lands centred on the dome
@@ -135,15 +173,19 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
   uv.needsUpdate = true;
   geo.computeVertexNormals();
 
+  // Semi-gloss lacquered wax: a slightly matte red body under a tightish
+  // clearcoat, so the field stays deep while the emboss ridges catch hard
+  // specular streaks (the pasted-reference finish). The whisper of metalness
+  // gives the pearlescent shimmer real sealing wax has.
   const material = new MeshPhysicalMaterial({
-    color: WAX_GOLD,
-    metalness: 0.15,
-    roughness: 0.44,
-    clearcoat: 0.7,
-    clearcoatRoughness: 0.3,
-    reflectivity: 0.42,
+    color: WAX_BURGUNDY,
+    metalness: 0.22,
+    roughness: 0.36,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.22,
+    reflectivity: 0.5,
     bumpMap: emboss,
-    bumpScale: 0.5,
+    bumpScale: 0.85,
   });
 
   return new Mesh(geo, material);
@@ -179,13 +221,14 @@ export function mountWaxSeal(
 
   // Lighting: a warm gold key carves the emboss from the upper-left; a cool
   // forest fill keeps the shadow side in brand; a faint back rim frees the edge.
-  const key = new DirectionalLight(KEY_WARM, 2.5);
+  // Dark wax swallows light, so the key runs hotter than it did on gold.
+  const key = new DirectionalLight(KEY_WARM, 3.0);
   key.position.set(-3, 3.4, 4);
-  const fill = new DirectionalLight(FILL_FOREST, 0.7);
+  const fill = new DirectionalLight(FILL_FOREST, 0.85);
   fill.position.set(3, -2, 2);
-  const rim = new PointLight(RIM_GLOW, 12, 20, 2);
+  const rim = new PointLight(RIM_GLOW, 14, 20, 2);
   rim.position.set(0, 0.6, -3);
-  const ambient = new AmbientLight(0x3a3320, 0.5);
+  const ambient = new AmbientLight(0x42302a, 0.55);
   scene.add(key, fill, rim, ambient);
 
   const emboss = makeEmbossTexture();
