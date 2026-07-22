@@ -1,5 +1,5 @@
 import { Dialog } from "@kobalte/core/dialog";
-import { createSignal, For } from "solid-js";
+import { createSignal, For, onCleanup } from "solid-js";
 
 import type { Module } from "../lib/dashboard-route";
 
@@ -72,6 +72,26 @@ export default function ModuleSidebar(props: {
     setSheetOpen(false);
   };
 
+  /**
+   * Close the sheet when the container grows past the rail breakpoint.
+   *
+   * The two surfaces swap by container query, so widening the shell hides the
+   * trigger with `display: none`. The sheet itself lives in a portal and would
+   * survive that, leaving a modal open with no way back to its trigger. A
+   * `ResizeObserver` reports a 0×0 box for a `display: none` element, which is
+   * exactly the signal we want — and it reads the real container width rather
+   * than duplicating the `@2xl` threshold in JS.
+   */
+  const watchNarrowSurface = (el: HTMLDivElement) => {
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry?.contentRect;
+      if (box && box.width === 0 && box.height === 0) setSheetOpen(false);
+    });
+    observer.observe(el);
+    onCleanup(() => observer.disconnect());
+  };
+
   return (
     <>
       {/* ── Wide container: persistent rail ────────────────────────────── */}
@@ -111,7 +131,7 @@ export default function ModuleSidebar(props: {
       </nav>
 
       {/* ── Narrow container: trigger + sheet ──────────────────────────── */}
-      <div class="@2xl/shell:hidden">
+      <div class="@2xl/shell:hidden" ref={watchNarrowSurface}>
         <Dialog open={sheetOpen()} onOpenChange={setSheetOpen}>
           <Dialog.Trigger
             class={`${rowBase} border-border bg-surface/40 text-text hover:border-gold-dim justify-between border px-4 py-3 text-[0.82rem]`}
@@ -132,10 +152,10 @@ export default function ModuleSidebar(props: {
 
           <Dialog.Portal>
             <Dialog.Overlay class="sheet-scrim bg-bg/80 fixed inset-0 z-40" />
-            <Dialog.Content
-              class="sheet-panel border-border bg-surface fixed inset-y-0 left-0 z-50 flex w-[min(19rem,86vw)] flex-col border-r"
-              aria-label="Wedding modules"
-            >
+            {/* The dialog takes its accessible name from Dialog.Title below —
+                Kobalte wires the aria-labelledby — so it carries no aria-label
+                of its own. The name belongs on the element that owns the role. */}
+            <Dialog.Content class="sheet-panel border-border bg-surface fixed inset-y-0 left-0 z-50 flex w-[min(19rem,86vw)] flex-col border-r">
               <div class="border-border flex items-center justify-between gap-4 border-b px-5 py-4">
                 <Dialog.Title class="font-display text-text text-[1.15rem] leading-none font-light">
                   Wedding modules
@@ -148,7 +168,10 @@ export default function ModuleSidebar(props: {
                 </Dialog.CloseButton>
               </div>
 
-              <nav class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
+              <nav
+                aria-label="Wedding modules"
+                class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3"
+              >
                 <For each={MODULE_NAV}>
                   {(mod) => {
                     const isActive = () => props.active === mod.id;

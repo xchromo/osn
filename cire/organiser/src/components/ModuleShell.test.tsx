@@ -136,7 +136,7 @@ describe("ModuleShell", () => {
 
   it("reports a module switch up via onModule and follows the controlled prop", () => {
     const { onModule } = renderShell({});
-    fireEvent.click(screen.getByRole("button", { name: /Schedule/ }));
+    fireEvent.click(within(rail()).getByRole("button", { name: /Schedule/ }));
     expect(onModule).toHaveBeenCalledWith("schedule");
     expect(screen.getByTestId("events")).toBeTruthy();
   });

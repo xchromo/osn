@@ -29,18 +29,6 @@
   --font-body: "Lato", system-ui, sans-serif;
   --default-font-family: var(--font-body);
 
-  /* Spacing — a 4pt scale. Tailwind's own scale stays available; these are the
-     named rhythm steps the shell composes with (rail width, panel gutters,
-     section stacks) so the dashboard keeps one vertical beat. */
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-5: 1.5rem;
-  --space-6: 2rem;
-  --space-7: 3rem;
-  --space-8: 4rem;
-
   /* Corner radius — one scale, sharp end of the range. The house look is
      stationery, not app-store chrome: nothing rounder than 6px except pills. */
   --radius-hair: 2px;
@@ -55,10 +43,6 @@
   --dur-slow: 320ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-
-  /* Hairlines — the shell separates with rules, not shadows. */
-  --rule-hair: 1px solid var(--color-border);
-  --rule-accent: 2px solid var(--color-gold);
 
   /* Focus — one ring everywhere, never animated, always visible. */
   --focus-ring-width: 2px;
@@ -124,10 +108,12 @@
 
   /* One focus ring for the whole dashboard. Never animated, never removed —
      the shell is keyboard-driven (module rail, sub-tabs, tables). */
+  /* No border-radius here: the outline already follows whatever radius the
+     element itself has, and setting one would square off pill-shaped controls
+     for as long as they hold focus. */
   :focus-visible {
     outline: var(--focus-ring-width) solid var(--focus-ring-color);
     outline-offset: var(--focus-ring-offset);
-    border-radius: var(--radius-hair);
   }
 }
 
