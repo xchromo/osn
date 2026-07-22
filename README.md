@@ -1,15 +1,15 @@
 # Open Social Network (OSN)
 
-An open, modular social platform. Users own their identity and their social graph, and decide which apps get to see them.
+An open, modular social platform. You own your identity and social graph, and choose which apps see them.
 
 ## Vision
 
-OSN splits the social graph away from the apps that use it. You own your identity and your relationships. You opt into apps one at a time, and your access rules follow you across all of them. Block someone on OSN and the block reaches every app you have connected — unless you say otherwise.
+OSN splits the social graph from the apps that use it. You own your identity and relationships, opt into apps one at a time, and your access rules follow you across all of them. Block someone on OSN and the block reaches every app you connect — unless you say otherwise.
 
 ## Core Principles
 
 - **Modular**: each capability (events, messaging, weddings, social media) is a standalone app. Use what you want, ignore the rest.
-- **Transparent data**: you can read every piece of personalisation data we hold on you, and wipe it whenever you like.
+- **Transparent data**: read every piece of personalisation data we hold on you, and wipe it any time.
 - **Private by design**: E2E encryption for messaging (Signal Protocol), fine-grained visibility rules, hidden-attendance options.
 - **Open standards**: OSN is an OIDC issuer, so third parties can build on it. Self-hosting is planned for enterprise use.
 
@@ -33,7 +33,7 @@ CI deploys the `osn-api`, `cire-api` and `zap-api` Workers, the guest site (Work
 
 ### OSN Core
 
-The identity and social-graph layer. It is the OIDC issuer the other apps authenticate against.
+The identity and social-graph layer, and the OIDC issuer other apps authenticate against.
 
 - Passkeys are the only primary login (WebAuthn / FIDO2). OTP survives as a step-up factor; magic links and PKCE primary flows are gone
 - Server-side session store with rotation and reuse detection (Copenhagen Book C1/C2/C3)
@@ -49,12 +49,12 @@ The identity and social-graph layer. It is the OIDC issuer the other apps authen
 
 ### Cire (Wedding invites)
 
-A bespoke digital wedding invite: a tactile, animated guest site plus a portal where the couple runs the guest list. It began as its own repo and moved in as a sibling workspace. The schema is already multi-tenant (a `weddings` root table), so it can become a product without a rewrite.
+A bespoke digital wedding invite: a tactile, animated guest site plus a portal where the couple runs the guest list. Once its own repo, now a sibling workspace. The schema is already multi-tenant (a `weddings` root table), so it can become a product without a rewrite.
 
 - Guest site — claim code unlocks the invite, then events, details and RSVP
 - Organiser portal — guest and event tables, spreadsheet import, per-section invite theming, co-hosts added by OSN handle
 - Vendor portal — vendor profiles and couple enquiries
-- Two auth models that never overlap: guests exchange a family claim code for a hashed session cookie and never need an OSN account; organisers sign in with their OSN passkey and are checked against wedding ownership
+- Two auth models that never overlap. Guests trade a family claim code for a hashed session cookie, and never need an OSN account. Organisers sign in with their OSN passkey, checked against wedding ownership
 - Optional account linking lets a guest attach their seat to an OSN account
 
 Detail lives in `wiki/apps/cire.md` and `wiki/systems/cire-auth.md`.
@@ -76,7 +76,7 @@ A unified events platform: the social ease of Facebook Events, the fun of Partif
 
 ### Zap (Messaging)
 
-Secure, playful messaging that doubles as the ecosystem's support and announcements channel. It should sit between Messenger, Instagram and iMessage — playful but not loud, modern, secure, open.
+Secure, playful messaging that doubles as the ecosystem's support and announcements channel. Aim: between Messenger, Instagram and iMessage — playful but not loud, modern, secure, open.
 
 **Two top-level views:**
 
@@ -105,7 +105,7 @@ Secure, playful messaging that doubles as the ecosystem's support and announceme
 
 ### Social media (spec only, deferred)
 
-Multi-format social content with per-format opt-out: text posts, image posts, long-form writing, short-form video. A user who wants nothing to do with short video can switch that format off entirely.
+Multi-format social content: text posts, image posts, long-form writing, short-form video. Switch off any format you don't want — short video, say — and it disappears.
 
 ## Architecture
 
@@ -154,7 +154,7 @@ shared/           # @shared/* — cross-cutting utilities
   typescript-config/ # base / node / solid tsconfigs
 ```
 
-Each Tauri app keeps the standard layout: `src/` for the SolidJS frontend, `src-tauri/` for the Rust layer with iOS and Android targets.
+Each Tauri app keeps the standard layout: `src/` SolidJS frontend, `src-tauri/` Rust layer with iOS and Android targets.
 
 **Prefix rule:** every workspace sits under exactly one of `osn/`, `pulse/`, `zap/`, `cire/` or `shared/`, and its `package.json` `name` uses the matching prefix.
 
@@ -247,7 +247,7 @@ bun run dev:cire         # cire API + guest + organiser, identity API
 bun run dev:apis         # backends only
 ```
 
-Packages that need configuration ship a `.env.example` — copy it to `.env` and fill it in. Everything degrades without secrets: no Resend key logs emails instead of sending them, no Turnstile secret leaves the bot check inert.
+Packages that need configuration ship a `.env.example` — copy it to `.env` and fill it in. Missing secrets degrade rather than break: no Resend key logs emails instead of sending them, no Turnstile secret leaves the bot check inert.
 
 Checks:
 
@@ -327,7 +327,7 @@ Work on a feature branch, and include a changeset describing the change and the 
 bun run changeset
 ```
 
-Pick the packages, pick the bump type, write a summary. The CI "Changeset Check" job fails without one. Two rules it enforces: package names must match the workspace `name` exactly (`"@pulse/app"`, not `"pulse"`), and a single changeset must not mix version-less packages (`@cire/*`) with versioned ones.
+Pick the packages, pick the bump type, write a summary. The CI "Changeset Check" job fails without one. It enforces two rules. Package names must match the workspace `name` exactly — `"@pulse/app"`, not `"pulse"`. One changeset must not mix version-less packages (`@cire/*`) with versioned ones.
 
 On merge, CI runs `changeset version` to bump versions and update changelogs, commits that to `main`, and deploys the live surfaces.
 
