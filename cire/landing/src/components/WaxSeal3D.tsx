@@ -8,7 +8,7 @@ import type { WaxSealController } from "./waxSealScene";
 // still reads and converts. This component only ever upgrades the picture of the
 // seal from a flat CSS disc to a lit, three-dimensional one.
 //
-// Baseline (always in the DOM): a burgundy CSS disc with the embossed "C". It is the
+// Baseline (always in the DOM): a gold CSS disc with the embossed "C". It is the
 // static poster the visitor sees first, the reduced-motion experience, and the
 // no-WebGL fallback. On a capable, motion-happy client we lazy-load the Three.js
 // scene, mount it on the <canvas> layered on top, and cross-fade it in over the
@@ -74,7 +74,7 @@ export function WaxSeal3D() {
       {/* Faint gold bloom the seal rests in — present in every mode. */}
       <div class="seal-glow" />
 
-      {/* Static poster: a pressed burgundy wax disc. The no-WebGL / no-JS fallback;
+      {/* Static poster: a pressed gold wax disc. The no-WebGL / no-JS fallback;
           hidden the instant we commit to the 3D seal so there's no seal swap. */}
       <div class="seal-poster" classList={{ "is-hidden": use3d() }}>
         <span class="seal-monogram">C</span>
@@ -115,13 +115,13 @@ export function WaxSeal3D() {
           border-radius: 50%;
           background: radial-gradient(
             circle at 38% 32%,
-            oklch(46% 0.14 25),
-            oklch(35% 0.125 22) 68%,
-            oklch(27% 0.105 18)
+            oklch(82% 0.09 82.08),
+            oklch(63% 0.085 70) 68%,
+            oklch(52% 0.08 64)
           );
           box-shadow:
-            inset 0 3px 6px oklch(68% 0.13 30 / 0.45),
-            inset 0 -6px 12px oklch(18% 0.07 15 / 0.65),
+            inset 0 3px 6px oklch(95% 0.05 82 / 0.5),
+            inset 0 -6px 12px oklch(40% 0.06 60 / 0.6),
             0 14px 40px oklch(0% 0 0 / 0.45);
           transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1);
         }
@@ -133,7 +133,7 @@ export function WaxSeal3D() {
           font-size: clamp(5rem, 18vw, 8rem);
           font-style: italic;
           line-height: 1;
-          color: oklch(22% 0.08 18);
+          color: oklch(30% 0.04 80);
           transform: translateY(0.04em);
         }
         .seal-canvas {

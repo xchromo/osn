@@ -2,7 +2,9 @@
 // page. It is deliberately AMBIENT — it never breaks. It rests, breathes with a
 // slow tilt, catches a gold key light on its embossed monogram, and leans toward
 // the pointer so it feels physical rather than printed. The "reveal" is a gentle
-// settle on load (a small dolly-back + fade-up), not a shatter.
+// settle on load (a small dolly-back + fade-up), not a shatter. The seal itself
+// is STAMPED, not moulded: each mount pours a fresh random puddle and presses
+// the same circular die into it, so every visitor's seal is unique.
 //
 // This module is lazy-loaded (`import()`) by WaxSeal3D so Three.js stays off the
 // critical path — the hero's headline and CTAs are server-rendered and painted
@@ -39,11 +41,8 @@ export interface WaxSealOptions {
   onReady?: () => void;
 }
 
-// Deep oxblood sealing wax — the classic letter-seal red from the reference
-// photography. The brand gold now lives in the LIGHT (key + rim + page glow),
-// not the wax body, so the palette still reads forest + gold with a burgundy
-// focal point.
-const WAX_BURGUNDY = 0x7d232c;
+// Brand gold (matches --color-gold, oklch(74.99% 0.0854 82.08)) as the wax body.
+const WAX_GOLD = 0xc9a86a;
 const KEY_WARM = 0xffe6b0; // upper-left key — the light that carves the emboss
 const FILL_FOREST = 0x2f5a44; // cool forest fill from below-right (brand bg family)
 const RIM_GLOW = 0xf6d79a; // faint back rim so the wax edge separates from the page
@@ -126,14 +125,73 @@ function makeEmbossTexture(): CanvasTexture {
 }
 
 /**
- * Build the wax blob. A sphere squashed along the view axis into a thick lens
- * with rounded, lobed edges (not a flat coin), plus a raised rounded rim on the
- * front — the pool of wax bulging where the stamp pressed it out. The real
- * curvature is what earns the highlights and shadows a flat disc can't. The
- * embossed monogram rides the domed face via a planar UV projection.
+ * One pour of wax. Each mount rolls a fresh puddle — the shape the molten wax
+ * spread into, and where it squeezed out from under the die. The die itself is
+ * the same perfect circle every time; uniqueness comes from the wax, exactly
+ * as it does on a real letter. So every visitor's seal is their own.
+ */
+interface WaxPour {
+  /** Silhouette radius multiplier around the puddle boundary (~0.85–1.3). */
+  spread(ang: number): number;
+  /** Squeeze-out ridge amplitude factor around the die edge (~0.5–1.8). */
+  squeeze(ang: number): number;
+}
+
+/** Shortest signed angular distance, so tongue falloffs wrap around ±π. */
+function angDist(a: number, b: number): number {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+function pourWax(): WaxPour {
+  // Low-frequency harmonics — a hand-poured puddle is never a circle.
+  const harmonics = Array.from({ length: 4 }, (_, i) => ({
+    k: 2 + i * 2 + (Math.random() < 0.5 ? 1 : 0),
+    amp: (0.05 / (i + 1)) * (0.6 + Math.random() * 0.9),
+    phase: Math.random() * Math.PI * 2,
+  }));
+  // A few tongues where wax escaped the press and ran further out.
+  const tongues = Array.from({ length: 2 + Math.floor(Math.random() * 2) }, () => ({
+    at: Math.random() * Math.PI * 2,
+    width: 0.3 + Math.random() * 0.35, // radians
+    run: 0.07 + Math.random() * 0.12,
+  }));
+  // Fine ripple on the squeeze-out ridge — the marks the die's edge drags.
+  const ripple = [
+    { k: 15 + Math.floor(Math.random() * 5), amp: 0.14, phase: Math.random() * Math.PI * 2 },
+    { k: 27 + Math.floor(Math.random() * 6), amp: 0.08, phase: Math.random() * Math.PI * 2 },
+  ];
+
+  const tongueAt = (ang: number) =>
+    tongues.reduce((sum, t) => sum + t.run * Math.exp(-((angDist(ang, t.at) / t.width) ** 2)), 0);
+
+  return {
+    spread(ang) {
+      let s = 1 + tongueAt(ang);
+      for (const h of harmonics) s += h.amp * Math.sin(h.k * ang + h.phase);
+      return s;
+    },
+    squeeze(ang) {
+      // More wax escapes where the puddle ran further — the ridge lumps and
+      // the silhouette tongues line up, as conservation of wax demands.
+      let q = 0.85 + tongueAt(ang) * 4;
+      for (const r of ripple) q += r.amp * Math.sin(r.k * ang + r.phase);
+      return q;
+    },
+  };
+}
+
+/**
+ * Build the seal the way a real one is made: pour an irregular puddle of wax,
+ * then press a perfectly circular die into it. The stamped field stays round
+ * because the die held it; everything outside — the squeeze-out ridge, the
+ * flared silhouette, the thin run-out tongues — is the wax reacting to the
+ * press, freshly randomised per pour. That contrast (round die, irregular wax)
+ * is what makes it read as STAMPED rather than a moulded button. The embossed
+ * monogram rides the pressed face via a planar UV projection.
  */
 function makeSealMesh(emboss: CanvasTexture): Mesh {
   const R = 1;
+  const pour = pourWax();
   const geo = new SphereGeometry(R, 160, 120);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
@@ -142,30 +200,36 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
   for (let i = 0; i < pos.count; i += 1) {
     v.fromBufferAttribute(pos, i);
     const ang = Math.atan2(v.y, v.x);
-    // Low-frequency lobing so the silhouette is hand-poured, not a circle. A
-    // touch stronger than before — the reference seals are clearly irregular.
-    const wob =
-      1 +
-      Math.sin(ang * 3 + 0.7) * 0.02 +
-      Math.sin(ang * 5) * 0.036 +
-      Math.sin(ang * 9 + 1.3) * 0.022;
-    v.x *= wob;
-    v.y *= wob;
-    // Squash the sphere along the view axis into a thick blob (rounded rim).
+    // Radial position in DIE space — measured before any spreading, because
+    // the die's press is a perfect circle regardless of where the wax went.
+    const rr = Math.min(1, Math.hypot(v.x, v.y) / R);
+
+    // Stamp, part 1 — the puddle: blend the poured silhouette in beyond the
+    // die edge, so the stamped field stays circular while the surrounding wax
+    // flares into its own one-off shape.
+    const flare = MathUtils.smoothstep(rr, 0.72, 1);
+    const spread = 1 + flare * (pour.spread(ang) - 1);
+    v.x *= spread;
+    v.y *= spread;
+
+    // Squash the sphere along the view axis into a thick wax slab.
     v.z *= 0.42;
+
     if (v.z > 0) {
-      const rr = Math.min(1, Math.hypot(v.x, v.y) / R);
-      // Dish the front face: press the centre DOWN so the rim reads proud of a
-      // near-flat stamped field (a squashed sphere alone leaves the centre as
-      // the high point, which is why the old seal read like a boiled sweet).
+      // Stamp, part 2 — the press: dish the centre DOWN so the field sits
+      // below the rim (a squashed sphere alone leaves the centre as the high
+      // point, which is why the old seal read like a boiled sweet)...
       v.z -= Math.exp(-((rr / 0.5) ** 2)) * 0.1;
-      // Raised rounded rim — a gaussian ridge near the edge, its height rippled
-      // around the circumference like wax squeezed unevenly from under the die.
-      const toolMarks = 1 + Math.sin(ang * 17 + 2.1) * 0.16 + Math.sin(ang * 29 + 0.5) * 0.09;
-      v.z += Math.exp(-(((rr - 0.78) / 0.19) ** 2)) * 0.16 * toolMarks;
+      // ...and pile the displaced wax up as an uneven squeeze-out ridge at
+      // the die edge — tallest exactly where the silhouette grew tongues.
+      v.z += Math.exp(-(((rr - 0.78) / 0.17) ** 2)) * 0.15 * pour.squeeze(ang);
+      // Stamp, part 3 — wax that ran further ran thinner.
+      const thin = Math.min(0.5, Math.max(0, (pour.spread(ang) - 1) * 1.8));
+      v.z *= 1 - MathUtils.smoothstep(rr, 0.82, 1) * thin;
     }
+
     pos.setXYZ(i, v.x, v.y, v.z);
-    // Planar UV down the view axis so the monogram lands centred on the dome
+    // Planar UV down the view axis so the monogram lands centred on the face
     // (a sphere's own UVs would pinch it into the pole).
     uv.setXY(i, v.x / (2 * R) + 0.5, v.y / (2 * R) + 0.5);
   }
@@ -173,19 +237,17 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
   uv.needsUpdate = true;
   geo.computeVertexNormals();
 
-  // Semi-gloss lacquered wax: a slightly matte red body under a tightish
-  // clearcoat, so the field stays deep while the emboss ridges catch hard
-  // specular streaks (the pasted-reference finish). The whisper of metalness
-  // gives the pearlescent shimmer real sealing wax has.
+  // Sealing-wax finish: a slightly matte body under a clearcoat, so the field
+  // stays soft while the emboss ridges catch the key light's specular streaks.
   const material = new MeshPhysicalMaterial({
-    color: WAX_BURGUNDY,
-    metalness: 0.22,
-    roughness: 0.36,
-    clearcoat: 0.85,
-    clearcoatRoughness: 0.22,
-    reflectivity: 0.5,
+    color: WAX_GOLD,
+    metalness: 0.15,
+    roughness: 0.4,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.25,
+    reflectivity: 0.45,
     bumpMap: emboss,
-    bumpScale: 0.85,
+    bumpScale: 0.75,
   });
 
   return new Mesh(geo, material);
@@ -221,14 +283,13 @@ export function mountWaxSeal(
 
   // Lighting: a warm gold key carves the emboss from the upper-left; a cool
   // forest fill keeps the shadow side in brand; a faint back rim frees the edge.
-  // Dark wax swallows light, so the key runs hotter than it did on gold.
-  const key = new DirectionalLight(KEY_WARM, 3.0);
+  const key = new DirectionalLight(KEY_WARM, 2.5);
   key.position.set(-3, 3.4, 4);
-  const fill = new DirectionalLight(FILL_FOREST, 0.85);
+  const fill = new DirectionalLight(FILL_FOREST, 0.7);
   fill.position.set(3, -2, 2);
-  const rim = new PointLight(RIM_GLOW, 14, 20, 2);
+  const rim = new PointLight(RIM_GLOW, 12, 20, 2);
   rim.position.set(0, 0.6, -3);
-  const ambient = new AmbientLight(0x42302a, 0.55);
+  const ambient = new AmbientLight(0x3a3320, 0.5);
   scene.add(key, fill, rim, ambient);
 
   const emboss = makeEmbossTexture();
