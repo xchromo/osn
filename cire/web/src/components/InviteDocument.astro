@@ -82,6 +82,8 @@ const preloadHeroSrcset = heroBase
       details={initialInvite?.details ?? null}
       welcomeMessage={initialInvite?.welcome?.message ?? null}
     />
-    <SiteFooter />
+    {/* Sign the invite off in the couple's name, so the last thing a guest
+        reads is who invited them and not the legal links. */}
+    <SiteFooter closing={initialInvite?.hero.title ?? null} />
   </body>
 </html>
