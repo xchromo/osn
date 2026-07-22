@@ -419,7 +419,9 @@ describe("InviteBuilder theme", () => {
     await waitFor(() => screen.getByText("Save invite"));
 
     const notice = await waitFor(() => screen.getByText(/Adjusted to stay readable/));
-    expect(notice.textContent).toContain("text");
+    // The seed NAME, not the old "text" label — and not the raw key either,
+    // which is what the notice falls back to when the label map loses a role.
+    expect(notice.textContent).toContain("ink");
     // The organiser's own pick is still saveable — nothing is blocked.
     expect((screen.getByText("Save invite") as HTMLButtonElement).disabled).toBe(false);
 
