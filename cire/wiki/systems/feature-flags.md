@@ -47,17 +47,27 @@ alongside the cached Elysia app, and **decorated** onto the request context as
 
 ```ts
 async ({ flags, session }) => {
-  const f = await flags.forRequest({ id: session.guestId });
-  return f.isOn("cire.example-banner") ? renderBanner() : null;
+  const f = await flags.forRequest({ id: session.familyId });
+  return f.isOn("cire.account-linking") ? renderLinking() : null;
 };
 ```
 
 `forRequest(attributes)` binds the request's targeting attributes (`id` is the
-bucketing key for percentage rollouts). Evaluation itself is synchronous.
+bucketing key for percentage rollouts). Evaluation itself is synchronous. For
+tests, `createStaticFlags({ "cire.account-linking": true })` builds a provider
+with explicit values and no network.
 
-No route gates on a flag yet — the current wiring is plumbing, with a single
-placeholder flag (`cire.example-banner`, defaults off). Add real flags to the
-registry + the GrowthBook dashboard as features land.
+## First gate — OSN account linking
+
+`cire.account-linking` (default **off**) gates the whole guest "Link your Pulse
+account" surface. Both `GET` and `POST /api/account/link` (`routes/account-link.ts`)
+call `flags.forRequest({ id: familyId })` and answer **503** ("disabled") when
+the flag is off. The guest UI (`cire/web` `PulseAccountLink`) already treats a
+503 status probe as disabled and renders nothing, so the flag hides the section
+with **no frontend change** — independent of whether the ARC linking keys exist.
+The POST guard is defense in depth (a crafted request can't link while off).
+Turn the flag on in the GrowthBook dashboard (feature key `cire.account-linking`)
+to reveal it. Add further flags to the registry + the dashboard as features land.
 
 ## Config
 

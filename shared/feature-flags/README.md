@@ -41,10 +41,18 @@ const flags = createFeatureFlags({
 
 // Per request, with that request's targeting attributes:
 const f = await flags.forRequest({ id: osnProfileId, role: "owner" });
-if (f.isOn("cire.example-banner")) {
+if (f.isOn("cire.account-linking")) {
   // ...
 }
-const variant = f.getValue("cire.example-banner"); // typed to the flag's default
+const value = f.getValue("cire.account-linking"); // typed to the flag's value type
+```
+
+For tests (or to force flags from code) use `createStaticFlags` — no GrowthBook,
+no network:
+
+```ts
+import { createStaticFlags } from "@shared/feature-flags";
+const flags = createStaticFlags({ "cire.account-linking": true });
 ```
 
 In `@cire/api` the provider is decorated onto the Elysia context as `flags`, so
@@ -52,10 +60,14 @@ any route handler can:
 
 ```ts
 async ({ flags, session }) => {
-  const f = await flags.forRequest({ id: session.guestId });
-  return f.isOn("cire.example-banner") ? renderBanner() : null;
+  const f = await flags.forRequest({ id: session.familyId });
+  return f.isOn("cire.account-linking") ? renderLinking() : null;
 };
 ```
+
+The first real gate is OSN account linking: `cire.account-linking` (default off)
+gates `GET`/`POST /api/account/link`, so the guest "Link your Pulse account"
+section stays hidden until the flag is turned on.
 
 ### Adding a flag
 

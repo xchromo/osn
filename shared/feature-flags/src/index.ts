@@ -45,18 +45,38 @@ import { instrumentedFetch } from "@shared/observability/fetch";
  */
 export const FLAGS = {
   /**
-   * Example placeholder so the registry is never empty and the types resolve.
-   * Replace with real flags as features land; delete once others exist. Defaults
-   * off ⇒ with no GrowthBook config the banner is hidden, exactly as today.
+   * OSN ("Pulse") account linking on the guest invite — the "Link your Pulse
+   * account" section (`cire/web` `PulseAccountLink`, mounted in `InvitePage`).
+   * Default OFF ⇒ `cire-api`'s `GET`/`POST /api/account/link` answer 503
+   * ("disabled") and the guest UI hides itself (its `<Show when={ready}>` treats
+   * a 503 probe as disabled), even where the ARC linking keys are configured.
+   * Flip on in the GrowthBook dashboard (feature key `cire.account-linking`) to
+   * reveal it — no deploy needed.
    */
-  "cire.example-banner": false,
+  "cire.account-linking": false,
 } as const satisfies Record<string, boolean | string | number>;
 
 /** A valid flag key — the keys of {@link FLAGS}. Typo ⇒ compile error. */
 export type FlagKey = keyof typeof FLAGS;
 
-/** The value type of a given flag, derived from its registry default. */
-export type FlagValue<K extends FlagKey> = (typeof FLAGS)[K];
+/**
+ * Widen a registry literal to the flag's runtime value type. The registry is
+ * `as const`, so a boolean flag's default reads as the literal `false`/`true` —
+ * but at runtime a flag can take either boolean, so its value type is `boolean`
+ * (likewise `string`/`number`). For a concrete key this reduces cleanly, so the
+ * public `getValue` / `createStaticFlags` signatures stay exact; only the
+ * internal generic-key evaluators need a cast.
+ */
+type Widen<T> = T extends boolean
+  ? boolean
+  : T extends number
+    ? number
+    : T extends string
+      ? string
+      : T;
+
+/** The value type of a given flag — its registry default's type, widened. */
+export type FlagValue<K extends FlagKey> = Widen<(typeof FLAGS)[K]>;
 
 /**
  * Per-request targeting attributes handed to GrowthBook. `id` is the bucketing
@@ -318,10 +338,13 @@ function gbEvaluator(payload: SdkPayload, attributes: FlagAttributes | undefined
       }
     },
     getValue(key) {
+      // Generic-key index of the `as const` registry doesn't reduce against the
+      // widened return type, and GrowthBook's own widening differs — cast via
+      // `unknown`. Concrete-key callers still get the exact `FlagValue<K>`.
       try {
-        return gb.getFeatureValue(key, FLAGS[key]) as FlagValue<typeof key>;
+        return gb.getFeatureValue(key, FLAGS[key]) as unknown as FlagValue<typeof key>;
       } catch {
-        return FLAGS[key];
+        return FLAGS[key] as unknown as FlagValue<typeof key>;
       }
     },
   };
@@ -334,7 +357,36 @@ function defaultsEvaluator(): FlagEvaluator {
       return Boolean(FLAGS[key]);
     },
     getValue(key) {
-      return FLAGS[key];
+      return FLAGS[key] as unknown as FlagValue<typeof key>;
+    },
+  };
+}
+
+/**
+ * Build a provider with explicit flag values — no GrowthBook, no network. For
+ * tests, and for callers that want to force flags from code. A flag absent from
+ * `overrides` falls back to its {@link FLAGS} registry default.
+ *
+ * ```ts
+ * const flags = createStaticFlags({ "cire.account-linking": true });
+ * ```
+ */
+export function createStaticFlags(
+  overrides: Partial<{ [K in FlagKey]: FlagValue<K> }> = {},
+): FeatureFlags {
+  const pick = <K extends FlagKey>(key: K): FlagValue<K> =>
+    (key in overrides ? overrides[key] : FLAGS[key]) as unknown as FlagValue<K>;
+  const evaluator: FlagEvaluator = {
+    isOn(key) {
+      return Boolean(pick(key));
+    },
+    getValue(key) {
+      return pick(key);
+    },
+  };
+  return {
+    async forRequest() {
+      return evaluator;
     },
   };
 }

@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 
 import {
   createFeatureFlags,
+  createStaticFlags,
   DEFAULT_API_HOST,
   FLAGS,
   type FetchLike,
   type FlagsKV,
 } from "../src/index";
 
-const FLAG = "cire.example-banner" as const;
+const FLAG = "cire.account-linking" as const;
 
 /**
  * Build a stub fetch that returns a GrowthBook SDK payload and records every
@@ -175,6 +176,19 @@ describe("fail-safe ladder", () => {
     const evaluator = await flags.forRequest({ id: "u", role: "vip" });
     // Cold cache + failed fetch ⇒ coded default (false), never a throw.
     expect(evaluator.isOn(FLAG)).toBe(false);
+  });
+});
+
+describe("createStaticFlags", () => {
+  it("returns overridden values and falls back to registry defaults", async () => {
+    const on = await createStaticFlags({ [FLAG]: true }).forRequest();
+    expect(on.isOn(FLAG)).toBe(true);
+    expect(on.getValue(FLAG)).toBe(true);
+
+    // No override ⇒ the registry default (false).
+    const off = await createStaticFlags().forRequest();
+    expect(off.isOn(FLAG)).toBe(FLAGS[FLAG]);
+    expect(off.isOn(FLAG)).toBe(false);
   });
 });
 

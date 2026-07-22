@@ -559,12 +559,13 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // need only the guest session; the POST link additionally requires an OSN
       // token. Splitting them is what method-gates `osnAuth` to POST without
       // gating the guest-only reads (same sibling pattern as rsvp + organiser).
-      .use(createAccountLinkRoutes(db, accountLinkLimiter))
+      .use(createAccountLinkRoutes(db, accountLinkLimiter, flags))
       .use(
         createAccountLinkPostRoute(
           db,
           osnAuthOptions,
           accountLinkLimiter,
+          flags,
           resolveOsnAccountId,
           webOrigin,
         ),
