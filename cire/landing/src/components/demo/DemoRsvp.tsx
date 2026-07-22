@@ -58,15 +58,8 @@ export function DemoRsvp() {
 
   return (
     <div class="border-border bg-surface-raised mx-auto max-w-[640px] overflow-hidden rounded-lg border shadow-2xl">
-      {/* An honest frame header — a small wax mark, not imitation browser chrome. */}
-      <div class="border-border flex items-center justify-center gap-2.5 border-b px-4 py-3">
-        <span
-          aria-hidden="true"
-          class="font-display grid h-5 w-5 place-items-center rounded-full text-[0.7rem] leading-none italic"
-          style="color: oklch(30% 0.04 80); background: radial-gradient(circle at 38% 32%, oklch(82% 0.09 82.08), oklch(60% 0.085 68));"
-        >
-          C
-        </span>
+      {/* An honest frame header — a plain label, not imitation browser chrome. */}
+      <div class="border-border flex items-center justify-center border-b px-4 py-3">
         <span class="font-body text-text-muted text-[0.72rem] tracking-[0.18em] uppercase">
           A live Cire invitation
         </span>

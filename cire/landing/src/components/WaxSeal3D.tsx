@@ -35,10 +35,18 @@ function supportsWebGL(): boolean {
 
 export function WaxSeal3D() {
   let canvasRef!: HTMLCanvasElement;
+  // `use3d` flips true the moment we commit to loading Three.js — that hides the
+  // flat poster right away (leaving only the glow) so the poster and the 3D seal
+  // are never on screen together. `live` flips true once the first frame paints,
+  // fading the canvas in. On no-WebGL / reduced-motion neither flips and the
+  // poster stays as the static fallback.
+  const [use3d, setUse3d] = createSignal(false);
   const [live, setLive] = createSignal(false);
 
   onMount(() => {
     if (prefersReducedMotion() || !supportsWebGL()) return; // poster stands in
+
+    setUse3d(true); // hide the poster now, before the (deferred) import even runs
 
     let controller: WaxSealController | undefined;
     let cancelled = false;
@@ -66,8 +74,9 @@ export function WaxSeal3D() {
       {/* Faint gold bloom the seal rests in — present in every mode. */}
       <div class="seal-glow" />
 
-      {/* Static poster: a pressed gold wax disc. Fades out once the 3D is live. */}
-      <div class="seal-poster" classList={{ "is-hidden": live() }}>
+      {/* Static poster: a pressed gold wax disc. The no-WebGL / no-JS fallback;
+          hidden the instant we commit to the 3D seal so there's no seal swap. */}
+      <div class="seal-poster" classList={{ "is-hidden": use3d() }}>
         <span class="seal-monogram">C</span>
       </div>
 

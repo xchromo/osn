@@ -15,7 +15,6 @@
 import {
   AmbientLight,
   CanvasTexture,
-  CylinderGeometry,
   DirectionalLight,
   Group,
   MathUtils,
@@ -24,7 +23,9 @@ import {
   PerspectiveCamera,
   PointLight,
   Scene,
+  SphereGeometry,
   SRGBColorSpace,
+  Vector3,
   WebGLRenderer,
 } from "three";
 
@@ -57,13 +58,10 @@ function makeEmbossTexture(): CanvasTexture {
   const ctx = canvas.getContext("2d")!;
   const c = S / 2;
 
-  // Wax field — a soft dome so the disc reads slightly convex, not flat.
-  const field = ctx.createRadialGradient(c, c, 0, c, c, c);
-  field.addColorStop(0, "#8f8f8f");
-  field.addColorStop(0.72, "#808080");
-  field.addColorStop(0.9, "#6f6f6f");
-  field.addColorStop(1, "#5c5c5c");
-  ctx.fillStyle = field;
+  // Flat wax field. The macro doming + raised rim now come from the geometry, so
+  // the bump map only carries the fine press detail (border ring + monogram) on
+  // top of an even surface.
+  ctx.fillStyle = "#808080";
   ctx.fillRect(0, 0, S, S);
 
   // The knocked-back inner well the stamp presses (design sits proud of this).
@@ -101,38 +99,51 @@ function makeEmbossTexture(): CanvasTexture {
 }
 
 /**
- * Build the disc. A short cylinder whose face turns to camera, with a gentle
- * per-vertex wobble on the rim so the edge looks hand-pressed rather than
- * machined. The top cap carries the embossed bump map.
+ * Build the wax blob. A sphere squashed along the view axis into a thick lens
+ * with rounded, lobed edges (not a flat coin), plus a raised rounded rim on the
+ * front — the pool of wax bulging where the stamp pressed it out. The real
+ * curvature is what earns the highlights and shadows a flat disc can't. The
+ * embossed monogram rides the domed face via a planar UV projection.
  */
 function makeSealMesh(emboss: CanvasTexture): Mesh {
-  const geo = new CylinderGeometry(1, 1, 0.26, 140, 1, false);
-  // Nudge rim vertices in/out by a hair, keyed to angle, for an organic edge.
+  const R = 1;
+  const geo = new SphereGeometry(R, 160, 120);
   const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  const v = new Vector3();
+
   for (let i = 0; i < pos.count; i += 1) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const r = Math.hypot(x, z);
-    if (r > 0.85) {
-      const a = Math.atan2(z, x);
-      const wobble = 1 + Math.sin(a * 7) * 0.012 + Math.sin(a * 13 + 1.7) * 0.008;
-      pos.setX(i, x * wobble);
-      pos.setZ(i, z * wobble);
+    v.fromBufferAttribute(pos, i);
+    const ang = Math.atan2(v.y, v.x);
+    // Gentle low-frequency lobing so the silhouette is hand-poured, not a circle.
+    const wob = 1 + Math.sin(ang * 5) * 0.028 + Math.sin(ang * 9 + 1.3) * 0.018;
+    v.x *= wob;
+    v.y *= wob;
+    // Squash the sphere along the view axis into a thick blob (rounded rim).
+    v.z *= 0.42;
+    // Raised rounded rim on the front face — a gaussian ridge near the edge.
+    if (v.z > 0) {
+      const rr = Math.min(1, Math.hypot(v.x, v.y) / R);
+      v.z += Math.exp(-(((rr - 0.8) / 0.16) ** 2)) * 0.12;
     }
+    pos.setXYZ(i, v.x, v.y, v.z);
+    // Planar UV down the view axis so the monogram lands centred on the dome
+    // (a sphere's own UVs would pinch it into the pole).
+    uv.setXY(i, v.x / (2 * R) + 0.5, v.y / (2 * R) + 0.5);
   }
+  pos.needsUpdate = true;
+  uv.needsUpdate = true;
   geo.computeVertexNormals();
-  // Axis is Y; tip the face toward camera (+Z).
-  geo.rotateX(Math.PI / 2);
 
   const material = new MeshPhysicalMaterial({
     color: WAX_GOLD,
-    metalness: 0.18,
-    roughness: 0.5,
-    clearcoat: 0.6,
-    clearcoatRoughness: 0.34,
-    reflectivity: 0.4,
+    metalness: 0.15,
+    roughness: 0.44,
+    clearcoat: 0.7,
+    clearcoatRoughness: 0.3,
+    reflectivity: 0.42,
     bumpMap: emboss,
-    bumpScale: 0.7,
+    bumpScale: 0.5,
   });
 
   return new Mesh(geo, material);
