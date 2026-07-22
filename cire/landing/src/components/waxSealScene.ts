@@ -47,81 +47,111 @@ const KEY_WARM = 0xffe6b0; // upper-left key — the light that carves the embos
 const FILL_FOREST = 0x2f5a44; // cool forest fill from below-right (brand bg family)
 const RIM_GLOW = 0xf6d79a; // faint back rim so the wax edge separates from the page
 
+interface SealMaps {
+  bump: CanvasTexture;
+  roughness: CanvasTexture;
+}
+
 /**
- * Paint the monogram + border ring the seal-press leaves in the wax, as a height
- * field for the bump map: mid-grey is the wax surface, brighter is raised. A real
- * seal press leaves the design PROUD of a knocked-back field, so the ring and the
- * "C" are drawn lighter than their surround.
+ * Paint what the die pressed into the wax. Two canvases from one drawing pass:
+ *
+ * - a BUMP map (height field: mid-grey surface, brighter raised) carrying the
+ *   knocked-back well, the double border ring, the monogram, and hand-poured
+ *   micro-texture;
+ * - a ROUGHNESS map: the die burnishes what it touches, so the pressed design
+ *   is left glossier (darker) than the surrounding cooled-wax field. This is
+ *   what makes the monogram READ — it catches the key light as a distinct
+ *   specular material, not just a faint slope change.
+ *
+ * The planar UV projection maps world x,y ∈ [-1,1] to uv [0,1], so a feature
+ * meant for the stamped field (which ends near world radius 0.6) must be drawn
+ * within ~0.3 of the canvas half-size. (A previous revision drew the border
+ * ring at 0.41 — which landed it ON the rim ridge, mushing both.)
  */
-function makeEmbossTexture(): CanvasTexture {
+function makeSealMaps(): SealMaps {
   const S = 512;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = S;
-  const ctx = canvas.getContext("2d")!;
+  const bumpCanvas = document.createElement("canvas");
+  bumpCanvas.width = bumpCanvas.height = S;
+  const b = bumpCanvas.getContext("2d")!;
+  const roughCanvas = document.createElement("canvas");
+  roughCanvas.width = roughCanvas.height = S;
+  const g = roughCanvas.getContext("2d")!;
   const c = S / 2;
 
-  // Flat wax field. The macro doming + raised rim now come from the geometry, so
-  // the bump map only carries the fine press detail (border ring + monogram) on
-  // top of an even surface.
-  ctx.fillStyle = "#808080";
-  ctx.fillRect(0, 0, S, S);
+  // Base: even wax surface; medium roughness with a hair more in the well,
+  // where the die's face pressed matte-cooled wax.
+  b.fillStyle = "#808080";
+  b.fillRect(0, 0, S, S);
+  g.fillStyle = "#969696";
+  g.fillRect(0, 0, S, S);
 
-  // The knocked-back inner well the stamp presses (design sits proud of this).
-  ctx.beginPath();
-  ctx.arc(c, c, S * 0.4, 0, Math.PI * 2);
-  ctx.fillStyle = "#666666";
-  ctx.fill();
+  // The knocked-back well the die pressed (design sits proud of this).
+  b.beginPath();
+  b.arc(c, c, S * 0.3, 0, Math.PI * 2);
+  b.fillStyle = "#6a6a6a";
+  b.fill();
+  g.beginPath();
+  g.arc(c, c, S * 0.3, 0, Math.PI * 2);
+  g.fillStyle = "#a4a4a4";
+  g.fill();
 
-  // Hand-poured micro-texture: a fine speckle over the whole face so the body
-  // reads as cooled wax rather than moulded plastic, plus a few faint circular
-  // striations in the well — the drag marks a die leaves as it twists free.
-  for (let i = 0; i < 1600; i += 1) {
+  // Hand-poured micro-texture: fine speckle so the body reads as cooled wax,
+  // plus faint circular striations in the well — die drag marks. Fresh each
+  // pour.
+  for (let i = 0; i < 1400; i += 1) {
     const a = Math.random() * Math.PI * 2;
     const r = Math.sqrt(Math.random()) * S * 0.5;
-    const g = 100 + Math.floor(Math.random() * 24) - 12;
-    ctx.fillStyle = `rgb(${g} ${g} ${g})`;
-    ctx.globalAlpha = 0.16;
-    ctx.fillRect(c + Math.cos(a) * r, c + Math.sin(a) * r, 1.6, 1.6);
+    const v = 116 + Math.floor(Math.random() * 24) - 12;
+    b.fillStyle = `rgb(${v} ${v} ${v})`;
+    b.globalAlpha = 0.14;
+    b.fillRect(c + Math.cos(a) * r, c + Math.sin(a) * r, 1.5, 1.5);
   }
-  ctx.globalAlpha = 1;
-  for (let i = 0; i < 7; i += 1) {
-    const rr = S * (0.1 + Math.random() * 0.26);
+  b.globalAlpha = 1;
+  for (let i = 0; i < 5; i += 1) {
+    const rr = S * (0.08 + Math.random() * 0.18);
     const start = Math.random() * Math.PI * 2;
-    ctx.beginPath();
-    ctx.arc(c, c, rr, start, start + 0.9 + Math.random() * 1.6);
-    ctx.lineWidth = 1 + Math.random() * 1.4;
-    ctx.strokeStyle = Math.random() < 0.5 ? "#5e5e5e" : "#707070";
-    ctx.globalAlpha = 0.35;
-    ctx.stroke();
+    b.beginPath();
+    b.arc(c, c, rr, start, start + 0.9 + Math.random() * 1.4);
+    b.lineWidth = 1 + Math.random();
+    b.strokeStyle = Math.random() < 0.5 ? "#606060" : "#727272";
+    b.globalAlpha = 0.3;
+    b.stroke();
   }
-  ctx.globalAlpha = 1;
+  b.globalAlpha = 1;
 
-  // Raised decorative border ring near the rim.
-  ctx.lineWidth = S * 0.03;
-  ctx.strokeStyle = "#d8d8d8";
-  ctx.beginPath();
-  ctx.arc(c, c, S * 0.41, 0, Math.PI * 2);
-  ctx.stroke();
-  // A finer companion ring inside it — the double-rule a die usually carries.
-  ctx.lineWidth = S * 0.008;
-  ctx.strokeStyle = "#c4c4c4";
-  ctx.beginPath();
-  ctx.arc(c, c, S * 0.35, 0, Math.PI * 2);
-  ctx.stroke();
+  // Raised double border ring — the rule a die usually carries — sized to sit
+  // just inside the stamped field.
+  const ring = (ctx: CanvasRenderingContext2D, r: number, w: number, style: string) => {
+    ctx.lineWidth = w;
+    ctx.strokeStyle = style;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.stroke();
+  };
+  ring(b, S * 0.265, S * 0.02, "#dedede");
+  ring(b, S * 0.225, S * 0.006, "#c8c8c8");
+  ring(g, S * 0.265, S * 0.02, "#5a5a5a");
+  ring(g, S * 0.225, S * 0.006, "#6a6a6a");
 
   // The monogram, raised and centred. Serif to echo the Cormorant display face.
-  ctx.fillStyle = "#efefef";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `700 ${S * 0.5}px Georgia, "Cormorant Garamond", serif`;
-  // Optical centring — a cap "C" sits a touch high on the maths midline.
-  ctx.fillText("C", c, c + S * 0.03);
+  const mono = (ctx: CanvasRenderingContext2D, style: string) => {
+    ctx.fillStyle = style;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 ${S * 0.3}px Georgia, "Cormorant Garamond", serif`;
+    // Optical centring — a cap "C" sits a touch high on the maths midline.
+    ctx.fillText("C", c, c + S * 0.018);
+  };
+  mono(b, "#f2f2f2");
+  mono(g, "#525252");
 
-  const tex = new CanvasTexture(canvas);
-  // A bump map is height data, not colour — leave it in the default linear space
-  // (tagging it sRGB would wrongly gamma-decode the heights).
-  tex.anisotropy = 4;
-  return tex;
+  const asTexture = (canvas: HTMLCanvasElement) => {
+    // Height/roughness data, not colour — leave in the default linear space.
+    const tex = new CanvasTexture(canvas);
+    tex.anisotropy = 4;
+    return tex;
+  };
+  return { bump: asTexture(bumpCanvas), roughness: asTexture(roughCanvas) };
 }
 
 /**
@@ -143,23 +173,26 @@ function angDist(a: number, b: number): number {
 }
 
 function pourWax(): WaxPour {
-  // Low-frequency harmonics — a hand-poured puddle is never a circle.
-  const harmonics = Array.from({ length: 4 }, (_, i) => ({
+  // Low-frequency harmonics — a hand-poured puddle is never a circle, but it
+  // is CLOSE to one. Restraint here is what separates a seal from a cookie.
+  const harmonics = Array.from({ length: 3 }, (_, i) => ({
     k: 2 + i * 2 + (Math.random() < 0.5 ? 1 : 0),
-    amp: (0.05 / (i + 1)) * (0.6 + Math.random() * 0.9),
+    amp: (0.028 / (i + 1)) * (0.6 + Math.random() * 0.8),
     phase: Math.random() * Math.PI * 2,
   }));
-  // A few tongues where wax escaped the press and ran further out.
-  const tongues = Array.from({ length: 2 + Math.floor(Math.random() * 2) }, () => ({
+  // One or two tongues where wax escaped the press and ran a little further.
+  const tongues = Array.from({ length: 1 + Math.floor(Math.random() * 2) }, () => ({
     at: Math.random() * Math.PI * 2,
-    width: 0.3 + Math.random() * 0.35, // radians
-    run: 0.07 + Math.random() * 0.12,
+    width: 0.35 + Math.random() * 0.3, // radians
+    run: 0.045 + Math.random() * 0.055,
   }));
-  // Fine ripple on the squeeze-out ridge — the marks the die's edge drags.
-  const ripple = [
-    { k: 15 + Math.floor(Math.random() * 5), amp: 0.14, phase: Math.random() * Math.PI * 2 },
-    { k: 27 + Math.floor(Math.random() * 6), amp: 0.08, phase: Math.random() * Math.PI * 2 },
-  ];
+  // The gentlest ripple on the squeeze-out ridge. High frequency + high
+  // amplitude reads as a crimped pie crust — keep it barely-there.
+  const ripple = {
+    k: 9 + Math.floor(Math.random() * 4),
+    amp: 0.045,
+    phase: Math.random() * Math.PI * 2,
+  };
 
   const tongueAt = (ang: number) =>
     tongues.reduce((sum, t) => sum + t.run * Math.exp(-((angDist(ang, t.at) / t.width) ** 2)), 0);
@@ -171,11 +204,9 @@ function pourWax(): WaxPour {
       return s;
     },
     squeeze(ang) {
-      // More wax escapes where the puddle ran further — the ridge lumps and
+      // More wax escapes where the puddle ran further — the ridge swells and
       // the silhouette tongues line up, as conservation of wax demands.
-      let q = 0.85 + tongueAt(ang) * 4;
-      for (const r of ripple) q += r.amp * Math.sin(r.k * ang + r.phase);
-      return q;
+      return 0.92 + tongueAt(ang) * 1.6 + ripple.amp * Math.sin(ripple.k * ang + ripple.phase);
     },
   };
 }
@@ -189,13 +220,21 @@ function pourWax(): WaxPour {
  * is what makes it read as STAMPED rather than a moulded button. The embossed
  * monogram rides the pressed face via a planar UV projection.
  */
-function makeSealMesh(emboss: CanvasTexture): Mesh {
+function makeSealMesh(maps: SealMaps): Mesh {
   const R = 1;
   const pour = pourWax();
   const geo = new SphereGeometry(R, 160, 120);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
   const v = new Vector3();
+
+  // The pressed profile, inside → out: a flat stamped FIELD (to ~0.55), a
+  // shallow GROOVE where the die's shoulder cut (≈0.62), one smooth proud RIM
+  // (crest ≈0.74), then the rounded run-off to the puddle edge.
+  const FIELD_Z = 0.315; // field height — below the rim crest
+  const RIM_R = 0.74;
+  const RIM_W = 0.11;
+  const RIM_H = 0.13;
 
   for (let i = 0; i < pos.count; i += 1) {
     v.fromBufferAttribute(pos, i);
@@ -205,9 +244,9 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
     const rr = Math.min(1, Math.hypot(v.x, v.y) / R);
 
     // Stamp, part 1 — the puddle: blend the poured silhouette in beyond the
-    // die edge, so the stamped field stays circular while the surrounding wax
+    // rim, so the stamped field and rim stay circular while the outer wax
     // flares into its own one-off shape.
-    const flare = MathUtils.smoothstep(rr, 0.72, 1);
+    const flare = MathUtils.smoothstep(rr, 0.8, 1);
     const spread = 1 + flare * (pour.spread(ang) - 1);
     v.x *= spread;
     v.y *= spread;
@@ -216,16 +255,19 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
     v.z *= 0.42;
 
     if (v.z > 0) {
-      // Stamp, part 2 — the press: dish the centre DOWN so the field sits
-      // below the rim (a squashed sphere alone leaves the centre as the high
-      // point, which is why the old seal read like a boiled sweet)...
-      v.z -= Math.exp(-((rr / 0.5) ** 2)) * 0.1;
-      // ...and pile the displaced wax up as an uneven squeeze-out ridge at
-      // the die edge — tallest exactly where the silhouette grew tongues.
-      v.z += Math.exp(-(((rr - 0.78) / 0.17) ** 2)) * 0.15 * pour.squeeze(ang);
+      // Stamp, part 2 — the press. Flatten the dome into the stamped field
+      // (blending back to the rounded slab toward the edge)...
+      const dome = v.z;
+      const flat = 1 - MathUtils.smoothstep(rr, 0.6, 0.97);
+      v.z = MathUtils.lerp(dome, FIELD_Z, flat);
+      // ...cut the groove where the die's shoulder sat...
+      v.z -= Math.exp(-(((rr - 0.62) / 0.07) ** 2)) * 0.03;
+      // ...and pile the displaced wax into one smooth proud rim, swelling
+      // gently where the silhouette grew tongues.
+      v.z += Math.exp(-(((rr - RIM_R) / RIM_W) ** 2)) * RIM_H * pour.squeeze(ang);
       // Stamp, part 3 — wax that ran further ran thinner.
-      const thin = Math.min(0.5, Math.max(0, (pour.spread(ang) - 1) * 1.8));
-      v.z *= 1 - MathUtils.smoothstep(rr, 0.82, 1) * thin;
+      const thin = Math.min(0.45, Math.max(0, (pour.spread(ang) - 1) * 1.6));
+      v.z *= 1 - MathUtils.smoothstep(rr, 0.85, 1) * thin;
     }
 
     pos.setXYZ(i, v.x, v.y, v.z);
@@ -237,17 +279,20 @@ function makeSealMesh(emboss: CanvasTexture): Mesh {
   uv.needsUpdate = true;
   geo.computeVertexNormals();
 
-  // Sealing-wax finish: a slightly matte body under a clearcoat, so the field
-  // stays soft while the emboss ridges catch the key light's specular streaks.
+  // Sealing-wax finish. Base roughness comes from the ROUGHNESS map — the die
+  // burnished the design glossier than the cooled field — under a soft
+  // clearcoat, so the monogram and rings catch the key light as distinct
+  // specular shapes while the body stays waxy.
   const material = new MeshPhysicalMaterial({
     color: WAX_GOLD,
     metalness: 0.15,
-    roughness: 0.4,
-    clearcoat: 0.8,
-    clearcoatRoughness: 0.25,
+    roughness: 1,
+    roughnessMap: maps.roughness,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.3,
     reflectivity: 0.45,
-    bumpMap: emboss,
-    bumpScale: 0.75,
+    bumpMap: maps.bump,
+    bumpScale: 1.25,
   });
 
   return new Mesh(geo, material);
@@ -283,17 +328,17 @@ export function mountWaxSeal(
 
   // Lighting: a warm gold key carves the emboss from the upper-left; a cool
   // forest fill keeps the shadow side in brand; a faint back rim frees the edge.
-  const key = new DirectionalLight(KEY_WARM, 2.5);
+  const key = new DirectionalLight(KEY_WARM, 2.75);
   key.position.set(-3, 3.4, 4);
-  const fill = new DirectionalLight(FILL_FOREST, 0.7);
+  const fill = new DirectionalLight(FILL_FOREST, 0.9);
   fill.position.set(3, -2, 2);
   const rim = new PointLight(RIM_GLOW, 12, 20, 2);
   rim.position.set(0, 0.6, -3);
   const ambient = new AmbientLight(0x3a3320, 0.5);
   scene.add(key, fill, rim, ambient);
 
-  const emboss = makeEmbossTexture();
-  const seal = makeSealMesh(emboss);
+  const maps = makeSealMaps();
+  const seal = makeSealMesh(maps);
   const group = new Group();
   group.add(seal);
   scene.add(group);
@@ -385,7 +430,8 @@ export function mountWaxSeal(
       io.disconnect();
       seal.geometry.dispose();
       (seal.material as MeshPhysicalMaterial).dispose();
-      emboss.dispose();
+      maps.bump.dispose();
+      maps.roughness.dispose();
       renderer.dispose();
     },
   };
