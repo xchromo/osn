@@ -4,6 +4,10 @@ import {
   contrastRatio,
   DERIVED_TOKENS,
   derivePalette,
+  FONT_CHOICES,
+  FONT_STACKS,
+  fontChoiceHasStack,
+  fontStack,
   formatOklch,
   isSafeCssColor,
   PALETTE_PRESET_KEYS,
@@ -116,9 +120,15 @@ describe("contrast is enforced, not advised", () => {
   const textPairs = [
     ["--color-text", "--color-bg"],
     ["--color-text", "--color-surface"],
+    ["--color-text", "--color-surface-raised"],
   ] as const;
   const uiPairs = [
     ["--color-text-muted", "--color-surface"],
+    // The `raised` tone paints whole sections, so text has to clear on it too —
+    // it passed by luck of the presets before this pair existed.
+    ["--color-text-muted", "--color-bg"],
+    ["--color-text-muted", "--color-surface-raised"],
+    ["--color-gold", "--color-surface-raised"],
     ["--color-gold", "--color-bg"],
     ["--color-bloom", "--color-bg"],
     ["--invite-focus", "--color-bg"],
@@ -240,6 +250,28 @@ describe("surface ordering", () => {
     expect(l(v["--color-surface-raised"] as string)).toBeLessThan(
       l(v["--color-surface"] as string),
     );
+  });
+});
+
+describe("fonts", () => {
+  test("every choice but `default` has a stack, and every stack is a choice", () => {
+    // `FONT_CHOICES` is spelled out by hand so the literal union survives into
+    // the API's Schema.Literal; this is the test that comment promises. A key in
+    // one and not the other is either a 400 on a font the guest can render, or a
+    // font choice that silently resolves to nothing.
+    for (const choice of FONT_CHOICES) {
+      expect(fontChoiceHasStack(choice), choice).toBe(true);
+      if (choice !== "default") expect(fontStack(choice), choice).not.toBeNull();
+    }
+    expect(FONT_CHOICES.filter((c) => c !== "default").toSorted()).toEqual(
+      Object.keys(FONT_STACKS).toSorted(),
+    );
+  });
+
+  test("an unknown choice keeps the built-in token rather than injecting a value", () => {
+    for (const bad of ["default", "unknown", "../../etc/passwd", ""]) {
+      expect(fontStack(bad), bad).toBeNull();
+    }
   });
 });
 

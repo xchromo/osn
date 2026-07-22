@@ -1143,6 +1143,26 @@ describe("PUT /invite/theme (organiser)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects an unknown section tone with 400", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/theme`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...validTheme, heroTone: "banana" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an unknown palette preset with 400", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/theme`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...validTheme, palettePreset: "not-a-preset" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects an over-long colour past the 64-char cap with 400", async () => {
     const { app } = buildApp();
     const res = await appRequest(app, `${orgBase}/theme`, {

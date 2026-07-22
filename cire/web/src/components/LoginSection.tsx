@@ -1,5 +1,6 @@
 import { createSignal, onMount, Show, For } from "solid-js";
 
+import { filterThemeVars } from "./invite-theme";
 import { TurnstileWidget, turnstileEnabled } from "./TurnstileWidget";
 import type { ClaimResult } from "./types";
 import { isValidClaimResponse } from "./utils";
@@ -128,7 +129,7 @@ export function LoginSection(props: LoginSectionProps) {
         // input's focus border, the submit button and its hover fill, the
         // preview-mode chip) already resolves the organiser's scheme from the
         // root palette, hover and focus states included.
-        ...props.themeVars,
+        ...filterThemeVars(props.themeVars),
         "background-color": "var(--invite-section-bg)",
       }}
     >

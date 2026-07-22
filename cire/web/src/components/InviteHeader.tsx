@@ -7,7 +7,7 @@ import {
   type ImageCrop,
 } from "./image-crop";
 import { isHeroEmpty, isStoryEmpty } from "./invite-emptiness";
-import { applyPaletteToRoot, type InviteTheme, sectionVars } from "./invite-theme";
+import { applyPaletteToRoot, filterThemeVars, type InviteTheme, sectionVars } from "./invite-theme";
 
 /**
  * Responsive variant widths the API can transform an invite image to. Mirrors
@@ -291,7 +291,7 @@ export default function InviteHeader(props: InviteHeaderProps) {
       <Show when={showHero()}>
         <section
           class="relative h-dvh overflow-hidden"
-          style={{ ...heroVars(), ...SECTION_SURFACE }}
+          style={{ ...filterThemeVars(heroVars()), ...SECTION_SURFACE }}
         >
           {/* Default gradient — always present as the base layer / fallback. */}
           <div
@@ -412,7 +412,7 @@ export default function InviteHeader(props: InviteHeaderProps) {
       <Show when={showStory()}>
         <section
           class="border-border border-y px-6 py-16 md:px-8 md:py-20"
-          style={{ ...storyVars(), ...SECTION_SURFACE }}
+          style={{ ...filterThemeVars(storyVars()), ...SECTION_SURFACE }}
         >
           {/*
             Two-column on laptop/desktop when a story image exists — image LEFT,

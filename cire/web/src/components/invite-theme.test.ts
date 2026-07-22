@@ -205,12 +205,30 @@ describe("styleAttr", () => {
     expect(attr.split(";").length).toBeGreaterThan(10);
   });
 
-  it("drops any value carrying a declaration terminator or quote (raw-attribute sink)", () => {
-    const attr = styleAttr({
-      "--color-gold": '#fff";background-image:url(https://evil.example/x)',
-      "--color-bg": "#123456",
-    });
-    expect(attr).toBe("--color-bg:#123456");
+  it("carries the FONT declarations too (they contain quoted family names)", () => {
+    // Regression: an earlier filter rejected `"` as well, which silently dropped
+    // every font — a themed invite server-rendered its colours but not its
+    // typography, and only picked the fonts up on hydration.
+    const attr = styleAttr(paletteRootVars(themed));
+    expect(attr).toContain("--font-display:");
+    expect(attr).toContain("Cormorant Garamond");
+    expect(attr).toContain("--default-font-family:");
+  });
+
+  it("drops any value that could open a second declaration (raw-attribute sink)", () => {
+    expect(
+      styleAttr({
+        "--color-gold": "#fff;background-image:url(https://evil.example/x)",
+        "--color-bg": "#123456",
+      }),
+    ).toBe("--color-bg:#123456");
+    // A CSS escape sequence must not be able to reconstruct a terminator.
+    expect(styleAttr({ "--color-gold": "#fff\\3b x", "--color-bg": "#123456" })).toBe(
+      "--color-bg:#123456",
+    );
+    expect(styleAttr({ "--color-gold": "#fff<script>", "--color-bg": "#123456" })).toBe(
+      "--color-bg:#123456",
+    );
   });
 
   it("drops keys outside the allow-list before serialising", () => {
@@ -236,5 +254,20 @@ describe("applyPaletteToRoot", () => {
     expect(document.documentElement.style.getPropertyValue("--color-bg")).toBe(
       derivePalette(PALETTE_PRESETS.fog)["--color-bg"],
     );
+  });
+
+  it("clears a variable the new theme no longer sets", () => {
+    // An organiser clearing their heading font back to the default stops
+    // `paletteRootVars` emitting --font-display. Without removal the value from
+    // the previous apply (or the SSR shell) would stick forever, and the guest
+    // would keep seeing a font the invite no longer specifies.
+    applyPaletteToRoot(themed);
+    expect(document.documentElement.style.getPropertyValue("--font-display")).toContain(
+      "Cormorant Garamond",
+    );
+    applyPaletteToRoot({ ...themed, headingFont: null });
+    expect(document.documentElement.style.getPropertyValue("--font-display")).toBe("");
+    // …while the colours it still sets are untouched.
+    expect(document.documentElement.style.getPropertyValue("--color-bg")).not.toBe("");
   });
 });

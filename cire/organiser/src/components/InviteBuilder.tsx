@@ -8,7 +8,7 @@ import {
   type SectionTone,
 } from "@cire/theme";
 import { useAuth } from "@osn/client/solid";
-import { createResource, createSignal, For, lazy, Show, Suspense } from "solid-js";
+import { createMemo, createResource, createSignal, For, lazy, Show, Suspense } from "solid-js";
 import { toast } from "solid-toast";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
@@ -279,14 +279,18 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   // guest site uses (`derivePalette` in `@cire/theme`). There is no
   // organiser-side colour maths any more, so the preview cannot disagree with
   // what a guest sees — the drift the old hand-copied preview helper allowed.
-  const previewTokens = (): Record<string, string> => {
+  // Memoised: four preview cards read this, and the trigger is a colour-picker
+  // DRAG (pointermove) — without a memo each frame ran the full derivation once
+  // per reader. A memo also gives the token map a stable identity, so Solid's
+  // style diffing can early-out instead of re-walking ~24 properties four times.
+  const previewTokens = createMemo((): Record<string, string> => {
     const vars: Record<string, string> = derivePalette(resolvedSeeds(palette()));
     const heading = fontStack(fontOrDefault(headingFont()));
     if (heading) vars["--font-display"] = heading;
     const body = fontStack(fontOrDefault(bodyFont()));
     if (body) vars["--font-body"] = body;
     return vars;
-  };
+  });
 
   /** The surface a section's tone paints, for its preview card. */
   const toneSurface = (section: ThemeSection): string => {

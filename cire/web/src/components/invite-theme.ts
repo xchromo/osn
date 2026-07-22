@@ -141,14 +141,24 @@ export function filterThemeVars(
  * themed (no flash of the built-in dark green before a cream invite loads).
  *
  * Values reaching here are `derivePalette` output or an allow-listed font stack,
- * but the map is filtered and each value re-checked for declaration
- * terminators anyway: this writes into a raw `style="…"` attribute, the one
- * place in the guest site where a stray `;` or quote would close the
- * declaration and open a new one.
+ * but the map is filtered and each value re-checked anyway: this writes into a
+ * raw `style="…"` attribute.
+ *
+ * The character that matters is `;` — the only one that can close this
+ * declaration and open another. `<`/`>` are rejected as belt-and-braces against
+ * a future caller writing this somewhere Astro doesn't escape, and `\` because
+ * a CSS escape sequence could otherwise reconstruct a `;`.
+ *
+ * Quotes are NOT rejected. An earlier version filtered them too, which silently
+ * dropped every font declaration — every stack in `FONT_STACKS` contains a
+ * quoted family name — so a themed invite server-rendered its colours but not
+ * its typography, and only picked the fonts up on hydration. Astro escapes the
+ * attribute, so a quote here cannot break out; over-broad filtering just voided
+ * the feature the SSR path exists for.
  */
 export function styleAttr(vars: Record<string, string>): string {
   return Object.entries(filterThemeVars(vars) ?? {})
-    .filter(([, value]) => !/[;"'<>]/.test(value))
+    .filter(([, value]) => !/[;<>\\]/.test(value))
     .map(([key, value]) => `${key}:${value}`)
     .join(";");
 }
@@ -162,7 +172,22 @@ export function styleAttr(vars: Record<string, string>): string {
 export function applyPaletteToRoot(theme: InviteTheme | null | undefined): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  for (const [key, value] of Object.entries(paletteRootVars(theme))) {
+  const vars = paletteRootVars(theme);
+
+  // Remove what the PREVIOUS apply set and this one doesn't. Fonts are the case
+  // that matters: an organiser clearing their heading font back to the default
+  // makes `paletteRootVars` stop emitting `--font-display`, and without this the
+  // value written by the SSR shell would stay on the root forever — the guest
+  // would keep seeing a font the invite no longer specifies.
+  for (const key of appliedKeys) {
+    if (!(key in vars)) root.style.removeProperty(key);
+  }
+  appliedKeys = new Set(Object.keys(vars));
+
+  for (const [key, value] of Object.entries(vars)) {
     root.style.setProperty(key, value);
   }
 }
+
+/** The custom properties the last {@link applyPaletteToRoot} call set. */
+let appliedKeys: ReadonlySet<string> = new Set();

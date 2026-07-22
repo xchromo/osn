@@ -216,6 +216,17 @@ describe("InviteBuilder theme", () => {
     // is what makes a key-only scheme render as that scheme.
     expect(sent.palettePreset).toBe("fog");
     expect(sent.paletteGround).toBeNull();
+
+    // And the preview agrees with what a guest will see. The two sides reach
+    // `derivePalette` differently — the builder pre-fills the five seeds, the
+    // guest passes the preset key — and the one bug this feature shipped to a
+    // live preview was exactly a preset-only scheme rendering as evergreen.
+    const heroPreview = document.querySelector('[aria-label="Hero preview"]') as HTMLElement;
+    await waitFor(() =>
+      expect(heroPreview.style.getPropertyValue("--color-gold")).toBe(
+        derivePalette(PALETTE_PRESETS.fog)["--color-gold"],
+      ),
+    );
   });
 
   it("PUTs an edited section tone (the tone lane)", async () => {

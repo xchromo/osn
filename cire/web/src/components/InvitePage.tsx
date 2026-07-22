@@ -5,7 +5,7 @@ import { Toaster } from "solid-toast";
 import { OSN_ISSUER_URL } from "../lib/osn";
 import { DetailsModal } from "./DetailsModal";
 import { EventCard } from "./EventCard";
-import { applyPaletteToRoot, type InviteTheme, sectionVars } from "./invite-theme";
+import { applyPaletteToRoot, filterThemeVars, type InviteTheme, sectionVars } from "./invite-theme";
 import { LoginSection } from "./LoginSection";
 import { PulseAccountLink } from "./PulseAccountLink";
 import { RsvpModal } from "./RsvpModal";
@@ -180,7 +180,10 @@ export default function InvitePage(props: InvitePageProps) {
             // `text-gold` / `font-display` / `border-border` utilities on the
             // header and on every EventCard descendant already resolve the
             // organiser's scheme from the root palette.
-            style={{ ...detailsVars(), "background-color": "var(--invite-section-bg)" }}
+            style={{
+              ...filterThemeVars(detailsVars()),
+              "background-color": "var(--invite-section-bg)",
+            }}
           >
             <div class="mx-auto max-w-[540px] text-center md:max-w-[640px]">
               <p class="font-body text-gold mb-3 text-[0.72rem] tracking-[0.2em] uppercase">

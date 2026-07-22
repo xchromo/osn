@@ -124,6 +124,133 @@ describe("0044 invite palette", () => {
     expect(row.palette_card).toBeNull();
   });
 
+  it("preserves a details/welcome surface pick as a card tone", () => {
+    // The branch that does the preserving. Without it, an invite whose organiser
+    // picked a background for those sections silently flattens onto the page.
+    const db = applyUpToTarget();
+    seedWedding(db, "wed_d");
+    db.exec(
+      "INSERT INTO wedding_invite_customisations" +
+        " (wedding_id, details_surface_color, welcome_surface_color, updated_at)" +
+        " VALUES ('wed_d', '#333F27', '#6E735D', 0);",
+    );
+
+    applyTarget(db);
+
+    const row = db
+      .query(
+        "SELECT hero_tone, story_tone, details_tone, welcome_tone" +
+          " FROM wedding_invite_customisations WHERE wedding_id = 'wed_d'",
+      )
+      .get() as Record<string, string | null>;
+
+    expect(row.details_tone).toBe("card");
+    expect(row.welcome_tone).toBe("card");
+    // The hero is exempt ON PURPOSE: its "surface" was the title panel behind
+    // the text, not a section background, so giving it a tone would paint a
+    // backdrop it never had. Pinned so a later reader doesn't "fix" it.
+    expect(row.hero_tone).toBeNull();
+  });
+
+  it("leaves the hero untoned even when it had a surface colour", () => {
+    const db = applyUpToTarget();
+    seedWedding(db, "wed_e");
+    db.exec(
+      "INSERT INTO wedding_invite_customisations (wedding_id, hero_surface_color, updated_at)" +
+        " VALUES ('wed_e', '#333F27', 0);",
+    );
+
+    applyTarget(db);
+
+    const row = db
+      .query(
+        "SELECT hero_tone, palette_card FROM wedding_invite_customisations WHERE wedding_id = 'wed_e'",
+      )
+      .get() as Record<string, string | null>;
+
+    expect(row.hero_tone).toBeNull();
+    // It is carried as the card seed instead — consumed by --invite-panel.
+    expect(row.palette_card).toBe("#333F27");
+  });
+
+  it("back-fills each row independently when several are migrated together", () => {
+    // Every other fixture here migrates ONE row, so a WHERE that accidentally
+    // matched every row would pass. Three rows in different states at once.
+    const db = applyUpToTarget();
+    for (const id of ["wed_f", "wed_g", "wed_h"]) seedWedding(db, id);
+    db.exec(
+      "INSERT INTO wedding_invite_customisations" +
+        " (wedding_id, hero_accent_color, details_surface_color, updated_at) VALUES" +
+        " ('wed_f', '#E5EAEF', '#333F27', 0)," +
+        " ('wed_g', NULL, NULL, 0)," +
+        " ('wed_h', '#AABBCC', NULL, 0);",
+    );
+
+    applyTarget(db);
+
+    const rows = db
+      .query(
+        "SELECT wedding_id, palette_gilt, details_tone, story_tone" +
+          " FROM wedding_invite_customisations ORDER BY wedding_id",
+      )
+      .all() as Record<string, string | null>[];
+
+    expect(rows.map((r) => [r.wedding_id, r.palette_gilt, r.details_tone])).toEqual([
+      ["wed_f", "#E5EAEF", "card"],
+      ["wed_g", null, null],
+      ["wed_h", "#AABBCC", null],
+    ]);
+    // The story band's tone is unconditional, so every row gets it.
+    expect(rows.every((r) => r.story_tone === "card")).toBe(true);
+  });
+
+  it("back-fills the two hero columns independently", () => {
+    const db = applyUpToTarget();
+    seedWedding(db, "wed_i");
+    db.exec(
+      "INSERT INTO wedding_invite_customisations (wedding_id, hero_surface_color, updated_at)" +
+        " VALUES ('wed_i', '#333F27', 0);",
+    );
+
+    applyTarget(db);
+
+    const row = db
+      .query(
+        "SELECT palette_gilt, palette_card FROM wedding_invite_customisations WHERE wedding_id = 'wed_i'",
+      )
+      .get() as Record<string, string | null>;
+
+    expect(row.palette_card).toBe("#333F27");
+    expect(row.palette_gilt).toBeNull();
+  });
+
+  it("drops the divergent per-section accents rather than smuggling them into a seed", () => {
+    // The documented, INTENDED data loss. Pinning it is what distinguishes a
+    // deliberate product change from an accident nobody noticed.
+    const db = applyUpToTarget();
+    seedWedding(db, "wed_j");
+    db.exec(
+      "INSERT INTO wedding_invite_customisations" +
+        " (wedding_id, hero_accent_color, story_accent_color, details_accent_color, updated_at)" +
+        " VALUES ('wed_j', '#111111', '#222222', '#333333', 0);",
+    );
+
+    applyTarget(db);
+
+    const row = db
+      .query(
+        "SELECT palette_gilt, palette_ground, palette_ink, palette_card, palette_bloom" +
+          " FROM wedding_invite_customisations WHERE wedding_id = 'wed_j'",
+      )
+      .get() as Record<string, string | null>;
+
+    // Only the hero accent survives, as the one accent the scheme now has.
+    expect(row.palette_gilt).toBe("#111111");
+    for (const seed of ["palette_ground", "palette_ink", "palette_card", "palette_bloom"]) {
+      expect(row[seed], seed).toBeNull();
+    }
+  });
+
   it("drops every per-section colour column and adds the scheme columns", () => {
     const db = applyUpToTarget();
     applyTarget(db);

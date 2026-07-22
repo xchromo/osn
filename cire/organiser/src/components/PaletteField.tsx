@@ -8,7 +8,7 @@ import {
   paletteAdjustments,
   resolveSeeds,
 } from "@cire/theme";
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 
 import ColorPicker from "./ColorPicker";
 
@@ -65,11 +65,14 @@ export default function PaletteField(props: {
   onChange: (next: PaletteState) => void;
 }) {
   const base = () => PALETTE_PRESETS[props.value.preset ?? DEFAULT_PRESET];
-  const seeds = () => resolvedSeeds(props.value);
-  const tokens = () => derivePalette(seeds());
+  // Memoised for the same reason as the builder's previewTokens: the trigger is
+  // a pointer-rate drag, and `tokens` + `adjusted` would each re-parse the same
+  // five seeds independently on every frame.
+  const seeds = createMemo(() => resolvedSeeds(props.value));
+  const tokens = createMemo(() => derivePalette(seeds()));
   // Which of the organiser's colours had to move to stay legible. Empty is the
   // normal case, and its emptiness is the signal that nothing needs explaining.
-  const adjusted = () => paletteAdjustments(seeds());
+  const adjusted = createMemo(() => paletteAdjustments(seeds()));
 
   /** Pick a preset: adopt its five colours wholesale, dropping earlier nudges. */
   const choosePreset = (key: PalettePresetKey) => props.onChange({ preset: key, seeds: {} });

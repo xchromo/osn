@@ -51,9 +51,24 @@ UPDATE `wedding_invite_customisations`
   SET `palette_card` = `hero_surface_color`
   WHERE `hero_surface_color` IS NOT NULL;--> statement-breakpoint
 
--- The story section has always painted a surface (`bg-surface`), so preserve
--- that rhythm as a tone rather than silently flattening it onto the page.
+-- Preserve each section's BACKGROUND as a tone. Without this the drop below
+-- silently flattens every section that painted a surface onto the page colour —
+-- a visible change to a live invite, which is not what "replace the colour
+-- model" is allowed to mean.
+--
+-- The story band has always painted `bg-surface`, so it becomes `card`
+-- unconditionally. The other two only painted one when the organiser picked it,
+-- so their tone is conditional on that pick. The hero is deliberately left
+-- alone: its "surface" was the title panel behind the text, not a section
+-- background (it is carried by `palette_card` above and consumed by
+-- `--invite-panel`), so giving it a tone would paint a backdrop it never had.
 UPDATE `wedding_invite_customisations` SET `story_tone` = 'card';--> statement-breakpoint
+UPDATE `wedding_invite_customisations`
+  SET `details_tone` = 'card'
+  WHERE `details_surface_color` IS NOT NULL;--> statement-breakpoint
+UPDATE `wedding_invite_customisations`
+  SET `welcome_tone` = 'card'
+  WHERE `welcome_surface_color` IS NOT NULL;--> statement-breakpoint
 
 ALTER TABLE `wedding_invite_customisations` DROP COLUMN `hero_accent_color`;--> statement-breakpoint
 ALTER TABLE `wedding_invite_customisations` DROP COLUMN `hero_surface_color`;--> statement-breakpoint

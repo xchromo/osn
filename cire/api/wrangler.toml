@@ -236,6 +236,13 @@ OSN_JWKS_URL = "https://id.cireweddings.com/.well-known/jwks.json"
 OSN_ISSUER_URL = "https://id.cireweddings.com"
 OSN_AUDIENCE = "osn-access"
 GROWTHBOOK_API_HOST = "https://cdn.growthbook.io"
+# OSN_ENV marks this as a DEPLOYED tier. Without it `loadConfig` falls back to
+# `local`, `isDeployedTier()` returns false, and the boot guard that fail-closes
+# on a missing CLAIM_RATE_LIMITER binding is skipped — on a publicly reachable
+# Worker. A binding typo would then silently downgrade the guest claim-code
+# brute-force defence to the per-isolate limiter with no signal. It also keeps
+# the logger off `debug` on a deployed tier, per the four-tier convention.
+OSN_ENV = "dev"
 # ZAP_API_URL is deliberately NOT set. Named envs don't inherit top-level vars,
 # so the code default (localhost) applies and vendor-enquiry delivery fails
 # closed — a preview must never send a real email to a real vendor. Everything
