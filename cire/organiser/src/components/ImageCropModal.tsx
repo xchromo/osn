@@ -328,9 +328,7 @@ export default function ImageCropModal(props: ImageCropModalProps) {
       <div class="border-border bg-bg flex max-h-[90vh] w-full max-w-2xl flex-col gap-4 overflow-auto rounded-sm border p-5">
         <header class="flex flex-col gap-1">
           <p class="font-body text-gold text-[0.72rem] tracking-[0.2em] uppercase">Crop</p>
-          <h3 class="font-display text-text text-[1.3rem] font-light italic">
-            Choose what guests see
-          </h3>
+          <h3 class="font-display text-text text-[1.3rem] font-light">Choose what guests see</h3>
           <p class="font-body text-text-muted text-[0.82rem]">
             Drag to pan, drag a corner to zoom. Pick a shape below — guests see exactly this frame,
             never stretched.

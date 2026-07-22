@@ -64,7 +64,7 @@ export default function EnquireDialog(props: EnquireDialogProps) {
         >
           <header class="flex flex-col gap-1">
             <p class="font-body text-gold text-[0.72rem] tracking-[0.2em] uppercase">Enquiry</p>
-            <h3 class="font-display text-text text-[1.2rem] font-light italic">
+            <h3 class="font-display text-text text-[1.2rem] font-light">
               Enquire with {props.vendorName}
             </h3>
           </header>

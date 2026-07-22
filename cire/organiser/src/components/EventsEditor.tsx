@@ -220,7 +220,7 @@ export default function EventsEditor(props: { weddingId: string }) {
           when={store.draft.events.length > 0}
           fallback={
             <div class="border-border bg-surface/30 flex flex-col items-start gap-2 rounded-sm border border-dashed p-8 text-center">
-              <p class="font-display text-gold-dim w-full text-[1.2rem] italic">No events yet</p>
+              <p class="font-display text-gold-dim w-full text-[1.2rem]">No events yet</p>
               <p class="font-body text-text-muted w-full text-[0.85rem]">
                 Add an event to start building your schedule. Guests are matched to events that
                 exist.
@@ -378,7 +378,7 @@ function EventRowCard(props: {
       </div>
 
       <div class="min-w-0 flex-1">
-        <p class="font-display text-text truncate text-[1.15rem] italic">
+        <p class="font-display text-text truncate text-[1.15rem]">
           {props.event.name || <span class="text-text-muted not-italic">Untitled event</span>}
         </p>
         <p class="font-body text-text-muted truncate text-[0.8rem]">
@@ -469,7 +469,7 @@ function EventDrawer(props: {
         onClick={(e) => e.stopPropagation()}
       >
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="font-display text-gold-dim text-[1.4rem] italic">Event details</h2>
+          <h2 class="font-display text-gold-dim text-[1.4rem]">Event details</h2>
           <button
             type="button"
             onClick={props.onClose}

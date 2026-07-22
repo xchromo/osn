@@ -200,9 +200,7 @@ export default function GuestsEditor(props: { weddingId: string }) {
           when={store.draft.families.length > 0}
           fallback={
             <div class="border-border bg-surface/30 flex flex-col items-start gap-2 rounded-sm border border-dashed p-8 text-center">
-              <p class="font-display text-gold-dim w-full text-[1.2rem] italic">
-                No households yet
-              </p>
+              <p class="font-display text-gold-dim w-full text-[1.2rem]">No households yet</p>
               <p class="font-body text-text-muted w-full text-[0.85rem]">
                 Add a household to start building your guest list.
               </p>
@@ -320,7 +318,7 @@ function FamilyCard(props: {
             aria-label="Household name"
             aria-invalid={famErrors().length > 0}
             onInput={(e) => props.store.renameFamily(props.family.key, e.currentTarget.value)}
-            class="border-border bg-bg font-display text-text focus:border-gold rounded-sm border px-3 py-1.5 text-[1.05rem] italic outline-none"
+            class="border-border bg-bg font-display text-text focus:border-gold rounded-sm border px-3 py-1.5 text-[1.05rem] outline-none"
           />
         </label>
         <div class="flex items-center gap-3">

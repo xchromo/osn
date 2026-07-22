@@ -307,7 +307,7 @@ export default function DirectoryBrowseView(props: DirectoryBrowseViewProps) {
 
       {/* Results grid */}
       <Show when={listings().length > 0}>
-        <ul class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <ul class="grid grid-cols-1 gap-4 @lg/panel:grid-cols-2 @3xl/panel:grid-cols-3">
           <For each={listings()}>
             {(item) => (
               <li class="border-border bg-surface/10 flex flex-col gap-3 rounded-sm border p-4">
