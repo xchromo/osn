@@ -57,6 +57,20 @@ Three greys carry all hierarchy. The only chromatic colour is the destructive re
 - **20px** (`h-5 w-5`) — card / content icons (row chevrons, etc.)
 - Inline SVG, `stroke="currentColor"`; resting icons inherit `text-subtle`.
 
+## Theme (light / dark)
+
+Follow the system theme by default; the fallback is **dark**. Light is shown
+only when the OS explicitly asks for light, or the user opts into light.
+`prefers-color-scheme: dark` and "no preference" both resolve to dark.
+
+- Preference (`system` / `light` / `dark`) persists in `localStorage` (`osn-theme`);
+  default is `system`. Resolution lives in `src/lib/theme.ts` (`resolveTheme`).
+- A synchronous mirror in `index.html` sets `.dark` before first paint (no flash).
+  Keep the two in sync.
+- The three-grey ink hierarchy inverts in `.dark` (paper `#1C1C1C`, ink `#F2F2F2`,
+  etc.) in `App.css`; type/radii/spacing are theme-agnostic.
+- Opt-in control: the `ThemeToggle` (System / Light / Dark) in the sidebar header.
+
 ## Layout
 
 - App shell = fixed **240px left rail** (`Sidebar.tsx`) + scrollable content.

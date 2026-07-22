@@ -21,6 +21,7 @@ import { toast } from "solid-toast";
 
 import { registrationClient, loginClient, recoveryClient } from "../lib/authClients";
 import { getTokenClaims, profileInitials, safeAvatarUrl } from "../lib/utils";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface NavItem {
   href: string;
@@ -145,9 +146,12 @@ export function Sidebar() {
     <>
       <aside class="border-border flex h-screen w-60 shrink-0 flex-col border-r">
         {/* Logo */}
-        <div class="flex items-baseline gap-1.5 px-4 pt-6 pb-1">
-          <span class="text-foreground text-title font-medium">OSN</span>
-          <span class="text-subtle text-meta tracking-[0.06em] uppercase">Social</span>
+        <div class="flex items-center justify-between px-4 pt-6 pb-1">
+          <div class="flex items-baseline gap-1.5">
+            <span class="text-foreground text-title font-medium">OSN</span>
+            <span class="text-subtle text-meta tracking-[0.06em] uppercase">Social</span>
+          </div>
+          <ThemeToggle />
         </div>
 
         {/* Navigation */}
