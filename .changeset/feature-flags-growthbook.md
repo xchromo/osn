@@ -1,6 +1,5 @@
 ---
 "@shared/feature-flags": minor
-"@cire/api": patch
 ---
 
 Add GrowthBook feature flags (key-optional, fail-safe) + wire into `@cire/api`.
