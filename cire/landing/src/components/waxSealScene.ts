@@ -1,16 +1,16 @@
 // The signature centrepiece: a real, three-dimensional wax seal that presents the
-// page. It is deliberately AMBIENT — it never breaks. It rests, breathes with a
-// slow tilt, catches a gold key light on its embossed monogram, and leans toward
-// the pointer so it feels physical rather than printed. The "reveal" is a gentle
-// settle on load (a small dolly-back + fade-up), not a shatter. The seal itself
+// page. It is deliberately AMBIENT — it never breaks. It rests in a fixed pose,
+// catches a gold key light on its embossed monogram, and leans a little toward
+// the pointer so it feels physical rather than printed; it never rotates on its
+// own. The "reveal" is a gentle settle on load (a small dolly-back + fade-up). The seal itself
 // is STAMPED, not moulded: each mount pours a fresh random puddle and presses
 // the same circular die into it, so every visitor's seal is unique.
 //
 // This module is lazy-loaded (`import()`) by WaxSeal3D so Three.js stays off the
 // critical path — the hero's headline and CTAs are server-rendered and painted
-// long before this ever runs. If WebGL is unavailable, or the visitor prefers
-// reduced motion, WaxSeal3D never loads this file at all and the CSS seal it
-// renders underneath stands in as a static poster.
+// long before this ever runs. If WebGL is unavailable WaxSeal3D never loads this
+// file and its CSS poster stands in; reduced-motion visitors get the scene in
+// `still` mode (one frame, no animation).
 //
 // Core `three` only — no examples/addons — to keep the added weight to the seal,
 // not a scene-graph toolkit.
@@ -39,6 +39,13 @@ export interface WaxSealController {
 export interface WaxSealOptions {
   /** Fired once the first frame has painted, so the caller can cross-fade in. */
   onReady?: () => void;
+  /**
+   * Render the seal as a still life: no settle animation, no pointer lean —
+   * a single frame, re-rendered only on resize. The 3D seal is a better
+   * PICTURE than the CSS poster even with all motion off, so reduced-motion
+   * visitors get it too.
+   */
+  still?: boolean;
 }
 
 // Brand gold (matches --color-gold, oklch(74.99% 0.0854 82.08)) as the wax body.
@@ -88,7 +95,7 @@ function makeSealMaps(): SealMaps {
   // The knocked-back well the die pressed (design sits proud of this).
   b.beginPath();
   b.arc(c, c, S * 0.3, 0, Math.PI * 2);
-  b.fillStyle = "#6a6a6a";
+  b.fillStyle = "#626262";
   b.fill();
   g.beginPath();
   g.arc(c, c, S * 0.3, 0, Math.PI * 2);
@@ -119,31 +126,67 @@ function makeSealMaps(): SealMaps {
   }
   b.globalAlpha = 1;
 
-  // Raised double border ring — the rule a die usually carries — sized to sit
-  // just inside the stamped field.
-  const ring = (ctx: CanvasRenderingContext2D, r: number, w: number, style: string) => {
-    ctx.lineWidth = w;
-    ctx.strokeStyle = style;
-    ctx.beginPath();
-    ctx.arc(c, c, r, 0, Math.PI * 2);
-    ctx.stroke();
-  };
-  ring(b, S * 0.265, S * 0.02, "#dedede");
-  ring(b, S * 0.225, S * 0.006, "#c8c8c8");
-  ring(g, S * 0.265, S * 0.02, "#5a5a5a");
-  ring(g, S * 0.225, S * 0.006, "#6a6a6a");
-
-  // The monogram, raised and centred. Serif to echo the Cormorant display face.
-  const mono = (ctx: CanvasRenderingContext2D, style: string) => {
+  // The die's design, raised from the field: a border ring, a laurel wreath
+  // of leaves and berries circling the monogram (echoing the botanical dies
+  // in the reference seals), and an italic serif "C" to match the brand face.
+  // Every shape is drawn twice — bright on the bump map (raised), dark on the
+  // roughness map (burnished glossy by the die).
+  const drawDesign = (ctx: CanvasRenderingContext2D, style: string) => {
     ctx.fillStyle = style;
+    ctx.strokeStyle = style;
+
+    // Border ring just inside the stamped field.
+    ctx.lineWidth = S * 0.016;
+    ctx.beginPath();
+    ctx.arc(c, c, S * 0.272, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Laurel wreath: a visible vine circle carrying opposed PAIRS of bold
+    // leaves at each node (one leaning out, one leaning in), a berry dot at
+    // every other node. Big enough to read as foliage at hero size — the
+    // previous pass looked like scattered grains.
+    const vineR = S * 0.206;
+    ctx.lineWidth = S * 0.005;
+    ctx.beginPath();
+    ctx.arc(c, c, vineR, 0, Math.PI * 2);
+    ctx.stroke();
+    const leaf = (px: number, py: number, rot: number, len: number, wid: number) => {
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(len * 0.45, -wid, len, 0);
+      ctx.quadraticCurveTo(len * 0.45, wid, 0, 0);
+      ctx.fill();
+      ctx.restore();
+    };
+    const nodes = 13;
+    for (let i = 0; i < nodes; i += 1) {
+      const a = (i / nodes) * Math.PI * 2;
+      const px = c + Math.cos(a) * vineR;
+      const py = c + Math.sin(a) * vineR;
+      const march = a + Math.PI / 2; // tangential, all marching one way
+      leaf(px, py, march - 0.75, S * 0.062, S * 0.017);
+      leaf(px, py, march + 0.75, S * 0.062, S * 0.017);
+      if (i % 2 === 0) {
+        const bx = c + Math.cos(a + Math.PI / nodes) * vineR;
+        const by = c + Math.sin(a + Math.PI / nodes) * vineR;
+        ctx.beginPath();
+        ctx.arc(bx, by, S * 0.0085, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // The monogram — italic, as on the CSS poster, so the two seals match.
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = `700 ${S * 0.3}px Georgia, "Cormorant Garamond", serif`;
+    ctx.font = `italic 700 ${S * 0.21}px Georgia, "Cormorant Garamond", serif`;
     // Optical centring — a cap "C" sits a touch high on the maths midline.
-    ctx.fillText("C", c, c + S * 0.018);
+    ctx.fillText("C", c, c + S * 0.014);
   };
-  mono(b, "#f2f2f2");
-  mono(g, "#525252");
+  drawDesign(b, "#f2f2f2");
+  drawDesign(g, "#525252");
 
   const asTexture = (canvas: HTMLCanvasElement) => {
     // Height/roughness data, not colour — leave in the default linear space.
@@ -261,7 +304,7 @@ function makeSealMesh(maps: SealMaps): Mesh {
       const flat = 1 - MathUtils.smoothstep(rr, 0.6, 0.97);
       v.z = MathUtils.lerp(dome, FIELD_Z, flat);
       // ...cut the groove where the die's shoulder sat...
-      v.z -= Math.exp(-(((rr - 0.62) / 0.07) ** 2)) * 0.03;
+      v.z -= Math.exp(-(((rr - 0.62) / 0.07) ** 2)) * 0.04;
       // ...and pile the displaced wax into one smooth proud rim, swelling
       // gently where the silhouette grew tongues.
       v.z += Math.exp(-(((rr - RIM_R) / RIM_W) ** 2)) * RIM_H * pour.squeeze(ang);
@@ -292,7 +335,7 @@ function makeSealMesh(maps: SealMaps): Mesh {
     clearcoatRoughness: 0.3,
     reflectivity: 0.45,
     bumpMap: maps.bump,
-    bumpScale: 1.25,
+    bumpScale: 1.6,
   });
 
   return new Mesh(geo, material);
@@ -343,6 +386,13 @@ export function mountWaxSeal(
   group.add(seal);
   scene.add(group);
 
+  // Resting pose: a small fixed tilt so the key light rakes the rim and the
+  // emboss instead of hitting the face dead-on. The seal does NOT rotate on
+  // its own — it sits, like a seal.
+  const POSE_YAW = -0.14;
+  const POSE_PITCH = 0.1;
+  group.rotation.set(POSE_PITCH, POSE_YAW, 0);
+
   // Pointer parallax target (-1..1 within the viewport). Stored here, applied
   // (lerped) in the loop so pointermove never triggers a render itself.
   let pointerX = 0;
@@ -386,12 +436,10 @@ export function mountWaxSeal(
     }
     const t = (performance.now() - t0) / 1000;
 
-    // Idle breath — a slow tilt that always keeps the face to camera.
-    const idleYaw = Math.sin(t * 0.45) * 0.26;
-    const idlePitch = Math.sin(t * 0.32) * 0.06;
-    // Pointer lean, damped toward the stored target.
-    const targetYaw = idleYaw + (hasPointer ? pointerX * 0.35 : 0);
-    const targetPitch = idlePitch + (hasPointer ? pointerY * 0.22 : 0);
+    // Pointer lean only, damped toward the stored target — the seal never
+    // rotates on its own, it just tips a little toward the visitor's hand.
+    const targetYaw = POSE_YAW + (hasPointer ? pointerX * 0.24 : 0);
+    const targetPitch = POSE_PITCH + (hasPointer ? pointerY * 0.16 : 0);
     group.rotation.y += (targetYaw - group.rotation.y) * 0.06;
     group.rotation.x += (targetPitch - group.rotation.x) * 0.06;
 
@@ -411,7 +459,22 @@ export function mountWaxSeal(
     raf = requestAnimationFrame(frame);
   };
 
+  // Still life: one frame in the resting pose, re-rendered only on demand
+  // (resize, visibility). No settle, no lean, no animation loop.
+  const renderStill = () => {
+    camera.position.z = 6;
+    renderer.render(scene, camera);
+    if (!ready) {
+      ready = true;
+      options.onReady?.();
+    }
+  };
+
   const start = () => {
+    if (options.still) {
+      renderStill();
+      return;
+    }
     if (raf === 0) raf = requestAnimationFrame(frame);
   };
   const onVisibility = () => {

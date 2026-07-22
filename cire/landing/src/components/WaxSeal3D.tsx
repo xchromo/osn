@@ -9,10 +9,10 @@ import type { WaxSealController } from "./waxSealScene";
 // seal from a flat CSS disc to a lit, three-dimensional one.
 //
 // Baseline (always in the DOM): a gold CSS disc with the embossed "C". It is the
-// static poster the visitor sees first, the reduced-motion experience, and the
-// no-WebGL fallback. On a capable, motion-happy client we lazy-load the Three.js
-// scene, mount it on the <canvas> layered on top, and cross-fade it in over the
-// poster once its first frame paints.
+// static poster the visitor sees first and the no-WebGL / no-JS fallback. On a
+// WebGL-capable client we lazy-load the Three.js scene, mount it on the <canvas>
+// layered on top, and cross-fade it in once its first frame paints. Visitors
+// preferring reduced motion get the same 3D seal as a motionless still life.
 
 function prefersReducedMotion(): boolean {
   return (
@@ -43,7 +43,12 @@ export function WaxSeal3D() {
   const [live, setLive] = createSignal(false);
 
   onMount(() => {
-    if (prefersReducedMotion() || !supportsWebGL()) return; // poster stands in
+    if (!supportsWebGL()) return; // poster stands in
+
+    // Reduced motion doesn't mean no 3D — it means no MOTION. Those visitors
+    // get the same lit, embossed seal as a still life (single frame, no
+    // settle, no pointer lean).
+    const still = prefersReducedMotion();
 
     let controller: WaxSealController | undefined;
     let cancelled = false;
@@ -53,7 +58,7 @@ export function WaxSeal3D() {
       try {
         const { mountWaxSeal } = await import("./waxSealScene");
         if (cancelled) return;
-        controller = mountWaxSeal(canvasRef, { onReady: () => setLive(true) });
+        controller = mountWaxSeal(canvasRef, { onReady: () => setLive(true), still });
       } catch {
         // Decorative upgrade failed — the poster is still on screen; done.
       }
