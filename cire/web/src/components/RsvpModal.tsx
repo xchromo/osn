@@ -255,7 +255,11 @@ export function RsvpModal(props: RsvpModalProps) {
                     Dietary requirements
                     <input
                       type="text"
-                      class="border-border font-body text-text placeholder:text-text-muted focus:border-gold mt-1.5 block w-full rounded-sm border bg-transparent px-3 py-2.5 text-base transition-colors duration-200 focus:outline-none sm:text-[0.9rem]"
+                      // No `focus:outline-none` here: it sits in Tailwind's
+                      // utilities layer and would beat the base-layer
+                      // `:focus-visible` ring, leaving a border tint as the
+                      // only focus cue on the invite's main data-entry field.
+                      class="border-border font-body text-text placeholder:text-text-muted focus:border-gold mt-1.5 block w-full rounded-sm border bg-transparent px-3 py-2.5 text-base transition-colors duration-200 sm:text-[0.9rem]"
                       placeholder="e.g. Vegetarian, no nuts"
                       value={responses()[guestId]?.dietary ?? ""}
                       onInput={(e) => setDietary(guestId, e.currentTarget.value)}

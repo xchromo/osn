@@ -130,7 +130,17 @@
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: -1ms !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+
+  /* A spinner is not decoration — it is the only sign the page is still
+     working. Clamped to one 0.01ms turn it becomes a static ring, which
+     reads as "nothing is happening". Keep it turning, slower. */
+  .animate-spin {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
   }
 }
