@@ -211,7 +211,9 @@ describe("InviteBuilder theme", () => {
     await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
     const sent = sentBody("/theme");
     // Picking a preset records the CHOICE, not five copied hexes — so a later
-    // change to the preset's palette reaches invites that chose it.
+    // change to the preset's palette reaches invites that chose it. The guest
+    // side resolves the null seeds against this key (see paletteRootVars), which
+    // is what makes a key-only scheme render as that scheme.
     expect(sent.palettePreset).toBe("fog");
     expect(sent.paletteGround).toBeNull();
   });

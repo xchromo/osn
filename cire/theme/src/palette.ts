@@ -268,10 +268,47 @@ function mix(a: Oklch, b: Oklch, t: number): Oklch {
   };
 }
 
-/** Parse a seed, falling back to the default preset's value for that role. */
-function seed(value: string | null | undefined, role: PaletteSeedKey): Oklch {
+/**
+ * Parse a seed, falling back to the chosen preset's value for that role (or the
+ * default preset's, when no preset was chosen).
+ *
+ * The fallback has to honour `preset`, not just the default. An organiser who
+ * picks a scheme and changes nothing saves the KEY with five null seeds — if a
+ * null seed resolved to the default preset here, every preset would render as
+ * the built-in look to guests while previewing correctly in the builder.
+ */
+function seed(
+  value: string | null | undefined,
+  role: PaletteSeedKey,
+  preset: PalettePresetKey,
+): Oklch {
   const parsed = value ? parseColor(value) : null;
-  return parsed ?? (parseColor(PALETTE_PRESETS[DEFAULT_PRESET][role]) as Oklch);
+  return parsed ?? (parseColor(PALETTE_PRESETS[preset][role]) as Oklch);
+}
+
+/** The preset a scheme is based on — the default when absent or unrecognised. */
+function basePreset(preset: string | null | undefined): PalettePresetKey {
+  return preset && isPalettePresetKey(preset) ? preset : DEFAULT_PRESET;
+}
+
+/**
+ * The five colours a scheme resolves to: the organiser's own picks laid over
+ * the preset they started from. This is the single definition of "what does
+ * this scheme actually mean" — the guest render, the organiser preview and the
+ * contrast report all go through it.
+ */
+export function resolveSeeds(
+  seeds: Partial<PaletteSeeds> | null | undefined,
+  preset?: string | null,
+): PaletteSeeds {
+  const base = PALETTE_PRESETS[basePreset(preset)];
+  return {
+    ground: seeds?.ground ?? base.ground,
+    card: seeds?.card ?? base.card,
+    ink: seeds?.ink ?? base.ink,
+    gilt: seeds?.gilt ?? base.gilt,
+    bloom: seeds?.bloom ?? base.bloom,
+  };
 }
 
 /**
@@ -296,7 +333,8 @@ function semantic(hue: number, chroma: number, card: Oklch): string {
 }
 
 /**
- * Derive the full token set from five seeds.
+ * Derive the full token set from a scheme: five seeds laid over the preset they
+ * were chosen from.
  *
  * Two rules run through all of it:
  *
@@ -311,12 +349,14 @@ function semantic(hue: number, chroma: number, card: Oklch): string {
  */
 export function derivePalette(
   seeds: Partial<PaletteSeeds> | null | undefined,
+  preset?: string | null,
 ): Record<string, string> {
-  const ground = seed(seeds?.ground, "ground");
-  const card = seed(seeds?.card, "card");
-  const inkSeed = seed(seeds?.ink, "ink");
-  const giltSeed = seed(seeds?.gilt, "gilt");
-  const bloomSeed = seed(seeds?.bloom, "bloom");
+  const base = basePreset(preset);
+  const ground = seed(seeds?.ground, "ground", base);
+  const card = seed(seeds?.card, "card", base);
+  const inkSeed = seed(seeds?.ink, "ink", base);
+  const giltSeed = seed(seeds?.gilt, "gilt", base);
+  const bloomSeed = seed(seeds?.bloom, "bloom", base);
 
   // A raised surface is one step further from the page than a card is. When an
   // organiser picks a card on the far side of ground, "away" keeps going that
@@ -399,12 +439,14 @@ export interface PaletteAdjustment {
 
 export function paletteAdjustments(
   seeds: Partial<PaletteSeeds> | null | undefined,
+  preset?: string | null,
 ): PaletteAdjustment[] {
-  const ground = seed(seeds?.ground, "ground");
-  const card = seed(seeds?.card, "card");
+  const base = basePreset(preset);
+  const ground = seed(seeds?.ground, "ground", base);
+  const card = seed(seeds?.card, "card", base);
   const out: PaletteAdjustment[] = [];
 
-  const inkSeed = seed(seeds?.ink, "ink");
+  const inkSeed = seed(seeds?.ink, "ink", base);
   if (
     contrastOklch(inkSeed, card) < WCAG_TEXT_MIN ||
     contrastOklch(inkSeed, ground) < WCAG_TEXT_MIN
@@ -415,12 +457,12 @@ export function paletteAdjustments(
     });
   }
 
-  const giltSeed = seed(seeds?.gilt, "gilt");
+  const giltSeed = seed(seeds?.gilt, "gilt", base);
   if (contrastOklch(giltSeed, ground) < WCAG_UI_MIN) {
     out.push({ token: "gilt", reason: "Adjusted so buttons and rules stay visible." });
   }
 
-  const bloomSeed = seed(seeds?.bloom, "bloom");
+  const bloomSeed = seed(seeds?.bloom, "bloom", base);
   if (contrastOklch(bloomSeed, ground) < WCAG_UI_MIN) {
     out.push({ token: "bloom", reason: "Adjusted so accents stay visible on the page." });
   }

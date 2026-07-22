@@ -59,6 +59,29 @@ describe("paletteRootVars", () => {
     }
   });
 
+  it("renders a chosen preset when the organiser edited no seed", () => {
+    // Caught on a live preview: the API returns `palettePreset: "chapel"` with
+    // five null seeds, and the guest rendered evergreen.
+    const vars = paletteRootVars({
+      headingFont: null,
+      bodyFont: null,
+      palettePreset: "chapel",
+      palette: { ground: null, card: null, ink: null, gilt: null, bloom: null },
+    });
+    expect(vars["--color-bg"]).toBe(derivePalette(PALETTE_PRESETS.chapel)["--color-bg"]);
+    expect(vars["--color-gold"]).toBe(derivePalette(PALETTE_PRESETS.chapel)["--color-gold"]);
+  });
+
+  it("ignores an unrecognised preset key (stale value degrades to the built-in)", () => {
+    const vars = paletteRootVars({
+      headingFont: null,
+      bodyFont: null,
+      palettePreset: "some-removed-preset",
+      palette: null,
+    });
+    expect(vars).toEqual(derivePalette(PALETTE_PRESETS.evergreen));
+  });
+
   it("renders the built-in scheme for a null theme", () => {
     expect(paletteRootVars(null)).toEqual(derivePalette(PALETTE_PRESETS.evergreen));
     expect(paletteRootVars(undefined)).toEqual(derivePalette(PALETTE_PRESETS.evergreen));

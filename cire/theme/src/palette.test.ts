@@ -10,6 +10,7 @@ import {
   PALETTE_PRESETS,
   paletteAdjustments,
   parseColor,
+  resolveSeeds,
   type PaletteSeeds,
   rgbToOklch,
   sectionToneVars,
@@ -68,6 +69,40 @@ describe("derivePalette", () => {
         expect(isSafeCssColor(value), `${key}/${token} = ${value}`).toBe(true);
       }
     }
+  });
+
+  test("a preset with no seed edits renders as THAT preset, not the default", () => {
+    // The bug this guards, caught on a live preview: choosing a scheme saves the
+    // KEY with five null seeds. When null resolved to the DEFAULT preset, every
+    // scheme rendered as the built-in look to guests while previewing correctly
+    // in the builder.
+    for (const key of PALETTE_PRESET_KEYS) {
+      expect(derivePalette({}, key), key).toEqual(derivePalette(PALETTE_PRESETS[key]));
+    }
+  });
+
+  test("an organiser's own seed still wins over the preset it sits on", () => {
+    const v = derivePalette({ gilt: "#112233" }, "chapel");
+    expect(v["--color-gold"]).toBe(
+      derivePalette({ ...PALETTE_PRESETS.chapel, gilt: "#112233" })["--color-gold"],
+    );
+    // …and the seeds they did NOT touch still follow chapel.
+    expect(v["--color-bg"]).toBe(derivePalette(PALETTE_PRESETS.chapel)["--color-bg"]);
+  });
+
+  test("an unknown or absent preset key degrades to the built-in scheme", () => {
+    const builtIn = derivePalette(PALETTE_PRESETS.evergreen);
+    expect(derivePalette({}, "not-a-preset")).toEqual(builtIn);
+    expect(derivePalette({}, null)).toEqual(builtIn);
+    expect(derivePalette({})).toEqual(builtIn);
+  });
+
+  test("resolveSeeds is the one definition of a half-filled scheme", () => {
+    expect(resolveSeeds({ gilt: "#112233" }, "jewel")).toEqual({
+      ...PALETTE_PRESETS.jewel,
+      gilt: "#112233",
+    });
+    expect(resolveSeeds(null, "fog")).toEqual({ ...PALETTE_PRESETS.fog });
   });
 
   test("falls back to the default preset for a missing or unparseable seed", () => {

@@ -6,6 +6,7 @@ import {
   type PalettePresetKey,
   type PaletteSeeds,
   paletteAdjustments,
+  resolveSeeds,
 } from "@cire/theme";
 import { For, Show } from "solid-js";
 
@@ -40,16 +41,13 @@ const PRESET_LABELS: Record<PalettePresetKey, string> = {
   garden: "Garden",
 };
 
-/** The seeds a scheme currently resolves to — the organiser's picks over their preset. */
+/**
+ * The seeds a scheme currently resolves to — the organiser's picks over their
+ * preset. Delegates to `@cire/theme` so the builder and the guest site cannot
+ * disagree about what a half-filled scheme means.
+ */
 export function resolvedSeeds(state: PaletteState): PaletteSeeds {
-  const base = PALETTE_PRESETS[state.preset ?? DEFAULT_PRESET];
-  return {
-    ground: state.seeds.ground ?? base.ground,
-    card: state.seeds.card ?? base.card,
-    ink: state.seeds.ink ?? base.ink,
-    gilt: state.seeds.gilt ?? base.gilt,
-    bloom: state.seeds.bloom ?? base.bloom,
-  };
+  return resolveSeeds(state.seeds, state.preset);
 }
 
 /**

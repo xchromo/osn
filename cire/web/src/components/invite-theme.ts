@@ -2,6 +2,7 @@ import {
   DERIVED_TOKENS,
   derivePalette,
   fontStack,
+  isPalettePresetKey,
   type PaletteSeeds,
   type SectionTone,
   sectionToneVars,
@@ -63,7 +64,15 @@ function safeSeeds(theme: InviteTheme | null | undefined): Partial<PaletteSeeds>
  * body face), so applying them per-section was only ever repeated work.
  */
 export function paletteRootVars(theme: InviteTheme | null | undefined): Record<string, string> {
-  const vars: Record<string, string> = derivePalette(safeSeeds(theme));
+  // The preset is part of what renders, not just a UI memento: an organiser who
+  // picks a scheme and changes nothing saves the KEY with five null seeds, and
+  // each null falls back to THAT preset's colour for the role. Drop it if it
+  // isn't a known key, so a stale value degrades to the built-in scheme.
+  const preset = theme?.palettePreset;
+  const vars: Record<string, string> = derivePalette(
+    safeSeeds(theme),
+    typeof preset === "string" && isPalettePresetKey(preset) ? preset : null,
+  );
 
   // Fonts resolve through the same closed allow-list; an unknown/absent key
   // simply keeps the built-in token.
