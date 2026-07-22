@@ -12,14 +12,14 @@ related:
   - "[[identity-model]]"
   - "[[dpia/cire-guest-data]]"
   - "[[changelog/compliance-fixes]]"
-last-reviewed: 2026-06-17
+last-reviewed: 2026-07-22
 ---
 
 # GDPR + UK GDPR
 
 OSN processes personal data of EU + UK end users (handles, emails, IP-derived
 metadata, social-graph edges, RSVPs, message metadata). That puts us
-squarely in scope as a **controller** for first-party data and as a
+in scope as a **controller** for first-party data and as a
 **processor** for Zap M3 organisation-chat transcripts (the verified org
 becomes the controller; we process on its instruction).
 
@@ -69,7 +69,7 @@ ones, in priority order:
 
 5. **DPA + SCC pack for processors** — sign the Cloudflare DPA template, the Grafana Labs DPA + SCCs, the chosen Redis provider's DPA, and Photon's DPA-equivalent (Komoot). File under `wiki/compliance/dpa/<vendor>.md` with execution date + scope. ID: **C-H5**.
 
-6. **DSAR runbook** — operational doc covering ID verification, the 30-day clock, the unverified-request response, the "manifestly unfounded" denial path, and where to log requests for audit. ID: **C-M1**. See [[dsar]].
+6. **DSAR runbook** — an operational doc that covers ID verification, the 30-day clock, the unverified-request response, the "manifestly unfounded" denial path, and where to log requests for audit. ID: **C-M1**. See [[dsar]].
 
 7. **Retention enforcement** — schedule documented + tested deletes for: dev OTP/magic store sweep (P-W4), security_events older than 12 months, sessions older than 30 days (already auto-expire), Grafana logs (already 50 GB rolling), Pulse RSVPs of cancelled events, deletion tombstones older than 30 days. Cron job in `osn/api` or sidecar. ID: **C-M2**. See [[retention]].
 
@@ -77,7 +77,7 @@ ones, in priority order:
 
 9. **Consent-record table** — `consents (id, account_id, purpose, given_at, withdrawn_at, evidence)` for OSN-side consent purposes. Required once we have a consent-based OSN purpose (geocoder, marketing email, analytics). cire's `rsvps.dietary` Art. 9(2)(a) explicit consent is **already captured** via dedicated columns on the `rsvps` row (`dietary_consent_at` / `dietary_consent_version`, C-H2 (cire dietary), PR #123) rather than this shared table. ID: **C-L1**.
 
-10. **DPO designation + public contact** — even if not strictly required, naming a DPO simplifies enterprise-customer DPAs. Email alias + named human responsible. ID: **C-L2**.
+10. **DPO designation + public contact** — even if not required, naming a DPO simplifies enterprise-customer DPAs. Email alias + named human responsible. ID: **C-L2**.
 
 ## Daily habits this introduces
 

@@ -10,7 +10,7 @@ related:
   - "[[identity-model]]"
   - "[[cire]]"
   - "[[turnstile]]"
-last-reviewed: 2026-06-18
+last-reviewed: 2026-07-22
 ---
 
 # Completed Features
@@ -31,7 +31,7 @@ The stack went **live on `cireweddings.com`**, all on Cloudflare Free tier, and 
 
 - **#155 — cire Security / Devices section.** Organiser portal `SecurityPanel` mounts `@osn/ui`'s new `PasskeysView` (list / add / rename / remove passkeys) with **passkey-only step-up** (`passkeyOnly` on `StepUpDialog`; OTP suppressed because email is degraded) + new-device help. See [[passkey-primary]], [[sessions]].
 - **#156 — any logged-in OSN user is a first-class organiser.** Removed the `ensureBootstrapOwner` 503 gate + `BOOTSTRAP_OWNER_PROFILE_ID` requirement; migration `0015` drops the demo `wed_bootstrap`. Per-wedding authz (`weddingOwner`/`weddingMember`) unchanged. See [[cire-auth]].
-- **#157 — CI Release workflow `git commit/push --no-verify`** (the lefthook pre-push `bun audit` was aborting auto-versioning every merge; ~28 changesets had piled up).
+- **#157 — CI Release workflow `git commit/push --no-verify`** (the lefthook pre-push `bun audit` aborted auto-versioning on every merge; ~28 changesets piled up).
 - **#154 — Cloudflare Turnstile** bot protection (key-optional, fail-closed) on osn register/login + cire claim/rsvp; shared `@shared/turnstile`. Inert until a dashboard widget is created. See [[turnstile]].
 - **#153 — osn-api rate-limit + IP-trust hardening behind Cloudflare.** `trustCloudflare` (`cf-connecting-ip`, was spoofable XFF → fixed the auth-429 bug); the 25 60s-window per-IP auth limiters moved onto **Workers native rate-limit bindings** (`RL_AUTH_IP_*`); Upstash kept for 1h-window IP limiters + all per-user/account limiters + stateful stores. Workers observability enabled. See [[rate-limiting]], [[redis]].
 - **#152 — cire per-section invite theming** (bounded fonts + colours; CSS-injection-safe; migration `0014`).
@@ -48,7 +48,7 @@ The stack went **live on `cireweddings.com`**, all on Cloudflare Free tier, and 
 
 - **Framework swap only** — every route path, status code, response body, header (Set-Cookie, Retry-After, CORS echo), and error shape is byte-for-byte preserved; services/schemas/db untouched.
 - **Route factories** per platform convention: `createClaimRoutes`, `createRsvpRoutes`, `createOrganiserWeddingsRoutes`, `createOrganiserImportRoutes`, composed in `createApp`.
-- **Middleware → Elysia plugins** (`derive` + `onBeforeHandle`, `as: "scoped"`): `sessionAuth`, `weddingOwner`, `ownedWedding`, `rateLimitMiddleware`; the organiser gate now uses the **shared Elysia adapter** from `@shared/osn-auth-client/middleware/elysia` (the unused Hono adapter was subsequently removed from the shared package — PR #130 — since cire was its last potential consumer).
+- **Middleware → Elysia plugins** (`derive` + `onBeforeHandle`, `as: "scoped"`): `sessionAuth`, `weddingOwner`, `ownedWedding`, `rateLimitMiddleware`; the organiser gate now uses the **shared Elysia adapter** from `@shared/osn-auth-client/middleware/elysia` (the unused Hono adapter was later removed from the shared package — PR #130 — since cire was its last potential consumer).
 - **Workers constraints**: `aot: false` (Elysia's AOT compiles handlers via `new Function`, forbidden on Cloudflare Workers); body parsing disabled per POST route via a sentinel `parse` hook so handlers keep the lenient manual `request.json()` semantics (malformed JSON → the schema's 400, not a framework parse error).
 - **Verified** by the test suite (169 pre-existing tests unchanged, plus six added during pre-PR review: CORS allowlist contract, claim rate-limit wiring, JSON 404 shape, generic-500 defect body), `wrangler deploy --dry-run`, and a Miniflare (workerd) smoke test of the built bundle.
 - **Pre-PR review hardening**: S-M1 (generic 500 bodies), S-L1 (schemeless `WEB_ORIGIN` fail-closed), P-W1 (per-isolate app memo) — see `[[changelog/security-fixes]]` / `[[changelog/performance-fixes]]`.
@@ -57,7 +57,7 @@ The stack went **live on `cireweddings.com`**, all on Cloudflare Free tier, and 
 
 Two erasure flows landed alongside the modular-platform `app_enrollments` model that drives them.
 
-- **Flow A — full OSN account delete.** `DELETE /account` on osn-api. Step-up gated, 7-day soft-delete grace window, manual fast-track. Soft-delete tx redacts identity (handle → `deleted_<id>`, display name + avatar nulled), nukes credentials (passkeys + recovery codes), revokes every session except the requesting one (preserved as the cancellation handle), closes every active app enrollment, and inserts a `deletion_jobs` row. Cross-service fan-out runs outside the tx via `Effect.all`+`Effect.either` against ARC `/internal/account-deleted` endpoints; failing bridges leave `*_done_at` NULL for the retry sweeper. After the grace window, `runHardDeleteSweep` purges all account-tied rows.
+- **Flow A — full OSN account delete.** `DELETE /account` on osn-api. Step-up gated, 7-day soft-delete grace window, manual fast-track. Soft-delete tx redacts identity (handle → `deleted_<id>`, display name + avatar nulled), deletes credentials (passkeys + recovery codes), revokes every session except the requesting one (preserved as the cancellation handle), closes every active app enrollment, and inserts a `deletion_jobs` row. Cross-service fan-out runs outside the tx via `Effect.all`+`Effect.either` against ARC `/internal/account-deleted` endpoints; failing bridges leave `*_done_at` NULL for the retry sweeper. After the grace window, `runHardDeleteSweep` purges all account-tied rows.
 - **Flow B — leave Pulse.** `DELETE /account` on pulse-api. Pulse delegates step-up validation to osn-api via the new ARC `/internal/step-up/verify` endpoint with `purpose: "pulse_app_delete"`. Soft-delete hard-removes RSVPs, close-friends, comms, and the `pulse_users` row; hosted events flip into a 14-day public-cancellation window (audience commitment, independent of the 7-day grace). After the user's leave succeeds, Pulse calls back to osn-api `/internal/app-enrollment/leave` to flip the row.
 - **`app_enrollments` table** tracks per-app opt-in. Lazy-provisioned on first authenticated app interaction; OSN-level deletion fan-out only targets currently-enrolled apps.
 - **Step-up `purpose` claim** (`account_delete`, `pulse_app_delete`) added as a confused-deputy guard, with the existing `osn-step-up` audience preserved. New `verifyStepUpForAccountDelete` and `verifyStepUpForExternalPurpose` helpers.
@@ -90,7 +90,7 @@ See `[[compliance/dsar]]` § Art. 17 and `[[compliance/retention]]` for the lock
 - **S-H1 — Passkey-register step-up gate.** `/passkey/register/begin` requires a fresh step-up token (webauthn or otp AMR) when the account already has ≥1 passkey. First-passkey bootstrap is exempt. `/passkey/register/complete` inserts a `security_events{kind: "passkey_register"}` row atomically, fires a best-effort email notification via `forkDaemon` (10s timeout), and derives the caller's session token from the HttpOnly cookie — H1 invalidation of other sessions cannot be silently skipped by a malicious body. Closes the "stolen access token → silent authenticator binding" vector.
 - **S-M1 — Login-begin enumeration safety.** `/login/passkey/begin` returns a uniform `200 { options }` for unknown identifiers, known-with-zero-passkeys, and known-with-passkeys; synthetic branches get a random 32-byte fake credentialId with no persisted challenge. An anonymous caller cannot probe the handle/email namespace.
 - **S-M2 — Access-token audience pin.** Access tokens now carry `aud: "osn-access"`; `verifyAccessToken` asserts it. Prevents accidental acceptance of any future token type minted with the same ES256 key.
-- **Strict last-passkey guard.** `deletePasskey` refuses unconditionally when the delete would leave 0 passkeys — recovery codes are no longer a substitute credential. Combined with mandatory enrollment on registration this gives the account-level invariant "every live account has ≥1 WebAuthn credential" cradle-to-grave.
+- **Strict last-passkey guard.** `deletePasskey` refuses unconditionally when the delete would leave 0 passkeys — recovery codes are no longer a substitute credential. Combined with mandatory enrollment on registration this gives the account-level invariant "every live account has ≥1 WebAuthn credential" for the whole life of the account.
 - **WebAuthn-unsupported fallback.** `SignIn.tsx` detects missing WebAuthn and shows an informational screen with a "use a recovery code" path; `<MagicLinkHandler>` deleted (no longer has any reason to exist).
 
 ## Auth improvements — Phase 5b (PKCE cleanup)
@@ -118,7 +118,7 @@ See `[[compliance/dsar]]` § Art. 17 and `[[compliance/retention]]` for the lock
 - **Step-up-gated dismissal (S-M1)**: `POST /account/security-events/:id/ack` and `POST /account/security-events/ack-all` both require a fresh step-up token (same amr set as `/recovery/generate`). A compromised access token cannot silently dismiss the banner that warns about its own compromise. Ack-all acks every unacked row in one transaction so the user completes one step-up ceremony per banner visit.
 - **Client surface**: `GET /account/security-events` (Bearer-auth, rate-limited, explicit projection) + step-up-gated ack routes. `createSecurityEventsClient` in `@osn/client` exposes `list / acknowledge / acknowledgeAll`. `SecurityEventsBanner` in `@osn/ui/auth` opens `StepUpDialog` on "Acknowledge" and uses optimistic local removal (P-I3) — no refetch after dismissal.
 - **Observability**: new `osn.auth.security_event.{recorded,notified,acknowledged}` counters + `osn.auth.security_event.notify.duration` histogram. `SecurityEventKind` (`recovery_code_generate | recovery_code_consume`) + `SecurityEventNotifyResult` added to `@shared/observability/metrics` with bounded string-literal unions. Redaction deny-list now includes `securityEventId` / `security_event_id`.
-- Unblocks the Phase-5 passkey-primary migration: a stolen access token + inbox hijack can no longer silently burn OR use the account's recovery codes, and the banner itself is out of the XSS blast radius. — see [[recovery-codes]]
+- Unblocks the Phase-5 passkey-primary migration: a stolen access token + inbox hijack can no longer silently burn OR use the account's recovery codes, and the banner itself is out of reach of XSS. — see [[recovery-codes]]
 
 ## Multi-account
 
