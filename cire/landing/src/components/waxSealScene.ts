@@ -266,7 +266,10 @@ function pourWax(): WaxPour {
 function makeSealMesh(maps: SealMaps): Mesh {
   const R = 1;
   const pour = pourWax();
-  const geo = new SphereGeometry(R, 160, 120);
+  // 96×72 segments (~7k vertices) fully captures the low-frequency pour
+  // deformation at the seal's on-screen size (≤ ~640 backing px); the fine
+  // detail lives in the bump/roughness maps, not the mesh.
+  const geo = new SphereGeometry(R, 96, 72);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
   const v = new Vector3();
@@ -289,8 +292,9 @@ function makeSealMesh(maps: SealMaps): Mesh {
     // Stamp, part 1 — the puddle: blend the poured silhouette in beyond the
     // rim, so the stamped field and rim stay circular while the outer wax
     // flares into its own one-off shape.
+    const sp = pour.spread(ang);
     const flare = MathUtils.smoothstep(rr, 0.8, 1);
-    const spread = 1 + flare * (pour.spread(ang) - 1);
+    const spread = 1 + flare * (sp - 1);
     v.x *= spread;
     v.y *= spread;
 
@@ -309,7 +313,7 @@ function makeSealMesh(maps: SealMaps): Mesh {
       // gently where the silhouette grew tongues.
       v.z += Math.exp(-(((rr - RIM_R) / RIM_W) ** 2)) * RIM_H * pour.squeeze(ang);
       // Stamp, part 3 — wax that ran further ran thinner.
-      const thin = Math.min(0.45, Math.max(0, (pour.spread(ang) - 1) * 1.6));
+      const thin = Math.min(0.45, Math.max(0, (sp - 1) * 1.6));
       v.z *= 1 - MathUtils.smoothstep(rr, 0.85, 1) * thin;
     }
 
@@ -394,22 +398,27 @@ export function mountWaxSeal(
   group.rotation.set(POSE_PITCH, POSE_YAW, 0);
 
   // Pointer parallax target (-1..1 within the viewport). Stored here, applied
-  // (lerped) in the loop so pointermove never triggers a render itself.
+  // (lerped) in the loop so pointermove itself stays cheap — it only nudges
+  // the loop awake (see below: the loop sleeps once the lean has converged).
   let pointerX = 0;
   let pointerY = 0;
   let hasPointer = false;
   const onPointerMove = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return; // touch has no hover; leave it to idle
+    if (e.pointerType === "touch") return; // touch has no hover; nothing to lean at
     hasPointer = true;
     pointerX = (e.clientX / window.innerWidth) * 2 - 1;
     pointerY = (e.clientY / window.innerHeight) * 2 - 1;
+    start(); // wake the loop if it went to sleep at steady state
   };
-  window.addEventListener("pointermove", onPointerMove, { passive: true });
+  // A still seal never leans — don't attach a window-lifetime listener whose
+  // writes nothing would ever read.
+  if (!options.still) window.addEventListener("pointermove", onPointerMove, { passive: true });
 
   const onResize = () => {
     const { w, h } = size();
-    renderer.setSize(w, h, false);
+    renderer.setSize(w, h, false); // re-allocates (and blanks) the buffer...
     setCamera();
+    start(); // ...so always follow with a repaint, even in still mode / asleep
   };
   const ro = new ResizeObserver(onResize);
   ro.observe(parent);
@@ -425,7 +434,8 @@ export function mountWaxSeal(
   );
   io.observe(canvas);
 
-  const t0 = performance.now();
+  let t0 = 0; // stamped on the first animated frame, so compile time isn't "settle" time
+  let lastT = 0;
   let raf = 0;
   let ready = false;
 
@@ -434,14 +444,21 @@ export function mountWaxSeal(
       raf = 0;
       return;
     }
-    const t = (performance.now() - t0) / 1000;
+    const now = performance.now();
+    if (t0 === 0) t0 = now;
+    const t = (now - t0) / 1000;
+    const dt = Math.min(0.05, lastT === 0 ? 1 / 60 : t - lastT);
+    lastT = t;
 
     // Pointer lean only, damped toward the stored target — the seal never
     // rotates on its own, it just tips a little toward the visitor's hand.
+    // Time-based damping so the feel (and the sleep threshold below) is the
+    // same at 60Hz and 120Hz.
     const targetYaw = POSE_YAW + (hasPointer ? pointerX * 0.24 : 0);
     const targetPitch = POSE_PITCH + (hasPointer ? pointerY * 0.16 : 0);
-    group.rotation.y += (targetYaw - group.rotation.y) * 0.06;
-    group.rotation.x += (targetPitch - group.rotation.x) * 0.06;
+    const damp = 1 - Math.exp(-4 * dt);
+    group.rotation.y += (targetYaw - group.rotation.y) * damp;
+    group.rotation.x += (targetPitch - group.rotation.x) * damp;
 
     // Gentle load-in settle: a small dolly-back + scale ease over ~1.3s.
     const rin = MathUtils.clamp(t / 1.3, 0, 1);
@@ -455,6 +472,21 @@ export function mountWaxSeal(
     if (!ready) {
       ready = true;
       options.onReady?.();
+    }
+
+    // Steady state: settle done and the lean has converged. The scene is now
+    // pixel-static, so STOP — burning GPU on identical frames is pure battery
+    // drain (on touch devices this sleeps ~1.3s after load and never wakes).
+    // pointermove / resize / visibility / intersection all call start() to
+    // wake the loop when something can actually change.
+    const settled =
+      rin >= 1 &&
+      Math.abs(targetYaw - group.rotation.y) < 0.0004 &&
+      Math.abs(targetPitch - group.rotation.x) < 0.0004;
+    if (settled) {
+      raf = 0;
+      lastT = 0;
+      return;
     }
     raf = requestAnimationFrame(frame);
   };
@@ -470,7 +502,14 @@ export function mountWaxSeal(
     }
   };
 
+  // Nothing renders until the shaders are compiled (booted) — the first
+  // renderer.render would otherwise compile MeshPhysicalMaterial's program
+  // synchronously on the main thread (routinely 50-200ms on low-end
+  // hardware). compileAsync uses KHR_parallel_shader_compile where available;
+  // the poster simply stays up a beat longer.
+  let booted = false;
   const start = () => {
+    if (!booted) return;
     if (options.still) {
       renderStill();
       return;
@@ -481,10 +520,17 @@ export function mountWaxSeal(
     if (!document.hidden) start();
   };
   document.addEventListener("visibilitychange", onVisibility);
-  start();
+  let disposed = false;
+  const boot = () => {
+    if (disposed) return;
+    booted = true;
+    start();
+  };
+  renderer.compileAsync(scene, camera).then(boot, boot);
 
   return {
     destroy() {
+      disposed = true;
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       window.removeEventListener("pointermove", onPointerMove);
