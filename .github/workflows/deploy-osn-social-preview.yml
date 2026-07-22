@@ -21,6 +21,11 @@ on:
       - ".github/workflows/deploy-osn-social-preview.yml"
   workflow_dispatch:
 
+# This job authenticates to Cloudflare with its own token and never needs
+# GITHUB_TOKEN write access — drop it to read-only (checkout needs read).
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-osn-social-preview-${{ github.ref }}
   cancel-in-progress: true
@@ -38,7 +43,7 @@ jobs:
           bun-version-file: .bun-version
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build osn/social
         run: bun run --cwd osn/social build

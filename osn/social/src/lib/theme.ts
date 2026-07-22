@@ -42,9 +42,8 @@ function apply(theme: ResolvedTheme): void {
 }
 
 const [themePref, setThemePrefSignal] = createSignal<ThemePref>(readPref());
-const [resolvedTheme, setResolvedTheme] = createSignal<ResolvedTheme>(resolveTheme(themePref()));
 
-export { themePref, resolvedTheme };
+export { themePref };
 
 /** Change the user's preference, persist it, and apply immediately. */
 export function setThemePref(pref: ThemePref): void {
@@ -54,26 +53,19 @@ export function setThemePref(pref: ThemePref): void {
   } catch {
     /* ignore write failures */
   }
-  const resolved = resolveTheme(pref);
-  setResolvedTheme(resolved);
-  apply(resolved);
+  apply(resolveTheme(pref));
 }
 
 /** Apply the current preference and start reacting to OS + cross-tab changes.
- *  Call once at startup. */
+ *  Call once at startup. The inline script in index.html has already applied
+ *  the pre-paint theme; this re-applies (idempotent) and wires the listeners. */
 export function initTheme(): void {
-  const resolved = resolveTheme(themePref());
-  setResolvedTheme(resolved);
-  apply(resolved);
+  apply(resolveTheme(themePref()));
 
   // Follow the OS while in `system` mode.
   const mq = window.matchMedia("(prefers-color-scheme: light)");
   mq.addEventListener?.("change", () => {
-    if (themePref() === "system") {
-      const next = resolveTheme("system");
-      setResolvedTheme(next);
-      apply(next);
-    }
+    if (themePref() === "system") apply(resolveTheme("system"));
   });
 
   // Keep tabs in sync when the preference changes elsewhere.
@@ -81,8 +73,6 @@ export function initTheme(): void {
     if (e.key !== STORAGE_KEY) return;
     const pref = readPref();
     setThemePrefSignal(pref);
-    const next = resolveTheme(pref);
-    setResolvedTheme(next);
-    apply(next);
+    apply(resolveTheme(pref));
   });
 }
