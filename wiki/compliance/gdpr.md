@@ -77,7 +77,7 @@ ones, in priority order:
 
 9. **Consent-record table** — `consents (id, account_id, purpose, given_at, withdrawn_at, evidence)` for OSN-side consent purposes. Required once we have a consent-based OSN purpose (geocoder, marketing email, analytics). cire's `rsvps.dietary` Art. 9(2)(a) explicit consent is **already captured** via dedicated columns on the `rsvps` row (`dietary_consent_at` / `dietary_consent_version`, C-H2 (cire dietary), PR #123) rather than this shared table. ID: **C-L1**.
 
-10. **DPO designation + public contact** — even if not required, naming a DPO simplifies enterprise-customer DPAs. Email alias + named human responsible. ID: **C-L2**.
+10. **DPO designation + public contact** — even if not strictly required, naming a DPO simplifies enterprise-customer DPAs. Email alias + named human responsible. ID: **C-L2**.
 
 ## Daily habits this introduces
 

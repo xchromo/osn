@@ -160,7 +160,7 @@ echo -n "<instance-id>:<api-token>" | base64
 
 **Symptom:** External requests show up with attacker-controlled trace IDs in internal traces.
 
-**Cause:** Trust an inbound `traceparent` only from ARC-authenticated callers (S-H13).
+**Cause:** An inbound `traceparent` is trustworthy only from an ARC-authenticated caller (S-H13).
 
 **Fix:** The Elysia plugin only extracts upstream trace context when the request presents `Authorization: ARC ...`. Anonymous/public requests start fresh root spans.
 

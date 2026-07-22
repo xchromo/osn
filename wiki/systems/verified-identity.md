@@ -53,7 +53,7 @@ of `[[TODO]]` for live work.
   credentials, RFC 9901 + draft-ietf-oauth-sd-jwt-vc) reuses the same
   key infrastructure — the issuer is just another `service_account`
   consumer of the OSN signing key.
-- **Australia first.** The user base lives here; the rules take effect
+- **Australia first.** The user base lives here; the regulatory clock runs
   here; the document/mDL stack is well defined here. Other countries
   layer on top of the same primitives in later phases.
 
@@ -272,8 +272,8 @@ checklist. Summary:
 
 - **V-M0 — Foundations**: vendor + DPIA + schema + SD-JWT VC issuance
   helper (no UI, no provider yet).
-- **V-M1 — Facial age estimation**: end-to-end thinnest path. It
-  answers the social-media minimum-age obligation.
+- **V-M1 — Facial age estimation**: end-to-end thinnest path. It lets us
+  answer the social-media minimum-age question.
 - **V-M2 — AU document verification (DVS + selfie + face-match)**.
 - **V-M3 — mDL acceptance** (NSW + QLD first; others as they go
   live).

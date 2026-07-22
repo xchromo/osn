@@ -81,7 +81,7 @@ If many IPs are hitting rate limits simultaneously:
 ### Immediate
 
 - If a legitimate user or IP is blocked, the rate limit window is 1 minute — they can retry after that
-- For Redis-backed limiters, `DEL` the relevant `rl:{namespace}:{key}` to clear state for one IP
+- For Redis-backed limiters, you can `DEL` the relevant `rl:{namespace}:{key}` to clear state for one IP
 - For the in-memory fallback there is no manual override. Restart `@osn/api` to reset all in-memory counters
 
 ### Short-term

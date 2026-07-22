@@ -416,6 +416,13 @@ eligible under the Digital ID Act 2024.
 
 ## Platform
 
+### Docs / wiki
+
+- [ ] Fix the wiki drift found by the 2026-07-22 writing-rules pass. The copy-edit changed prose only, so about 25 factual contradictions were flagged and left in place — the full list is in the pull request body. The worst: `[[production-deploy]]` §5.3–5.4 still deploys `cire/web` as a Pages project on the apex; `[[observability-setup]]` and `[[rate-limit-incident]]` still assume the Bun/Node stack that the Workers migration replaced; `[[monorepo-structure]]` says four top-level directories and "SQLite (migrating to Supabase)"; `[[component-library]]` deprecates `bx()` and still tells you to use it; `[[email]]`, `[[passkey-primary]]` and `[[subprocessors]]` disagree about whether Resend or Cloudflare Email Service is live
+- [ ] Delete or redirect `wiki/apps/landing.md` — it documents `@osn/landing` as unbuilt with the deploy target undecided, which `[[osn-landing]]` contradicts in full
+- [ ] Reconcile the duplicate finding IDs in this file (C-L4, C-L5, C-L6, S-L23 each appear on two or three rows) and the eight items recorded as both shipped and open
+- [ ] Run the same writing-rules pass over `cire/wiki/` (30 pages, ~62k words) — the 2026-07-22 pass covered only the root `wiki/` tree
+
 ### Pulse events API (`pulse/api`)
 
 - [ ] Batch status-transition `UPDATE`s in `listEvents`/`listTodayEvents` (currently N individual writes)

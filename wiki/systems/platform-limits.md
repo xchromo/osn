@@ -45,7 +45,7 @@ Events with more than 1000 guests belong to a future **verified-organisation tie
 - Dashboards, SLA, bulk import/export
 - Paid ticketing
 
-**Do not raise this number without a team discussion.** The limit exists because the membership sets the visibility filter reads are not paginated -- the bridge returns complete sets. Before you raise the cap, check that the full set still fits in memory and that the visibility filter stays fast enough.
+**Do not raise this number without a team discussion.** The limit exists because the graph membership sets the visibility filter reads are not paginated -- the bridge returns complete sets. Before you raise the cap, check that the full set still fits comfortably in memory and that the visibility filter still performs acceptably.
 
 ## Adding a New Limit
 

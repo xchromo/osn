@@ -204,7 +204,7 @@ Behaviour when `INTERNAL_SERVICE_SECRET` is unset:
 
 Behaviour when `osn/api` is unreachable (`ConnectionRefused`, DNS failure, etc):
 
-- **Non-local env**: throws at startup and the process exits. Deploy order must bring `osn/api` up first; a race here signals a real config error.
+- **Non-local env**: throws at startup and the process exits. Deploy order is expected to bring `osn/api` up first; a race here signals a real config error.
 - **Local dev**: the service logs a warning, `startKeyRotation()` returns `"pending-retry"`, and a background retry runs with exponential backoff (5 s, 10 s, 20 s… capped at 5 min) plus ±1 s symmetric jitter until registration succeeds. This lets `bun run dev:pulse` boot both services in parallel without a crash when `pulse-api` wins the startup race. The retry classifier uses an explicit allowlist of Bun/Node network-error codes (`ConnectionRefused`, `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND`, `ETIMEDOUT`, `EAI_AGAIN`, `EHOSTUNREACH`, `ENETUNREACH`, `UND_ERR_CONNECT_TIMEOUT`, `UND_ERR_SOCKET`) — HTTP 4xx/5xx responses and any other error still throw and exit. The retry reuses the same ephemeral key across attempts; this is safe because `/register-service` upserts both `service_accounts` (by `serviceId`) and `service_account_keys` (by `keyId`) via `ON CONFLICT DO UPDATE`, so repeated POSTs are idempotent.
 
 Env vars: `INTERNAL_SERVICE_SECRET`, `KEY_TTL_HOURS` (default 24), `KEY_ROTATION_BUFFER_HOURS` (default 2).

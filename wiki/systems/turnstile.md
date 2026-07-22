@@ -39,7 +39,7 @@ widget.
 **`/api/rsvp` is intentionally NOT gated.** A guest only reaches RSVP after a
 successful `/api/claim`, which mints the `cire_session` cookie behind the
 Turnstile gate above — so the unauthenticated bot surface is already covered at
-claim. A second challenge on every RSVP added friction and no defence (it put an
+claim. A second challenge on every RSVP added friction alone (it put an
 interactive widget in the middle of the flow), so `app.ts` wires `createRsvpRoutes(db)` with **no
 verifier** and `RsvpModal` renders no widget. The `rsvp.ts` route keeps the
 key-optional gate parameter (defaults to a no-op) so it can be re-armed if abuse

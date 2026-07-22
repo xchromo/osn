@@ -245,7 +245,7 @@ email-change verification factor. The recovery-code path is the single
 
 ## Privacy Rules
 
-1. **`accountId` never appears in**: API responses, JWT claims (except session tokens, which only the account holder sees), log entries (enforced via redaction deny-list), metric attributes, span attributes, or any data sent to other services.
+1. **`accountId` never appears in**: API responses, JWT claims (except refresh tokens, which only the account holder sees), log entries (enforced via redaction deny-list), metric attributes, span attributes, or any data sent to other services.
 2. **`passkeyUserId` (not `accountId`)** is used as the WebAuthn `user.id` to prevent passkey-based profile correlation.
 3. **Rate limiting is per-profile** for API calls, **per-IP for auth** — per-account rate limits would correlate profiles. Exception: profile-switch rate limiting is per-account (acceptable because the endpoint inherently requires the account-scoped refresh token).
 4. **Block independence** — blocking on one profile does NOT affect other profiles on the same account.

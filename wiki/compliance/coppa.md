@@ -28,7 +28,7 @@ compliant strategy is therefore the **hard age gate at registration**:
 - No retry persistence — the rejected registration leaves no row in the DB.
 - The age gate appears **once**, before any personal information is collected, so we never have actual knowledge of a child's data.
 
-This is the FTC-recognised "actual knowledge" defence (16 CFR §312.2). It
+This is the "actual knowledge" defence the FTC tolerates (16 CFR §312.2). It
 puts us out of scope for COPPA's substantive obligations (verifiable
 parental consent, parental review, data minimisation specific to children,
 etc.).

@@ -115,7 +115,7 @@ Three rewrite shapes recur:
 | `@osn/api` | ✅ | DB layer ✅ (Miniflare-tested) · Workers hosting ⛔ | 17 → `commitBatch` |
 | `@cire/api` | ✅ (dev/tests) | ✅ (always was) | n/a (async from day 1) |
 
-**`@osn/api` Workers-hosting caveat:** the DB layer is D1-ready and
+**`@osn/api` Workers-hosting caveat:** the DB layer is fully D1-ready and
 Miniflare-tested, but the long-lived osn-api process also depends on **ioredis**
 (rate-limiters, rotated-session + step-up JTI stores) and loads JWT keys from env
 at module top level — neither runs on Cloudflare Workers. Hosting osn-api on

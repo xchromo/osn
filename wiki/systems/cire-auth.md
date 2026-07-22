@@ -14,7 +14,7 @@ last-reviewed: 2026-07-22
 
 # Cire auth model
 
-Cire runs **three deliberately separate auth principal classes**. Guests are wedding attendees, and cire never asks them to create an account; organisers are OSN users who own a wedding; vendors are OSN users who also hold membership in an OSN org. The systems differ in credential, storage, transport, and threat model — do not try to unify them.
+Cire runs **three deliberately separate auth principal classes**. Guests are wedding attendees, and cire must never ask them to create an account; organisers are OSN users who own a wedding; vendors are OSN users who also hold membership in an OSN org. The systems differ in credential, storage, transport, and threat model — do not try to unify them.
 
 | | Guests | Organisers | Vendors |
 |---|---|---|---|

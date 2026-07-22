@@ -76,7 +76,7 @@ UI surface (`@osn/ui/auth`):
     ("email me a code") factor and drives the passkey ceremony directly.
     Required wherever transactional email is degraded. The cire organiser
     portal sets it because its osn-api runs with `OSN_EMAIL_OPTIONAL=true`
-    (Cloudflare email degraded), so an OTP step-up would wait on a code
+    (Cloudflare email degraded), so an OTP step-up would dead-end on a code
     that never arrives. Every passkey-management gate accepts a passkey
     step-up (delete defaults to `webauthn`-only AMR; rename/register accept
     `webauthn`), so the flow stays fully functional without email.
@@ -163,9 +163,10 @@ binding" vector that the enrollmentToken deletion otherwise opened.
 
 Unchanged contract: `POST /login/recovery/complete` returns a session
 directly. The user can immediately add a new passkey from the authenticated
-state. This is the one place the account-level invariant relaxes. A user who
-deleted their old passkey on another device before the recovery would hold
-an account backed by recovery codes alone. Because `deletePasskey` refuses
+state. This is the one place the account-level invariant sees a "temporary"
+relaxation. A user who deleted their old passkey on another device before
+the recovery would technically hold an account backed by recovery codes
+alone. Because `deletePasskey` refuses
 to leave 0 passkeys, that state is unreachable in normal operation.
 
 ## Enumeration safety (S-M1)

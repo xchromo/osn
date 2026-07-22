@@ -95,7 +95,7 @@ osn-api emails OTPs and security notices through **Resend's HTTP API**
 `osn/api/src/lib/email-layer.ts`). Resend is the **live transport** — it works on
 workerd over plain HTTP and needs no paid Workers plan (the reason the Cloudflare Email
 Service path was originally degraded). In a non-local env osn-api needs a real email
-provider. Without one it fails closed at startup and the edge returns `503 Worker
+provider. Without one it fails closed at startup, which surfaces as a `503 Worker
 misconfigured`. The one exception is the degraded-email opt-in `OSN_EMAIL_OPTIONAL` (see
 the box below). With `RESEND_API_KEY` set, email works normally and the opt-in is no
 longer needed.
@@ -413,8 +413,8 @@ The `wrangler` OAuth token in use (`chavaniket@duck.com`) lacks the `Account.Tur
 scope, so the widget **could not be created programmatically** during this work —
 create it in the dashboard (or with a custom API token that has the scope).
 
-> ⚠️ **Order matters (fail-closed).** Set the **secret on the Workers first** (step 4).
-> Ship the **sitekey** in the Pages build second (step 3). If you ship the sitekey while
+> ⚠️ **Order matters (fail-closed).** Ship the **sitekey** in the Pages build first
+> (step 3). Set the **secret on the Workers** second (step 4). If you ship the sitekey while
 > the secret is absent, the widget renders and the server skips verify — harmless. If you
 > set the secret while the sitekey is absent, the server requires a token the UI never
 > sends, and legitimate requests 400/403. A coordinated deploy of both at once is also

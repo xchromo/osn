@@ -53,8 +53,8 @@ ones, with their notable deltas, are:
 **Operational consequence:** treat universal opt-out signals (Global
 Privacy Control browser header, Sec-GPC: 1) as a CCPA opt-out from sale /
 share. Implementation: `@osn/api` middleware reads `Sec-GPC: 1` and sets a
-`gpc_opt_out` flag on the session. The flag moves to a `consent_signals`
-table once the consent-records system lands (C-L1).
+`gpc_opt_out` flag on the session. The flag also persists to a
+`consent_signals` table once the consent-records system lands (C-L1).
 
 ## Project changes required
 

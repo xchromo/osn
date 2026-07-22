@@ -1,4 +1,4 @@
-- V&R is too small. Make it bigger.
+- V&R is too small.
 - Add a hero image.
 - Widen the letter spacing on "Our story".
 - Desktop: align "Our story" right and the photo left.
