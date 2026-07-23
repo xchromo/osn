@@ -141,6 +141,10 @@ export default function InvitePage(props: InvitePageProps) {
   // Organiser copy overrides with the built-in defaults as fallback.
   const detailsEyebrow = () => liveInvite().details?.eyebrow ?? DEFAULT_DETAILS_EYEBROW;
   const detailsHeading = () => liveInvite().details?.heading ?? DEFAULT_DETAILS_HEADING;
+  // Live value first (seeded from the build-time prop), then the built-in
+  // default — same chain as classic, so an organiser edit made after the last
+  // build reaches guests via the on-mount revalidation.
+  const welcomeMessage = () => liveInvite().welcomeMessage ?? DEFAULT_WELCOME_MESSAGE;
 
   let loginFormRef: HTMLDivElement;
   let welcomeRef: HTMLDivElement;
@@ -274,7 +278,7 @@ export default function InvitePage(props: InvitePageProps) {
                       Welcome, the {claimResult()?.familyName} Family
                     </h2>
                     <p class="text-text-muted mb-2 text-[0.92rem] leading-[1.6] font-light">
-                      {props.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE}
+                      {welcomeMessage()}
                     </p>
                     <p class="text-text mb-8 text-[0.88rem] leading-[1.6] font-light">
                       <For each={claimResult()?.members}>
@@ -293,7 +297,7 @@ export default function InvitePage(props: InvitePageProps) {
                   Dear {individualName()}
                 </h2>
                 <p class="text-text-muted mb-8 text-[0.92rem] leading-[1.6] font-light">
-                  {props.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE}
+                  {welcomeMessage()}
                 </p>
               </Show>
             </div>

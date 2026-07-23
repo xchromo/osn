@@ -394,6 +394,66 @@ describe("gala InvitePage", () => {
     expect(queryByText("Celebrate With Us")).toBeNull();
   });
 
+  it("renders the live revalidated welcome message, overriding the stale build-time prop", async () => {
+    // The build-time prop carries the OLD greeting; the live /api/invite/:slug
+    // response carries the organiser's NEW one. With a slug present, the
+    // on-mount revalidation must win — an organiser edit made after the last
+    // build reaches guests without a static rebuild.
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      // The invite-customisation revalidation.
+      if (url.includes("/api/invite/")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ welcome: { message: "Fresh live greeting" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      // The auto-claim POST (?code= deep-link).
+      return Promise.resolve(
+        new Response(JSON.stringify({ ...claim, preview: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
+
+    const { getByText, queryByText } = render(() => (
+      <InvitePage
+        apiUrl="https://api.test"
+        slug="cire-wedding"
+        // Stale build-time greeting — must be overridden by the live fetch.
+        welcomeMessage="Stale build-time greeting"
+      />
+    ));
+
+    await waitFor(() => expect(getByText("Fresh live greeting")).toBeTruthy(), { timeout: 2000 });
+    expect(queryByText("Stale build-time greeting")).toBeNull();
+  });
+
+  it("renders the build-time welcome message when no slug means no revalidation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ...claim, preview: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
+
+    const { getByText, queryByText } = render(() => (
+      <InvitePage apiUrl="https://api.test" welcomeMessage="Our own greeting" />
+    ));
+
+    await waitFor(() => expect(getByText("Our own greeting")).toBeTruthy(), { timeout: 2000 });
+    expect(queryByText("We are delighted to invite you to celebrate with us.")).toBeNull();
+  });
+
   it("auto-claims from a ?code= deep-link and strips the code from the URL (S-L1)", async () => {
     const previewClaim: ClaimResult = { ...claim, preview: true };
     const fetchMock = vi.fn().mockResolvedValue(
