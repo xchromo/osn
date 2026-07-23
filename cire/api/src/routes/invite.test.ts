@@ -1715,6 +1715,27 @@ describe("image crop (migration 0021)", () => {
       expect(pub.hero.imageCropMobile).toBeNull();
     });
 
+    it("removing the hero image clears BOTH rectangles (no stale phone crop on re-upload)", async () => {
+      const { app } = buildApp();
+      await uploadHero(app);
+      await putCrop(app, { crop: VALID_CROP });
+      await putCrop(app, { crop: MOBILE_CROP, screen: "mobile" });
+
+      // The remove path is a separate UPDATE from the upload upsert — it must
+      // clear the phone rectangle too, or a later re-upload would resurrect a
+      // crop framed for a different photo.
+      const del = await appRequest(app, `${orgBase}/image/hero`, {
+        method: "DELETE",
+        headers: await authHeaders(BOOTSTRAP_OWNER),
+      });
+      expect(del.status).toBe(200);
+
+      await uploadHero(app);
+      const pub = (await (await appRequest(app, `/api/invite/${SLUG}`)).json()) as HeroCrops;
+      expect(pub.hero.imageCrop).toBeNull();
+      expect(pub.hero.imageCropMobile).toBeNull();
+    });
+
     it("re-uploading the hero clears BOTH rectangles", async () => {
       const { app } = buildApp();
       await uploadHero(app);

@@ -141,6 +141,19 @@ describe("aspect presets", () => {
     expect(presetAspectRatio("9:16", "story")).toBeCloseTo(9 / 16);
   });
 
+  it("re-opens the phone crop editor on the intended preset (hero-mobile tie-break)", () => {
+    // A saved 9:16 rectangle IS the hero-mobile slot's default shape — the
+    // editor must re-open on "original" (checked before the fixed presets), not
+    // the explicit "9:16" preset that now resolves to the same ratio.
+    expect(
+      presetForCrop({ x: 0, y: 0, w: 0.28125, h: 0.5, natW: 1000, natH: 1000 }, "hero-mobile"),
+    ).toBe("original");
+    // A non-default shape on the phone slot resolves to its ratio preset.
+    expect(
+      presetForCrop({ x: 0, y: 0, w: 0.5, h: 0.5, natW: 1000, natH: 1000 }, "hero-mobile"),
+    ).toBe("1:1");
+  });
+
   it("restores a saved crop's preset from its captured dims (re-open the editor)", () => {
     // A square pixel crop → 1:1 preset.
     expect(presetForCrop({ x: 0, y: 0, w: 0.5, h: 0.5, natW: 1000, natH: 1000 }, "event")).toBe(
