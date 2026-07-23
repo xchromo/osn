@@ -125,16 +125,20 @@ describe("aspect presets", () => {
       "4:3",
       "1:1",
       "4:5",
+      "9:16",
       "freeform",
     ]);
   });
 
   it("resolves Original to the slot default and Freeform to NaN (unlocked)", () => {
     expect(presetAspectRatio("original", "hero")).toBeCloseTo(16 / 9);
+    // The hero's phone rectangle opens on a tall 9:16 frame (0046).
+    expect(presetAspectRatio("original", "hero-mobile")).toBeCloseTo(9 / 16);
     expect(presetAspectRatio("original", "event")).toBeCloseTo(4 / 3);
     expect(Number.isNaN(presetAspectRatio("freeform", "story"))).toBe(true);
     expect(presetAspectRatio("1:1", "event")).toBe(1);
     expect(presetAspectRatio("4:5", "event")).toBeCloseTo(4 / 5);
+    expect(presetAspectRatio("9:16", "story")).toBeCloseTo(9 / 16);
   });
 
   it("restores a saved crop's preset from its captured dims (re-open the editor)", () => {
