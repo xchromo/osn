@@ -36,7 +36,7 @@ vi.mock("../lib/api", () => ({
 // navigation's locked-skip behaviour is exercised (mirrors the TEST_CATALOG
 // fixture pattern in cire/api/src/routes/invite.test.ts — the launch catalog
 // is all-free, so the dormant entitlement gate needs its own fixture).
-vi.mock("@shared/invite-designs", () => ({
+vi.mock("@cire/invite-designs", () => ({
   DESIGNS: [
     { id: "classic", name: "Classic", tier: "free" },
     { id: "test-premium", name: "Test Premium", tier: "premium" },
