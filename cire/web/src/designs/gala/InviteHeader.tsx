@@ -13,7 +13,10 @@ import type { HeroDisplay, InviteCustomisation } from "../types";
 
 // The Our Story photo's default display aspect (4∶3) — the shape the box used
 // before crops carried source dimensions. Used as the fallback when a crop has no
-// captured dims (a legacy crop), so it renders exactly as it did before.
+// captured dims (a legacy crop), so it renders exactly as it did before. Gala
+// also applies this aspect to the UNCROPPED image path (unlike classic, which
+// only constrains height there) so the mobile-visible photo never needs a fixed
+// pixel height to avoid clipping — it scales with its column width instead.
 const STORY_DEFAULT_ASPECT = 4 / 3;
 
 // The section background, painted from whichever derived surface the section's
@@ -45,12 +48,12 @@ interface InviteHeaderProps {
 }
 
 /**
- * Renders the invite's hero + "Our Story" sections, applying the organiser's
- * per-wedding customisation (fetched client-side from the public invite
- * endpoint) on top of the built-in defaults. Anything the organiser hasn't set
- * falls back to the original hard-coded copy, so an uncustomised wedding renders
- * exactly as before. The event/guest data is unaffected — that still loads via
- * InvitePage's /api/claim flow.
+ * Gala's hero + "Our Story" sections. Same data plumbing and hero backdrop
+ * lifecycle as classic's `InviteHeader` (revalidating fetch, palette
+ * application, emptiness gates, crop handling) — the difference is purely
+ * structural: a left-aligned editorial hero (anchored bottom-left instead of
+ * centered) and an asymmetric story grid whose photo stays visible on mobile
+ * (classic hides it below `md`).
  */
 export default function InviteHeader(props: InviteHeaderProps) {
   const [data] = createResource<InviteCustomisation | null>(
@@ -163,7 +166,7 @@ export default function InviteHeader(props: InviteHeaderProps) {
     <>
       <Show when={showHero()}>
         <section
-          // min-h, not a fixed h-dvh: a long couple title at 7rem must be able
+          // min-h, not a fixed h-dvh: a long couple title at 6.5rem must be able
           // to grow the hero rather than be clipped by it. The gradient and
           // photo layers below are absolute inset-0, so they stretch with it.
           class="relative min-h-dvh overflow-hidden"
@@ -222,13 +225,15 @@ export default function InviteHeader(props: InviteHeaderProps) {
           </Show>
           {/* Scrim over the blurred backdrop so the gold title stays readable over
             any uploaded photo (a bright blurred image would otherwise wash out the
-            text). Slightly stronger at centre than the original gradient-only hero
-            since a blurred photo can carry more mid-tone luminance than the dark
-            default gradient — keeps WCAG contrast on the title. */}
-          {/* In flow (not absolute) so the title block sets the hero's height
-              once it outgrows the viewport; min-h-dvh keeps the full-screen
-              feel for every normal-length title. */}
-          <div class="relative flex min-h-dvh flex-col items-center justify-center bg-[radial-gradient(ellipse_at_center,var(--invite-scrim-from)_0%,var(--invite-scrim-to)_100%)] px-[max(1.5rem,env(safe-area-inset-left))] py-[max(1.5rem,env(safe-area-inset-top))]">
+            text). In flow (not absolute) so the title block sets the hero's height
+            once it outgrows the viewport; min-h-dvh keeps the full-screen feel for
+            every normal-length title.
+
+            Structural difference from classic: the content column is anchored
+            BOTTOM-LEFT (`items-start justify-end`) instead of centered — the
+            editorial hero the gala pack is named for — and padding respects the
+            left/bottom safe-area insets to match. */}
+          <div class="relative flex min-h-dvh flex-col items-start justify-end bg-[radial-gradient(ellipse_at_center,var(--invite-scrim-from)_0%,var(--invite-scrim-to)_100%)] px-[max(1.5rem,env(safe-area-inset-left))] pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(2.5rem,env(safe-area-inset-bottom))]">
             {/* Title block. A title legibility panel sits behind the title +
               monogram, driven by the two backdrop sliders: its opacity (0–100 ⇒
               0–1) controls how solid the dark scrim panel is, and its blur (0–20px)
@@ -236,10 +241,9 @@ export default function InviteHeader(props: InviteHeaderProps) {
               just the radial scrim (the original look) via a layout-only wrapper.
               The panel colour is the theme surface (emitted only when the organiser
               set a validated colour) else a dark scrim, applied at the chosen
-              opacity. TODO(future): auto contrast-check the title colour vs the
-              image and auto-tune the panel — see cire/wiki/todo/future.md. */}
+              opacity. */}
             <div
-              class="flex max-w-full flex-col items-center gap-4"
+              class="flex max-w-[42rem] flex-col items-start gap-5 text-left"
               classList={{
                 "rounded-2xl px-[clamp(1.5rem,6vw,4rem)] py-[clamp(1.25rem,5vw,3rem)]":
                   showTitleBackdrop(),
@@ -261,29 +265,33 @@ export default function InviteHeader(props: InviteHeaderProps) {
               <Show
                 when={hero()?.title}
                 // Neutral fallback for a shown hero with no couple title (an
-                // image/subtitle-only hero). Previously the bespoke "V & R"
-                // monogram — a multi-tenant product must never default to one
-                // couple's initials.
+                // image/subtitle-only hero). A multi-tenant product must never
+                // default to one couple's initials.
                 fallback={
-                  <span class="font-display text-gold max-w-full pb-1 text-center text-[clamp(2.5rem,8vw,5.5rem)] leading-[1.1] font-light break-words select-none">
+                  <span class="font-display text-gold max-w-full pb-1 text-left text-[clamp(2.75rem,9vw,6.5rem)] leading-[1.1] font-light break-words select-none">
                     You're Invited
                   </span>
                 }
               >
                 {(title) => (
-                  // leading-[1.1] + pb-1, never leading-none: at 7rem a name
+                  // leading-[1.1] + pb-1, never leading-none: at 6.5rem a name
                   // with a descender (Jyoti, Peggy, Raj) loses its tail to the
                   // line box otherwise, on the one word the page exists for.
-                  <span class="font-display text-gold max-w-full pb-1 text-center text-[clamp(3rem,10vw,7rem)] leading-[1.1] font-light break-words select-none">
+                  <span class="font-display text-gold max-w-full pb-1 text-left text-[clamp(2.75rem,9vw,6.5rem)] leading-[1.1] font-light break-words select-none">
                     {title()}
                   </span>
                 )}
               </Show>
               <Show when={hero()?.subtitle}>
                 {(subtitle) => (
-                  <p class="font-body text-gold-dim max-w-full text-center text-[0.8rem] tracking-[0.25em] break-words uppercase">
-                    {subtitle()}
-                  </p>
+                  // Short hairline rule ahead of the subtitle row — replaces
+                  // classic's stacked-centered treatment with an editorial divider.
+                  <div class="flex flex-col items-start gap-3">
+                    <hr class="border-border h-0 w-16 border-t" aria-hidden="true" />
+                    <p class="font-body text-gold-dim max-w-full text-left text-[0.8rem] tracking-[0.25em] break-words uppercase">
+                      {subtitle()}
+                    </p>
+                  </div>
                 )}
               </Show>
             </div>
@@ -293,19 +301,23 @@ export default function InviteHeader(props: InviteHeaderProps) {
 
       <Show when={showStory()}>
         <section
-          class="border-border border-y px-6 py-16 md:px-8 md:py-20"
+          class="border-border border-y px-6 py-16 md:px-10 md:py-24"
           style={{ ...filterThemeVars(storyVars()), ...SECTION_SURFACE }}
         >
           {/*
-            Two-column on laptop/desktop when a story image exists — image LEFT,
-            text RIGHT, vertically centred with a comfortable gap. The image
-            wrapper is `hidden md:block`, so on mobile the photo is never laid
-            out and the text block falls back to the single centred column. With
-            no story image the wrapper collapses (image-less grid renders one
-            cell), so the text spans the full width at every breakpoint.
+            Asymmetric two-column on md+ when a story image exists — image spans
+            cols 1–5, text cols 7–12 (offset, not centered against it), the image
+            nudged down (`md:mt-12`) for editorial stagger. UNLIKE classic, the
+            image wrapper carries NO `hidden` class: gala keeps the photo visible
+            (stacked above the text) at every width, mobile included — the whole
+            point of this pack's asymmetric-story requirement. `md:grid-cols-12`
+            gives every column track `minmax(0,1fr)` (Tailwind's default), so the
+            image can never force horizontal overflow at 320px even before `md`
+            engages the grid. With no story image the wrapper collapses to a
+            single left-aligned column at every breakpoint.
           */}
           <div
-            class="group/story mx-auto grid max-w-[540px] items-center gap-10 text-center md:max-w-[640px] data-[has-image=true]:md:max-w-[960px] data-[has-image=true]:md:grid-cols-2 data-[has-image=true]:md:gap-14 data-[has-image=true]:md:text-left"
+            class="group/story mx-auto flex max-w-[640px] flex-col gap-8 text-left md:grid md:max-w-[1100px] md:grid-cols-12 md:items-start md:gap-x-10"
             data-has-image={storyImageUrl() ? "true" : "false"}
           >
             <Show when={storyImageUrl()}>
@@ -314,7 +326,10 @@ export default function InviteHeader(props: InviteHeaderProps) {
                 // region via the shared CSS fraction technique (a `card`-variant
                 // background — backgrounds can't use srcset, so we pick the size
                 // that comfortably covers the ~480px column at retina). With no
-                // crop, keep the responsive <img srcset> + object-cover (unchanged).
+                // crop, keep the responsive <img srcset> + object-cover, sized by
+                // the same default aspect ratio (no fixed pixel height — the photo
+                // scales with its column width instead of clipping at narrow
+                // viewports).
                 const cropStyle = () =>
                   cropBackgroundStyle(variantSrc(url(), "card"), story()?.imageCrop);
                 return (
@@ -327,8 +342,13 @@ export default function InviteHeader(props: InviteHeaderProps) {
                         srcset={buildSrcSet(url(), ["thumb", "card"])}
                         sizes="(min-width: 768px) 480px, 100vw"
                         alt=""
-                        // Hidden below md — the photo is not even laid out on mobile.
-                        class="border-border hidden max-h-[420px] w-full rounded-sm border object-cover md:block"
+                        // Below the fold on mobile (image-first, but the fold still
+                        // sits above it on most phones) — lazy keeps the cost off
+                        // first paint even though, unlike classic, it IS laid out.
+                        loading="lazy"
+                        decoding="async"
+                        class="border-border w-full max-w-full rounded-sm border object-cover md:col-span-5 md:mt-12"
+                        style={{ "aspect-ratio": String(STORY_DEFAULT_ASPECT) }}
                       />
                     }
                   >
@@ -338,9 +358,9 @@ export default function InviteHeader(props: InviteHeaderProps) {
                         // The box adopts the crop's TRUE pixel aspect (from its
                         // captured source dims) so the uniformly-scaled region fills
                         // it with no distortion and no empty bars. A legacy crop (no
-                        // dims) falls back to the story default 3∶2. Hidden below md,
-                        // like the <img> path.
-                        class="border-border hidden max-h-[420px] w-full overflow-hidden rounded-sm border md:block"
+                        // dims) falls back to the story default 4∶3. Visible at every
+                        // width — never `hidden` below md.
+                        class="border-border w-full max-w-full overflow-hidden rounded-sm border md:col-span-5 md:mt-12"
                         style={{
                           ...style(),
                           "aspect-ratio": String(
@@ -353,20 +373,19 @@ export default function InviteHeader(props: InviteHeaderProps) {
                 );
               }}
             </Show>
-            <div>
+            <div class="md:col-span-12 md:self-center group-data-[has-image=true]/story:md:col-span-6 group-data-[has-image=true]/story:md:col-start-7">
               <p class="font-body text-gold mb-3 text-[0.72rem] tracking-[0.2em] uppercase">
                 {story()?.eyebrow ?? "Our Story"}
               </p>
               <h2 class="font-display text-text mb-5 text-[clamp(2rem,5vw,3rem)] leading-[1.15] font-light">
                 {story()?.heading ?? "How It All Began"}
               </h2>
-              <div class="mx-auto max-w-[480px] group-data-[has-image=true]/story:md:mx-0">
+              <div class="max-w-[480px]">
                 <Show
                   when={story()?.body}
                   // Neutral fallback for a shown story with no body (heading- or
-                  // image-only). Previously the original couple's bespoke story
-                  // — a multi-tenant product must never default to one couple's
-                  // personal copy.
+                  // image-only). A multi-tenant product must never default to one
+                  // couple's personal copy.
                   fallback={
                     <p class="font-body text-text-muted text-[0.95rem] leading-[1.75] font-light">
                       Every love story is beautiful, and we can't wait to celebrate the next chapter
