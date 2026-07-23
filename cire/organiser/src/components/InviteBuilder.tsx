@@ -448,8 +448,8 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     const ids = unlockedDesignIds();
     if (ids.length === 0) return undefined;
     const from = ids.indexOf(fromId);
-    const base = from === -1 ? 0 : from;
-    return ids[(base + delta + ids.length) % ids.length];
+    const fromIndex = from === -1 ? 0 : from;
+    return ids[(fromIndex + delta + ids.length) % ids.length];
   }
 
   /** Roving-tabindex keyboard handler: moves focus AND selects (radio
