@@ -73,7 +73,7 @@ sequenceDiagram
 | `GET /.well-known/openid-configuration` | Anyone | Discovery |
 | `GET /.well-known/jwks.json` | Anyone | The ES256 public key, shared with access tokens |
 
-Everything is `cache-control: no-store`.
+Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-Policy: no-referrer`, so a rendered error page or a bounce off the authorize URL cannot carry the query string — `client_id`, `redirect_uri`, the PKCE challenge — into a third party's referrer log.
 
 ## What the rules actually protect
 
@@ -112,7 +112,7 @@ First-party clients skip the consent screen — the link is recorded for the def
 Three tables in `@osn/db` (migration `0002_wet_gamora`):
 
 - `oauth_clients` — the registry. `redirect_uris` is a JSON array; exact match, no wildcards. `sector_identifier` feeds the pairwise subject. `client_secret_hash` is null for public clients. There is no write route yet; rows are seeded by hand.
-- `oauth_authorization_codes` — id is the hash of the code. 60-second TTL.
+- `oauth_authorization_codes` — id is the hash of the code. 60-second TTL. A redeemed code is deleted on the spot; an abandoned one is left behind, so `runExpiredAuthCodeSweep` (a `DELETE … WHERE expires_at <= now`, riding `oauth_codes_expires_idx`) runs from the Worker's `scheduled` handler alongside the session and deletion sweeps. Nothing reads an expired code — the sweep only keeps the table from growing without bound.
 - `oauth_consents` — one row per (account, client), holding the linked profile and the granted scope. Scope **merges** on re-consent, never replaces.
 
 `code_challenge_method` has no column. S256 is the only value the provider accepts, so storing it would only record a constant.
