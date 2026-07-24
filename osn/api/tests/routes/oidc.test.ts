@@ -424,6 +424,9 @@ describe("POST /authorize/decision", () => {
     // JSON, not a 302: a fetch would follow a redirect instead of handing it
     // to the consent screen.
     expect(res.headers.get("location")).toBeNull();
+    // The consumed binding cookie is expired rather than left to linger.
+    expect(res.headers.get("set-cookie")).toContain(`osn_${requestId}=;`);
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0");
     const body = (await res.json()) as { redirectTo: string };
     const loc = new URL(body.redirectTo);
     expect(loc.searchParams.get("code")).toMatch(/^cod_/);
@@ -446,6 +449,9 @@ describe("POST /authorize/decision", () => {
 
     const body = (await res.json()) as { redirectTo: string };
     expect(new URL(body.redirectTo).searchParams.get("error")).toBe("access_denied");
+    // A refusal consumes the request too, so its binding cookie clears as well.
+    expect(res.headers.get("set-cookie")).toContain(`osn_${requestId}=;`);
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
   it("retires the request id, so a replayed decision cannot mint a second code", async () => {
@@ -1064,5 +1070,150 @@ describe("connections (S-M3)", () => {
     );
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("invalid_grant");
+  });
+});
+
+describe("auth freshness boundaries (S-H1)", () => {
+  it("does not force re-login when the session age is within max_age", async () => {
+    const h = setup();
+    h.seedClient();
+    const cookie = await signIn(h, "within@example.com", "within_user");
+    ageSessions(h, 3600);
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, max_age: "3605" }), { headers: { cookie } }),
+    );
+
+    // Not stale — the flow proceeds to the consent question, not to login.
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("reason")).toBe("consent");
+  });
+
+  it("treats max_age=0 as a demand for fresh authentication", async () => {
+    const h = setup();
+    h.seedClient();
+    const cookie = await signIn(h, "zero@example.com", "zero_user");
+    ageSessions(h, 10);
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, max_age: "0" }), { headers: { cookie } }),
+    );
+
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("reason")).toBe("login");
+  });
+
+  it("rejects a max_age above the ceiling as invalid_request", async () => {
+    const h = setup();
+    h.seedClient();
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, max_age: "999999999" })),
+    );
+
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.origin + loc.pathname).toBe(REDIRECT_URI);
+    expect(loc.searchParams.get("error")).toBe("invalid_request");
+  });
+
+  it("rejects a code_challenge that is not exactly 43 base64url characters", async () => {
+    const h = setup();
+    h.seedClient();
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, code_challenge: `${CHALLENGE}A` })),
+    );
+
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("error")).toBe("invalid_request");
+  });
+});
+
+describe("re-consent (recordConsent conflict path)", () => {
+  /** Full authorize→context→decision round for the given params. */
+  async function approve(
+    h: Harness,
+    sessionCookie: string,
+    params: Record<string, string>,
+  ): Promise<Response> {
+    const { requestId, binding } = await startAuthorize(h, sessionCookie, params);
+    const cookie = `${sessionCookie}; ${binding}`;
+    const ctxRes = await h.app.handle(
+      new Request(`http://localhost/authorize/context?request=${requestId}`, {
+        headers: { cookie },
+      }),
+    );
+    const { profiles } = (await ctxRes.json()) as { profiles: { id: string }[] };
+    return h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId: profiles[0]!.id, approved: true }),
+      }),
+    );
+  }
+
+  it("widens the stored scope to the union on re-consent", async () => {
+    const h = setup();
+    h.seedClient();
+    const { cookie: sessionCookie, accessToken } = await register(
+      h,
+      "widen@example.com",
+      "widen_user",
+    );
+
+    expect((await approve(h, sessionCookie, { ...goodParams, scope: "openid" })).status).toBe(200);
+    // The second request asks for more than the recorded grant covers, so it
+    // interacts again; approving merges rather than replaces.
+    expect((await approve(h, sessionCookie, goodParams)).status).toBe(200);
+
+    const listRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections", {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    const { connections } = (await listRes.json()) as { connections: { scope: string }[] };
+    expect(connections).toHaveLength(1);
+    expect(connections[0]!.scope.split(" ").toSorted()).toEqual(["openid", "profile"]);
+  });
+
+  it("re-links after a revoke: consent live again, silent requests succeed", async () => {
+    const h = setup();
+    h.seedClient();
+    const { cookie: sessionCookie, accessToken } = await register(
+      h,
+      "relink@example.com",
+      "relink_user",
+    );
+    const authed = { authorization: `Bearer ${accessToken}` };
+
+    expect((await approve(h, sessionCookie, goodParams)).status).toBe(200);
+    expect(
+      (
+        await h.app.handle(
+          new Request("http://localhost/oidc/connections/cid_rp", {
+            method: "DELETE",
+            headers: authed,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    // Re-approving a revoked consent is the RE-GRANT arm of the conflict
+    // branch: revoked_at must clear, and the link must read as live again.
+    expect((await approve(h, sessionCookie, goodParams)).status).toBe(200);
+
+    const listRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections", { headers: authed }),
+    );
+    const { connections } = (await listRes.json()) as { connections: unknown[] };
+    expect(connections).toHaveLength(1);
+
+    const silent = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, prompt: "none" }), {
+        headers: { cookie: sessionCookie },
+      }),
+    );
+    const loc = new URL(silent.headers.get("location")!);
+    expect(loc.searchParams.get("code")).toMatch(/^cod_/);
+    expect(loc.searchParams.get("error")).toBeNull();
   });
 });

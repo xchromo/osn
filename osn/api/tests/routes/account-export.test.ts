@@ -228,6 +228,14 @@ describe("GET /account/export — bundle", () => {
        VALUES ('ocs_x', ?, 'cid_rp', ?, 'openid profile', 1000, NULL)`,
       [profile.accountId, profile.id],
     );
+    // A withdrawn grant — the export must keep it (the withdrawal is the
+    // person's record), with its revokedAt visible.
+    sqlite.run(
+      `INSERT INTO oauth_consents
+         (id, account_id, client_id, profile_id, scope, granted_at, revoked_at)
+       VALUES ('ocs_y', ?, 'cid_gone', ?, 'openid', 2000, 3000)`,
+      [profile.accountId, profile.id],
+    );
 
     const app = makeApp(layer);
     const res = await app.handle(
@@ -251,13 +259,20 @@ describe("GET /account/export — bundle", () => {
     const consents = lines
       .filter((l) => l.section === "oidc_consents")
       .map((l) => l.record as Record<string, unknown>);
-    expect(consents).toHaveLength(1);
+    expect(consents).toHaveLength(2);
     expect(consents[0]).toMatchObject({
       clientId: "cid_rp",
       clientName: "Relying Party",
       scope: "openid profile",
       grantedAt: 1000,
       revokedAt: null,
+    });
+    // Revoked grant included; its client has no registry row (hand-deleted),
+    // so the left join yields a null name rather than dropping the record.
+    expect(consents[1]).toMatchObject({
+      clientId: "cid_gone",
+      clientName: null,
+      revokedAt: 3000,
     });
     expect(consents[0]).not.toHaveProperty("accountId");
   });
