@@ -19,7 +19,7 @@
  * See [[wiki/systems/oidc-provider]].
  */
 
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { OidcAuthorizeResult, OidcTokenResult } from "@shared/observability/metrics";
 import { Effect, Either } from "effect";
@@ -125,7 +125,18 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
     if (bindingHash === undefined) return true;
     const secret = readBindingCookie(cookieHeader, requestId, cookieConfig);
     if (secret === null) return false;
-    return createHash("sha256").update(secret).digest("hex") === bindingHash;
+    // Constant-time, matching the repo rule for hash comparisons — both sides
+    // are digests, so a prefix leak reveals nothing, but it costs nothing to
+    // do properly.
+    const computed = createHash("sha256").update(secret).digest();
+    let stored: Buffer;
+    try {
+      stored = Buffer.from(bindingHash, "hex");
+    } catch {
+      return false;
+    }
+    if (stored.length !== computed.length) return false;
+    return timingSafeEqual(computed, stored);
   };
 
   /**

@@ -502,13 +502,19 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       const row = existing[0];
       if (!row) return false; // Deleted between the two statements — nothing to widen.
 
+      // Merging holds only for LIVE rows (a narrower approval must not shrink
+      // an existing grant). Across a revocation boundary the old scope is a
+      // withdrawal record, not a grant — resurrecting it would silently
+      // re-authorize scopes the consent screen never displayed. A re-grant
+      // starts from exactly what the user just approved.
+      const nextScope = row.revokedAt !== null ? scope : mergeScope(row.scope, scope);
       yield* Effect.tryPromise({
         try: () =>
           db
             .update(oauthConsents)
             .set({
               profileId,
-              scope: mergeScope(row.scope, scope),
+              scope: nextScope,
               grantedAt: nowSec,
               revokedAt: null,
             })
@@ -716,6 +722,20 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       if (!verifyPkce(row.codeChallenge, input.codeVerifier)) {
         return yield* Effect.fail(
           new OidcError({ code: "invalid_grant", description: "PKCE verification failed" }),
+        );
+      }
+
+      // Withdrawal means now: the revoke route deletes in-flight codes, but a
+      // code inserted concurrently with the revoke can slip past that delete.
+      // Re-reading the consent here closes the race by construction — no live
+      // consent, no tokens, however the code survived.
+      const consent = yield* findConsent(row.accountId, client.clientId);
+      if (!consent) {
+        return yield* Effect.fail(
+          new OidcError({
+            code: "invalid_grant",
+            description: "The authorization behind this code has been revoked",
+          }),
         );
       }
 
@@ -993,9 +1013,13 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
         }));
 
       if (session === null) {
+        // `prompt=login` must record its freshness demand on THIS park path
+        // too: a caller can always strip their session cookie, and a park
+        // without `requireAuthAfter` would let a decision made with any old
+        // session satisfy an RP that explicitly demanded re-authentication.
         return silent
           ? { kind: "error" as const, code: "login_required" as const, description: "No session" }
-          : yield* interaction("login");
+          : yield* interaction("login", prompts.has("login") ? nowSec : null);
       }
 
       // `login` and `select_account` are explicit demands for interaction, and
@@ -1109,16 +1133,16 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       // S-M1 oidc: the decision must come from the browser that parked the
       // request. Checked BEFORE the request is consumed, so a forged attempt
       // does not burn the real user's pending flow. The hash is absent only
-      // for requests parked by a pre-upgrade instance mid-deploy.
+      // for requests parked by a pre-upgrade instance mid-deploy. The error
+      // is byte-identical to the unknown-id case: a caller without the
+      // binding cookie must not learn that the id exists.
       if (
         parked.bindingHash !== undefined &&
-        (input.bindingSecret === null || sha256Hex(input.bindingSecret) !== parked.bindingHash)
+        (input.bindingSecret === null ||
+          !hexEqual(sha256Hex(input.bindingSecret), parked.bindingHash))
       ) {
         return yield* Effect.fail(
-          new OidcError({
-            code: "invalid_request",
-            description: "This request does not belong to this browser",
-          }),
+          new OidcError({ code: "invalid_request", description: "Unknown or expired request" }),
         );
       }
 

@@ -99,6 +99,10 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 
 **`auth_time` is the session's truth, and freshness demands are enforced.** Codes carry the session row's `created_at` — the moment the user actually authenticated on that device — never the code-mint time. `max_age` is parsed (digits only, ≤10-year ceiling) and an exceeded value behaves exactly like `prompt=login`: the request parks with `requireAuthAfter = now`, and the decision refuses (`400 login_required`, request left alive) any session created before that instant. `max_age` is also re-checked outright at decision time, because a user can sit on the consent screen while their session ages past it. (S-H1 oidc.)
 
+**The exchange re-checks the consent.** `POST /oidc/token` reads the (account, client) consent row after PKCE passes and refuses `invalid_grant` when it is absent or revoked. The revoke route already deletes in-flight codes, but a code inserted concurrently with the revoke can slip past that delete — the exchange-time re-read closes the race by construction, so withdrawal means *now* under every interleaving.
+
+**A re-grant after revocation starts from zero.** Scope merging holds only for live consents (a narrower approval must not shrink an existing grant). Across a revocation boundary the old scope is a withdrawal record: re-approving grants exactly what the consent screen displayed, never the union with the withdrawn scopes.
+
 **Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. The future client-registration route must also reject them at write time (`isReservedOidcClientId`). OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
 
 ## `prompt` handling
@@ -148,5 +152,5 @@ The issuer string is an identifier, not branding. Moving the provider to a prett
 - **`/userinfo`** — the ID token carries what clients need for now.
 - **`offline_access`** — third parties get no refresh token, so a long-lived integration must send the user through `/authorize` again.
 - **The consent screen itself** — the endpoints behind it exist (context, decision, and now connections); the page does not. Contract for whoever builds it: the browser already holds the per-request binding cookie (the flow only works in the browser that hit `/authorize`), and a `400 login_required` from the decision means "drive a fresh sign-in, then retry the SAME request id".
-- **A client-registration route** — rows go in by hand. Must reject `RESERVED_OIDC_CLIENT_IDS` at write time (lookup already refuses them).
+- **A client-registration route** — rows go in by hand. Must reject `RESERVED_OIDC_CLIENT_IDS` at write time (lookup already refuses them) and pin `logo_url` to `https:` — the value flows into the first-party connections/consent UI as an image `src`, so an unvalidated scheme is a stored-XSS-adjacent surface.
 - **The apex worker** serving `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. Blocked on the identity domain being bought. That is layers 2 and 3; layer 0 works without it.

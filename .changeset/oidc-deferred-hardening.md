@@ -14,6 +14,7 @@ OIDC provider deferred-hardening batch — closes every deferred finding from th
 - **C-M1 (oidc)** — DSAR export gains an `oidc_consents` section (clientId, clientName, profileId, scope, grantedAt, revokedAt; revoked grants included as withdrawal history).
 - **P-W1/2/4/5, P-I3 (oidc)** — exchange and decision return their metric dimensions instead of re-reading the client/parked request; `recordConsent` is insert-first (`ON CONFLICT DO NOTHING`); the two token signatures run concurrently; client/consent reads use explicit projections. P-W3 declined: the `/token` reads are dependency-ordered — consuming the code before client auth would burn a victim's code on an attacker's failed attempt.
 - PKCE `code_challenge` is now required to be exactly 43 base64url characters (an S256 digest's only possible length); discovery advertises `auth_time`, `preferred_username`, `picture`, `email_verified`.
+- Prep-pr review fixes: `prompt=login` records its freshness demand on the signed-out park path too; a re-grant after revocation replaces the stored scope instead of resurrecting withdrawn scopes; the token exchange re-checks consent liveness (revocation is race-free); binding-mismatch errors are byte-identical to unknown-id errors; binding-hash compares are constant-time.
 
 **@shared/observability (patch)**
 

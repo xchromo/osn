@@ -1217,3 +1217,136 @@ describe("re-consent (recordConsent conflict path)", () => {
     expect(loc.searchParams.get("error")).toBeNull();
   });
 });
+
+describe("security-review fixes (prep-pr round)", () => {
+  it("S-M1: prompt=login parked signed-out still demands a fresh session at decision", async () => {
+    const h = setup();
+    h.seedClient();
+    const sessionCookie = await signIn(h, "strip@example.com", "strip_user");
+    ageSessions(h, 60);
+
+    // The attacker path: strip the session cookie on the /authorize
+    // navigation so the park records no session — the freshness demand must
+    // be recorded anyway.
+    const { requestId, binding } = await startAuthorize(h, null, {
+      ...goodParams,
+      prompt: "login",
+    });
+    const cookie = `${sessionCookie}; ${binding}`;
+    const ctxRes = await h.app.handle(
+      new Request(`http://localhost/authorize/context?request=${requestId}`, {
+        headers: { cookie },
+      }),
+    );
+    const { profiles } = (await ctxRes.json()) as { profiles: { id: string }[] };
+
+    const decide = () =>
+      h.app.handle(
+        new Request("http://localhost/authorize/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie },
+          body: JSON.stringify({ requestId, profileId: profiles[0]!.id, approved: true }),
+        }),
+      );
+
+    const stale = await decide();
+    expect(stale.status).toBe(400);
+    expect(((await stale.json()) as { error: string }).error).toBe("login_required");
+
+    // A session created after the park (a real re-login) is accepted.
+    h.sqlite.run(`UPDATE sessions SET created_at = created_at + 120`);
+    expect((await decide()).status).toBe(200);
+  });
+
+  it("S-M2: re-consent after a revoke grants only what was just approved", async () => {
+    const h = setup();
+    h.seedClient();
+    const { cookie: sessionCookie, accessToken } = await register(
+      h,
+      "narrow@example.com",
+      "narrow_user",
+    );
+    const authed = { authorization: `Bearer ${accessToken}` };
+
+    const approve = async (params: Record<string, string>) => {
+      const { requestId, binding } = await startAuthorize(h, sessionCookie, params);
+      const cookie = `${sessionCookie}; ${binding}`;
+      const ctxRes = await h.app.handle(
+        new Request(`http://localhost/authorize/context?request=${requestId}`, {
+          headers: { cookie },
+        }),
+      );
+      const { profiles } = (await ctxRes.json()) as { profiles: { id: string }[] };
+      const res = await h.app.handle(
+        new Request("http://localhost/authorize/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie },
+          body: JSON.stringify({ requestId, profileId: profiles[0]!.id, approved: true }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    };
+
+    await approve(goodParams); // openid profile
+    await h.app.handle(
+      new Request("http://localhost/oidc/connections/cid_rp", {
+        method: "DELETE",
+        headers: authed,
+      }),
+    );
+    await approve({ ...goodParams, scope: "openid" });
+
+    const listRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections", { headers: authed }),
+    );
+    const { connections } = (await listRes.json()) as { connections: { scope: string }[] };
+    // The withdrawn "profile" scope must NOT resurrect — only what the user
+    // just saw on the consent screen is granted.
+    expect(connections[0]!.scope).toBe("openid");
+  });
+
+  it("S-L4: the token exchange refuses a code whose consent was revoked mid-flight", async () => {
+    const h = setup();
+    h.seedClient();
+    const code = await mintCode(h, "midflight@example.com", "midflight_user");
+
+    // Revoke directly in the DB — simulating the race where a code slips past
+    // the revoke route's delete — so only the exchange-time re-check can act.
+    h.sqlite.run(`UPDATE oauth_consents SET revoked_at = 1 WHERE client_id = 'cid_rp'`);
+
+    const res = await h.app.handle(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: VERIFIER,
+        client_id: "cid_rp",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_grant");
+  });
+
+  it("S-L1: a decision without the binding cookie reads exactly like an unknown id", async () => {
+    const h = setup();
+    h.seedClient();
+    const sessionCookie = await signIn(h, "oracle@example.com", "oracle_user");
+    const { requestId, profileId } = await parkRequest(h, sessionCookie);
+
+    const decideWithout = (id: string) =>
+      h.app.handle(
+        new Request("http://localhost/authorize/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie: sessionCookie },
+          body: JSON.stringify({ requestId: id, profileId, approved: true }),
+        }),
+      );
+
+    const real = await decideWithout(requestId);
+    const fake = await decideWithout("oar_ffffffffffff");
+    expect(real.status).toBe(400);
+    expect(fake.status).toBe(400);
+    // Byte-identical bodies: a real-but-unbound id must not be distinguishable.
+    expect(await real.json()).toEqual(await fake.json());
+  });
+});
