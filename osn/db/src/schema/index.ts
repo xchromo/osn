@@ -660,10 +660,9 @@ export const oauthConsents = sqliteTable(
     /** Unix seconds. Non-null = the user unlinked; treated as no consent. */
     revokedAt: integer("revoked_at"),
   },
-  (t) => [
-    unique("oauth_consents_account_client_uq").on(t.accountId, t.clientId),
-    index("oauth_consents_account_idx").on(t.accountId),
-  ],
+  // The unique `(account_id, client_id)` index already serves every lookup keyed
+  // on `account_id` alone via its leftmost prefix, so no separate account index.
+  (t) => [unique("oauth_consents_account_client_uq").on(t.accountId, t.clientId)],
 );
 
 export type OauthConsent = typeof oauthConsents.$inferSelect;

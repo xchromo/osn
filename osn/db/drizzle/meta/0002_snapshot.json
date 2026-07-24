@@ -805,13 +805,6 @@
         }
       },
       "indexes": {
-        "oauth_consents_account_idx": {
-          "name": "oauth_consents_account_idx",
-          "columns": [
-            "account_id"
-          ],
-          "isUnique": false
-        },
         "oauth_consents_account_client_uq": {
           "name": "oauth_consents_account_client_uq",
           "columns": [

@@ -27,7 +27,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { oauthAuthorizationCodes, oauthClients, oauthConsents } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { and, eq } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 import { Effect } from "effect";
 
 import {
@@ -214,6 +214,39 @@ export function generateClientSecret(): string {
 export function hashClientSecret(secret: string): string {
   return sha256Hex(secret);
 }
+
+/**
+ * Deletes every authorization code whose lifetime has elapsed.
+ *
+ * A code is normally cleared the instant it is redeemed (`consumeAuthorizationCode`
+ * DELETEs it), so this only reaps codes that were minted and never exchanged —
+ * an abandoned sign-in, or a request pointed at the endpoint purely to write a
+ * row. Nothing else removes those: the redemption DELETE never fires for them,
+ * and the 60-second lifetime means every such row is dead within a minute of
+ * being written. Left unswept they accumulate without bound and are cheap to
+ * drive, so a scheduled pass keeps the table to only live codes. Uses the
+ * `oauth_codes_expires_idx` range index rather than a scan.
+ *
+ * Standalone (not a member of the module closure) so the Workers `scheduled`
+ * handler can call it beside the account-deletion sweeps, taking `Db` from the
+ * same layer.
+ */
+export const runExpiredAuthCodeSweep = (
+  opts: { nowMs?: number } = {},
+): Effect.Effect<{ deleted: number }, DatabaseError, Db> =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    const nowSec = Math.floor((opts.nowMs ?? Date.now()) / 1000);
+    const deleted = yield* Effect.tryPromise({
+      try: () =>
+        db
+          .delete(oauthAuthorizationCodes)
+          .where(lte(oauthAuthorizationCodes.expiresAt, nowSec))
+          .returning({ id: oauthAuthorizationCodes.id }),
+      catch: (cause) => new DatabaseError({ cause }),
+    });
+    return { deleted: deleted.length };
+  });
 
 export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   const { config } = ctx;

@@ -253,7 +253,6 @@ export function createTestLayerWithSqlite() {
       UNIQUE (account_id, client_id)
     )
   `);
-  sqlite.run(`CREATE INDEX oauth_consents_account_idx ON oauth_consents (account_id)`);
   const db = drizzle(sqlite, { schema });
   const dbLayer = Layer.succeed(Db, { db });
   const emailLayer = makeLogEmailLive().layer;

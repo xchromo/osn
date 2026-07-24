@@ -43,5 +43,4 @@ CREATE TABLE `oauth_consents` (
 	FOREIGN KEY (`profile_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE INDEX `oauth_consents_account_idx` ON `oauth_consents` (`account_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `oauth_consents_account_client_uq` ON `oauth_consents` (`account_id`,`client_id`);

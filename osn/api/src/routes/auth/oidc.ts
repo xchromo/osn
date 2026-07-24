@@ -130,6 +130,10 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
       // -----------------------------------------------------------------------
       .get("/authorize", async ({ query, set, headers, server, request }) => {
         set.headers["cache-control"] = "no-store";
+        // The interaction redirect carries the parked-request id in its query
+        // string, and the whole endpoint carries the relying party's OAuth
+        // parameters. Neither may ride a `Referer` header onto the next page.
+        set.headers["referrer-policy"] = "no-referrer";
 
         const rlErr = await rateLimit(
           headers,

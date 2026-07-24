@@ -11,6 +11,7 @@ import { registerOutboundKeysOnce } from "./lib/outbound-arc";
 import { osnLoggerLayer } from "./observability";
 import { initRedisClientFromEnv } from "./redis";
 import * as accountErasure from "./services/account-erasure";
+import { runExpiredAuthCodeSweep } from "./services/auth/oidc";
 
 // ---------------------------------------------------------------------------
 // Cloudflare Workers entry for @osn/api.
@@ -297,6 +298,21 @@ export const handler: {
         accountErasure.runHardDeleteSweep().pipe(
           Effect.catchAll((err) =>
             Effect.logError("scheduled hard-delete sweep failed", { reason: String(err) }),
+          ),
+          Effect.provide(dbLayer),
+          Effect.provide(osnLoggerLayer),
+        ),
+      ),
+    );
+
+    // Reap OIDC authorization codes that were minted and never exchanged. A
+    // redeemed code deletes itself; only abandoned or endpoint-spammed codes
+    // outlive their 60s TTL, and left unswept they grow without bound.
+    ctx.waitUntil(
+      Effect.runPromise(
+        runExpiredAuthCodeSweep().pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled OIDC code sweep failed", { reason: String(err) }),
           ),
           Effect.provide(dbLayer),
           Effect.provide(osnLoggerLayer),
