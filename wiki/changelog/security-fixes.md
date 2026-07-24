@@ -7,12 +7,23 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-07-21
+last-reviewed: 2026-07-24
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## OIDC provider deferred-hardening batch (2026-07-24)
+
+Post-merge follow-up to PR #315 (the OIDC provider). All four deferred security findings from the prep-pr review, closed in one pass; the "blocked on the consent screen" framing turned out to be true only for the pixels — every enforcement half was implementable server-side.
+
+- **S-H1 (oidc)** — **`auth_time` was fabricated and `prompt=login` / `max_age` were not enforced.** **Issue:** `createAuthorizationCode` stamped `authTime: now` at code-mint time, so a code minted off a 29-day-old session cookie told the relying party the user had *just* authenticated; `max_age` was never parsed and `prompt=login` degraded to a plain interaction redirect with no freshness check at decision time. **Why:** relying parties act on `auth_time` (step-up gating, payment confirmation); a fabricated value is a false security statement to a third party. **Solution:** `verifyRefreshToken` now returns `authenticatedAt` (the session row's `created_at`, untouched by the sliding-window extend); `/authorize` threads the real session auth time into every code mint; `max_age` is parsed (digits, ≤10 y ceiling, else `invalid_request`) and an exceeded `max_age` behaves exactly like `prompt=login`; both park the request with `requireAuthAfter = now` and `completeAuthorization` refuses (`400 login_required`, request left alive for retry) any deciding session created before that instant, re-checking `max_age` outright at decision time. `claims_supported` now advertises `auth_time`. **Rationale:** the demand for a fresh ceremony is enforced where the code is minted, not just displayed — the consent UI only needs to route the user through sign-in and retry.
+- **S-M1 (oidc)** — **parked authorization request not bound to the initiating browser.** **Issue:** anyone who learned a parked `oar_` request id (forwarded link, referrer, guess) could read its context or, signed in as themselves, complete someone else's flow from a different agent — a request-fixation surface on the consent flow. **Solution:** `/authorize` now mints a per-request 256-bit binding secret (`oab_`, `osn/api/src/lib/oidc-binding-cookie.ts`), sets it as a short-TTL (600 s = request TTL) HttpOnly `__Host-`-prefixed cookie named per request id, and parks only its SHA-256 (`bindingHash`). `/authorize/context` answers a missing/mismatched binding exactly like an unknown id (404 — no existence oracle); `/authorize/decision` fails it `400 invalid_request` **before** consuming the request, so a forged attempt cannot burn the real user's pending flow; the cookie is cleared once the decision lands. Absent-hash requests (parked by a pre-upgrade instance) pass unconditionally for mid-deploy continuity. **Rationale:** the request id stays shoulder-surfable and log-safe because it is no longer a capability — the cookie is, and it never leaves the browser that started the flow.
+- **S-M2 (oidc)** — **no reserved-audience deny-list / token typing.** **Issue:** a client row seeded (or later self-registered) under a reserved identifier (`osn-access`, `osn-step-up`, ARC audiences) would mint OIDC access tokens whose `aud` collides with an internal verifier's pin; OIDC access tokens were also structurally indistinguishable from ID tokens. **Solution:** `RESERVED_OIDC_CLIENT_IDS` + `isReservedOidcClientId` in `services/auth/constants.ts`; `findClient` treats a reserved id as absent (covers `/authorize`, `/oidc/token`, context and connections in one chokepoint), and the future registration route must reject them at write time. OIDC access tokens now carry a `typ: "at+jwt"` header (RFC 9068) via an optional `typ` parameter on `signJwt`; ID tokens stay untyped. **Rationale:** enforcement at the registry read means no seeding mistake is reachable, and the typed header lets any future verifier reject cross-class token replay outright.
+- **S-M3 (oidc)** — **no user-facing connections routes.** Closed together with C-M3 (oidc) — see [[changelog/compliance-fixes]] for the route surface (`GET /oidc/connections`, `DELETE /oidc/connections/:clientId`) and the revoke-kills-in-flight-codes semantics.
+
+Verified: 43 OIDC route tests (binding-cookie forgery, freshness loop, `typ` headers, reserved ids, revoke semantics), 802 total in `@osn/api`, 22/22 type-check tasks.
 
 ## Dependency review sweep (2026-07-21)
 

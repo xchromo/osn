@@ -27,13 +27,15 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { oauthAuthorizationCodes, oauthClients, oauthConsents } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import { Effect } from "effect";
 
 import {
   AUTHORIZATION_CODE_TTL_SEC,
   AUTHORIZE_REQUEST_TTL_MS,
   ID_TOKEN_TTL_SEC,
+  isReservedOidcClientId,
+  OIDC_MAX_AGE_CEILING_SEC,
   OIDC_PARAM_MAX_LENGTH,
 } from "./constants";
 import type { AuthContext } from "./context";
@@ -69,6 +71,8 @@ export interface AuthorizeParams {
   codeChallenge: string | null;
   codeChallengeMethod: string;
   prompt: string | null;
+  /** Raw `max_age` query value — validated (digits, bounded) before use. */
+  maxAge: string | null;
 }
 
 /** A request that has survived validation. Every field is safe to act on. */
@@ -79,6 +83,15 @@ export interface ValidatedAuthorizeRequest {
   state: string | null;
   nonce: string | null;
   codeChallenge: string;
+  /** Seconds, already parsed and bounded. Null when the client didn't ask. */
+  maxAge: number | null;
+}
+
+/** The device's session as `/authorize` sees it: who, and since when. */
+export interface AuthorizeSession {
+  accountId: string;
+  /** Unix seconds — when the session was created, i.e. the real auth_time. */
+  authTime: number;
 }
 
 /**
@@ -100,7 +113,16 @@ export type AuthorizeValidation =
 /** What a validated request needs next. */
 export type AuthorizeOutcome =
   | { kind: "code"; code: string }
-  | { kind: "interaction"; requestId: string; reason: "login" | "select_account" | "consent" }
+  | {
+      kind: "interaction";
+      requestId: string;
+      reason: "login" | "select_account" | "consent";
+      /**
+       * Raw browser-binding secret (S-M1 oidc). The route sets it as a
+       * short-TTL HttpOnly cookie; only its hash is parked server-side.
+       */
+      bindingSecret: string;
+    }
   | { kind: "error"; code: OidcErrorCode; description: string };
 
 /** The user's answer to a consent screen. */
@@ -109,12 +131,18 @@ export interface DecisionInput {
   accountId: string;
   profileId: string;
   approved: boolean;
+  /** Unix seconds — creation time of the session making the decision. */
+  authTime: number;
+  /** The binding cookie's value, or null when the browser sent none. */
+  bindingSecret: string | null;
 }
 
 /** Where to send the browser next, plus whether this was a first-time link. */
 export interface DecisionResult {
   redirectTo: string;
   isNewLink: boolean;
+  /** For the consent-granted metric — meaningful only when `isNewLink`. */
+  isFirstParty: boolean;
 }
 
 /** Everything an authorization code binds at issue time. */
@@ -126,6 +154,8 @@ export interface IssueCodeInput {
   scope: string;
   codeChallenge: string;
   nonce: string | null;
+  /** Unix seconds — when the user authenticated, NOT when the code minted. */
+  authTime: number;
 }
 
 /** A token-endpoint request, already parsed out of the form body / auth header. */
@@ -144,6 +174,28 @@ export interface OidcTokenResponse {
   token_type: "Bearer";
   expires_in: number;
   scope: string;
+}
+
+/**
+ * A successful exchange plus the metric dimension the route needs, so the
+ * route does not have to re-read the client purely to label a counter
+ * (P-W1 oidc).
+ */
+export interface ExchangeResult {
+  response: OidcTokenResponse;
+  isFirstParty: boolean;
+}
+
+/** One row of the user-facing "apps you have authorised" list (S-M3 oidc). */
+export interface OidcConnectionSummary {
+  clientId: string;
+  /** Null only if the client row was hand-deleted out from under the consent. */
+  clientName: string | null;
+  logoUrl: string | null;
+  profileId: string;
+  scope: string;
+  /** Unix seconds. */
+  grantedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +256,17 @@ const generateAuthorizationCode = (): string => {
   return "cod_" + base64Url(Buffer.from(bytes));
 };
 
+/**
+ * The browser-binding secret for a parked request (S-M1 oidc): 32 random
+ * bytes, base64url, `oab_` prefixed. Travels only in an HttpOnly cookie; the
+ * ceremony store holds its SHA-256.
+ */
+const generateBindingSecret = (): string => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return "oab_" + base64Url(Buffer.from(bytes));
+};
+
 /** A relying-party secret, shown once at registration and never stored raw. */
 export function generateClientSecret(): string {
   const bytes = new Uint8Array(32);
@@ -256,7 +319,9 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   // Relying-party registry
   // -------------------------------------------------------------------------
 
-  const rowToClient = (row: typeof oauthClients.$inferSelect): OidcClient => ({
+  const rowToClient = (
+    row: Omit<typeof oauthClients.$inferSelect, "createdAt" | "disabledAt">,
+  ): OidcClient => ({
     id: row.id,
     clientId: row.clientId,
     name: row.name,
@@ -268,13 +333,37 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     isFirstParty: row.isFirstParty,
   });
 
-  /** Looks up an enabled relying party. Disabled clients read as absent. */
+  /**
+   * Looks up an enabled relying party. Disabled clients read as absent, and so
+   * does any client whose id collides with a reserved first-party or S2S
+   * audience (S-M2 oidc) — a row seeded under such a name could mint OIDC
+   * access tokens whose `aud` an internal verifier pins, so the registry
+   * refuses to see it no matter how it got written.
+   */
   const findClient = (clientId: string): Effect.Effect<OidcClient | null, DatabaseError, Db> =>
     Effect.gen(function* () {
+      if (isReservedOidcClientId(clientId)) return null;
       const { db } = yield* Db;
+      // P-I3: explicit projection — `rowToClient` names every column it uses,
+      // plus `disabledAt` for the liveness check.
       const rows = yield* Effect.tryPromise({
         try: () =>
-          db.select().from(oauthClients).where(eq(oauthClients.clientId, clientId)).limit(1),
+          db
+            .select({
+              id: oauthClients.id,
+              clientId: oauthClients.clientId,
+              name: oauthClients.name,
+              logoUrl: oauthClients.logoUrl,
+              redirectUris: oauthClients.redirectUris,
+              clientSecretHash: oauthClients.clientSecretHash,
+              sectorIdentifier: oauthClients.sectorIdentifier,
+              allowedScopes: oauthClients.allowedScopes,
+              isFirstParty: oauthClients.isFirstParty,
+              disabledAt: oauthClients.disabledAt,
+            })
+            .from(oauthClients)
+            .where(eq(oauthClients.clientId, clientId))
+            .limit(1),
         catch: (cause) => new DatabaseError({ cause }),
       });
       const row = rows[0];
@@ -331,13 +420,19 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   const findConsent = (
     accountId: string,
     clientId: string,
-  ): Effect.Effect<typeof oauthConsents.$inferSelect | null, DatabaseError, Db> =>
+  ): Effect.Effect<{ id: string; profileId: string; scope: string } | null, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
+      // P-I3: three used columns plus the liveness marker, not SELECT *.
       const rows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              id: oauthConsents.id,
+              profileId: oauthConsents.profileId,
+              scope: oauthConsents.scope,
+              revokedAt: oauthConsents.revokedAt,
+            })
             .from(oauthConsents)
             .where(
               and(eq(oauthConsents.accountId, accountId), eq(oauthConsents.clientId, clientId)),
@@ -347,7 +442,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       });
       const row = rows[0];
       if (!row || row.revokedAt !== null) return null;
-      return row;
+      return { id: row.id, profileId: row.profileId, scope: row.scope };
     });
 
   /**
@@ -367,10 +462,36 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     Effect.gen(function* () {
       const { db } = yield* Db;
       const nowSec = Math.floor(Date.now() / 1000);
+      // P-W4: insert-first. A first link — the common case for a growing
+      // provider — is one statement; only the re-consent path pays the
+      // read-merge-write, because a scope UNION cannot be expressed in the
+      // conflict clause.
+      const inserted = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .insert(oauthConsents)
+            .values({
+              id: genId("ocs_"),
+              accountId,
+              clientId,
+              profileId,
+              scope,
+              grantedAt: nowSec,
+            })
+            .onConflictDoNothing({ target: [oauthConsents.accountId, oauthConsents.clientId] })
+            .returning({ id: oauthConsents.id }),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (inserted.length > 0) return true;
+
       const existing = yield* Effect.tryPromise({
         try: () =>
           db
-            .select()
+            .select({
+              id: oauthConsents.id,
+              scope: oauthConsents.scope,
+              revokedAt: oauthConsents.revokedAt,
+            })
             .from(oauthConsents)
             .where(
               and(eq(oauthConsents.accountId, accountId), eq(oauthConsents.clientId, clientId)),
@@ -379,22 +500,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
         catch: (cause) => new DatabaseError({ cause }),
       });
       const row = existing[0];
-
-      if (!row) {
-        yield* Effect.tryPromise({
-          try: () =>
-            db.insert(oauthConsents).values({
-              id: genId("ocs_"),
-              accountId,
-              clientId,
-              profileId,
-              scope,
-              grantedAt: nowSec,
-            }),
-          catch: (cause) => new DatabaseError({ cause }),
-        });
-        return true;
-      }
+      if (!row) return false; // Deleted between the two statements — nothing to widen.
 
       yield* Effect.tryPromise({
         try: () =>
@@ -414,23 +520,84 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       return row.revokedAt !== null;
     });
 
-  /** Unlinks an account from a relying party. Later requests need consent again. */
+  /**
+   * Unlinks an account from a relying party. Later requests need consent
+   * again. Returns whether a LIVE consent was actually revoked, so the
+   * user-facing route can 404 an unknown or already-revoked client rather
+   * than pretend.
+   *
+   * Also deletes any authorization code in flight for the pair: redemption
+   * does not re-read the consent row, so without this a code minted seconds
+   * before the revoke would still exchange after it. Withdrawal means now,
+   * not "after the 60-second window drains" (Art. 7(3)).
+   */
   const revokeConsent = (
     accountId: string,
     clientId: string,
-  ): Effect.Effect<void, DatabaseError, Db> =>
+  ): Effect.Effect<{ revoked: boolean }, DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
-      yield* Effect.tryPromise({
+      const updated = yield* Effect.tryPromise({
         try: () =>
           db
             .update(oauthConsents)
             .set({ revokedAt: Math.floor(Date.now() / 1000) })
             .where(
-              and(eq(oauthConsents.accountId, accountId), eq(oauthConsents.clientId, clientId)),
+              and(
+                eq(oauthConsents.accountId, accountId),
+                eq(oauthConsents.clientId, clientId),
+                isNull(oauthConsents.revokedAt),
+              ),
+            )
+            .returning({ id: oauthConsents.id }),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (updated.length === 0) return { revoked: false };
+
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .delete(oauthAuthorizationCodes)
+            .where(
+              and(
+                eq(oauthAuthorizationCodes.accountId, accountId),
+                eq(oauthAuthorizationCodes.clientId, clientId),
+              ),
             ),
         catch: (cause) => new DatabaseError({ cause }),
       });
+      return { revoked: true };
+    });
+
+  /**
+   * The account's live consents, joined to the client registry so the list
+   * can show a name and logo (S-M3 oidc). A consent whose client row was
+   * hand-deleted still appears — the grant is the user's record, not the
+   * client's — with a null name.
+   */
+  const listConsents = (
+    accountId: string,
+  ): Effect.Effect<OidcConnectionSummary[], DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({
+              clientId: oauthConsents.clientId,
+              clientName: oauthClients.name,
+              logoUrl: oauthClients.logoUrl,
+              profileId: oauthConsents.profileId,
+              scope: oauthConsents.scope,
+              grantedAt: oauthConsents.grantedAt,
+            })
+            .from(oauthConsents)
+            .leftJoin(oauthClients, eq(oauthClients.clientId, oauthConsents.clientId))
+            .where(and(eq(oauthConsents.accountId, accountId), isNull(oauthConsents.revokedAt)))
+            .orderBy(oauthConsents.grantedAt),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return rows;
     });
 
   // -------------------------------------------------------------------------
@@ -456,7 +623,10 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             scope: input.scope,
             codeChallenge: input.codeChallenge,
             nonce: input.nonce,
-            authTime: nowSec,
+            // S-H1 oidc: the SESSION's establishment time, never `nowSec` — a
+            // code minted off a month-old cookie must not claim the user just
+            // authenticated, because relying parties act on `auth_time`.
+            authTime: input.authTime,
             expiresAt: nowSec + AUTHORIZATION_CODE_TTL_SEC,
             createdAt: nowSec,
           }),
@@ -519,7 +689,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
    */
   const exchangeAuthorizationCode = (
     input: ExchangeInput,
-  ): Effect.Effect<OidcTokenResponse, OidcError | DatabaseError, Db> =>
+  ): Effect.Effect<ExchangeResult, OidcError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const client = yield* findClient(input.clientId);
       if (!client || !authenticateClient(client, input.clientSecret)) {
@@ -581,35 +751,57 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
         claims["email_verified"] = true;
       }
 
-      const idToken = yield* Effect.tryPromise({
-        try: () =>
-          signJwt(claims, config.jwtPrivateKey, config.jwtKid, ID_TOKEN_TTL_SEC, config.issuerUrl),
-        catch: (cause) =>
-          new OidcError({ code: "server_error", description: `Failed to sign ID token: ${cause}` }),
-      });
-
-      const accessToken = yield* Effect.tryPromise({
-        try: () =>
-          signJwt(
-            { sub, aud: client.clientId, scope: row.scope },
-            config.jwtPrivateKey,
-            config.jwtKid,
-            ID_TOKEN_TTL_SEC,
-            config.issuerUrl,
-          ),
-        catch: (cause) =>
-          new OidcError({
-            code: "server_error",
-            description: `Failed to sign access token: ${cause}`,
+      // P-W5: the two signatures share nothing but the key, which is already
+      // resident — so they run concurrently instead of back-to-back.
+      // The access token carries `typ: "at+jwt"` (RFC 9068) so no verifier can
+      // ever mistake it for an ID token or a first-party token, on top of the
+      // `aud` separation (S-M2 oidc).
+      const { idToken, accessToken } = yield* Effect.all(
+        {
+          idToken: Effect.tryPromise({
+            try: () =>
+              signJwt(
+                claims,
+                config.jwtPrivateKey,
+                config.jwtKid,
+                ID_TOKEN_TTL_SEC,
+                config.issuerUrl,
+              ),
+            catch: (cause) =>
+              new OidcError({
+                code: "server_error",
+                description: `Failed to sign ID token: ${cause}`,
+              }),
           }),
-      });
+          accessToken: Effect.tryPromise({
+            try: () =>
+              signJwt(
+                { sub, aud: client.clientId, scope: row.scope },
+                config.jwtPrivateKey,
+                config.jwtKid,
+                ID_TOKEN_TTL_SEC,
+                config.issuerUrl,
+                "at+jwt",
+              ),
+            catch: (cause) =>
+              new OidcError({
+                code: "server_error",
+                description: `Failed to sign access token: ${cause}`,
+              }),
+          }),
+        },
+        { concurrency: 2 },
+      );
 
       return {
-        access_token: accessToken,
-        id_token: idToken,
-        token_type: "Bearer" as const,
-        expires_in: ID_TOKEN_TTL_SEC,
-        scope: row.scope,
+        response: {
+          access_token: accessToken,
+          id_token: idToken,
+          token_type: "Bearer" as const,
+          expires_in: ID_TOKEN_TTL_SEC,
+          scope: row.scope,
+        },
+        isFirstParty: client.isFirstParty,
       };
     });
 
@@ -668,8 +860,25 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       if (params.codeChallengeMethod !== "S256") {
         return fail("invalid_request", "code_challenge_method must be S256");
       }
-      if (params.codeChallenge === null || params.codeChallenge.length < 43) {
+      // Exactly 43: base64url of a SHA-256 digest is 43 characters, always.
+      // Anything else can never verify, so accepting it would only mint codes
+      // that are dead on arrival at the token endpoint.
+      if (params.codeChallenge === null || !/^[A-Za-z0-9_-]{43}$/.test(params.codeChallenge)) {
         return fail("invalid_request", "A valid S256 code_challenge is required");
+      }
+
+      let maxAge: number | null = null;
+      if (params.maxAge !== null) {
+        // OIDC Core §3.1.2.1: max_age is a number of seconds. Digits only,
+        // bounded — a negative, fractional, or absurd value is a protocol
+        // error, not something to coerce.
+        if (!/^\d{1,9}$/.test(params.maxAge)) {
+          return fail("invalid_request", "max_age must be a non-negative integer");
+        }
+        maxAge = Number(params.maxAge);
+        if (maxAge > OIDC_MAX_AGE_CEILING_SEC) {
+          return fail("invalid_request", "max_age is out of range");
+        }
       }
 
       const scope = narrowScope(params.scope ?? "", client.allowedScopes);
@@ -694,6 +903,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
           state,
           nonce: params.nonce,
           codeChallenge: params.codeChallenge,
+          maxAge,
         },
       };
     });
@@ -720,10 +930,22 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     return url.toString();
   };
 
-  /** Parks a validated request for the consent UI and returns its opaque id. */
-  const parkRequest = (request: ValidatedAuthorizeRequest): Effect.Effect<string, never, never> =>
+  /**
+   * Parks a validated request for the consent UI. Returns the opaque id plus
+   * the raw browser-binding secret (S-M1 oidc) — the route turns the secret
+   * into a cookie; only its hash is stored here.
+   *
+   * `requireAuthAfter` records, in the parked request itself, that the flow
+   * demanded a FRESH sign-in (`prompt=login`, or `max_age` already exceeded):
+   * the decision will refuse any session created before that instant.
+   */
+  const parkRequest = (
+    request: ValidatedAuthorizeRequest,
+    requireAuthAfter: number | null,
+  ): Effect.Effect<{ requestId: string; bindingSecret: string }, never, never> =>
     Effect.promise(async () => {
       const requestId = genId("oar_");
+      const bindingSecret = generateBindingSecret();
       await ctx.stores.authorizeRequests.set(
         requestId,
         {
@@ -733,11 +955,14 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
           state: request.state,
           nonce: request.nonce,
           codeChallenge: request.codeChallenge,
+          maxAge: request.maxAge,
+          requireAuthAfter,
+          bindingHash: sha256Hex(bindingSecret),
           expiresAt: Date.now() + AUTHORIZE_REQUEST_TTL_MS,
         },
         AUTHORIZE_REQUEST_TTL_MS,
       );
-      return requestId;
+      return { requestId, bindingSecret };
     });
 
   /**
@@ -750,38 +975,56 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   const prepareAuthorization = (
     request: ValidatedAuthorizeRequest,
     prompts: Set<string>,
-    accountId: string | null,
+    session: AuthorizeSession | null,
   ): Effect.Effect<AuthorizeOutcome, DatabaseError, Db> =>
     Effect.gen(function* () {
       const silent = prompts.has("none");
+      const nowSec = Math.floor(Date.now() / 1000);
 
-      if (accountId === null) {
+      const interaction = (
+        reason: "login" | "select_account" | "consent",
+        requireAuthAfter: number | null = null,
+      ) =>
+        Effect.map(parkRequest(request, requireAuthAfter), ({ requestId, bindingSecret }) => ({
+          kind: "interaction" as const,
+          requestId,
+          reason,
+          bindingSecret,
+        }));
+
+      if (session === null) {
         return silent
           ? { kind: "error" as const, code: "login_required" as const, description: "No session" }
-          : {
-              kind: "interaction" as const,
-              requestId: yield* parkRequest(request),
-              reason: "login" as const,
-            };
+          : yield* interaction("login");
       }
 
       // `login` and `select_account` are explicit demands for interaction, and
       // `none` has already been rejected alongside them during validation.
+      // `prompt=login` parks with `requireAuthAfter = now`: the decision will
+      // only accept a session created after this instant, so the demand for a
+      // fresh ceremony is enforced server-side, not just displayed (S-H1 oidc).
       if (prompts.has("login")) {
-        return {
-          kind: "interaction" as const,
-          requestId: yield* parkRequest(request),
-          reason: "login" as const,
-        };
-      }
-      if (prompts.has("select_account")) {
-        return {
-          kind: "interaction" as const,
-          requestId: yield* parkRequest(request),
-          reason: "select_account" as const,
-        };
+        return yield* interaction("login", nowSec);
       }
 
+      // `max_age` exceeded reads exactly like `prompt=login` (OIDC Core
+      // §3.1.2.1) — the session is real but too old for this relying party.
+      const stale = request.maxAge !== null && nowSec - session.authTime > request.maxAge;
+      if (stale) {
+        return silent
+          ? {
+              kind: "error" as const,
+              code: "login_required" as const,
+              description: "Authentication is older than the requested max_age",
+            }
+          : yield* interaction("login", nowSec);
+      }
+
+      if (prompts.has("select_account")) {
+        return yield* interaction("select_account");
+      }
+
+      const { accountId, authTime } = session;
       const consent = yield* findConsent(accountId, request.client.clientId);
       const consentUsable =
         consent !== null && scopeCovers(consent.scope, request.scope) && !prompts.has("consent");
@@ -795,6 +1038,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
           scope: request.scope,
           codeChallenge: request.codeChallenge,
           nonce: request.nonce,
+          authTime,
         });
         return { kind: "code" as const, code };
       }
@@ -815,6 +1059,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             scope: request.scope,
             codeChallenge: request.codeChallenge,
             nonce: request.nonce,
+            authTime,
           });
           return { kind: "code" as const, code };
         }
@@ -826,11 +1071,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             code: "consent_required" as const,
             description: "The user has not linked this account to this client",
           }
-        : {
-            kind: "interaction" as const,
-            requestId: yield* parkRequest(request),
-            reason: "consent" as const,
-          };
+        : yield* interaction("consent");
     });
 
   /** Reads a parked request back for the consent UI. Expired ids read as null. */
@@ -864,6 +1105,42 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
           new OidcError({ code: "invalid_request", description: "Unknown or expired request" }),
         );
       }
+
+      // S-M1 oidc: the decision must come from the browser that parked the
+      // request. Checked BEFORE the request is consumed, so a forged attempt
+      // does not burn the real user's pending flow. The hash is absent only
+      // for requests parked by a pre-upgrade instance mid-deploy.
+      if (
+        parked.bindingHash !== undefined &&
+        (input.bindingSecret === null || sha256Hex(input.bindingSecret) !== parked.bindingHash)
+      ) {
+        return yield* Effect.fail(
+          new OidcError({
+            code: "invalid_request",
+            description: "This request does not belong to this browser",
+          }),
+        );
+      }
+
+      // S-H1 oidc: a flow that demanded a fresh sign-in (`prompt=login`, or
+      // `max_age` exceeded at /authorize) only accepts a session created after
+      // the request was parked — and `max_age` is re-checked outright, because
+      // a user can sit on the consent screen while their session ages past it.
+      const nowSec = Math.floor(Date.now() / 1000);
+      // `!= null` on purpose: both fields read as undefined off a request
+      // parked by a pre-upgrade instance, and undefined must mean "no demand".
+      const tooOld =
+        (parked.requireAuthAfter != null && input.authTime < parked.requireAuthAfter) ||
+        (parked.maxAge != null && nowSec - input.authTime > parked.maxAge);
+      if (tooOld) {
+        return yield* Effect.fail(
+          new OidcError({
+            code: "login_required",
+            description: "A fresh sign-in is required before this request can be approved",
+          }),
+        );
+      }
+
       yield* Effect.promise(() => ctx.stores.authorizeRequests.delete(input.requestId));
 
       if (!input.approved) {
@@ -875,6 +1152,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             parked.state,
           ),
           isNewLink: false,
+          isFirstParty: false,
         };
       }
 
@@ -910,9 +1188,14 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
         scope: parked.scope,
         codeChallenge: parked.codeChallenge,
         nonce: parked.nonce,
+        authTime: input.authTime,
       });
 
-      return { redirectTo: buildCodeRedirect(parked.redirectUri, code, parked.state), isNewLink };
+      return {
+        redirectTo: buildCodeRedirect(parked.redirectUri, code, parked.state),
+        isNewLink,
+        isFirstParty: client.isFirstParty,
+      };
     });
 
   return {
@@ -923,6 +1206,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     findConsent,
     recordConsent,
     revokeConsent,
+    listConsents,
     createAuthorizationCode,
     consumeAuthorizationCode,
     verifyPkce,

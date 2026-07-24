@@ -7,7 +7,7 @@ import { createAccountExportRoutes } from "../../src/routes/account-export";
 import { exportLines, type ExportDownstream } from "../../src/services/account-export";
 import { createAuthService } from "../../src/services/auth";
 import { makeTestAuthConfig } from "../helpers/auth-config";
-import { createTestLayer } from "../helpers/db";
+import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
 let config: Awaited<ReturnType<typeof makeTestAuthConfig>>;
 
@@ -210,6 +210,56 @@ describe("GET /account/export — bundle", () => {
     const recovery = bySection("recovery_codes");
     expect(recovery).toHaveLength(1);
     expect(recovery[0]).toMatchObject({ total: expect.any(Number), used: expect.any(Number) });
+  });
+
+  it("includes the account's OIDC consents (C-M1 oidc)", async () => {
+    const { layer, sqlite } = createTestLayerWithSqlite();
+    const { auth, profile, accessToken } = await seed(layer);
+    sqlite.run(
+      `INSERT INTO oauth_clients
+         (id, client_id, name, logo_url, redirect_uris, client_secret_hash,
+          sector_identifier, allowed_scopes, is_first_party, created_at, disabled_at)
+       VALUES ('oc_rp', 'cid_rp', 'Relying Party', NULL, '["https://rp.example.com/cb"]',
+               NULL, 'rp.example.com', 'openid profile email', 0, 1000, NULL)`,
+    );
+    sqlite.run(
+      `INSERT INTO oauth_consents
+         (id, account_id, client_id, profile_id, scope, granted_at, revoked_at)
+       VALUES ('ocs_x', ?, 'cid_rp', ?, 'openid profile', 1000, NULL)`,
+      [profile.accountId, profile.id],
+    );
+
+    const app = makeApp(layer);
+    const res = await app.handle(
+      new Request("http://localhost/account/export", {
+        headers: {
+          ...IP_HEADERS,
+          Authorization: `Bearer ${accessToken}`,
+          "x-step-up-token": await mintStepUp(auth, profile.accountId),
+        },
+      }),
+    );
+    const text = await res.text();
+    expect(text).not.toContain(profile.accountId);
+
+    const lines = text
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines[0]!.sections).toContain("oidc_consents");
+
+    const consents = lines
+      .filter((l) => l.section === "oidc_consents")
+      .map((l) => l.record as Record<string, unknown>);
+    expect(consents).toHaveLength(1);
+    expect(consents[0]).toMatchObject({
+      clientId: "cid_rp",
+      clientName: "Relying Party",
+      scope: "openid profile",
+      grantedAt: 1000,
+      revokedAt: null,
+    });
+    expect(consents[0]).not.toHaveProperty("accountId");
   });
 
   it("emits a degraded line when a downstream bridge fails", async () => {

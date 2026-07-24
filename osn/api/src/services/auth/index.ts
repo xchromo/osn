@@ -38,10 +38,13 @@ export type { AuthConfig } from "./config";
 export type {
   AuthorizeOutcome,
   AuthorizeParams,
+  AuthorizeSession,
   AuthorizeValidation,
   DecisionInput,
   DecisionResult,
+  ExchangeResult,
   OidcClient,
+  OidcConnectionSummary,
   OidcTokenResponse,
   ValidatedAuthorizeRequest,
 } from "./oidc";
@@ -159,6 +162,7 @@ export function createAuthService(config: AuthConfig) {
     exchangeAuthorizationCode: oidc.exchangeAuthorizationCode,
     findOidcConsent: oidc.findConsent,
     revokeOidcConsent: oidc.revokeConsent,
+    listOidcConsents: oidc.listConsents,
     hashSessionToken: (token: string) => hashSessionToken(token),
   };
 }

@@ -71,6 +71,10 @@ export type AuthRateLimiters = Readonly<{
    * verifier.
    */
   oidcToken: RateLimiterBackend;
+  /** Connections list (authenticated, settings read — mirrors sessionList). */
+  oidcConnectionsList: RateLimiterBackend;
+  /** Connections revoke (authenticated, infrequent settings write). */
+  oidcConnectionsRevoke: RateLimiterBackend;
 }>;
 
 /**
@@ -135,5 +139,7 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     oidcAuthorizeContext: createRateLimiter({ maxRequests: 30, windowMs: 60_000 }),
     oidcAuthorizeDecision: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     oidcToken: createRateLimiter({ maxRequests: 60, windowMs: 60_000 }),
+    oidcConnectionsList: createRateLimiter({ maxRequests: 30, windowMs: 60_000 }),
+    oidcConnectionsRevoke: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
   };
 }

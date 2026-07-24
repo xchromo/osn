@@ -67,9 +67,11 @@ sequenceDiagram
 | Endpoint | Who calls it | Notes |
 |---|---|---|
 | `GET /authorize` | The browser, top-level | Authorization code flow. No TypeBox query schema — a 422 would break the RFC error contract |
-| `GET /authorize/context` | The consent screen | Describes the parked request: client, scopes, the signed-in account's profiles, any existing link |
-| `POST /authorize/decision` | The consent screen | Approve or refuse. Returns `{redirectTo}` as JSON, not a 302, so `fetch` does not follow it |
+| `GET /authorize/context` | The consent screen | Describes the parked request: client, scopes, the signed-in account's profiles, any existing link. Requires the binding cookie — without it the id reads as unknown (404) |
+| `POST /authorize/decision` | The consent screen | Approve or refuse. Returns `{redirectTo}` as JSON, not a 302, so `fetch` does not follow it. Requires the binding cookie; `400 login_required` means "re-authenticate, then retry the same request id" |
 | `POST /oidc/token` | The client's server | Code for tokens. Exempt from the origin guard — there is no browser here |
+| `GET /oidc/connections` | The account owner (Bearer access token) | The apps this account has authorised: client id/name/logo, linked profile, scope, granted-at |
+| `DELETE /oidc/connections/:clientId` | The account owner (Bearer access token) | Withdraws the grant (Art. 7(3)) and deletes any authorization code in flight for the pair — revocation is immediate, not "after the 60 s code window drains". 404 when nothing is live |
 | `GET /.well-known/openid-configuration` | Anyone | Discovery |
 | `GET /.well-known/jwks.json` | Anyone | The ES256 public key, shared with access tokens |
 
@@ -93,6 +95,12 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 
 **No refresh tokens, and never an `osn-access` audience.** The token endpoint returns an ID token and a scoped access token bound to the client. It cannot be used to mint a first-party session.
 
+**A parked request belongs to one browser.** When `/authorize` parks a request for the consent UI, the response also sets a per-request HttpOnly cookie (`__Host-osn_oar_…`, 600 s — the request's own TTL) carrying a 256-bit secret whose SHA-256 rides in the parked entry. `/authorize/context` answers a missing or wrong binding exactly like an unknown id, and `/authorize/decision` refuses it **before** consuming the request — so a leaked, forwarded, or guessed `oar_` id can neither be read nor approved anywhere else, and a forged attempt cannot burn the real user's pending flow. (S-M1 oidc.)
+
+**`auth_time` is the session's truth, and freshness demands are enforced.** Codes carry the session row's `created_at` — the moment the user actually authenticated on that device — never the code-mint time. `max_age` is parsed (digits only, ≤10-year ceiling) and an exceeded value behaves exactly like `prompt=login`: the request parks with `requireAuthAfter = now`, and the decision refuses (`400 login_required`, request left alive) any session created before that instant. `max_age` is also re-checked outright at decision time, because a user can sit on the consent screen while their session ages past it. (S-H1 oidc.)
+
+**Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. The future client-registration route must also reject them at write time (`isReservedOidcClientId`). OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
+
 ## `prompt` handling
 
 | Value | Signed out | Signed in |
@@ -105,6 +113,8 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 
 `none` combined with any other value is `invalid_request`, per the spec.
 
+`max_age` composes with the table above: a session older than `max_age` seconds is treated as "signed out" for freshness purposes — interaction with `reason=login` normally, `error=login_required` under `prompt=none`.
+
 First-party clients skip the consent screen — the link is recorded for the default profile and a code comes straight back — unless `prompt` asks otherwise.
 
 ## Data
@@ -113,13 +123,13 @@ Three tables in `@osn/db` (migration `0002_wet_gamora`):
 
 - `oauth_clients` — the registry. `redirect_uris` is a JSON array; exact match, no wildcards. `sector_identifier` feeds the pairwise subject. `client_secret_hash` is null for public clients. There is no write route yet; rows are seeded by hand.
 - `oauth_authorization_codes` — id is the hash of the code. 60-second TTL. A redeemed code is deleted on the spot; an abandoned one is left behind, so `runExpiredAuthCodeSweep` (a `DELETE … WHERE expires_at <= now`, riding `oauth_codes_expires_idx`) runs from the Worker's `scheduled` handler alongside the session and deletion sweeps. Nothing reads an expired code — the sweep only keeps the table from growing without bound.
-- `oauth_consents` — one row per (account, client), holding the linked profile and the granted scope. Scope **merges** on re-consent, never replaces.
+- `oauth_consents` — one row per (account, client), holding the linked profile and the granted scope. Scope **merges** on re-consent, never replaces. The write is insert-first (`INSERT … ON CONFLICT DO NOTHING`, then merge only on conflict). Revoking (`DELETE /oidc/connections/:clientId`) stamps `revoked_at`, deletes the pair's in-flight codes, and the row is kept as the withdrawal record until account erasure purges it.
 
 `code_challenge_method` has no column. S256 is the only value the provider accepts, so storing it would only record a constant.
 
 ## Rate limits
 
-Four per-IP limiters, all folded into the existing `"rate_limit"` Redis namespace so no metric union had to widen: `oidc_authorize` (20/min), `oidc_authorize_context` (30/min), `oidc_authorize_decision` (10/min), `oidc_token` (60/min). See [[rate-limiting]].
+Six per-IP limiters: `oidc_authorize` (20/min), `oidc_authorize_context` (30/min), `oidc_authorize_decision` (10/min), `oidc_token` (60/min), `oidc_connections_list` (30/min), `oidc_connections_revoke` (10/min). See [[rate-limiting]].
 
 ## Configuration
 
@@ -137,6 +147,6 @@ The issuer string is an identifier, not branding. Moving the provider to a prett
 
 - **`/userinfo`** — the ID token carries what clients need for now.
 - **`offline_access`** — third parties get no refresh token, so a long-lived integration must send the user through `/authorize` again.
-- **The consent screen itself** — the two endpoints behind it exist; the page does not.
-- **A client-registration route** — rows go in by hand.
+- **The consent screen itself** — the endpoints behind it exist (context, decision, and now connections); the page does not. Contract for whoever builds it: the browser already holds the per-request binding cookie (the flow only works in the browser that hit `/authorize`), and a `400 login_required` from the decision means "drive a fresh sign-in, then retry the SAME request id".
+- **A client-registration route** — rows go in by hand. Must reject `RESERVED_OIDC_CLIENT_IDS` at write time (lookup already refuses them).
 - **The apex worker** serving `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. Blocked on the identity domain being bought. That is layers 2 and 3; layer 0 works without it.

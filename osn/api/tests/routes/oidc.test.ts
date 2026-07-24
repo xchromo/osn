@@ -41,6 +41,8 @@ interface Harness {
   /** Latest OTP the log transport captured, for the registration flow. */
   code: () => string | undefined;
   seedClient: (overrides?: Partial<SeedClient>) => void;
+  /** Raw DB handle — used to age sessions for auth_time / max_age tests. */
+  sqlite: ReturnType<typeof createTestLayerWithSqlite>["sqlite"];
 }
 
 interface SeedClient {
@@ -58,6 +60,7 @@ function setup(): Harness {
 
   return {
     app,
+    sqlite,
     code: () => {
       const all = rec.recorded();
       for (let i = all.length - 1; i >= 0; i--) {
@@ -95,8 +98,12 @@ function setup(): Harness {
   };
 }
 
-/** Registers an account and returns its session cookie header value. */
-async function signIn(h: Harness, email: string, handle: string): Promise<string> {
+/** Registers an account; returns its session cookie + a bearer access token. */
+async function register(
+  h: Harness,
+  email: string,
+  handle: string,
+): Promise<{ cookie: string; accessToken: string }> {
   await h.app.handle(
     new Request("http://localhost/register/begin", {
       method: "POST",
@@ -111,10 +118,24 @@ async function signIn(h: Harness, email: string, handle: string): Promise<string
       body: JSON.stringify({ email, code: h.code() }),
     }),
   );
+  const body = (await res.json()) as { session: { access_token: string } };
   const setCookie = res.headers.get("set-cookie") ?? "";
   const token = setCookie.split(";")[0];
   expect(token).toContain("osn_session=");
-  return token;
+  return { cookie: token, accessToken: body.session.access_token };
+}
+
+/** Registers an account and returns its session cookie header value. */
+async function signIn(h: Harness, email: string, handle: string): Promise<string> {
+  return (await register(h, email, handle)).cookie;
+}
+
+/**
+ * Ages every session in the harness by `seconds`, so a "signed in a while
+ * ago" device can be simulated without waiting.
+ */
+function ageSessions(h: Harness, seconds: number): void {
+  h.sqlite.run(`UPDATE sessions SET created_at = created_at - ${seconds}`);
 }
 
 function authorizeUrl(params: Record<string, string>): string {
@@ -288,16 +309,13 @@ describe("GET /authorize/context", () => {
   it("describes the client, the scopes and the signed-in profiles", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "ctx@example.com", "ctx_user");
+    const sessionCookie = await signIn(h, "ctx@example.com", "ctx_user");
 
-    const authorizeRes = await h.app.handle(
-      new Request(authorizeUrl(goodParams), { headers: { cookie } }),
-    );
-    const requestId = new URL(authorizeRes.headers.get("location")!).searchParams.get("request")!;
+    const { requestId, binding } = await startAuthorize(h, sessionCookie);
 
     const res = await h.app.handle(
       new Request(`http://localhost/authorize/context?request=${requestId}`, {
-        headers: { cookie },
+        headers: { cookie: `${sessionCookie}; ${binding}` },
       }),
     );
 
@@ -320,11 +338,12 @@ describe("GET /authorize/context", () => {
   it("reports signedIn: false without a session cookie", async () => {
     const h = setup();
     h.seedClient();
-    const authorizeRes = await h.app.handle(new Request(authorizeUrl(goodParams)));
-    const requestId = new URL(authorizeRes.headers.get("location")!).searchParams.get("request")!;
+    const { requestId, binding } = await startAuthorize(h, null);
 
     const res = await h.app.handle(
-      new Request(`http://localhost/authorize/context?request=${requestId}`),
+      new Request(`http://localhost/authorize/context?request=${requestId}`, {
+        headers: { cookie: binding },
+      }),
     );
 
     const body = (await res.json()) as { signedIn: boolean; profiles: unknown[] };
@@ -333,20 +352,40 @@ describe("GET /authorize/context", () => {
   });
 });
 
-/** Drives a third-party request to the consent screen and returns its inputs. */
+/**
+ * Starts an authorize flow that needs interaction. Returns the parked request
+ * id and the browser-binding cookie the response set (S-M1) as a `name=value`
+ * pair ready to join onto a Cookie header.
+ */
+async function startAuthorize(
+  h: Harness,
+  cookie: string | null,
+  params: Record<string, string> = goodParams,
+): Promise<{ requestId: string; binding: string }> {
+  const res = await h.app.handle(
+    new Request(authorizeUrl(params), cookie === null ? undefined : { headers: { cookie } }),
+  );
+  const requestId = new URL(res.headers.get("location")!).searchParams.get("request")!;
+  const binding = (res.headers.get("set-cookie") ?? "").split(";")[0];
+  expect(binding).toContain(`osn_${requestId}=oab_`);
+  return { requestId, binding };
+}
+
+/**
+ * Drives a third-party request to the consent screen and returns its inputs.
+ * `cookie` is the session + binding pair every context/decision call needs.
+ */
 async function parkRequest(
   h: Harness,
-  cookie: string,
-): Promise<{ requestId: string; profileId: string }> {
-  const authorizeRes = await h.app.handle(
-    new Request(authorizeUrl(goodParams), { headers: { cookie } }),
-  );
-  const requestId = new URL(authorizeRes.headers.get("location")!).searchParams.get("request")!;
+  sessionCookie: string,
+): Promise<{ requestId: string; profileId: string; cookie: string }> {
+  const { requestId, binding } = await startAuthorize(h, sessionCookie);
+  const cookie = `${sessionCookie}; ${binding}`;
   const ctxRes = await h.app.handle(
     new Request(`http://localhost/authorize/context?request=${requestId}`, { headers: { cookie } }),
   );
   const { profiles } = (await ctxRes.json()) as { profiles: { id: string }[] };
-  return { requestId, profileId: profiles[0].id };
+  return { requestId, profileId: profiles[0].id, cookie };
 }
 
 describe("POST /authorize/decision", () => {
@@ -370,8 +409,8 @@ describe("POST /authorize/decision", () => {
   it("returns the code redirect as JSON on approval", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "approve@example.com", "approve_user");
-    const { requestId, profileId } = await parkRequest(h, cookie);
+    const sessionCookie = await signIn(h, "approve@example.com", "approve_user");
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
 
     const res = await h.app.handle(
       new Request("http://localhost/authorize/decision", {
@@ -394,8 +433,8 @@ describe("POST /authorize/decision", () => {
   it("returns access_denied on refusal", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "refuse@example.com", "refuse_user");
-    const { requestId, profileId } = await parkRequest(h, cookie);
+    const sessionCookie = await signIn(h, "refuse@example.com", "refuse_user");
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
 
     const res = await h.app.handle(
       new Request("http://localhost/authorize/decision", {
@@ -412,8 +451,8 @@ describe("POST /authorize/decision", () => {
   it("retires the request id, so a replayed decision cannot mint a second code", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "replay@example.com", "replay_user");
-    const { requestId, profileId } = await parkRequest(h, cookie);
+    const sessionCookie = await signIn(h, "replay@example.com", "replay_user");
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
 
     const decide = () =>
       h.app.handle(
@@ -433,16 +472,11 @@ describe("POST /authorize/decision", () => {
   it("refuses a profile the deciding account does not own", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "owner@example.com", "owner_user");
+    const sessionCookie = await signIn(h, "owner@example.com", "owner_user");
     const otherCookie = await signIn(h, "other@example.com", "other_user");
-    const { requestId } = await parkRequest(h, cookie);
-    const otherCtx = await h.app.handle(
-      new Request(`http://localhost/authorize/context?request=${requestId}`, {
-        headers: { cookie: otherCookie },
-      }),
-    );
-    const otherProfileId = ((await otherCtx.json()) as { profiles: { id: string }[] }).profiles[0]
-      .id;
+    const { requestId, cookie } = await parkRequest(h, sessionCookie);
+    // The other account learns its own profile id from its own flow.
+    const { profileId: otherProfileId } = await parkRequest(h, otherCookie);
 
     const res = await h.app.handle(
       new Request("http://localhost/authorize/decision", {
@@ -459,8 +493,8 @@ describe("POST /authorize/decision", () => {
   it("makes the next silent request succeed once consent is on record", async () => {
     const h = setup();
     h.seedClient();
-    const cookie = await signIn(h, "linked@example.com", "linked_user");
-    const { requestId, profileId } = await parkRequest(h, cookie);
+    const sessionCookie = await signIn(h, "linked@example.com", "linked_user");
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
     await h.app.handle(
       new Request("http://localhost/authorize/decision", {
         method: "POST",
@@ -470,7 +504,9 @@ describe("POST /authorize/decision", () => {
     );
 
     const res = await h.app.handle(
-      new Request(authorizeUrl({ ...goodParams, prompt: "none" }), { headers: { cookie } }),
+      new Request(authorizeUrl({ ...goodParams, prompt: "none" }), {
+        headers: { cookie: sessionCookie },
+      }),
     );
 
     const loc = new URL(res.headers.get("location")!);
@@ -481,8 +517,8 @@ describe("POST /authorize/decision", () => {
 
 /** Runs a whole authorization and hands back a redeemable code. */
 async function mintCode(h: Harness, email: string, handle: string): Promise<string> {
-  const cookie = await signIn(h, email, handle);
-  const { requestId, profileId } = await parkRequest(h, cookie);
+  const sessionCookie = await signIn(h, email, handle);
+  const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
   const res = await h.app.handle(
     new Request("http://localhost/authorize/decision", {
       method: "POST",
@@ -676,5 +712,357 @@ describe("POST /oidc/token", () => {
 
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("invalid_request");
+  });
+});
+
+describe("browser binding (S-M1)", () => {
+  it("sets an HttpOnly short-TTL binding cookie on the interaction redirect", async () => {
+    const h = setup();
+    h.seedClient();
+    const res = await h.app.handle(new Request(authorizeUrl(goodParams)));
+
+    const setCookie = res.headers.get("set-cookie")!;
+    const requestId = new URL(res.headers.get("location")!).searchParams.get("request")!;
+    expect(setCookie).toContain(`osn_${requestId}=oab_`);
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("Max-Age=600");
+    expect(setCookie).toContain("SameSite=Lax");
+  });
+
+  it("404s a context read from a browser without the binding cookie", async () => {
+    const h = setup();
+    h.seedClient();
+    const cookie = await signIn(h, "bindctx@example.com", "bindctx_user");
+    const { requestId } = await startAuthorize(h, cookie);
+
+    // Session cookie present, binding cookie absent — another signed-in
+    // browser that somehow learned the request id.
+    const res = await h.app.handle(
+      new Request(`http://localhost/authorize/context?request=${requestId}`, {
+        headers: { cookie },
+      }),
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("refuses a decision from a browser without the binding cookie, without burning the request", async () => {
+    const h = setup();
+    h.seedClient();
+    const sessionCookie = await signIn(h, "bind@example.com", "bind_user");
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
+
+    const forged = await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie: sessionCookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+    expect(forged.status).toBe(400);
+    expect(((await forged.json()) as { error: string }).error).toBe("invalid_request");
+
+    // The parked request survives the forged attempt: the real browser,
+    // holding the binding cookie, can still approve it.
+    const real = await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+    expect(real.status).toBe(200);
+  });
+});
+
+describe("auth freshness (S-H1)", () => {
+  it("forces re-login when the session is older than max_age", async () => {
+    const h = setup();
+    h.seedClient();
+    const cookie = await signIn(h, "stale@example.com", "stale_user");
+    ageSessions(h, 7200);
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, max_age: "3600" }), { headers: { cookie } }),
+    );
+
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("reason")).toBe("login");
+  });
+
+  it("answers prompt=none with login_required when max_age is exceeded", async () => {
+    const h = setup();
+    h.seedClient();
+    const cookie = await signIn(h, "stalenone@example.com", "stalenone_user");
+    ageSessions(h, 7200);
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, max_age: "3600", prompt: "none" }), {
+        headers: { cookie },
+      }),
+    );
+
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("error")).toBe("login_required");
+  });
+
+  it("redirects an unparseable max_age back as invalid_request", async () => {
+    const h = setup();
+    h.seedClient();
+    const res = await h.app.handle(new Request(authorizeUrl({ ...goodParams, max_age: "-1" })));
+
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.origin + loc.pathname).toBe(REDIRECT_URI);
+    expect(loc.searchParams.get("error")).toBe("invalid_request");
+  });
+
+  it("refuses a prompt=login decision from the pre-existing session until it is re-created", async () => {
+    const h = setup();
+    h.seedClient();
+    const sessionCookie = await signIn(h, "fresh@example.com", "fresh_user");
+    // The session predates the parked request by a comfortable margin.
+    ageSessions(h, 60);
+
+    const { requestId, binding } = await startAuthorize(h, sessionCookie, {
+      ...goodParams,
+      prompt: "login",
+    });
+    const cookie = `${sessionCookie}; ${binding}`;
+    const ctxRes = await h.app.handle(
+      new Request(`http://localhost/authorize/context?request=${requestId}`, {
+        headers: { cookie },
+      }),
+    );
+    const { profiles } = (await ctxRes.json()) as { profiles: { id: string }[] };
+
+    const decide = () =>
+      h.app.handle(
+        new Request("http://localhost/authorize/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie },
+          body: JSON.stringify({ requestId, profileId: profiles[0].id, approved: true }),
+        }),
+      );
+
+    const staleAttempt = await decide();
+    expect(staleAttempt.status).toBe(400);
+    expect(((await staleAttempt.json()) as { error: string }).error).toBe("login_required");
+
+    // Simulate the fresh sign-in the screen would drive: the session row is
+    // re-created (created_at moves past the park instant). Same request id.
+    h.sqlite.run(`UPDATE sessions SET created_at = created_at + 120`);
+    const freshAttempt = await decide();
+    expect(freshAttempt.status).toBe(200);
+  });
+
+  it("stamps auth_time from the session, not from the code mint", async () => {
+    const h = setup();
+    h.seedClient();
+    const sessionCookie = await signIn(h, "authtime@example.com", "authtime_user");
+    ageSessions(h, 7200);
+
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
+    const decisionRes = await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+    const { redirectTo } = (await decisionRes.json()) as { redirectTo: string };
+    const code = new URL(redirectTo).searchParams.get("code")!;
+
+    const tokenRes = await h.app.handle(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: VERIFIER,
+        client_id: "cid_rp",
+      }),
+    );
+    const { id_token } = (await tokenRes.json()) as { id_token: string };
+    const claims = JSON.parse(
+      Buffer.from(id_token.split(".")[1], "base64url").toString("utf8"),
+    ) as { auth_time: number };
+    // The session is two hours old; auth_time must say so.
+    expect(claims.auth_time).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 7000);
+  });
+});
+
+describe("token typing (S-M2)", () => {
+  it("marks the OIDC access token typ: at+jwt and leaves the id_token untyped", async () => {
+    const h = setup();
+    h.seedClient();
+    const code = await mintCode(h, "typ@example.com", "typ_user");
+
+    const res = await h.app.handle(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: VERIFIER,
+        client_id: "cid_rp",
+      }),
+    );
+    const { access_token, id_token } = (await res.json()) as {
+      access_token: string;
+      id_token: string;
+    };
+    const header = (t: string) =>
+      JSON.parse(Buffer.from(t.split(".")[0], "base64url").toString("utf8")) as { typ?: string };
+    expect(header(access_token).typ).toBe("at+jwt");
+    expect(header(id_token).typ).toBeUndefined();
+  });
+
+  it("treats a client registered under a reserved audience as unknown", async () => {
+    const h = setup();
+    h.seedClient({ clientId: "osn-access" });
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, client_id: "osn-access" })),
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_client");
+  });
+});
+
+describe("connections (S-M3)", () => {
+  /** Registers, links the account to cid_rp, returns the bearer token. */
+  async function linkAccount(h: Harness, email: string, handle: string): Promise<string> {
+    const { cookie: sessionCookie, accessToken } = await register(h, email, handle);
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
+    const res = await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    return accessToken;
+  }
+
+  it("401s without a bearer token", async () => {
+    const h = setup();
+    const res = await h.app.handle(new Request("http://localhost/oidc/connections"));
+    expect(res.status).toBe(401);
+  });
+
+  it("lists the linked apps and revokes one", async () => {
+    const h = setup();
+    h.seedClient();
+    const accessToken = await linkAccount(h, "conn@example.com", "conn_user");
+    const authed = { authorization: `Bearer ${accessToken}` };
+
+    const listRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections", { headers: authed }),
+    );
+    expect(listRes.status).toBe(200);
+    const { connections } = (await listRes.json()) as {
+      connections: { clientId: string; clientName: string | null; scope: string }[];
+    };
+    expect(connections).toHaveLength(1);
+    expect(connections[0].clientId).toBe("cid_rp");
+    expect(connections[0].clientName).toBe("Relying Party");
+
+    const revokeRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections/cid_rp", {
+        method: "DELETE",
+        headers: authed,
+      }),
+    );
+    expect(revokeRes.status).toBe(200);
+
+    const emptyRes = await h.app.handle(
+      new Request("http://localhost/oidc/connections", { headers: authed }),
+    );
+    const after = (await emptyRes.json()) as { connections: unknown[] };
+    expect(after.connections).toHaveLength(0);
+
+    // Revoking again finds nothing live.
+    const again = await h.app.handle(
+      new Request("http://localhost/oidc/connections/cid_rp", {
+        method: "DELETE",
+        headers: authed,
+      }),
+    );
+    expect(again.status).toBe(404);
+  });
+
+  it("makes the next silent request fail once revoked", async () => {
+    const h = setup();
+    h.seedClient();
+    const { cookie: sessionCookie, accessToken } = await register(
+      h,
+      "unlink@example.com",
+      "unlink_user",
+    );
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
+    await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+
+    await h.app.handle(
+      new Request("http://localhost/oidc/connections/cid_rp", {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+
+    const res = await h.app.handle(
+      new Request(authorizeUrl({ ...goodParams, prompt: "none" }), {
+        headers: { cookie: sessionCookie },
+      }),
+    );
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.searchParams.get("error")).toBe("consent_required");
+  });
+
+  it("kills an authorization code in flight when the consent is revoked", async () => {
+    const h = setup();
+    h.seedClient();
+    const { cookie: sessionCookie, accessToken } = await register(
+      h,
+      "inflight@example.com",
+      "inflight_user",
+    );
+    const { requestId, profileId, cookie } = await parkRequest(h, sessionCookie);
+    const decisionRes = await h.app.handle(
+      new Request("http://localhost/authorize/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({ requestId, profileId, approved: true }),
+      }),
+    );
+    const { redirectTo } = (await decisionRes.json()) as { redirectTo: string };
+    const code = new URL(redirectTo).searchParams.get("code")!;
+
+    await h.app.handle(
+      new Request("http://localhost/oidc/connections/cid_rp", {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${accessToken}` },
+      }),
+    );
+
+    const res = await h.app.handle(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: VERIFIER,
+        client_id: "cid_rp",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_grant");
   });
 });
