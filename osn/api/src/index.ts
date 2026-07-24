@@ -58,6 +58,10 @@ export interface Env {
   // non-local env, osn-api boots with a no-op email transport (transactional
   // mail discarded, not delivered) instead of throwing. Unset = fail-closed.
   OSN_EMAIL_OPTIONAL?: string;
+  // Where `/authorize` sends the browser when a request needs the user —
+  // sign-in, profile choice, or consent. Unset falls back to `/authorize` on
+  // the first configured origin.
+  OSN_AUTHORIZE_UI_URL?: string;
   PULSE_API_URL?: string;
   ZAP_API_URL?: string;
   TRUSTED_PROXY_COUNT?: string;
@@ -65,6 +69,10 @@ export interface Env {
   OSN_JWT_PRIVATE_KEY?: string;
   OSN_JWT_PUBLIC_KEY?: string;
   OSN_SESSION_IP_PEPPER?: string;
+  // HMAC key behind every pairwise OIDC `sub`. Permanent: rotating it changes
+  // every subject a relying party has on file. `wrangler secret put
+  // OSN_PAIRWISE_SALT`.
+  OSN_PAIRWISE_SALT?: string;
   UPSTASH_REDIS_REST_URL?: string;
   UPSTASH_REDIS_REST_TOKEN?: string;
   // Preferred email transport (Resend HTTP API). When set in a non-local env,

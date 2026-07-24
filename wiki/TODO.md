@@ -7,6 +7,7 @@ Progress tracking and deferred decisions. Completed items move to `[[changelog/]
 Now **deployed on `cireweddings.com`** (Cloudflare Free tier — see [[production-deploy]], [[free-tier-limits]], [[changelog/completed-features]] "Production launch" 2026-06-18). Post-deploy priorities:
 
 - [ ] **Activate Cloudflare Turnstile** — create the managed widget in the dashboard, set `PUBLIC_TURNSTILE_SITEKEY` (Pages build var, **sitekey-first**) then `TURNSTILE_SECRET_KEY` (osn-api + cire-api Worker secret). The code shipped inert (#154); the gates go live only once the secret is set. See [[turnstile]], [[production-deploy]] §3.4.
+- [ ] **Set `OSN_PAIRWISE_SALT` before the next osn-api deploy** — 32 bytes or more, as a Worker secret. The check is fail closed: without it osn-api will not boot outside local. It must never change afterwards, or every OIDC client sees its users as strangers. See [[oidc-provider]], [[production-deploy]].
 - [ ] **Free Cloudflare dashboard hardening** (manual — wrangler cannot do this) — confirm the free WAF Managed Ruleset, add a custom rule blocking public `/internal/*` + `/graph/internal/*`, enable Page Shield on the guest site, confirm L7 DDoS. See [[free-tier-limits]] "Cloudflare security hardening".
 - [ ] **Re-enable email later** — provision Cloudflare Email Service (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_EMAIL_API_TOKEN` + `OSN_EMAIL_FROM`), watch `osn.email.send.attempts{outcome="sent"}`, then **remove** `OSN_EMAIL_OPTIONAL=true` from osn-api `[vars]`. Restores OTP step-up everywhere (incl. cire organiser, currently passkey-only). See [[email]], [[production-deploy]] §1.1.
 - [ ] **Optional Google Maps key** — set the Maps Embed key so cire location previews render the real map instead of the CSS-card fallback (#146; key-optional today). See [[cire]].
@@ -118,7 +119,12 @@ The review found these sound: the token-verification core (audience enforced ins
 - [x] Multi-account privacy audit (P6) — accountId leak verification, per-profile rate limits
 - [ ] Per-app vs global blocking logic (deferred — global blocking across all OSN apps for now)
 - [ ] Interest profile selection (onboarding)
-- [ ] Third-party app authorization flow
+- [x] Third-party app authorization flow — `@osn/api` is now an OIDC provider: `/authorize`, `/authorize/context`, `/authorize/decision`, `/oidc/token`, discovery. Authorization code + PKCE (S256 only), pairwise `sub` per client sector, consent per (account, client), codes hashed + single use. See [[oidc-provider]]
+- [ ] **Consent screen UI** — the two endpoints behind it exist (`/authorize/context`, `/authorize/decision`); the page does not. Lives on the identity domain; set `OSN_AUTHORIZE_UI_URL` once it has a home — see [[oidc-provider]]
+- [ ] OIDC client registration — `oauth_clients` rows go in by hand today. Needs an organiser-facing or admin route before third parties self-serve
+- [ ] OIDC `/userinfo` + `offline_access` refresh tokens — deliberately out of the first cut; third parties re-enter `/authorize` instead
+- [ ] Apex worker for the identity domain — `/.well-known/webauthn` (Related Origin Requests, **five registrable labels ever**), `apple-app-site-association`, `assetlinks.json`. Blocked on the domain purchase; the OIDC provider works without it — see [[oidc-provider]]
+- [ ] Native single sign-on — `ASWebAuthenticationSession` (iOS) / Custom Tabs (Android) so native apps share the system browser cookie jar and `prompt=none` works inside them
 - [x] Organisation frontend — standalone `@osn/social` app delivered (2026-04-16); Tauri wrapping deferred
 - [x] Merge `@osn/core` into `@osn/api`, move `@osn/crypto` → `@shared/crypto`; ARC audience updated `"osn-core"` → `"osn-api"`
 - [x] Step-up (sudo) tokens (M-PK1) — ES256 JWTs with `aud: "osn-step-up"`, passkey/OTP ceremonies, required on `/recovery/generate` + `/account/email/complete` — see [[step-up]]
