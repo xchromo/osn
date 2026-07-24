@@ -103,7 +103,7 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 
 **A re-grant after revocation starts from zero.** Scope merging holds only for live consents (a narrower approval must not shrink an existing grant). Across a revocation boundary the old scope is a withdrawal record: re-approving grants exactly what the consent screen displayed, never the union with the withdrawn scopes.
 
-**Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. The future client-registration route must also reject them at write time (`isReservedOidcClientId`). OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
+**Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. Self-serve registration cannot collide by construction (`client_id` is server-generated), so the lookup guard covers hand-seeded rows. OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
 
 ## `prompt` handling
 
@@ -133,7 +133,29 @@ Three tables in `@osn/db` (migration `0002_wet_gamora`):
 
 ## Rate limits
 
-Six per-IP limiters: `oidc_authorize` (20/min), `oidc_authorize_context` (30/min), `oidc_authorize_decision` (10/min), `oidc_token` (60/min), `oidc_connections_list` (30/min), `oidc_connections_revoke` (10/min). See [[rate-limiting]].
+Nine per-IP limiters: `oidc_authorize` (20/min), `oidc_authorize_context` (30/min), `oidc_authorize_decision` (10/min), `oidc_token` (60/min), `oidc_connections_list` (30/min), `oidc_connections_revoke` (10/min), `oidc_client_create` (**5/hour** — mints a durable credential, so it rides the hour-window Redis tier like `email_change_begin`), `oidc_client_list` (30/min), `oidc_client_disable` (10/min). See [[rate-limiting]].
+
+## Client registration (self-serve)
+
+`oauth_clients` rows no longer go in only by hand. A signed-in account can register, list, and disable its own relying parties:
+
+| Route | Auth | What it does |
+|---|---|---|
+| `POST /oidc/clients` | Bearer access token | Registers a client. Returns the summary plus `client_secret` **exactly once** (null for public clients); only the SHA-256 is stored |
+| `GET /oidc/clients` | Bearer access token | The caller's clients, never the secret in any form |
+| `DELETE /oidc/clients/:clientId` | Bearer access token | Disables an owned client — it reads as absent everywhere at once, so new `/authorize` flows refuse and in-flight codes die at the exchange's client lookup. 404 covers "not yours" and "not found" alike |
+
+Trust decisions, all server-owned (`registerClient` + `validateClientRegistration` in `services/auth/oidc.ts`):
+
+- **`client_id` is server-generated** (`cid_` + random) — it can never collide with a reserved audience, and carries no user-chosen content. The `RESERVED_OIDC_CLIENT_IDS` lookup guard stays as defence in depth for hand-seeded rows.
+- **Redirect URIs are the open-redirect boundary**: 1–8 of them, ≤512 chars, valid URLs, `https:` only (`http:` tolerated solely for `localhost`/`127.0.0.1` development), no fragments, exact strings.
+- **`logo_url` must be https** — it flows into the first-party consent/connections UI as an image `src`.
+- **`sector_identifier` is derived** from the first redirect URI's host, never chosen — choosing a shared sector is how two colluding clients would defeat pairwise-subject isolation.
+- **`is_first_party` is not a registration input.** First-party status stays a hand-seeded trust decision.
+- **Cap: 5 live clients per account** (`MAX_OIDC_CLIENTS_PER_ACCOUNT`); disabling frees the slot.
+- **Ownership** (`owner_account_id`) gates list/disable; account erasure disables owned clients and severs the link (rows survive because other users' consents reference them, and they hold no personal data once unlinked). Owned clients appear in the DSAR export as `oidc_clients_owned`.
+
+No step-up on create, deliberately: a freshly minted client is inert until a real user walks through `/authorize` in a browser and consents, so the credential grants nothing by itself — the cap plus the 5/hour limiter bound the abuse surface.
 
 ## Configuration
 
@@ -151,6 +173,5 @@ The issuer string is an identifier, not branding. Moving the provider to a prett
 
 - **`/userinfo`** — the ID token carries what clients need for now.
 - **`offline_access`** — third parties get no refresh token, so a long-lived integration must send the user through `/authorize` again.
-- **The consent screen itself** — the endpoints behind it exist (context, decision, and now connections); the page does not. Contract for whoever builds it: the browser already holds the per-request binding cookie (the flow only works in the browser that hit `/authorize`), and a `400 login_required` from the decision means "drive a fresh sign-in, then retry the SAME request id".
-- **A client-registration route** — rows go in by hand. Must reject `RESERVED_OIDC_CLIENT_IDS` at write time (lookup already refuses them) and pin `logo_url` to `https:` — the value flows into the first-party connections/consent UI as an image `src`, so an unvalidated scheme is a stored-XSS-adjacent surface.
+- **The consent screen itself** — the endpoints behind it exist (context, decision, connections); the page does not. **Full build-ready spec: [[authorize-ui]]** — states, exhaustive decision-error handling (incl. the `login_required` retry loop), and the rules the page must not break.
 - **The apex worker** serving `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. Blocked on the identity domain being bought. That is layers 2 and 3; layer 0 works without it.

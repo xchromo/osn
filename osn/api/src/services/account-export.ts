@@ -64,6 +64,7 @@ export const EXPORT_SECTIONS = [
   "recovery_codes",
   "email_changes",
   "oidc_consents",
+  "oidc_clients_owned",
   "connections",
   "blocks",
   "organisations",
@@ -341,6 +342,30 @@ export async function* exportLines(opts: {
     const { _cursor, ...record } = row;
     void _cursor;
     yield jsonLine({ section: "oidc_consents", record });
+  }
+
+  // oidc_clients_owned — relying parties this account registered via
+  // POST /oidc/clients. Ownership is the account's own data (Art. 15);
+  // never the secret hash, never the internal accountId.
+  for await (const row of keyset(async (cursor) =>
+    db
+      .select({
+        _cursor: oauthClients.id,
+        clientId: oauthClients.clientId,
+        name: oauthClients.name,
+        redirectUris: oauthClients.redirectUris,
+        sectorIdentifier: oauthClients.sectorIdentifier,
+        createdAt: oauthClients.createdAt,
+        disabledAt: oauthClients.disabledAt,
+      })
+      .from(oauthClients)
+      .where(and(eq(oauthClients.ownerAccountId, accountId), gt(oauthClients.id, cursor)))
+      .orderBy(asc(oauthClients.id))
+      .limit(PAGE_SIZE),
+  )) {
+    const { _cursor, ...record } = row;
+    void _cursor;
+    yield jsonLine({ section: "oidc_clients_owned", record });
   }
 
   // connections — both directions, resolved to the peers' handles (not ids).

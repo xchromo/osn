@@ -35,6 +35,10 @@ import {
   AUTHORIZE_REQUEST_TTL_MS,
   ID_TOKEN_TTL_SEC,
   isReservedOidcClientId,
+  MAX_OIDC_CLIENTS_PER_ACCOUNT,
+  OIDC_CLIENT_MAX_REDIRECT_URIS,
+  OIDC_CLIENT_NAME_MAX_LENGTH,
+  OIDC_CLIENT_URI_MAX_LENGTH,
   OIDC_MAX_AGE_CEILING_SEC,
   OIDC_PARAM_MAX_LENGTH,
 } from "./constants";
@@ -186,6 +190,36 @@ export interface ExchangeResult {
   isFirstParty: boolean;
 }
 
+/** What `POST /oidc/clients` accepts, already shape-validated by TypeBox. */
+export interface ClientRegistrationInput {
+  ownerAccountId: string;
+  name: string;
+  redirectUris: string[];
+  logoUrl: string | null;
+  /** True mints a client secret (server-side RP); false is a public client. */
+  confidential: boolean;
+}
+
+/** A registered client as shown to its owner. Never the secret hash. */
+export interface OwnedClientSummary {
+  clientId: string;
+  name: string;
+  logoUrl: string | null;
+  redirectUris: string[];
+  sectorIdentifier: string;
+  /** True when a secret exists (confidential client). */
+  confidential: boolean;
+  createdAt: number;
+  disabledAt: number | null;
+}
+
+/** The one-time registration response: summary plus the raw secret, once. */
+export interface ClientRegistrationResult {
+  client: OwnedClientSummary;
+  /** Shown exactly once; only its SHA-256 is stored. Null for public clients. */
+  clientSecret: string | null;
+}
+
 /** One row of the user-facing "apps you have authorised" list (S-M3 oidc). */
 export interface OidcConnectionSummary {
   clientId: string;
@@ -267,6 +301,81 @@ const generateBindingSecret = (): string => {
   return "oab_" + base64Url(Buffer.from(bytes));
 };
 
+/**
+ * Semantic validation for client registration, beyond the TypeBox shape.
+ * Pure and exported so the rules are unit-testable and reusable by any future
+ * admin surface. Returns the normalised inputs on success — trimmed name,
+ * deduplicated URIs — or the first human-readable problem.
+ *
+ * The rules exist because every one of them is an attack surface:
+ *  - redirect URIs are the open-redirect / code-theft boundary — https only
+ *    (http tolerated solely for loopback development), no fragments (RFC 6749
+ *    §3.1.2), exact strings, bounded count and length;
+ *  - `logo_url` flows into the first-party consent/connections UI as an image
+ *    `src`, so a non-https scheme is a stored-XSS-adjacent foothold;
+ *  - the name renders on the consent screen, so it is length-bounded.
+ *
+ * `client_id` is server-generated (`cid_` + random), so the reserved-id
+ * deny-list cannot collide by construction — `findClient` still enforces it
+ * as defence in depth for hand-seeded rows.
+ */
+export function validateClientRegistration(input: {
+  name: string;
+  redirectUris: string[];
+  logoUrl: string | null;
+}):
+  | { ok: true; name: string; redirectUris: string[]; logoUrl: string | null }
+  | { ok: false; message: string } {
+  const name = input.name.trim();
+  if (name.length === 0 || name.length > OIDC_CLIENT_NAME_MAX_LENGTH) {
+    return { ok: false, message: `name must be 1–${OIDC_CLIENT_NAME_MAX_LENGTH} characters` };
+  }
+
+  const uris = [...new Set(input.redirectUris)];
+  if (uris.length === 0 || uris.length > OIDC_CLIENT_MAX_REDIRECT_URIS) {
+    return {
+      ok: false,
+      message: `between 1 and ${OIDC_CLIENT_MAX_REDIRECT_URIS} redirect URIs are required`,
+    };
+  }
+  for (const uri of uris) {
+    if (uri.length > OIDC_CLIENT_URI_MAX_LENGTH) {
+      return { ok: false, message: "redirect URI exceeds the maximum length" };
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      return { ok: false, message: `redirect URI is not a valid URL: ${uri}` };
+    }
+    const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
+      return { ok: false, message: "redirect URIs must be https (http only for loopback)" };
+    }
+    if (parsed.hash !== "") {
+      return { ok: false, message: "redirect URIs must not carry a fragment" };
+    }
+  }
+
+  const logoUrl = input.logoUrl;
+  if (logoUrl !== null) {
+    if (logoUrl.length > OIDC_CLIENT_URI_MAX_LENGTH) {
+      return { ok: false, message: "logo_url exceeds the maximum length" };
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(logoUrl);
+    } catch {
+      return { ok: false, message: "logo_url is not a valid URL" };
+    }
+    if (parsed.protocol !== "https:") {
+      return { ok: false, message: "logo_url must be https" };
+    }
+  }
+
+  return { ok: true, name, redirectUris: uris, logoUrl };
+}
+
 /** A relying-party secret, shown once at registration and never stored raw. */
 export function generateClientSecret(): string {
   const bytes = new Uint8Array(32);
@@ -320,7 +429,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   // -------------------------------------------------------------------------
 
   const rowToClient = (
-    row: Omit<typeof oauthClients.$inferSelect, "createdAt" | "disabledAt">,
+    row: Omit<typeof oauthClients.$inferSelect, "createdAt" | "disabledAt" | "ownerAccountId">,
   ): OidcClient => ({
     id: row.id,
     clientId: row.clientId,
@@ -390,6 +499,149 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
    */
   const isRegisteredRedirectUri = (client: OidcClient, redirectUri: string): boolean =>
     client.redirectUris.includes(redirectUri);
+
+  /**
+   * Registers a relying party owned by `ownerAccountId` (self-serve — the
+   * TODO's "organiser-facing route"). Inputs are assumed to have passed
+   * {@link validateClientRegistration}; this function owns only the parts
+   * that need the database: the per-account cap, id/secret generation, and
+   * the insert.
+   *
+   * Deliberate properties:
+   *  - `client_id` is server-generated, so it can never collide with a
+   *    reserved audience and carries no user-chosen content;
+   *  - the secret is returned exactly once and stored only as SHA-256;
+   *  - `sector_identifier` is derived from the first redirect URI's host —
+   *    self-serve clients cannot choose their sector, because choosing a
+   *    shared sector is how two colluding clients would defeat pairwise
+   *    subject isolation;
+   *  - `is_first_party` is never settable here. First-party status is a
+   *    hand-seeded trust decision, not a registration input.
+   */
+  const registerClient = (
+    input: ClientRegistrationInput,
+  ): Effect.Effect<ClientRegistrationResult, OidcError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const live = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ id: oauthClients.id })
+            .from(oauthClients)
+            .where(
+              and(
+                eq(oauthClients.ownerAccountId, input.ownerAccountId),
+                isNull(oauthClients.disabledAt),
+              ),
+            ),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      if (live.length >= MAX_OIDC_CLIENTS_PER_ACCOUNT) {
+        return yield* Effect.fail(
+          new OidcError({
+            code: "invalid_request",
+            description: `An account may hold at most ${MAX_OIDC_CLIENTS_PER_ACCOUNT} active clients`,
+          }),
+        );
+      }
+
+      const clientId = genId("cid_");
+      const clientSecret = input.confidential ? generateClientSecret() : null;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const sectorIdentifier = new URL(input.redirectUris[0]!).host;
+
+      yield* Effect.tryPromise({
+        try: () =>
+          db.insert(oauthClients).values({
+            id: genId("oc_"),
+            clientId,
+            name: input.name,
+            logoUrl: input.logoUrl,
+            redirectUris: input.redirectUris,
+            clientSecretHash: clientSecret === null ? null : hashClientSecret(clientSecret),
+            sectorIdentifier,
+            isFirstParty: false,
+            ownerAccountId: input.ownerAccountId,
+            createdAt: nowSec,
+          }),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      return {
+        client: {
+          clientId,
+          name: input.name,
+          logoUrl: input.logoUrl,
+          redirectUris: input.redirectUris,
+          sectorIdentifier,
+          confidential: clientSecret !== null,
+          createdAt: nowSec,
+          disabledAt: null,
+        },
+        clientSecret,
+      };
+    });
+
+  /** The clients this account registered, newest first. Never the secret hash. */
+  const listOwnedClients = (
+    accountId: string,
+  ): Effect.Effect<OwnedClientSummary[], DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({
+              clientId: oauthClients.clientId,
+              name: oauthClients.name,
+              logoUrl: oauthClients.logoUrl,
+              redirectUris: oauthClients.redirectUris,
+              sectorIdentifier: oauthClients.sectorIdentifier,
+              clientSecretHash: oauthClients.clientSecretHash,
+              createdAt: oauthClients.createdAt,
+              disabledAt: oauthClients.disabledAt,
+            })
+            .from(oauthClients)
+            .where(eq(oauthClients.ownerAccountId, accountId))
+            .orderBy(oauthClients.createdAt),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return rows.map(({ clientSecretHash, ...rest }) => ({
+        ...rest,
+        confidential: clientSecretHash !== null,
+      }));
+    });
+
+  /**
+   * Disables an owned client. Disabled clients read as absent everywhere
+   * (`findClient`), so `/authorize` refuses new flows and in-flight codes die
+   * at the exchange's client lookup. Returns false when the caller owns no
+   * live client under that id — the route 404s rather than leaking whether
+   * the id exists under someone else's account.
+   */
+  const disableOwnedClient = (
+    accountId: string,
+    clientId: string,
+  ): Effect.Effect<{ disabled: boolean }, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const updated = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .update(oauthClients)
+            .set({ disabledAt: Math.floor(Date.now() / 1000) })
+            .where(
+              and(
+                eq(oauthClients.ownerAccountId, accountId),
+                eq(oauthClients.clientId, clientId),
+                isNull(oauthClients.disabledAt),
+              ),
+            )
+            .returning({ id: oauthClients.id }),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      return { disabled: updated.length > 0 };
+    });
 
   // -------------------------------------------------------------------------
   // Pairwise subject identifiers
@@ -1226,6 +1478,9 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     findClient,
     authenticateClient,
     isRegisteredRedirectUri,
+    registerClient,
+    listOwnedClients,
+    disableOwnedClient,
     pairwiseSub,
     findConsent,
     recordConsent,

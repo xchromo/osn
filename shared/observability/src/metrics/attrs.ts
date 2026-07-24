@@ -252,4 +252,7 @@ export type AuthRateLimitedEndpoint =
   | "oidc_authorize_decision"
   | "oidc_token"
   | "oidc_connections_list"
-  | "oidc_connections_revoke";
+  | "oidc_connections_revoke"
+  | "oidc_client_create"
+  | "oidc_client_list"
+  | "oidc_client_disable";

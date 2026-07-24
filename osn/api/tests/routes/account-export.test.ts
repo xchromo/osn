@@ -218,9 +218,11 @@ describe("GET /account/export — bundle", () => {
     sqlite.run(
       `INSERT INTO oauth_clients
          (id, client_id, name, logo_url, redirect_uris, client_secret_hash,
-          sector_identifier, allowed_scopes, is_first_party, created_at, disabled_at)
+          sector_identifier, allowed_scopes, is_first_party, owner_account_id,
+          created_at, disabled_at)
        VALUES ('oc_rp', 'cid_rp', 'Relying Party', NULL, '["https://rp.example.com/cb"]',
-               NULL, 'rp.example.com', 'openid profile email', 0, 1000, NULL)`,
+               'deadbeef', 'rp.example.com', 'openid profile email', 0, ?, 1000, NULL)`,
+      [profile.accountId],
     );
     sqlite.run(
       `INSERT INTO oauth_consents
@@ -275,6 +277,16 @@ describe("GET /account/export — bundle", () => {
       revokedAt: 3000,
     });
     expect(consents[0]).not.toHaveProperty("accountId");
+
+    // Clients the account REGISTERED appear too — without the secret hash.
+    const owned = lines
+      .filter((l) => l.section === "oidc_clients_owned")
+      .map((l) => l.record as Record<string, unknown>);
+    expect(owned).toHaveLength(1);
+    expect(owned[0]).toMatchObject({ clientId: "cid_rp", name: "Relying Party" });
+    expect(owned[0]).not.toHaveProperty("clientSecretHash");
+    expect(owned[0]).not.toHaveProperty("accountId");
+    expect(text).not.toContain("deadbeef");
   });
 
   it("emits a degraded line when a downstream bridge fails", async () => {

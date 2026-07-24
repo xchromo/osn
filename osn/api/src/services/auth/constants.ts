@@ -172,3 +172,15 @@ export const RESERVED_OIDC_CLIENT_IDS: ReadonlySet<string> = new Set([
 export function isReservedOidcClientId(clientId: string): boolean {
   return RESERVED_OIDC_CLIENT_IDS.has(clientId);
 }
+
+/**
+ * Cap on live (non-disabled) OIDC clients one account may register. A relying
+ * party is a durable credential surface; nobody legitimate needs dozens, and
+ * the cap keeps a compromised access token from carpeting the registry.
+ */
+export const MAX_OIDC_CLIENTS_PER_ACCOUNT = 5;
+
+/** Bounds on client registration inputs — see `validateClientRegistration`. */
+export const OIDC_CLIENT_NAME_MAX_LENGTH = 64;
+export const OIDC_CLIENT_MAX_REDIRECT_URIS = 8;
+export const OIDC_CLIENT_URI_MAX_LENGTH = 512;
