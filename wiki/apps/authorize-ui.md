@@ -11,6 +11,7 @@ related:
   - "[[identity-model]]"
   - "[[passkey-primary]]"
   - "[[sessions]]"
+  - "[[musubi-identity-migration]]"
 last-reviewed: 2026-07-26
 ---
 

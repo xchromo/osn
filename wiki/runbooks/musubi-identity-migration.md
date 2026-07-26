@@ -11,7 +11,7 @@ related:
   - "[[passkey-primary]]"
   - "[[sessions]]"
   - "[[social]]"
-last-reviewed: 2026-07-25
+last-reviewed: 2026-07-26
 ---
 
 # Migrating OSN identity to musubi.dev
@@ -26,11 +26,13 @@ cutover, or cire loses sign-in entirely. Read the blockers first.
 
 ## Why it cannot be config-only
 
-### Blocker 1 — the authorize UI does not exist
+### Blocker 1 — the authorize UI ✅ cleared 2026-07-26
 
-`[[authorize-ui]]` is `status: planned`. `/authorize` parks the request and
-redirects to a page nobody has built yet, so the OIDC flow does not complete
-end to end today.
+The consent screen is built: `/authorize` in `@osn/social`, see
+`[[authorize-ui]]`. It is not yet reachable in production — that is the
+remaining half of blocker 2 (deploy `@osn/social` and set
+`OSN_AUTHORIZE_UI_URL`). The paragraphs below stay because they explain why
+this ordering is not optional.
 
 This matters because of WebAuthn scoping. A passkey ceremony may only run on
 an origin that is same-site with the RP ID. Once `OSN_RP_ID` becomes
@@ -138,19 +140,23 @@ current values unless the whole ladder moves.
 Out-of-band, not in the repo:
 
 - **Zone.** `musubi.dev` must be in the same Cloudflare account for
-  `custom_domain = true` to auto-provision DNS + edge cert.
+  `custom_domain = true` to auto-provision DNS + edge cert. **Not confirmed
+  yet** — check the account's zone list before planning the route flip.
 - **Resend.** Verify `musubi.dev` as a sender domain before moving
-  `OSN_EMAIL_FROM`, or OTP and security mail fail closed.
+  `OSN_EMAIL_FROM`, or OTP and security mail fail closed. **Confirmed
+  outstanding (2026-07-26):** the Resend account has only `cireweddings.com`
+  verified. Nothing can send from musubi.dev today.
 - **Turnstile.** Add the musubi.dev hostnames to the widget's domain list —
   the verifier is fail-closed once a secret is set (`[[turnstile]]`).
 
 ## Cutover order
 
-1. Set `OSN_PAIRWISE_SALT` on `osn-api-production`. Prerequisite for every
-   later step; also ends the current outage.
-2. Mint recovery codes for every account that must survive (above).
+1. ✅ Set `OSN_PAIRWISE_SALT` on `osn-api-production`. Prerequisite for every
+   later step; also ended the outage it was causing.
+2. ✅ Mint recovery codes for every account that must survive (above).
 3. Add `musubi.dev` to Cloudflare; verify the Resend sender domain.
-4. Build the `/authorize` page in `@osn/social` per `[[authorize-ui]]`.
+4. ✅ Build the `/authorize` page in `@osn/social` per `[[authorize-ui]]`
+   (2026-07-26).
 5. Add an osn-social Pages job to `deploy.yml`; deploy to musubi.dev.
 6. Register cire as an OIDC client; convert organiser, vendor and web from
    direct `@osn/client` ceremonies to the redirect flow.
@@ -158,7 +164,32 @@ Out-of-band, not in the repo:
    and zap-api pick up the new JWKS URL.
 8. Re-enroll passkeys under the new RP ID; regenerate recovery codes.
 
-Steps 4–6 are the real work. Steps 1–3 and 7–8 are mechanical.
+Steps 5–6 are the real work left. Steps 3 and 7–8 are mechanical.
+
+### Do not ship steps 5–7 as one change
+
+The move is safest split into four PRs, because it separates "does the OIDC
+flow work at all" from "does it work on a new domain". Debugging both at once
+is what turns a cutover into an outage.
+
+- **A — the consent screen.** Done: `/authorize` in `@osn/social`.
+- **B — deploy `@osn/social` where the cookies already work.** Add the Pages
+  job and serve it from a host under the **current** registrable domain
+  (`me.cireweddings.com`), then set `OSN_AUTHORIZE_UI_URL` to it. The binding
+  and session cookies are host-bound to `id.cireweddings.com` and same-site
+  with that host, so the whole authorize → consent → token round-trip becomes
+  testable today, on the domain that already works.
+- **C — convert cire to the redirect flow.** Register cire as an OIDC client
+  and move organiser, vendor and web off direct `@osn/client` passkey
+  ceremonies, still on cireweddings.com. This is the change that removes
+  cire's dependence on the RP ID, and it can be proven before the RP ID moves.
+- **D — the move itself.** Flip the vars, the route and the Pages hostname.
+  With A–C landed, the only thing that breaks is the passkeys, and step 2's
+  recovery codes are the bridge across that.
+
+Ordering C before D is what makes D reversible: after C, cire never runs a
+WebAuthn ceremony of its own, so changing the RP ID cannot take cire's
+sign-in with it.
 
 ## Rollback
 
