@@ -13,6 +13,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/lib/authorize", () => ({ authorizeClient: mocks }));
+// The sign-in island carries its own AuthProvider and the WebAuthn client;
+// the page only cares that it reports success.
+vi.mock("../../src/components/AuthorizeSignIn", () => ({
+  AuthorizeSignIn: (props: { onSuccess: () => void }) => (
+    <button type="button" onClick={() => props.onSuccess()}>
+      finish sign-in
+    </button>
+  ),
+}));
 vi.mock("../../src/lib/authClients", () => ({
   loginClient: {},
   recoveryClient: {},
@@ -264,5 +273,71 @@ describe("<AuthorizePage />", () => {
     renderPage(`?request=${REQUEST_ID}&reason=select_account`);
 
     expect(await screen.findByText("Choose a profile")).toBeDefined();
+  });
+
+  it("puts the ceremony before the decision when reason=login", async () => {
+    mocks.getContext.mockResolvedValue(context());
+
+    renderPage(`?request=${REQUEST_ID}&reason=login`);
+
+    // A session exists, but the flow demands a fresh one: no Allow yet.
+    expect(await screen.findByText("finish sign-in")).toBeDefined();
+    expect(screen.queryByText("Allow")).toBeNull();
+
+    fireEvent.click(screen.getByText("finish sign-in"));
+
+    expect(await screen.findByText("Allow")).toBeDefined();
+  });
+
+  it("replays the held answer once the same account signs in again", async () => {
+    mocks.getContext.mockResolvedValue(context());
+    mocks.submitDecision.mockRejectedValueOnce(
+      new AuthorizeError("login_required", 400, "Re-authentication required"),
+    );
+    mocks.submitDecision.mockResolvedValue({ redirectTo: "https://app.example.com/cb" });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Allow"));
+    fireEvent.click(await screen.findByText("finish sign-in"));
+
+    await waitFor(() => expect(mocks.submitDecision).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app.example.com/cb"));
+  });
+
+  it("drops the held answer when a different account signs in", async () => {
+    mocks.getContext.mockResolvedValueOnce(context());
+    mocks.getContext.mockResolvedValue(context({ profiles: [bob] }));
+    mocks.submitDecision.mockRejectedValueOnce(
+      new AuthorizeError("login_required", 400, "Re-authentication required"),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Allow"));
+    fireEvent.click(await screen.findByText("finish sign-in"));
+
+    expect(
+      await screen.findByText(
+        "You signed in as a different account — check this before continuing.",
+      ),
+    ).toBeDefined();
+    // The answer Alice gave is not posted for Bob.
+    expect(mocks.submitDecision).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Allow")).toBeDefined();
+  });
+
+  it("offers a retry when the context read is rate limited", async () => {
+    mocks.getContext.mockRejectedValueOnce(
+      new AuthorizeError("rate_limited", 429, "Too many attempts. Try again in a minute."),
+    );
+    mocks.getContext.mockResolvedValue(context());
+
+    renderPage();
+
+    expect(await screen.findByText("Could not load this request")).toBeDefined();
+    expect(screen.getByText("Too many attempts. Try again in a minute.")).toBeDefined();
+
+    fireEvent.click(screen.getByText("Try again"));
+
+    expect(await screen.findByText("Allow")).toBeDefined();
   });
 });

@@ -151,6 +151,23 @@ short-circuits consent), so state 4's copy can assume a third party.
 - `login_required` and `unauthorized` hold the user's answer, re-run
   `<SignIn>`, refetch context and replay the answer against the **same**
   request id. Only `invalid_request` and `invalid_client` are terminal.
+- The replay is **reconciled first**. A re-authentication can land on a
+  different account, so the page compares the profile set before and after:
+  same set, replay the held answer; different set, drop it, clear the chosen
+  profile and say so. Otherwise one person's "Allow" could be spent by
+  whoever signed in second.
+- `reason=login` (the server's `prompt=login` / `max_age` path) puts the
+  ceremony **before** the decision, even when the browser already has a
+  session. The page tracks whether the ceremony happened *here*; a session
+  the relying party has already rejected is not enough to show Allow.
+- A failed context read that is not terminal — a 429, a dropped connection —
+  gets its own screen with the message and a retry, not an endless spinner.
+- The page runs **outside `AuthProvider`**. Mounting it calls `POST /token`,
+  which *rotates* the refresh session, and then lists profiles the page never
+  reads: `GET /authorize/context` already carries the session state and the
+  profiles. `<SignIn>` needs the provider, so the provider moved into
+  `AuthorizeSignIn`, a `lazy()` island that loads only when a ceremony is
+  actually required. The signed-in path — the common one — touches neither.
 - A logo URL from the client record is untrusted input: it is rendered as
   an `<img src>` through `safeAvatarUrl` with `referrerpolicy="no-referrer"`
   and nowhere else.

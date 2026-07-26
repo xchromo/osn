@@ -1,12 +1,20 @@
 import type { AuthorizeContext, PublicProfile } from "@osn/client";
 import { AuthorizeError } from "@osn/client";
-import { SignIn } from "@osn/ui/auth/SignIn";
 import { Avatar, AvatarFallback, AvatarImage } from "@osn/ui/ui/avatar";
 import { Button } from "@osn/ui/ui/button";
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  lazy,
+  Match,
+  Show,
+  Suspense,
+  Switch,
+} from "solid-js";
 
-import { loginClient, recoveryClient } from "../lib/authClients";
 import { authorizeClient } from "../lib/authorize";
 import { profileInitials, safeAvatarUrl } from "../lib/utils";
 
@@ -27,6 +35,15 @@ import { profileInitials, safeAvatarUrl } from "../lib/utils";
  */
 
 const REQUEST_PATTERN = /^oar_[a-f0-9]{12}$/;
+
+/**
+ * Sign-in drags in the Effect runtime, the WebAuthn client and five auth
+ * clients. The common case — an already-signed-in user — never reaches it, so
+ * it loads only on the branch that needs it.
+ */
+const AuthorizeSignIn = lazy(() =>
+  import("../components/AuthorizeSignIn").then((m) => ({ default: m.AuthorizeSignIn })),
+);
 
 /**
  * The only user-facing strings with security weight. One map, so a reviewer
@@ -50,7 +67,10 @@ export function navigateTo(url: string) {
   window.location.assign(url);
 }
 
-type Screen = "loading" | "signedOut" | "picker" | "consent" | "redirecting" | "dead";
+type Screen = "loading" | "signedOut" | "picker" | "consent" | "redirecting" | "dead" | "error";
+
+const sameProfileSet = (before: ReadonlySet<string>, after: readonly PublicProfile[]) =>
+  after.length === before.size && after.every((p) => before.has(p.id));
 
 export function AuthorizePage() {
   const [params] = useSearchParams();
@@ -75,6 +95,11 @@ export function AuthorizePage() {
   // parked request is still alive, so we re-authenticate and post the SAME
   // request id again rather than restarting the flow.
   const [reauth, setReauth] = createSignal(false);
+  // `reason=login` means the flow demands a session created after the request
+  // was parked, so the ceremony leads even when a session already exists. One
+  // sign-in on this page satisfies it — the flag is what stops the sign-in
+  // screen looping, since the URL still says `login` afterwards.
+  const [signedInHere, setSignedInHere] = createSignal(false);
   const [pending, setPending] = createSignal<boolean | null>(null);
   const [fatal, setFatal] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
@@ -97,7 +122,7 @@ export function AuthorizePage() {
     if (!c || c.profiles.length < 2) return false;
     return reason() === "select_account" || c.linkedProfileId === null;
   });
-  const showPicker = () => pickerOpen() || (autoPicker() && chosenId() === null);
+  const showPicker = createMemo(() => pickerOpen() || (autoPicker() && chosenId() === null));
 
   /** Terminal states name the app only if context was ever loaded. */
   const clientName = () => ctx()?.client.name ?? null;
@@ -114,14 +139,30 @@ export function AuthorizePage() {
     return null;
   });
 
-  const screen = (): Screen => {
+  /**
+   * A context failure the request survives — rate limiting, or the network.
+   * Retryable, so it gets a message and a button rather than the spinner it
+   * would otherwise sit behind for ever.
+   */
+  const loadError = createMemo(() => {
+    const err = context.error;
+    if (!err || (err instanceof AuthorizeError && err.terminal)) return null;
+    return err instanceof Error && err.message ? err.message : "Something went wrong.";
+  });
+
+  // `<Switch>` asks each `Match` in turn, so this is the one tracked value the
+  // whole page hangs off — computed once per change, not once per branch.
+  const screen = createMemo((): Screen => {
     if (redirecting()) return "redirecting";
     if (deadMessage()) return "dead";
+    if (loadError()) return "error";
     if (context.loading || !ctx()) return "loading";
-    if (!ctx()!.signedIn || reauth()) return "signedOut";
+    if (!ctx()!.signedIn || reauth() || (reason() === "login" && !signedInHere())) {
+      return "signedOut";
+    }
     if (showPicker()) return "picker";
     return "consent";
-  };
+  });
 
   /** A retryable failure — the request survives, the page does not restart. */
   function softFail(message: string) {
@@ -167,15 +208,30 @@ export function AuthorizePage() {
     }
   }
 
+  /**
+   * The held answer belongs to whoever read the client card and clicked it.
+   * Replaying it after a sign-in is only safe while that is still the account
+   * on screen — on a shared device the person who re-authenticates may not be
+   * the person who answered. Context carries no account id, so the profile set
+   * is the proxy: if it changed, the answer is dropped and the consent screen
+   * is shown again with the new account's profiles.
+   */
   async function afterSignIn() {
     setReauth(false);
+    setSignedInHere(true);
     setNotice(null);
-    await refetch();
+    const before = new Set(profiles().map((p) => p.id));
     const answer = pending();
-    if (answer !== null) {
-      setPending(null);
-      await decide(answer);
+    setPending(null);
+    await refetch();
+    if (!sameProfileSet(before, profiles())) {
+      setChosenId(null);
+      if (answer !== null) {
+        setNotice("You signed in as a different account — check this before continuing.");
+      }
+      return;
     }
+    if (answer !== null) await decide(answer);
   }
 
   return (
@@ -196,6 +252,18 @@ export function AuthorizePage() {
           </div>
         </Match>
 
+        <Match when={screen() === "error"}>
+          <div class="border-border rounded-card border p-6 text-center">
+            <h1 class="text-foreground text-title font-medium">Could not load this request</h1>
+            <p class="text-muted-foreground text-body mt-2" role="alert">
+              {loadError()}
+            </p>
+            <Button class="mt-4" onClick={() => void refetch()}>
+              Try again
+            </Button>
+          </div>
+        </Match>
+
         <Match when={screen() === "redirecting"}>
           <p class="text-muted-foreground text-body text-center">Taking you back…</p>
         </Match>
@@ -208,11 +276,11 @@ export function AuthorizePage() {
             )}
           </Show>
           <div class="border-border rounded-card mt-4 border p-1">
-            <SignIn
-              client={loginClient}
-              recoveryClient={recoveryClient}
-              onSuccess={() => void afterSignIn()}
-            />
+            <Suspense
+              fallback={<p class="text-muted-foreground text-body p-4 text-center">Loading…</p>}
+            >
+              <AuthorizeSignIn onSuccess={() => void afterSignIn()} />
+            </Suspense>
           </div>
         </Match>
 
@@ -328,14 +396,12 @@ export function AuthorizePage() {
 function ProfileAvatar(props: { profile: PublicProfile }) {
   return (
     <Avatar class="h-9 w-9">
+      {/* No `loading="lazy"`: the avatar is inside the first viewport on both
+          the picker and the consent screen, so deferring it only costs a round
+          trip. */}
       <Show when={safeAvatarUrl(props.profile.avatarUrl)}>
         {(url) => (
-          <AvatarImage
-            src={url()}
-            alt={props.profile.handle}
-            referrerpolicy="no-referrer"
-            loading="lazy"
-          />
+          <AvatarImage src={url()} alt={props.profile.handle} referrerpolicy="no-referrer" />
         )}
       </Show>
       <AvatarFallback class="text-meta">{profileInitials(props.profile)}</AvatarFallback>
