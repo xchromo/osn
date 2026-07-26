@@ -118,6 +118,7 @@ export function createAuthService(config: AuthConfig) {
     deletePasskey: passkeyManagement.deletePasskey,
     invalidateSession: sessions.invalidateSession,
     resolveSessionByBinding: sessions.resolveSessionByBinding,
+    resolveCallerSession: sessions.resolveCallerSession,
     invalidateAccountSessions: sessions.invalidateAccountSessions,
     invalidateOtherAccountSessions: sessions.invalidateOtherAccountSessions,
     generateRecoveryCodesForAccount: recovery.generateRecoveryCodesForAccount,

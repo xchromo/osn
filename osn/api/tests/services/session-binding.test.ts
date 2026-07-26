@@ -9,7 +9,7 @@ import { makeTestAuthConfig } from "../helpers/auth-config";
 import { createTestLayer } from "../helpers/db";
 
 /**
- * `sid` — the access token's one-way binding to the session it was minted
+ * `osn_sid` — the access token's one-way binding to the session it was minted
  * from. It exists so a Bearer-only caller (cross-origin, cookie-stripping
  * proxy, native client) can still name its OWN session; before it existed
  * those callers looked sessionless and the passkey add/remove paths revoked
@@ -29,7 +29,7 @@ beforeAll(async () => {
   auth = createAuthService(config);
 });
 
-describe("session binding (sid)", () => {
+describe("session binding (osn_sid)", () => {
   it.effect("issueTokens mints a binding that resolves back to that session", () =>
     Effect.gen(function* () {
       const profile = yield* auth.registerProfile("sid-mint@example.com", "sidmint");

@@ -137,7 +137,7 @@ export function createPasskeyManagementModule(
     /**
      * Hashed id of the caller's own session, so H1 invalidation spares it.
      * The route derives it from the HttpOnly cookie, falling back to the
-     * access token's `sid` binding — never from body input (S-H1).
+     * access token's `osn_sid` binding — never from body input (S-H1).
      */
     currentSessionHash: string | null,
     eventMeta?: SessionMeta,
@@ -222,7 +222,7 @@ export function createPasskeyManagementModule(
       } else {
         // S-L3: the caller has no identifiable session at all — the route
         // found neither a cookie nor a live session matching the access
-        // token's `sid` binding. We nuke every session on the account
+        // token's `osn_sid` binding. We nuke every session on the account
         // because there is genuinely no "self" to preserve. This branch is
         // rare and forensically distinct, so log it out-of-band and emit the
         // security-invalidation metric explicitly.

@@ -260,7 +260,7 @@ describe("passkey management routes", () => {
     });
 
     // S-L3: a Bearer-only delete (no session cookie) must still identify the
-    // caller's own session, via the access token's `sid` binding. Before that
+    // caller's own session, via the access token's `osn_sid` binding. Before that
     // fallback existed this branch nuked EVERY session on the account — the
     // caller logged themselves out of every device by removing a passkey.
     it("keeps the caller's session and revokes the others without a cookie", async () => {
@@ -291,7 +291,7 @@ describe("passkey management routes", () => {
       );
       expect(res.status).toBe(200);
 
-      // The caller's session — named only by `sid` — survives.
+      // The caller's session — named only by `osn_sid` — survives.
       await Effect.runPromise(
         svc.verifyRefreshToken(tokens.refreshToken).pipe(Effect.provide(layer)),
       );

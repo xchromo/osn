@@ -131,24 +131,20 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
             // deletion is the strongest available signal.
             await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
             // Identify the caller's own session so the sweep below spares
-            // it. The cookie is the cheap path; when it isn't there (a
-            // cross-origin Bearer call, a proxy that strips cookies, a
-            // native client) fall back to the access token's `sid` binding.
-            // Before that fallback existed, a cookieless — but fully
-            // authenticated — delete took the "no self to preserve" branch
-            // and logged the account out of every device.
+            // it. The cookie is the cheap path, but only when it names a live
+            // row; otherwise (a cross-origin Bearer call, a proxy that strips
+            // cookies, a native client, a stale cookie) fall back to the
+            // access token's `osn_sid` binding. Before that fallback existed,
+            // a cookieless — but fully authenticated — delete took the "no
+            // self to preserve" branch and logged the account out of every
+            // device.
             const cookieToken = readSessionCookie(headers.cookie, cookieConfig);
-            const currentHash =
-              (cookieToken ? auth.hashSessionToken(cookieToken) : null) ??
-              (claims.sessionBinding
-                ? await run(
-                    auth.resolveSessionByBinding(
-                      profile.accountId,
-                      claims.profileId,
-                      claims.sessionBinding,
-                    ),
-                  )
-                : null);
+            const currentHash = await run(
+              auth.resolveCallerSession(profile.accountId, claims.profileId, {
+                cookieSessionHash: cookieToken ? auth.hashSessionToken(cookieToken) : null,
+                sessionBinding: claims.sessionBinding,
+              }),
+            );
             const result = await run(
               auth.deletePasskey(
                 profile.accountId,

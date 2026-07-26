@@ -13,7 +13,7 @@ to preserve" branch and deleted **every** session on the account. Removing or
 adding a passkey logged the user out everywhere, including on the device they
 were using.
 
-Access tokens now carry a `sid` claim: `sha256(session_hash + ":" + profile_id)`
+Access tokens now carry a `osn_sid` claim: `sha256(session_hash + ":" + profile_id)`
 truncated to 128 bits. It is one-way (the session hash is itself a SHA-256 of a
 160-bit random token) and per-profile — sessions are account-scoped and shared
 across profile switches, so a plain session id would have let an observer tie
@@ -25,7 +25,12 @@ secret, no schema change.
 `issueTokens` and `refreshTokens` generate the session token before signing the
 JWT so the access token binds to the session it ships with — on refresh, the
 rotated-in session, not the retired one. `switchProfile` resolves the caller's
-session from the old profile's `sid` and re-derives it for the target profile.
-The two routes read the cookie first and fall back to `sid`; with neither, the
+session from the old profile's `osn_sid` and re-derives it for the target profile.
+
+Routes call one helper, `resolveCallerSession`: the cookie wins when it names a
+session that is still live, otherwise the `osn_sid` binding does. A cookie that
+is merely present no longer counts — a stale one hashes to a value matching no
+row, and passing that on would delete every session, the same failure through a
+different door. With neither a live cookie nor a resolvable binding the
 account-wide revocation stands, so a token minted before this claim existed
 degrades to the old behaviour rather than failing.

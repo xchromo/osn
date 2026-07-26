@@ -85,7 +85,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         // `deriveSessionBinding`) — lets a Bearer-only caller be matched to
         // its own session row without a cookie and without leaking either
         // the session id or the account behind the profile.
-        if (sessionBinding) payload["sid"] = sessionBinding;
+        if (sessionBinding) payload["osn_sid"] = sessionBinding;
         return signJwt(
           payload,
           config.jwtPrivateKey,
@@ -119,7 +119,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     Effect.gen(function* () {
       // Generate opaque session token + store SHA-256 hash in DB. This runs
       // BEFORE the access token is signed: the JWT carries a binding to the
-      // session it was minted from (`sid`).
+      // session it was minted from (`osn_sid`).
       const sessionToken = generateSessionToken();
       const sessionId = hashSessionToken(sessionToken);
       const accessToken = yield* issueAccessToken(
@@ -579,7 +579,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         // Absent on tokens minted before this claim existed, and on any
         // future path that mints one outside a session. Callers must treat
         // null as "session unknown", never as "no session".
-        sessionBinding: typeof payload["sid"] === "string" ? payload["sid"] : null,
+        sessionBinding: typeof payload["osn_sid"] === "string" ? payload["osn_sid"] : null,
       };
     });
 

@@ -225,7 +225,7 @@ export function createAuthRouteContext(deps: AuthRouteDeps) {
         unauthorized: false;
         accountId: string;
         profileId: string;
-        /** `sid` — lets a cookieless caller still name its own session. */
+        /** `osn_sid` — lets a cookieless caller still name its own session. */
         sessionBinding: string | null;
       };
   async function resolvePasskeyEnrollPrincipal(authHeader: string | undefined): Promise<Principal> {

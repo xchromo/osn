@@ -78,7 +78,7 @@ describe("O4 completePasskeyRegistration session invalidation", () => {
       yield* auth.completePasskeyRegistration(
         alice.accountId,
         fakeAttestation(),
-        current.refreshToken,
+        auth.hashSessionToken(current.refreshToken),
       );
 
       // Caller session survives; the other session is revoked (H1).
@@ -89,7 +89,7 @@ describe("O4 completePasskeyRegistration session invalidation", () => {
   );
 
   // The Bearer-only enrolment: no cookie reaches us, so the route resolves
-  // the caller's session from the access token's `sid` binding and hands the
+  // the caller's session from the access token's `osn_sid` binding and hands the
   // hash straight in. That caller must survive H1 just like the cookie one.
   it.effect("cookieless but sid-bound: keeps the caller, revokes other sessions", () =>
     Effect.gen(function* () {
@@ -109,20 +109,14 @@ describe("O4 completePasskeyRegistration session invalidation", () => {
         dave.displayName,
       );
       const claims = yield* auth.verifyAccessToken(current.accessToken);
-      const callerHash = yield* auth.resolveSessionByBinding(
-        dave.accountId,
-        dave.id,
-        claims.sessionBinding!,
-      );
+      // Exactly what the route does on a cookieless call.
+      const callerHash = yield* auth.resolveCallerSession(dave.accountId, dave.id, {
+        cookieSessionHash: null,
+        sessionBinding: claims.sessionBinding,
+      });
 
       yield* auth.beginPasskeyRegistration(dave.accountId);
-      yield* auth.completePasskeyRegistration(
-        dave.accountId,
-        fakeAttestation(),
-        null,
-        undefined,
-        callerHash,
-      );
+      yield* auth.completePasskeyRegistration(dave.accountId, fakeAttestation(), callerHash);
 
       yield* auth.verifyRefreshToken(current.refreshToken);
       const err = yield* Effect.flip(auth.verifyRefreshToken(other.refreshToken));
