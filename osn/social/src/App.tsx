@@ -1,6 +1,6 @@
 import { AuthProvider } from "@osn/client/solid";
-import { Route, Router } from "@solidjs/router";
-import { lazy } from "solid-js";
+import { Route, Router, useLocation } from "@solidjs/router";
+import { lazy, Show } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import { Sidebar } from "./components/Sidebar";
@@ -23,11 +23,24 @@ const OrgDetailPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
+const AuthorizePage = lazy(() =>
+  import("./pages/AuthorizePage").then((m) => ({ default: m.AuthorizePage })),
+);
+
+/**
+ * The consent screen runs bare: no navigation out of the flow, nothing to
+ * click but the decision itself.
+ */
+const BARE_ROUTES = ["/authorize"];
 
 function Layout(props: { children?: import("solid-js").JSX.Element }) {
+  const location = useLocation();
+  const bare = () => BARE_ROUTES.includes(location.pathname);
   return (
     <div class="flex h-screen overflow-hidden">
-      <Sidebar />
+      <Show when={!bare()}>
+        <Sidebar />
+      </Show>
       <div class="flex flex-1 flex-col overflow-y-auto">{props.children}</div>
       <Toaster position="bottom-right" />
     </div>
@@ -44,6 +57,7 @@ export default function App() {
         <Route path="/organisations" component={OrganisationsPage} />
         <Route path="/organisations/:id" component={OrgDetailPage} />
         <Route path="/settings" component={SettingsPage} />
+        <Route path="/authorize" component={AuthorizePage} />
       </Router>
     </AuthProvider>
   );
