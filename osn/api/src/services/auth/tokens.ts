@@ -5,11 +5,11 @@
 
 import { sessions } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
+import { rowsChanged } from "@shared/db-utils";
 import { desc, eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 
 import type { RotatedHashRecord } from "../../lib/rotated-session-store";
-import { rowsChanged } from "../../lib/rows-changed";
 import {
   metricRotatedStoreDuration,
   metricRotatedStoreOp,

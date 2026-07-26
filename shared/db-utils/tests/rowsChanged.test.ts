@@ -1,13 +1,13 @@
 /**
  * `rowsChanged` normalises the rows-affected field across every driver this
- * API runs on. The bug it exists to prevent: tests run on bun:sqlite
+ * repo runs on. The bug it exists to prevent: tests run on bun:sqlite
  * (`{ changes }`) while production runs on D1 (`{ meta: { changes } }`), so a
  * naive `result.changes` read is green locally and 0 everywhere in production.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { rowsChanged } from "../../src/lib/rows-changed";
+import { rowsChanged } from "../src/index";
 
 describe("rowsChanged", () => {
   it("reads bun:sqlite / better-sqlite3 `{ changes }`", () => {

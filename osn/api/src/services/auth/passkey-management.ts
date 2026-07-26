@@ -7,12 +7,11 @@
 
 import { passkeys, securityEvents, sessions } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { commitBatch } from "@shared/db-utils";
+import { commitBatch, rowsChanged } from "@shared/db-utils";
 import { EmailService } from "@shared/email";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 
-import { rowsChanged } from "../../lib/rows-changed";
 import {
   metricSecurityEventRecorded,
   metricSessionSecurityInvalidation,

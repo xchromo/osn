@@ -1,5 +1,6 @@
 ---
 "@osn/api": patch
+"@shared/db-utils": minor
 ---
 
 Fix two compare-and-swap gates that read the wrong rows-affected field on D1 —
@@ -21,6 +22,9 @@ D1, so the gates were green in CI and read 0 for every write in production.
 - **Passkey rename** (`services/auth/passkey-management.ts`). Same read, so a
   rename that updated the row still answered "Passkey not found".
 
-Both now go through `lib/rows-changed.ts`, which knows all three shapes.
-Regression tests drive each gate through a driver proxy that reports counts
-D1-style, and unit tests cover every shape plus junk input.
+Both now go through `rowsChanged` from `@shared/db-utils`, which knows all
+three shapes. `cire/api` carried three copies of the same helper — one per
+service — so the fix lands in the one place every package already reaches for
+Drizzle helpers, and the copies are gone. Regression tests drive each osn gate
+through a driver proxy that reports counts D1-style, and unit tests in
+`@shared/db-utils` cover every shape plus junk input.
