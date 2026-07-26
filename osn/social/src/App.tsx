@@ -31,11 +31,11 @@ const AuthorizePage = lazy(() =>
  * The consent screen runs bare: no navigation out of the flow, nothing to
  * click but the decision itself.
  */
-const BARE_ROUTES = ["/authorize"];
+const BARE_ROUTES = new Set(["/authorize"]);
 
 function Layout(props: { children?: import("solid-js").JSX.Element }) {
   const location = useLocation();
-  const bare = () => BARE_ROUTES.includes(location.pathname);
+  const bare = () => BARE_ROUTES.has(location.pathname);
   return (
     <div class="flex h-screen overflow-hidden">
       <Show when={!bare()}>
