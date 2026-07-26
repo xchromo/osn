@@ -228,10 +228,19 @@ crons = ["0 */6 * * *"]
 OSN_ENV = "production"
 OSN_RP_ID = "cireweddings.com"
 OSN_RP_NAME = "OSN"
-OSN_ORIGIN = "https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com"
+OSN_ORIGIN = "https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com,https://me.cireweddings.com"
 OSN_ISSUER_URL = "https://id.cireweddings.com"
-OSN_CORS_ORIGIN = "https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com"
+OSN_CORS_ORIGIN = "https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com,https://me.cireweddings.com"
 OSN_EMAIL_FROM = "hello@cireweddings.com"
+# Where a parked OIDC request sends the browser. `@osn/social` serves the
+# consent screen from me.cireweddings.com — same registrable domain as this
+# Worker, so the session cookie and the per-request binding cookie both flow on
+# its credentialed fetches back here. Unset, the provider would fall back to
+# `/authorize` on the FIRST OSN_ORIGIN (the organiser portal), which serves no
+# such route. me.cireweddings.com is therefore in both allowlists above: in
+# OSN_ORIGIN because the consent screen runs the passkey ceremony, and in
+# OSN_CORS_ORIGIN because every call it makes is cross-origin (same-site).
+OSN_AUTHORIZE_UI_URL = "https://me.cireweddings.com/authorize"
 # Email is sent via Resend (RESEND_API_KEY secret, §1.1) — confirmed delivering
 # from hello@cireweddings.com on 2026-06-18. Email is REQUIRED in prod: if
 # RESEND_API_KEY is ever absent osn-api fails closed at startup rather than

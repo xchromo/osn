@@ -28,11 +28,9 @@ cutover, or cire loses sign-in entirely. Read the blockers first.
 
 ### Blocker 1 — the authorize UI ✅ cleared 2026-07-26
 
-The consent screen is built: `/authorize` in `@osn/social`, see
-`[[authorize-ui]]`. It is not yet reachable in production — that is the
-remaining half of blocker 2 (deploy `@osn/social` and set
-`OSN_AUTHORIZE_UI_URL`). The paragraphs below stay because they explain why
-this ordering is not optional.
+The consent screen is built and deployed: `/authorize` in `@osn/social`, see
+`[[authorize-ui]]`. The paragraphs below stay because they explain why this
+ordering is not optional.
 
 This matters because of WebAuthn scoping. A passkey ceremony may only run on
 an origin that is same-site with the RP ID. Once `OSN_RP_ID` becomes
@@ -44,18 +42,20 @@ page that does not exist.
 Flip the RP ID before that page ships and cire has neither mechanism: direct
 ceremonies are illegal, and the redirect flow dead-ends.
 
-### Blocker 2 — `@osn/social` is not deployed
+### Blocker 2 — `@osn/social` is not deployed ✅ cleared 2026-07-26
 
-`deploy.yml` builds Pages projects for `cire-organiser`, `cire-vendor` and
-`cire-landing`. There is no osn/social job. The identity-domain web app —
-the thing that must serve sign-in and `/authorize` on musubi.dev — exists
-only as a dev server on port 1422.
+`deploy.yml` now carries a `deploy-osn-social` job: the `osn-social` Pages
+project, served at `me.cireweddings.com`, with
+`OSN_AUTHORIZE_UI_URL = https://me.cireweddings.com/authorize`. Feature-branch
+previews were moved to a separate `osn-social-preview` project so a push to a
+branch can no longer overwrite what a live hostname serves.
 
-`[[authorize-ui]]` also requires it be served under the **same registrable
-domain as osn-api**, because the session cookie and the per-request OIDC
-binding cookie are host-bound and only flow on same-site fetches with
-`credentials: "include"`. After the move that means it must live on
-`musubi.dev`, not on cireweddings.com.
+`[[authorize-ui]]` requires it be served under the **same registrable domain
+as osn-api**, because the session cookie and the per-request OIDC binding
+cookie are host-bound and only flow on same-site fetches with
+`credentials: "include"`. `me.cireweddings.com` satisfies that today. After
+the move it must live on `musubi.dev` instead — that hostname change is part
+of PR D, not a separate blocker.
 
 ### Why partial moves do not help
 
@@ -127,13 +127,14 @@ current values unless the whole ladder moves.
 | ″ | `OSN_ISSUER_URL` | `https://id.cireweddings.com` → `https://id.musubi.dev` |
 | ″ | `OSN_ORIGIN` | cire origins → musubi.dev ceremony origins |
 | ″ | `OSN_CORS_ORIGIN` | cire origins → musubi.dev surfaces |
-| ″ | `OSN_AUTHORIZE_UI_URL` | unset → the deployed `/authorize` page |
+| ″ | `OSN_AUTHORIZE_UI_URL` | `https://me.cireweddings.com/authorize` → the musubi.dev host |
 | ″ | `OSN_EMAIL_FROM` | `hello@cireweddings.com` → a verified musubi.dev sender |
 | ″ `[[env.production.routes]]` | `pattern` | `id.cireweddings.com` → `id.musubi.dev` |
 | `cire/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_ISSUER_URL` | both hosts (staging + production blocks) |
 | `zap/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_API_URL` | both |
 | `.github/workflows/deploy.yml` | `PUBLIC_OSN_ISSUER_URL` | three occurrences |
 | `.github/workflows/deploy-cire-preview.yml` | `PUBLIC_OSN_ISSUER_URL` | two occurrences |
+| `.github/workflows/deploy.yml` | `VITE_OSN_ISSUER_URL` (`deploy-osn-social`) | one occurrence |
 | `.github/workflows/deploy-osn-social-preview.yml` | `VITE_OSN_ISSUER_URL` | one occurrence |
 | `cire/web/src/lib/security-headers.ts` | `osnIssuer` + CSP `connect-src` | hardcoded — must track the issuer |
 
@@ -148,6 +149,10 @@ Out-of-band, not in the repo:
   verified. Nothing can send from musubi.dev today.
 - **Turnstile.** Add the musubi.dev hostnames to the widget's domain list —
   the verifier is fail-closed once a secret is set (`[[turnstile]]`).
+- **Pages custom domain.** `me.cireweddings.com` must be attached to the
+  `osn-social` Pages project in the dashboard (step 5), and re-pointed at the
+  musubi.dev host in step 7. A Pages custom domain is a dashboard setting, not
+  a wrangler route — the deploy job cannot create it.
 
 ## Cutover order
 
@@ -157,14 +162,20 @@ Out-of-band, not in the repo:
 3. Add `musubi.dev` to Cloudflare; verify the Resend sender domain.
 4. ✅ Build the `/authorize` page in `@osn/social` per `[[authorize-ui]]`
    (2026-07-26).
-5. Add an osn-social Pages job to `deploy.yml`; deploy to musubi.dev.
+5. ✅ Add an osn-social Pages job to `deploy.yml` (2026-07-26). It deploys to
+   `me.cireweddings.com` first — the domain the cookies already work on — and
+   moves to musubi.dev in step 7. **Dashboard step outstanding:** attach
+   `me.cireweddings.com` to the `osn-social` Pages project, or the job
+   publishes to `osn-social.pages.dev` and `OSN_AUTHORIZE_UI_URL` points at
+   nothing.
 6. Register cire as an OIDC client; convert organiser, vendor and web from
    direct `@osn/client` ceremonies to the redirect flow.
-7. Flip the osn-api vars + route. Redeploy downstream verifiers so cire-api
-   and zap-api pick up the new JWKS URL.
+7. Flip the osn-api vars + route, and the osn-social Pages custom domain.
+   Redeploy downstream verifiers so cire-api and zap-api pick up the new
+   JWKS URL.
 8. Re-enroll passkeys under the new RP ID; regenerate recovery codes.
 
-Steps 5–6 are the real work left. Steps 3 and 7–8 are mechanical.
+Step 6 is the real work left. Steps 3 and 7–8 are mechanical.
 
 ### Do not ship steps 5–7 as one change
 
@@ -173,12 +184,13 @@ flow work at all" from "does it work on a new domain". Debugging both at once
 is what turns a cutover into an outage.
 
 - **A — the consent screen.** Done: `/authorize` in `@osn/social`.
-- **B — deploy `@osn/social` where the cookies already work.** Add the Pages
-  job and serve it from a host under the **current** registrable domain
-  (`me.cireweddings.com`), then set `OSN_AUTHORIZE_UI_URL` to it. The binding
-  and session cookies are host-bound to `id.cireweddings.com` and same-site
-  with that host, so the whole authorize → consent → token round-trip becomes
-  testable today, on the domain that already works.
+- **B — deploy `@osn/social` where the cookies already work.** Done
+  2026-07-26: the `deploy-osn-social` Pages job serves it from
+  `me.cireweddings.com`, a host under the **current** registrable domain, and
+  `OSN_AUTHORIZE_UI_URL` points at it. The binding and session cookies are
+  host-bound to `id.cireweddings.com` and same-site with that host, so the
+  whole authorize → consent → token round-trip is testable today, on the
+  domain that already works.
 - **C — convert cire to the redirect flow.** Register cire as an OIDC client
   and move organiser, vendor and web off direct `@osn/client` passkey
   ceremonies, still on cireweddings.com. This is the change that removes

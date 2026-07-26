@@ -345,6 +345,63 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+  # ── osn/social (Vite SPA → Cloudflare Pages, me.cireweddings.com) ─────────
+  # The identity web app: profile, connections, organisations, settings — and
+  # `/authorize`, the OIDC consent screen osn-api redirects to. It must be
+  # served under the SAME registrable domain as osn-api, because the session
+  # cookie and the per-request OIDC binding cookie are host-bound to
+  # id.cireweddings.com and only ride along on same-site credentialed fetches.
+  # That is why the host is me.cireweddings.com and not a *.pages.dev URL.
+  #
+  # `osn/social/public/_redirects` rewrites every path to index.html (200) so
+  # client-side routes deep-link; `_headers` ships the framing denial the
+  # consent screen needs. Both are static files Pages serves as-is.
+  #
+  # The `osn-social` Pages project must exist in the account before first run,
+  # and me.cireweddings.com is attached to it in the dashboard (a Pages custom
+  # domain, not a wrangler route) — see the runbook.
+  #
+  # Feature-branch previews go to a SEPARATE `osn-social-preview` project
+  # (deploy-osn-social-preview.yml); they must never touch this one, whose
+  # production deployment now serves a real hostname.
+  deploy-osn-social:
+    name: Deploy osn/social (Pages)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install
+
+      # VITE_OSN_ISSUER_URL bakes in at build time. Without it the bundle falls
+      # back to http://localhost:4000 and every call from the deployed app dials
+      # the user's own machine.
+      - name: Build osn/social
+        run: bun run --cwd osn/social build
+        env:
+          VITE_OSN_ISSUER_URL: https://id.cireweddings.com
+
+      - name: Deploy osn/social to Cloudflare Pages
+        run: bunx wrangler pages deploy dist --project-name osn-social --branch main --commit-dirty=true
+        working-directory: osn/social
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
   # ── osn/api (Worker + D1 migrate) ──────────────────────────────────────────
   # osn-api (identity/auth) is a Cloudflare Worker (`main = "src/index.ts"`,
   # `[env.production]` custom-domain route → id.cireweddings.com). It runs on

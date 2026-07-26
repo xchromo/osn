@@ -26,20 +26,25 @@ enforced server-side as well, with test coverage in
 **Built 2026-07-26.** The page lives at `osn/social/src/pages/AuthorizePage.tsx`
 and talks to the provider through `createAuthorizeClient` in
 `osn/client/src/authorize.ts`. Tests: `osn/social/tests/components/AuthorizePage.test.tsx`
-and `osn/client/tests/authorize.test.ts`. The only step left is
-deployment — set `OSN_AUTHORIZE_UI_URL` on osn-api once `@osn/social` is
-served from the identity domain.
+and `osn/client/tests/authorize.test.ts`.
+
+**Deployed 2026-07-26.** `@osn/social` has a Pages job in `deploy.yml` and
+serves `https://me.cireweddings.com`; `OSN_AUTHORIZE_UI_URL` points at it.
 
 ## Where it lives
 
-- **Route:** `/authorize` in `@osn/social` (the identity-domain web app).
+- **Route:** `/authorize` in `@osn/social` (the identity-domain web app),
+  served at `https://me.cireweddings.com/authorize`.
   In production the app must be served under the same registrable domain as
   osn-api (`*.cireweddings.com` today) — the session cookie and the
   per-request binding cookie are both host-bound to `id.cireweddings.com`
-  and flow on same-site fetches with `credentials: "include"`.
-- **Config:** set `OSN_AUTHORIZE_UI_URL` on osn-api once the page deploys
-  (`[env.production].vars`); until then the provider falls back to
-  `/authorize` on the first `OSN_ORIGIN`.
+  and flow on same-site fetches with `credentials: "include"`. `me.` is
+  therefore in `OSN_CORS_ORIGIN` (every call it makes is cross-origin) and
+  in `OSN_ORIGIN` (it runs the passkey ceremony).
+- **Config:** `OSN_AUTHORIZE_UI_URL` on osn-api
+  (`[env.production].vars`). Unset, the provider falls back to `/authorize`
+  on the **first** `OSN_ORIGIN` — the organiser portal, which has no such
+  route — so this one is set, not left to the fallback.
 - The page is a plain top-level document — never an iframe (the provider's
   cookies are `SameSite=Lax`, and framing a consent screen is clickjacking
   bait; ship `frame-ancestors 'none'` in the page's CSP).
@@ -135,11 +140,13 @@ short-circuits consent), so state 4's copy can assume a third party.
 3. ~~Profile picker~~ — done. It only leads when there is a real choice:
    two or more profiles, and either `reason=select_account` or the client
    has never seen any of them. Single-profile accounts never see it.
-4. Set `OSN_AUTHORIZE_UI_URL` in prod vars; smoke: full authorize →
-   consent → token round-trip against a self-registered client
-   (`POST /oidc/clients` makes this testable without an operator).
-   **Still open** — waits on `@osn/social` being served from the identity
-   domain; see [[musubi-identity-migration]].
+4. ~~Set `OSN_AUTHORIZE_UI_URL` in prod vars~~ — done 2026-07-26, along
+   with the `deploy-osn-social` Pages job. Smoke check still open: full
+   authorize → consent → token round-trip against a self-registered client
+   (`POST /oidc/clients` makes this testable without an operator). It needs
+   `me.cireweddings.com` attached to the `osn-social` Pages project in the
+   dashboard first — see [[production-deploy]] §5.4 and
+   [[musubi-identity-migration]].
 
 ### What the build settled
 

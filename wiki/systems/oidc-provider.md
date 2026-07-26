@@ -162,7 +162,7 @@ No step-up on create, deliberately: a freshly minted client is inert until a rea
 | Variable | Required | What happens without it |
 |---|---|---|
 | `OSN_PAIRWISE_SALT` | **Yes, outside local** | osn-api refuses to boot. The check is fail closed and wants 32 bytes or more |
-| `OSN_AUTHORIZE_UI_URL` | No | Falls back to `/authorize` on the web origin |
+| `OSN_AUTHORIZE_UI_URL` | No, but set it | Falls back to `/authorize` on the **first** `OSN_ORIGIN` — the organiser portal in production, which serves no such route. Set in prod: `https://me.cireweddings.com/authorize` |
 | `OSN_ISSUER_URL` | Yes | Already required; it is the `iss` claim and the discovery issuer |
 
 The salt must never change once tokens are live — every pairwise subject would change with it, and every client would see its users as strangers. Treat it as permanent.
@@ -175,4 +175,4 @@ The issuer string is an identifier, not branding. Moving the provider to a prett
 - **`offline_access`** — third parties get no refresh token, so a long-lived integration must send the user through `/authorize` again.
 - **The apex worker** serving `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. Blocked on the identity domain being bought. That is layers 2 and 3; layer 0 works without it.
 
-The consent screen is built (2026-07-26): `/authorize` in `@osn/social` — see [[authorize-ui]]. It is not reachable in production yet; set `OSN_AUTHORIZE_UI_URL` once `@osn/social` is served from the identity domain.
+The consent screen is built (2026-07-26): `/authorize` in `@osn/social` — see [[authorize-ui]]. `@osn/social` deploys to the `osn-social` Pages project and is served from `https://me.cireweddings.com`, the same registrable domain as the provider, so `OSN_AUTHORIZE_UI_URL = https://me.cireweddings.com/authorize`. It moves with the provider when the issuer does — see [[musubi-identity-migration]].

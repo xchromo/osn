@@ -10,7 +10,7 @@ related:
   - "[[redis]]"
   - "[[email]]"
   - "[[vendors]]"
-last-reviewed: 2026-07-23
+last-reviewed: 2026-07-26
 ---
 
 # Production Deploy Runbook — osn + cire
@@ -83,6 +83,8 @@ marked **TBD** blocks the deploy.
 | `CIRE_API_ARC_PRIVATE_KEY` + `CIRE_API_ARC_KEY_ID` + `OSN_API_URL` | cire-api | needed only if guest account-linking is enabled (section 6.2) |
 | cire/web `PUBLIC_API_URL`, `PUBLIC_SITE_URL` (build-time) | cire/web **SSR Worker** | **DONE — `https://api.cireweddings.com` / `https://invite.cireweddings.com`** (set in `deploy.yml`). No `PUBLIC_WEDDING_SLUG` — wedding resolved from the path. `invite.` is served by the `cire-invites` Worker (custom-domain route), not a Pages project — see §3.3. The apex serves the marketing landing site. |
 | cire/organiser `PUBLIC_CIRE_API_URL`, `PUBLIC_OSN_ISSUER_URL`, `PUBLIC_CIRE_WEB_URL` (build-time) | cire/organiser Pages | **DONE — `https://api.cireweddings.com` / `https://id.cireweddings.com` / `https://invite.cireweddings.com`** (set in `deploy.yml`) |
+| osn/social `VITE_OSN_ISSUER_URL` (build-time) | osn/social Pages (`osn-social`) | **DONE — `https://id.cireweddings.com`** (set in `deploy.yml`, job `deploy-osn-social`) |
+| `OSN_AUTHORIZE_UI_URL` (OIDC consent screen) | osn-api wrangler.toml | **DONE — `https://me.cireweddings.com/authorize`**. Needs the Pages custom domain attached (§5.4) to resolve |
 
 ---
 
@@ -320,11 +322,11 @@ bunx wrangler secret put OTEL_EXPORTER_OTLP_HEADERS  --env <dev|staging|producti
 | `OSN_JWT_PUBLIC_KEY` | `wrangler secret put` | **Yes** | base64 ES256 JWK; published at `/.well-known/jwks.json`. §1.2 |
 | `OSN_SESSION_IP_PEPPER` | `wrangler secret put` | **Yes** | ≥32 bytes or throws. §1.3 |
 | `OSN_PAIRWISE_SALT` | **Preferred: the `Set OSN_PAIRWISE_SALT` GitHub workflow** (`.github/workflows/set-osn-pairwise-salt.yml`, `workflow_dispatch`, production environment) — idempotent, refuses to rotate, never prints the value. Manual `wrangler secret put` remains for non-prod envs. | **Yes** | ≥32 bytes or throws (`build-deps.ts`). HMAC key behind every OIDC pairwise `sub`. **Never rotate it** once clients hold tokens — every subject changes and every client sees its users as strangers. The workflow enforces this: it exits without touching an existing secret. [[oidc-provider]] |
-| `OSN_AUTHORIZE_UI_URL` | `[env.<env>.vars]` | Optional | Absolute URL of the OIDC consent screen. Unset ⇒ `/authorize` on the first `OSN_ORIGIN`. Set it once the screen has a home. [[oidc-provider]] |
+| `OSN_AUTHORIZE_UI_URL` | `[env.<env>.vars]` | Optional, but **set it** | Absolute URL of the OIDC consent screen. Prod = **`https://me.cireweddings.com/authorize`** (`@osn/social` on the `osn-social` Pages project). Unset ⇒ `/authorize` on the **first** `OSN_ORIGIN` — the organiser portal, which serves no such route, so every parked request dead-ends. [[oidc-provider]], [[authorize-ui]] |
 | `OSN_RP_ID` | `[env.<env>.vars]` | **Yes** | WebAuthn RP ID — must be a **registrable domain**. Prod = **`cireweddings.com`** (the registrable apex shared by every `*.cireweddings.com` passkey surface). Prod passkeys are now UNBLOCKED. |
-| `OSN_ORIGIN` | `[env.<env>.vars]` | **Yes** | Comma-sep accepted WebAuthn origins; prod **https** origins. Prod = **`https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com`** (organiser portal, vendor portal, and the guest site's account-linking island). |
+| `OSN_ORIGIN` | `[env.<env>.vars]` | **Yes** | Comma-sep accepted WebAuthn origins; prod **https** origins. Prod = **`https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com,https://me.cireweddings.com`** (organiser portal, vendor portal, the guest site's account-linking island, and the identity app — `me.` runs the passkey ceremony on the consent screen). |
 | `OSN_ISSUER_URL` | `[env.<env>.vars]` | **Yes** | Public https base URL of osn-api → JWT `iss`; must match what cire verifies. Prod = **`https://id.cireweddings.com`** (custom-domain route in `wrangler.toml` `[env.production]`). |
-| `OSN_CORS_ORIGIN` | `[env.<env>.vars]` | **Yes** | Comma-sep prod app origins. In a secure env an empty list **throws** at `assertCorsOriginsConfigured` (`lib/cors-config.ts`) — Origin/CSRF guard is mandatory. Prod = **`https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com`** (organiser + vendor portals, and the guest site's optional account-linking island). |
+| `OSN_CORS_ORIGIN` | `[env.<env>.vars]` | **Yes** | Comma-sep prod app origins. In a secure env an empty list **throws** at `assertCorsOriginsConfigured` (`lib/cors-config.ts`) — Origin/CSRF guard is mandatory. Prod = **`https://host.cireweddings.com,https://vendor.cireweddings.com,https://invite.cireweddings.com,https://me.cireweddings.com`** (organiser + vendor portals, the guest site's optional account-linking island, and the identity app — every call the consent screen makes to `id.` is cross-origin). |
 | `RESEND_API_KEY` | `wrangler secret put` | **Yes\* (live transport)** | Resend API key (bearer). **Set on production.** When set in non-local → `ResendEmailLive` (POST `https://api.resend.com/emails`); **wins over the Cloudflare creds and the opt-in**. Fail-closed at startup if no provider is set in non-local — **unless `OSN_EMAIL_OPTIONAL` is set** (then degraded no-op). §1.1 |
 | `CLOUDFLARE_ACCOUNT_ID` | `wrangler secret put` | Optional / **legacy** | Cloudflare-email fallback transport (paid Workers plan). Used only if `RESEND_API_KEY` is absent. §1.1 |
 | `CLOUDFLARE_EMAIL_API_TOKEN` | `wrangler secret put` | Optional / **legacy** | Cloudflare-email fallback bearer token. Same role as `CLOUDFLARE_ACCOUNT_ID`. §1.1 |
@@ -412,6 +414,7 @@ build outside CI, export these before `bun run --cwd <site> build`.
 | `PUBLIC_CIRE_API_URL` | cire/organiser | **Yes** | `https://api.cireweddings.com` | cire-api prod origin (`cire/organiser/src/lib/osn.ts`; `PUBLIC_API_URL` honoured as legacy fallback). |
 | `PUBLIC_OSN_ISSUER_URL` | cire/organiser | **Yes** | `https://id.cireweddings.com` | osn-api prod origin for organiser passkey sign-in (`osn.ts`, dev default `http://localhost:4000`). Must equal osn-api's `OSN_ISSUER_URL`. |
 | `PUBLIC_CIRE_WEB_URL` | cire/organiser | Recommended | `https://invite.cireweddings.com` | Guest site URL used in organiser preview links (`osn.ts`). |
+| `VITE_OSN_ISSUER_URL` | osn/social | **Yes** | `https://id.cireweddings.com` | osn-api prod origin for the identity app **and** the `/authorize` consent screen (`osn/social/src/lib/auth.ts`, dev default `http://localhost:4000`). A Vite SPA, so this bakes into the bundle: unset, the deployed app dials the visitor's own localhost. Set in `deploy.yml` (`deploy-osn-social`) and in `deploy-osn-social-preview.yml`. |
 | `PUBLIC_TURNSTILE_SITEKEY` | cire/web **and** cire/organiser | Optional (key-optional) | _(unset)_ | Cloudflare Turnstile **sitekey** (public — safe to embed in client HTML). When set, the guest claim + RSVP forms (cire/web) and the organiser SignIn + Register forms (cire/organiser, via `@osn/ui`) render the Turnstile challenge and gate submit on it; when unset/blank no widget renders and no token is sent (a pure enhancement). Wired in the `deploy-cire-web` / `deploy-cire-organiser` / `deploy-cire-vendor` build steps as `${{ vars.PUBLIC_TURNSTILE_SITEKEY }}`, and the repo **Variable** is set (#160), so the widget renders. The matching `TURNSTILE_SECRET_KEY` secret decides whether the gate bites; it must be set on the cire-api Worker (claim/rsvp) and the osn-api Worker (register/login), and it is **unset on cire-api** today (§3.2). |
 
 ### 3.4 Create the Cloudflare Turnstile widget (one-time, gates Turnstile on) 🔑
@@ -634,13 +637,21 @@ issues the DNS records and certs automatically once you attach them.
    - `cire-landing` (marketing site) → add the apex **`cireweddings.com`**.
    - `cire-organiser` (organiser portal) → add **`host.cireweddings.com`**.
    - `cire-vendor` (vendor portal) → add **`vendor.cireweddings.com`** (§8.2).
+   - `osn-social` (identity app + OIDC consent screen) → add **`me.cireweddings.com`**.
+     Not optional: `OSN_AUTHORIZE_UI_URL` points at `https://me.cireweddings.com/authorize`,
+     and until the domain is attached that host resolves to nothing while the app sits on
+     `osn-social.pages.dev` — where the `__Host-` session and binding cookies would not
+     reach it anyway. Leave the separate `osn-social-preview` project on its
+     `*.pages.dev` URL; it serves feature branches and must never take a real hostname.
    Cloudflare adds the CNAME/records in the in-account zone and issues the cert. After the
    apex is attached to Pages, confirm it does not collide with the email/DNS records from
    §1.1 (SPF/DKIM/DMARC are TXT records, the apex Pages target is a separate record type —
    they coexist).
-3. **Re-check the allowlists** once the domains resolve: the live guest, organiser and
-   vendor origins must exactly match cire-api `WEB_ORIGIN` and osn-api `OSN_CORS_ORIGIN` /
-   `OSN_ORIGIN`. A trailing-slash or scheme mismatch fails the Origin guard.
+3. **Re-check the allowlists** once the domains resolve: the live guest, organiser,
+   vendor and identity origins must exactly match cire-api `WEB_ORIGIN` and osn-api
+   `OSN_CORS_ORIGIN` / `OSN_ORIGIN` (`me.cireweddings.com` is in both osn-api lists —
+   it makes cross-origin calls *and* runs passkey ceremonies). A trailing-slash or
+   scheme mismatch fails the Origin guard.
 
 ---
 

@@ -8,6 +8,9 @@ packages:
 related:
   - "[[osn-core]]"
   - "[[authorize-ui]]"
+  - "[[oidc-provider]]"
+  - "[[production-deploy]]"
+  - "[[musubi-identity-migration]]"
   - "[[social-graph]]"
   - "[[identity-model]]"
   - "[[passkey-primary]]"
@@ -65,6 +68,38 @@ Environment variables (all prefixed `VITE_`):
 
 - `VITE_OSN_ISSUER_URL` — defaults to `http://localhost:4000`
 - `VITE_OSN_CLIENT_ID` — defaults to `social`
+
+## Deployment
+
+Cloudflare Pages, project **`osn-social`**, served at
+**`https://me.cireweddings.com`**. The `deploy-osn-social` job in
+`.github/workflows/deploy.yml` builds and publishes it on every merge to
+`main`.
+
+The host is not cosmetic. `@osn/social` serves `/authorize`, the OIDC consent
+screen, and that page only works under the **same registrable domain as
+osn-api**: the `__Host-osn_session` cookie and the per-request binding cookie
+`__Host-osn_oar_<12hex>` are host-bound to `id.cireweddings.com` and
+`SameSite=Lax`, so they ride along on credentialed fetches from
+`me.cireweddings.com` but not from a `*.pages.dev` host. `me.` is therefore in
+both osn-api allowlists — `OSN_ORIGIN` (it runs passkey ceremonies) and
+`OSN_CORS_ORIGIN` (every call it makes is cross-origin). See
+[[authorize-ui]] and [[oidc-provider]].
+
+- `VITE_OSN_ISSUER_URL` is baked in **at build time** (`https://id.cireweddings.com`
+  in the deploy job). Unset, the bundle dials `http://localhost:4000` and the
+  deployed app calls the visitor's own machine.
+- `public/_redirects` rewrites every path to `index.html` (200) so client-side
+  routes deep-link; `public/_headers` ships the framing denial.
+- The custom domain is attached in the Cloudflare dashboard, not by wrangler —
+  see [[production-deploy]] §5.4.
+- Feature branches deploy to a **separate** `osn-social-preview` project
+  (`deploy-osn-social-preview.yml` → `osn-social-preview.pages.dev`). It must
+  stay separate: that workflow publishes to a project's production deployment,
+  so pointed at `osn-social` it would put branch code on a live hostname.
+
+`musubi.dev` takes over this role at cutover — see
+[[musubi-identity-migration]].
 
 ## Auth
 
