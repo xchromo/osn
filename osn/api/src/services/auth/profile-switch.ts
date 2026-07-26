@@ -11,7 +11,9 @@ import { Effect } from "effect";
 import { withProfileSwitch } from "../../metrics";
 import type { AuthContext } from "./context";
 import { AuthError, DatabaseError } from "./errors";
+import { deriveSessionBinding } from "./helpers";
 import type { ProfilesModule } from "./profiles";
+import type { SessionsModule } from "./sessions";
 import type { TokensModule } from "./tokens";
 import type { PublicProfile } from "./types";
 import { toPublicProfile } from "./types";
@@ -20,10 +22,12 @@ export function createProfileSwitchModule(
   ctx: AuthContext,
   profiles: ProfilesModule,
   tokens: TokensModule,
+  sessions: SessionsModule,
 ) {
   const { accessTokenTtl, profileSwitchCap } = ctx;
   const { findProfileById } = profiles;
   const { issueAccessToken } = tokens;
+  const { resolveSessionByBinding } = sessions;
 
   /**
    * Lists all profiles belonging to the given account.
@@ -60,6 +64,7 @@ export function createProfileSwitchModule(
   const switchProfile = (
     accountId: string,
     targetProfileId: string,
+    caller?: { profileId: string; sessionBinding: string | null },
   ): Effect.Effect<
     { accessToken: string; expiresIn: number; profile: PublicProfile },
     AuthError | DatabaseError,
@@ -82,12 +87,22 @@ export function createProfileSwitchModule(
           new AuthError({ message: "Profile does not belong to this account" }),
         );
       }
+      // The session is account-scoped and unchanged, but its binding is
+      // per-profile: resolve the caller's session from the OLD profile's
+      // `sid`, then re-derive it for the profile being switched to. Drops
+      // to null when the caller's token predates the claim — the new token
+      // is then simply unbound, same as before.
+      const sessionHash =
+        caller?.sessionBinding != null
+          ? yield* resolveSessionByBinding(accountId, caller.profileId, caller.sessionBinding)
+          : null;
       // Issue only a new access token — the session token is account-scoped and unchanged.
       const accessToken = yield* issueAccessToken(
         profile.id,
         profile.email,
         profile.handle,
         profile.displayName,
+        sessionHash ? deriveSessionBinding(sessionHash, profile.id) : null,
       );
       return {
         accessToken,

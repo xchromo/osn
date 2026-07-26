@@ -12,7 +12,7 @@ import { Effect } from "effect";
 import { metricSessionSecurityInvalidation, withSessionOp } from "../../metrics";
 import { MAX_SESSIONS_PER_ACCOUNT } from "./constants";
 import { AuthError, DatabaseError } from "./errors";
-import { hashSessionToken, sessionHandleFromHash } from "./helpers";
+import { deriveSessionBinding, hashSessionToken, sessionHandleFromHash } from "./helpers";
 import type { SessionSummary } from "./types";
 
 export function createSessionsModule() {
@@ -30,6 +30,36 @@ export function createSessionsModule() {
         catch: (cause) => new DatabaseError({ cause }),
       });
     });
+
+  /**
+   * Resolves the caller's own session row from an access token's `sid`
+   * claim. Recomputes the binding over the account's session ids and
+   * returns the matching hash, or null when nothing matches (token minted
+   * before the claim existed, or its session has since been revoked).
+   *
+   * This is the Bearer-token equivalent of reading the session cookie:
+   * routes that must preserve "this session" while revoking the rest no
+   * longer depend on a cookie riding along with the request.
+   */
+  const resolveSessionByBinding = (
+    accountId: string,
+    profileId: string,
+    sessionBinding: string,
+  ): Effect.Effect<string | null, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ id: sessions.id })
+            .from(sessions)
+            .where(eq(sessions.accountId, accountId))
+            .limit(MAX_SESSIONS_PER_ACCOUNT),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const match = rows.find((row) => deriveSessionBinding(row.id, profileId) === sessionBinding);
+      return match?.id ?? null;
+    }).pipe(Effect.withSpan("auth.session.resolve_binding"));
 
   /**
    * Invalidates ALL sessions for an account. Used when a security event
@@ -176,6 +206,7 @@ export function createSessionsModule() {
 
   return {
     invalidateSession,
+    resolveSessionByBinding,
     invalidateAccountSessions,
     invalidateOtherAccountSessions,
     listAccountSessions,

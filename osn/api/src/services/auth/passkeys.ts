@@ -190,6 +190,13 @@ export function createPasskeysModule(
     currentSessionToken: string | null,
     /** IP + UA for the security_events row (S-H1). Best-effort; omitted in tests. */
     eventMeta?: SessionMeta,
+    /**
+     * Already-hashed session id of the caller, used when no cookie reached
+     * us. The route resolves it from the access token's `sid` binding, so a
+     * cookieless Bearer call still has a "self" to preserve. Like
+     * `currentSessionToken` this is server-derived, never body input (S-H1).
+     */
+    callerSessionHash?: string | null,
   ): Effect.Effect<{ passkeyId: string }, AuthError | DatabaseError, Db | EmailService> =>
     Effect.gen(function* () {
       const entry = yield* Effect.promise(() => stores.registrationChallenges.get(accountId));
@@ -289,17 +296,25 @@ export function createPasskeysModule(
       // H1: Invalidate all other sessions on passkey registration.
       // An attacker who stole a session token cannot persist after the
       // legitimate user adds a passkey.
-      if (currentSessionToken) {
-        yield* invalidateOtherAccountSessions(accountId, hashSessionToken(currentSessionToken));
+      //
+      // The caller's own session comes from the cookie when there is one, and
+      // otherwise from the access token's `sid` binding — a cross-origin
+      // Bearer call, a cookie-stripping proxy or a native client all land on
+      // the second path and must NOT be treated as sessionless.
+      const selfSessionHash = currentSessionToken
+        ? hashSessionToken(currentSessionToken)
+        : (callerSessionHash ?? null);
+      if (selfSessionHash) {
+        yield* invalidateOtherAccountSessions(accountId, selfSessionHash);
       } else {
-        // O4: caller has no resolvable session token (cookie stripped by a
-        // proxy, or the registration arrived via the enrollment-token path).
-        // Previously this branch was a silent no-op — H1 invalidation was
-        // skipped entirely, so a stolen session survived the very enrolment
-        // that is supposed to evict it. Mirror deletePasskey's cookieless
-        // branch: nuke EVERY session on the account (there is no "self" to
-        // preserve), log the anomaly out-of-band, and emit the canonical
-        // invalidation metric so the H1 dashboard still records the event.
+        // O4: the caller has no identifiable session at all — no cookie, and
+        // either no `sid` in the access token or one that matches no live
+        // session row. Previously this branch was a silent no-op — H1
+        // invalidation was skipped entirely, so a stolen session survived the
+        // very enrolment that is supposed to evict it. Nuke EVERY session on
+        // the account (there is genuinely no "self" to preserve), log the
+        // anomaly out-of-band, and emit the canonical invalidation metric so
+        // the H1 dashboard still records the event.
         yield* Effect.logWarning("auth.passkey.register: nuking all sessions (no caller session)");
         yield* Effect.tryPromise({
           try: () => db.delete(sessions).where(eq(sessions.accountId, accountId)),

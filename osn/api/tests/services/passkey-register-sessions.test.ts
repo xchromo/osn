@@ -88,6 +88,48 @@ describe("O4 completePasskeyRegistration session invalidation", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // The Bearer-only enrolment: no cookie reaches us, so the route resolves
+  // the caller's session from the access token's `sid` binding and hands the
+  // hash straight in. That caller must survive H1 just like the cookie one.
+  it.effect("cookieless but sid-bound: keeps the caller, revokes other sessions", () =>
+    Effect.gen(function* () {
+      const dave = yield* auth.registerProfile("pkreg-sid@example.com", "pkregsid");
+      const current = yield* auth.issueTokens(
+        dave.id,
+        dave.accountId,
+        dave.email,
+        dave.handle,
+        dave.displayName,
+      );
+      const other = yield* auth.issueTokens(
+        dave.id,
+        dave.accountId,
+        dave.email,
+        dave.handle,
+        dave.displayName,
+      );
+      const claims = yield* auth.verifyAccessToken(current.accessToken);
+      const callerHash = yield* auth.resolveSessionByBinding(
+        dave.accountId,
+        dave.id,
+        claims.sessionBinding!,
+      );
+
+      yield* auth.beginPasskeyRegistration(dave.accountId);
+      yield* auth.completePasskeyRegistration(
+        dave.accountId,
+        fakeAttestation(),
+        null,
+        undefined,
+        callerHash,
+      );
+
+      yield* auth.verifyRefreshToken(current.refreshToken);
+      const err = yield* Effect.flip(auth.verifyRefreshToken(other.refreshToken));
+      expect(err._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("cookieless (no caller session): nukes ALL account sessions (O4)", () =>
     Effect.gen(function* () {
       const bob = yield* auth.registerProfile("pkreg-nuke@example.com", "pkregnuke");

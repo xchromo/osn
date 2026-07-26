@@ -130,8 +130,25 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
             // construction (last-passkey guard), so requiring one for
             // deletion is the strongest available signal.
             await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
+            // Identify the caller's own session so the sweep below spares
+            // it. The cookie is the cheap path; when it isn't there (a
+            // cross-origin Bearer call, a proxy that strips cookies, a
+            // native client) fall back to the access token's `sid` binding.
+            // Before that fallback existed, a cookieless — but fully
+            // authenticated — delete took the "no self to preserve" branch
+            // and logged the account out of every device.
             const cookieToken = readSessionCookie(headers.cookie, cookieConfig);
-            const currentHash = cookieToken ? auth.hashSessionToken(cookieToken) : null;
+            const currentHash =
+              (cookieToken ? auth.hashSessionToken(cookieToken) : null) ??
+              (claims.sessionBinding
+                ? await run(
+                    auth.resolveSessionByBinding(
+                      profile.accountId,
+                      claims.profileId,
+                      claims.sessionBinding,
+                    ),
+                  )
+                : null);
             const result = await run(
               auth.deletePasskey(
                 profile.accountId,

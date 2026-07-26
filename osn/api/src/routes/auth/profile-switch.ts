@@ -67,7 +67,12 @@ export function createProfileSwitchRoutes(ctx: AuthRouteContext) {
               set.status = 401;
               return { error: "unauthorized" };
             }
-            const result = await run(auth.switchProfile(profile.accountId, body.profile_id));
+            const result = await run(
+              auth.switchProfile(profile.accountId, body.profile_id, {
+                profileId: claims.profileId,
+                sessionBinding: claims.sessionBinding,
+              }),
+            );
             return {
               access_token: result.accessToken,
               expires_in: result.expiresIn,

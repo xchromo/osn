@@ -7,12 +7,16 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-07-24
+last-reviewed: 2026-07-26
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## Access-token session binding — `sid` (2026-07-26)
+
+- **S-M1 (passkey-cookieless-revocation)** — **a Bearer-only passkey add or remove signed the caller out of every device.** **Issue:** passkey register (H1) and passkey delete (S-L3) revoke every session on the account except the caller's own, and the caller's own session was read *only* from the HttpOnly session cookie. A request that authenticated with a Bearer access token but carried no cookie — a cross-origin call, a proxy that strips cookies, a native client — looked sessionless, so both paths took the "no self to preserve" branch and deleted **every** session on the account, including the one making the request. **Why:** an availability failure on the two ceremonies a user reaches for *because* they are worried about their account; the account-wide wipe also masks the signal it was meant to raise. **Solution:** access tokens now carry a `sid` claim — `sha256(session_hash + ":" + profile_id)` truncated to 128 bits. It is one-way (the session hash is itself a SHA-256 of a 160-bit random token) and per-profile, because sessions are account-scoped and shared across profile switches, so a plain session id would let an observer tie two profiles of one account together (P6 forbids that). Recognition is by recomputation over the account's session rows, bounded by `MAX_SESSIONS_PER_ACCOUNT`, via the new `resolveSessionByBinding`; no new secret and no schema change. `issueTokens` and `refreshTokens` mint the session token *before* signing so the JWT binds to the session it ships with — on refresh, the rotated-in one, not the retired one. `switchProfile` resolves the caller's session from the old profile's `sid` and re-derives it for the target profile. Both routes read the cookie first and fall back to `sid`. **Rationale:** with neither a cookie nor a resolvable `sid` the account-wide revocation stands, so a token minted before the claim existed degrades to the old behaviour rather than failing. See [[sessions]].
 
 ## OIDC provider deferred-hardening batch (2026-07-24)
 

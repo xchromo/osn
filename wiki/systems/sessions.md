@@ -5,7 +5,7 @@ related:
   - "[[identity-model]]"
   - "[[step-up]]"
   - "[[passkey-primary]]"
-last-reviewed: 2026-07-22
+last-reviewed: 2026-07-26
 ---
 
 # Session introspection + revocation
@@ -92,6 +92,21 @@ The public `id` field is the first 16 hex chars of the session-token SHA-256. Ch
 
 The server re-scans its sessions table by accountId and finds the row whose hash prefix matches. This maps handle → internal hash at request time.
 
+## Access-token session binding (`sid`)
+
+Some endpoints must revoke every session on the account *except the caller's own* — passkey add (H1) and passkey delete (S-L3) both do. Until now the caller's own session was read only from the HttpOnly cookie. A request that authenticated with a Bearer access token but carried no cookie — a cross-origin call, a proxy that strips cookies, a native client — looked sessionless, so both paths took the "there is no self to preserve" branch and deleted **every** session on the account. Removing a passkey signed you out of every device, including the one you were on.
+
+Access tokens now carry `sid`: `sha256(session_hash + ":" + profile_id)` truncated to the first 32 hex chars (128 bits). Two properties matter:
+
+- **One-way.** The session hash is itself a SHA-256 of a 160-bit random token, so `sid` leaks nothing usable; a stolen `sid` cannot be turned back into a session token.
+- **Per-profile.** Sessions are account-scoped and shared across profile switches, so a plain session id in the token would let an observer tie two profiles of one account together — exactly what P6 forbids. Mixing the profile id in means each profile sees a different value for the same session.
+
+Recognition is by recomputation: `resolveSessionByBinding(accountId, profileId, sid)` reads the account's session rows (bounded by `MAX_SESSIONS_PER_ACCOUNT` = 50), derives the binding for each, and returns the hash that matches, else `null`. No new secret, no schema change, no reverse lookup.
+
+`issueTokens` and `refreshTokens` generate the session token before signing the JWT so the token binds to the session it ships with — on refresh, that is the rotated-**in** session, not the one being retired. `switchProfile` resolves the caller's session from the old profile's `sid` and re-derives it for the new profile, so the binding survives a switch.
+
+The route reads the cookie first and falls back to `sid`. Both missing (or a `sid` matching no live row) still means no self to preserve, and the account-wide revocation stands — a token minted before this claim existed degrades to the old behaviour rather than failing.
+
 ## Rotation preserves metadata
 
 Refresh-token rotation (Copenhagen Book C2) deletes the old session row and inserts a new one with a rotated session token. We copy the old row's `ua_label` and `ip_hash` onto the new row so Settings continues to show the same "Firefox on macOS" entry instead of flipping to a new device. The `last_used_at` timestamp is set to the rotation moment.
@@ -122,7 +137,7 @@ Failure modes fail **open**: `check` returns `null` on Redis error (so an outage
 ## Observability
 
 - `osn.auth.session.operations{action, result}` — one per `list` / `revoke` / `revoke_all` call
-- Spans: `auth.session.list`, `auth.session.revoke`, `auth.session.revoke_all`
+- Spans: `auth.session.list`, `auth.session.revoke`, `auth.session.revoke_all`, `auth.session.resolve_binding` (the `sid` lookup)
 - `SecurityInvalidationTrigger` union extended with `session_revoke`, `session_revoke_all`, and `passkey_delete` so the H1 dashboard picks up user-initiated revocations alongside passkey-register, passkey-delete, recovery-code, and email-change triggers
 - `osn.auth.session.rotated_store.operations{action, result, backend}` — counter for every rotated-session store call. `action` ∈ `track` / `check` / `revoke_family`; `result` ∈ `ok` / `hit` / `miss` / `error`; `backend` ∈ `memory` / `redis`. Error rate by backend is the primary Redis-health signal for the reuse detector.
 - `osn.auth.session.reuse_detected` / `osn.auth.session.family_revoked` — genuine C2 reuse caught (replay outside the grace window) and the resulting whole-family revocations. A spike is a real security signal (token theft) — distinct from the benign metric below.
