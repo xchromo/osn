@@ -12,7 +12,7 @@ related:
   - "[[passkey-primary]]"
   - "[[sessions]]"
   - "[[musubi-identity-migration]]"
-last-reviewed: 2026-07-26
+last-reviewed: 2026-07-27
 ---
 
 # Authorize UI — the OIDC consent screen
@@ -28,23 +28,26 @@ and talks to the provider through `createAuthorizeClient` in
 `osn/client/src/authorize.ts`. Tests: `osn/social/tests/components/AuthorizePage.test.tsx`
 and `osn/client/tests/authorize.test.ts`.
 
-**Deployed 2026-07-26.** `@osn/social` has a Pages job in `deploy.yml` and
-serves `https://me.cireweddings.com`; `OSN_AUTHORIZE_UI_URL` points at it.
+**Deployed 2026-07-26**, on `me.cireweddings.com` at first. **Moved to the
+`musubi.dev` apex 2026-07-27** with the rest of identity — see
+[[musubi-identity-migration]]. `@osn/social` has a Pages job in `deploy.yml`;
+`OSN_AUTHORIZE_UI_URL` points at it.
 
 ## Where it lives
 
 - **Route:** `/authorize` in `@osn/social` (the identity-domain web app),
-  served at `https://me.cireweddings.com/authorize`.
+  served at `https://musubi.dev/authorize`.
   In production the app must be served under the same registrable domain as
-  osn-api (`*.cireweddings.com` today) — the session cookie and the
-  per-request binding cookie are both host-bound to `id.cireweddings.com`
-  and flow on same-site fetches with `credentials: "include"`. `me.` is
-  therefore in `OSN_CORS_ORIGIN` (every call it makes is cross-origin) and
-  in `OSN_ORIGIN` (it runs the passkey ceremony).
+  osn-api (`musubi.dev`) — the session cookie and the per-request binding
+  cookie are both host-bound to `id.musubi.dev` and flow on same-site fetches
+  with `credentials: "include"`. The apex is therefore in `OSN_CORS_ORIGIN`
+  (every call it makes is cross-origin) and in `OSN_ORIGIN` (it runs the
+  passkey ceremony). It is also the WebAuthn RP ID, which is what makes that
+  ceremony legal at all.
 - **Config:** `OSN_AUTHORIZE_UI_URL` on osn-api
   (`[env.production].vars`). Unset, the provider falls back to `/authorize`
-  on the **first** `OSN_ORIGIN` — the organiser portal, which has no such
-  route — so this one is set, not left to the fallback.
+  on the **first** `OSN_ORIGIN`. That happens to be the right host now, but
+  the fallback silently follows list order, so this one is set explicitly.
 - The page is a plain top-level document — never an iframe (the provider's
   cookies are `SameSite=Lax`, and framing a consent screen is clickjacking
   bait; ship `frame-ancestors 'none'` in the page's CSP).
@@ -141,10 +144,11 @@ short-circuits consent), so state 4's copy can assume a third party.
    two or more profiles, and either `reason=select_account` or the client
    has never seen any of them. Single-profile accounts never see it.
 4. ~~Set `OSN_AUTHORIZE_UI_URL` in prod vars~~ — done 2026-07-26, along
-   with the `deploy-osn-social` Pages job. Smoke check still open: full
+   with the `deploy-osn-social` Pages job; re-pointed at
+   `https://musubi.dev/authorize` on 2026-07-27. Smoke check still open: full
    authorize → consent → token round-trip against a self-registered client
    (`POST /oidc/clients` makes this testable without an operator). It needs
-   `me.cireweddings.com` attached to the `osn-social` Pages project in the
+   the apex `musubi.dev` attached to the `osn-social` Pages project in the
    dashboard first — see [[production-deploy]] §5.4 and
    [[musubi-identity-migration]].
 

@@ -16,7 +16,7 @@ packages:
   - "@cire/web"
   - "@cire/organiser"
 finding-ids: []
-last-reviewed: 2026-07-22
+last-reviewed: 2026-07-27
 ---
 
 # Turnstile bot protection
@@ -90,8 +90,10 @@ limiter keys on — see [[rate-limiting]].
 | `PUBLIC_TURNSTILE_SITEKEY` | cire/web + cire/organiser build var (`import.meta.env`, statically inlined) | Public sitekey, key-optional | Client half. Set ⇒ the widget renders + a token rides in the submit body. Unset/blank ⇒ no widget, no token sent. |
 
 **Same widget for both backends.** One sitekey + one secret; the widget's
-domains cover `cireweddings.com` (guest) and `app.cireweddings.com` (organiser),
-and osn-api lives on `id.cireweddings.com`.
+domains cover `cireweddings.com` (guest) and `app.cireweddings.com` (organiser).
+osn-api moved to its own zone on 2026-07-27 and now lives on `id.musubi.dev`,
+with the identity app on the `musubi.dev` apex — see
+[[musubi-identity-migration]].
 
 > **Widget allowed-hostnames must include every form origin.** Turnstile only
 > issues a token on a hostname listed in the widget's **Domains** (Cloudflare
@@ -100,7 +102,11 @@ and osn-api lives on `id.cireweddings.com`.
 > calls back with a token, and the gated form's submit stays disabled — the
 > `@osn/ui` widget surfaces this as "Couldn't load the verification challenge",
 > not a silent hang. Add **`cireweddings.com`, `app.cireweddings.com`,
-> `id.cireweddings.com`** to the widget's domain list.
+> `musubi.dev`, `id.musubi.dev`** to the widget's domain list. The two
+> musubi.dev entries are a **dashboard step** left over from the identity move:
+> the wrangler API token has no `challenge-widgets.write` scope, so the widget's
+> domain list cannot be edited from CI. Until they are added, any Turnstile-gated
+> form served from the identity domain fires `error-callback` (`110200`).
 
 ## Client widget: single-use tokens must be reset after each submit
 

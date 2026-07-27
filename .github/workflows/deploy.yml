@@ -171,7 +171,7 @@ jobs:
           # OSN identity issuer for the guest "Link my Pulse account" island.
           # Without it the bundle falls back to the dev default
           # (http://localhost:4000) and the linking flow dials localhost in prod.
-          PUBLIC_OSN_ISSUER_URL: https://id.cireweddings.com
+          PUBLIC_OSN_ISSUER_URL: https://id.musubi.dev
           PUBLIC_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
           # Google Maps Embed API key (public, referrer-restricted to *.cireweddings.com).
           # Present ⇒ real Embed iframe; absent ⇒ CSS-card fallback (key-optional).
@@ -237,7 +237,7 @@ jobs:
         run: bun run --cwd cire/organiser build
         env:
           PUBLIC_CIRE_API_URL: https://api.cireweddings.com
-          PUBLIC_OSN_ISSUER_URL: https://id.cireweddings.com
+          PUBLIC_OSN_ISSUER_URL: https://id.musubi.dev
           # Domain reshuffle 2026-07-16: the guest site (this is the organiser's
           # "preview / view live invite" link) now lives on `invite.`.
           PUBLIC_CIRE_WEB_URL: https://invite.cireweddings.com
@@ -285,7 +285,7 @@ jobs:
         run: bun run --cwd cire/vendor build
         env:
           PUBLIC_CIRE_API_URL: https://api.cireweddings.com
-          PUBLIC_OSN_ISSUER_URL: https://id.cireweddings.com
+          PUBLIC_OSN_ISSUER_URL: https://id.musubi.dev
           PUBLIC_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
 
       - name: Deploy cire/vendor to Cloudflare Pages
@@ -345,21 +345,24 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-  # ── osn/social (Vite SPA → Cloudflare Pages, me.cireweddings.com) ─────────
+  # ── osn/social (Vite SPA → Cloudflare Pages, musubi.dev) ──────────────────
   # The identity web app: profile, connections, organisations, settings — and
   # `/authorize`, the OIDC consent screen osn-api redirects to. It must be
   # served under the SAME registrable domain as osn-api, because the session
   # cookie and the per-request OIDC binding cookie are host-bound to
-  # id.cireweddings.com and only ride along on same-site credentialed fetches.
-  # That is why the host is me.cireweddings.com and not a *.pages.dev URL.
+  # id.musubi.dev and only ride along on same-site credentialed fetches. That is
+  # why the host is the musubi.dev apex and not a *.pages.dev URL.
+  #
+  # The apex is also the WebAuthn RP ID (`OSN_RP_ID = musubi.dev`), so this app
+  # is the one surface that can run a passkey ceremony.
   #
   # `osn/social/public/_redirects` rewrites every path to index.html (200) so
   # client-side routes deep-link; `_headers` ships the framing denial the
   # consent screen needs. Both are static files Pages serves as-is.
   #
   # The `osn-social` Pages project must exist in the account before first run,
-  # and me.cireweddings.com is attached to it in the dashboard (a Pages custom
-  # domain, not a wrangler route) — see the runbook.
+  # and musubi.dev is attached to it in the dashboard (a Pages custom domain,
+  # not a wrangler route) — see the runbook.
   #
   # Feature-branch previews go to a SEPARATE `osn-social-preview` project
   # (deploy-osn-social-preview.yml); they must never touch this one, whose
@@ -393,11 +396,11 @@ jobs:
       - name: Build osn/social
         run: bun run --cwd osn/social build
         env:
-          VITE_OSN_ISSUER_URL: https://id.cireweddings.com
+          VITE_OSN_ISSUER_URL: https://id.musubi.dev
 
       # Idempotent: creates the project on the first run, no-ops (|| true) after.
       # `pages deploy` against a project that does not exist fails outright in a
-      # non-interactive shell. The custom domain (me.cireweddings.com) is still a
+      # non-interactive shell. The custom domain (musubi.dev) is still a
       # dashboard step — wrangler cannot attach one.
       - name: Ensure the osn-social Pages project exists
         run: bunx wrangler pages project create osn-social --production-branch main || true
@@ -415,7 +418,7 @@ jobs:
 
   # ── osn/api (Worker + D1 migrate) ──────────────────────────────────────────
   # osn-api (identity/auth) is a Cloudflare Worker (`main = "src/index.ts"`,
-  # `[env.production]` custom-domain route → id.cireweddings.com). It runs on
+  # `[env.production]` custom-domain route → id.musubi.dev). It runs on
   # workerd with Upstash + native Workers rate-limiters — the old ioredis gate
   # that kept it out of CI is long resolved (it's been a deployed Worker since the
   # 2026-06 cutover), so it now deploys here alongside cire-api instead of by hand.
