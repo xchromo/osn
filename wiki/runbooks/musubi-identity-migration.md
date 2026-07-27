@@ -74,8 +74,10 @@ that hostname**: the 2026-07-27 decision to go straight to musubi.social landed
 before the Pages custom domain was attached, so the job now targets the
 **`musubi.social` apex** with
 `OSN_AUTHORIZE_UI_URL = https://musubi.social/authorize`. Feature-branch previews
-live in a separate `osn-social-preview` project so a push to a branch can never
-overwrite what a live hostname serves.
+lived in a separate `osn-social-preview` project so a push to a branch could never
+overwrite what a live hostname serves; that workflow was **removed** on
+2026-07-27, since a `*.pages.dev` preview can run neither a passkey ceremony nor
+an OIDC round-trip (see [[social]]).
 
 `[[authorize-ui]]` requires it be served under the **same registrable domain
 as osn-api**, because the session cookie and the per-request OIDC binding
@@ -166,7 +168,7 @@ ladder did not move.
 | `.github/workflows/deploy.yml` | `PUBLIC_OSN_ISSUER_URL` | three occurrences — then **deleted** the same day by the OIDC swap. The cire frontends no longer call the issuer at all: sign-in is a top-level redirect to cire-api, which runs the code exchange server-side. Two of the three became `PUBLIC_OSN_ACCOUNT_URL=https://musubi.social` (organiser, vendor — "manage your account" links); the guest build lost its issuer var outright. See [[cire-auth]]. |
 | `.github/workflows/deploy-cire-preview.yml` | `PUBLIC_OSN_ISSUER_URL` | two occurrences — same story, same day: one became `PUBLIC_OSN_ACCOUNT_URL`, one went away |
 | `.github/workflows/deploy.yml` | `VITE_OSN_ISSUER_URL` (`deploy-osn-social`) | one occurrence |
-| `.github/workflows/deploy-osn-social-preview.yml` | `VITE_OSN_ISSUER_URL` | one occurrence |
+| `.github/workflows/deploy-osn-social-preview.yml` | `VITE_OSN_ISSUER_URL` | one occurrence — **file deleted 2026-07-27**, the preview is gone |
 | `cire/web/src/lib/security-headers.ts` | `osnIssuer` + CSP `connect-src` | hardcoded — must track the issuer |
 
 Out-of-band, not in the repo:

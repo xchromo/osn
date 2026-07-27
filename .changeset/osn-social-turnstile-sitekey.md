@@ -23,7 +23,7 @@ token was sent.
   `turnstileEnabled()` sees one shape.
 - Threaded into all three ceremony call sites: the sidebar's `SignIn` and
   `Register` dialogs, and the `/authorize` consent screen's sign-in island.
-- `deploy.yml` and `deploy-osn-social-preview.yml` pass
+- `deploy.yml`'s `deploy-osn-social` job passes
   `VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}` — the same
   widget and repo Variable as the cire builds; the prefix differs only because
   Vite exposes `VITE_*` where Astro exposes `PUBLIC_*`.
@@ -32,7 +32,13 @@ token was sent.
 Guarded by `tests/components/turnstile-wiring.test.tsx`, which fails if any
 ceremony call site drops the prop.
 
-Note for preview deploys: `osn-social-preview.pages.dev` must be added to the
-widget's Domains list in the Cloudflare dashboard, or its widget error-callbacks
-(110200) and preview sign-in stays blocked. Production `musubi.social` is already
-on that list.
+No dashboard step is needed: `musubi.social` is already on the widget's Domains
+list, and it is now the only hostname that builds this app.
+
+Also removes `deploy-osn-social-preview.yml` and the `osn-social-preview` Pages
+project it published to. A `*.pages.dev` preview can complete neither a passkey
+ceremony nor an OIDC round-trip — the RP ID is `musubi.social` and the `__Host-`
+session and binding cookies are host-bound to `id.musubi.social` — so it could
+only ever be looked at, while spending a prod-scoped Cloudflare token on every
+branch push (the open S-M `preview-ci-prod-token` finding). Review social changes
+locally with `bun run dev:osn`.

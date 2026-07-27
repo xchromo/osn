@@ -363,9 +363,15 @@ jobs:
   # and musubi.social is attached to it in the dashboard (a Pages custom domain,
   # not a wrangler route) — see the runbook.
   #
-  # Feature-branch previews go to a SEPARATE `osn-social-preview` project
-  # (deploy-osn-social-preview.yml); they must never touch this one, whose
-  # production deployment now serves a real hostname.
+  # There is NO feature-branch preview for this app. `deploy-osn-social-preview.yml`
+  # (a separate `osn-social-preview` Pages project) was removed on 2026-07-27: a
+  # preview on `*.pages.dev` can neither run a passkey ceremony nor complete an
+  # OIDC round-trip — wrong RP ID, and the `__Host-` cookies are bound to
+  # id.musubi.social — so it could only ever be looked at, and it cost a
+  # prod-scoped Cloudflare token on every branch push (TODO.md S-M
+  # preview-ci-prod-token). Review social changes locally with `bun run dev:osn`.
+  # If a preview is ever reinstated it must NOT target this project, whose
+  # production deployment serves a real hostname.
   deploy-osn-social:
     name: Deploy osn/social (Pages)
     needs: build
