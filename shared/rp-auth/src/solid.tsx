@@ -72,10 +72,13 @@ export function AuthProvider(props: AuthProviderProps) {
     await refetch();
   };
 
+  // Wrapped, not passed straight through: Solid's `refetch` takes an optional
+  // `info` argument and may return the value synchronously, so it does not fit
+  // the plain `() => Promise<…>` the consumers see.
+  const refresh = async () => await refetch();
+
   return (
-    <AuthContext.Provider
-      value={{ session, activeProfileId, authFetch, signIn, logout, refresh: refetch }}
-    >
+    <AuthContext.Provider value={{ session, activeProfileId, authFetch, signIn, logout, refresh }}>
       {props.children}
     </AuthContext.Provider>
   );
