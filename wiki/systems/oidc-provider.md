@@ -140,13 +140,13 @@ Three tables in `@osn/db` (migration `0002_wet_gamora`):
 | Column | Value |
 |---|---|
 | `id` / `client_id` | `oc_cire` / `cid_cire` |
-| `redirect_uris` | `https://api.cireweddings.com/api/auth/oidc/callback`, `https://api-preview.cireweddings.com/api/auth/oidc/callback` |
+| `redirect_uris` | `https://api.cireweddings.com/api/auth/oidc/callback` (the seeded row still carries a second entry, `https://api-preview.cireweddings.com/api/auth/oidc/callback`, left dead by the 2026-07-27 preview teardown and pending removal) |
 | `sector_identifier` | `cireweddings.com` |
 | `allowed_scopes` | `openid profile email` |
 | `is_first_party` | `1` |
 | `owner_account_id` | null — a platform client, owned by nobody, so account erasure cannot disable it |
 
-Both redirect URIs point at **cire-api**, never at a browser origin: cire runs the exchange server-side and mints its own cookie, so no OSN token reaches the browser. The secret lives in two places that must move together — `CIRE_OIDC_CLIENT_SECRET` on the cire-api Workers (production and preview) and `oauth_clients.client_secret_hash` here. Rotating one alone locks organisers out at the token endpoint. Local development needs its own row in the local D1, with a `http://localhost:8787/…` callback.
+The redirect URI points at **cire-api**, never at a browser origin: cire runs the exchange server-side and mints its own cookie, so no OSN token reaches the browser. The secret lives in two places that must move together — `CIRE_OIDC_CLIENT_SECRET` on the cire-api production Worker and `oauth_clients.client_secret_hash` here. Rotating one alone locks organisers out at the token endpoint. Local development needs its own row in the local D1, with a `http://localhost:8787/…` callback.
 
 ## Rate limits
 

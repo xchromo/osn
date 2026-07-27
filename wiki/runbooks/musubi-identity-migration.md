@@ -163,10 +163,10 @@ ladder did not move.
 | ″ | `OSN_AUTHORIZE_UI_URL` | → **`https://musubi.social/authorize`**. Stays explicit: unset it resolves against the *first* `OSN_ORIGIN` entry, which is right today by accident and breaks silently if that list is ever reordered. |
 | ″ | `OSN_EMAIL_FROM` | **unchanged — `hello@cireweddings.com`.** See the Resend note below; moving it would fail closed and take OTP with it. |
 | ″ `[[env.production.routes]]` | `pattern` | `id.cireweddings.com` → **`id.musubi.social`**, `custom_domain = true` |
-| `cire/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_ISSUER_URL` | both, in `[env.production]` **and** `[env.preview]` — the preview tier shares prod identity by design |
+| `cire/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_ISSUER_URL` | both, in `[env.production]` **and** the then-current `[env.preview]` — the preview tier shared prod identity by design. That env went away with the tier on 2026-07-27 |
 | `zap/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_API_URL` | both |
 | `.github/workflows/deploy.yml` | `PUBLIC_OSN_ISSUER_URL` | three occurrences — then **deleted** the same day by the OIDC swap. The cire frontends no longer call the issuer at all: sign-in is a top-level redirect to cire-api, which runs the code exchange server-side. Two of the three became `PUBLIC_OSN_ACCOUNT_URL=https://musubi.social` (organiser, vendor — "manage your account" links); the guest build lost its issuer var outright. See [[cire-auth]]. |
-| `.github/workflows/deploy-cire-preview.yml` | `PUBLIC_OSN_ISSUER_URL` | two occurrences — same story, same day: one became `PUBLIC_OSN_ACCOUNT_URL`, one went away |
+| `.github/workflows/deploy-cire-preview.yml` | `PUBLIC_OSN_ISSUER_URL` | two occurrences — same story, same day: one became `PUBLIC_OSN_ACCOUNT_URL`, one went away. **File deleted 2026-07-27**, the preview tier is gone |
 | `.github/workflows/deploy.yml` | `VITE_OSN_ISSUER_URL` (`deploy-osn-social`) | one occurrence |
 | `.github/workflows/deploy-osn-social-preview.yml` | `VITE_OSN_ISSUER_URL` | one occurrence — **file deleted 2026-07-27**, the preview is gone |
 | `cire/web/src/lib/security-headers.ts` | `osnIssuer` + CSP `connect-src` | hardcoded — must track the issuer |
