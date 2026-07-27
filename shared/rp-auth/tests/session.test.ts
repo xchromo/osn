@@ -9,6 +9,7 @@ import {
   readAuthError,
   signInUrl,
   signOut,
+  startCreateAccount,
   startSignIn,
   type RpAuthConfig,
 } from "../src/index";
@@ -64,6 +65,16 @@ describe("signInUrl", () => {
       signInUrl(config({ apiBase: `${API_BASE}/` }), "https://app.test.invalid/"),
     );
     expect(url.pathname).toBe("/api/auth/oidc/start");
+  });
+
+  it("leaves prompt off unless asked for", () => {
+    const url = new URL(signInUrl(config(), "https://app.test.invalid/"));
+    expect(url.searchParams.has("prompt")).toBe(false);
+  });
+
+  it("attaches prompt=create when the caller wants the sign-up screen", () => {
+    const url = new URL(signInUrl(config(), "https://app.test.invalid/", { prompt: "create" }));
+    expect(url.searchParams.get("prompt")).toBe("create");
   });
 });
 
@@ -207,6 +218,22 @@ describe("startSignIn", () => {
       expect(assign).toHaveBeenCalledWith(
         signInUrl(config(), "https://host.test.invalid/weddings"),
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("startCreateAccount", () => {
+  it("is the same journey opened on the sign-up screen", () => {
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { assign, href: "https://host.test.invalid/login" } });
+    try {
+      startCreateAccount(config(), "https://host.test.invalid/");
+      const url = new URL(assign.mock.calls[0]![0] as string);
+      expect(url.pathname).toBe("/api/auth/oidc/start");
+      expect(url.searchParams.get("prompt")).toBe("create");
+      expect(url.searchParams.get("return_to")).toBe("https://host.test.invalid/");
     } finally {
       vi.unstubAllGlobals();
     }

@@ -74,14 +74,29 @@ const authBase = (config: RpAuthConfig): string =>
 
 const doFetch = (config: RpAuthConfig): typeof fetch => config.fetch ?? fetch;
 
+export interface SignInOptions {
+  /**
+   * Ask the issuer to lead with the sign-up screen rather than the sign-in
+   * one — "Initiating User Registration via OpenID Connect 1.0". Only
+   * `create` is passed through; the API rejects anything else, so an app
+   * cannot smuggle `none` (silent authentication) through this seam.
+   */
+  prompt?: "create";
+}
+
 /**
  * Where to send the browser to sign in. `returnTo` is an absolute URL the API
  * re-validates against its own CORS allowlist, so an attacker-supplied value
  * cannot turn this into an open redirect.
  */
-export function signInUrl(config: RpAuthConfig, returnTo: string): string {
+export function signInUrl(
+  config: RpAuthConfig,
+  returnTo: string,
+  options: SignInOptions = {},
+): string {
   const url = new URL(`${authBase(config)}/oidc/start`);
   url.searchParams.set("return_to", returnTo);
+  if (options.prompt) url.searchParams.set("prompt", options.prompt);
   return url.toString();
 }
 
@@ -90,8 +105,21 @@ export function signInUrl(config: RpAuthConfig, returnTo: string): string {
  * are top-level navigations by design, and `window.open` would land the
  * session cookie in a popup the app cannot see.
  */
-export function startSignIn(config: RpAuthConfig, returnTo?: string): void {
-  window.location.assign(signInUrl(config, returnTo ?? window.location.href));
+export function startSignIn(
+  config: RpAuthConfig,
+  returnTo?: string,
+  options: SignInOptions = {},
+): void {
+  window.location.assign(signInUrl(config, returnTo ?? window.location.href, options));
+}
+
+/**
+ * The same journey, opened on the sign-up screen. Someone with no OSN account
+ * still ends up signed in to this app at the end of it, so there is one flow
+ * here, not two — only the first screen differs.
+ */
+export function startCreateAccount(config: RpAuthConfig, returnTo?: string): void {
+  startSignIn(config, returnTo, { prompt: "create" });
 }
 
 /**

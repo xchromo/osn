@@ -9,7 +9,7 @@ related:
   - "[[rate-limiting]]"
   - "[[cire-auth]]"
   - "[[musubi-identity-migration]]"
-last-reviewed: 2026-07-27
+last-reviewed: 2026-07-28
 ---
 
 # OIDC provider
@@ -118,8 +118,11 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 | `login` | interaction | interaction |
 | `select_account` | interaction | interaction, even for a first-party client |
 | `consent` | interaction | interaction |
+| `create` | interaction, `reason=create` | interaction, `reason=create` |
 
 `none` combined with any other value is `invalid_request`, per the spec.
+
+`create` is "Initiating User Registration via OpenID Connect 1.0": the relying party is saying this person has no account yet, so the consent screen leads with the sign-up half rather than the sign-in one. It is checked **before** every other branch — a signed-in visitor who clicked "create an account" meant it — and it parks the request with the same `requireAuthAfter = now` that `prompt=login` uses, so the decision only accepts a session created after the request arrived. Registration ends in an enrolled passkey and an adopted session, which satisfies that. `reason` reaches the browser as advisory copy only; the server re-derives every requirement at decision time.
 
 `max_age` composes with the table above: a session older than `max_age` seconds is treated as "signed out" for freshness purposes — interaction with `reason=login` normally, `error=login_required` under `prompt=none`.
 

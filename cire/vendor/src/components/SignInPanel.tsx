@@ -1,4 +1,10 @@
-import { clearAuthError, readAuthError, startSignIn, type RpAuthConfig } from "@shared/rp-auth";
+import {
+  clearAuthError,
+  readAuthError,
+  startCreateAccount,
+  startSignIn,
+  type RpAuthConfig,
+} from "@shared/rp-auth";
 import { createSignal, onMount, Show } from "solid-js";
 
 import { CIRE_API_URL } from "../lib/osn";
@@ -17,63 +23,68 @@ const ERROR_COPY: Record<string, string> = {
  * OIDC start leg, which sends the vendor to the identity app and takes the
  * code back in exchange for a cire session cookie.
  *
- * There is nothing to choose here, so there is nothing to click: a clean visit
- * leaves for the issuer on mount. The panel only draws itself when the issuer
- * sent someone back with `?auth_error=…` — a button in front of a redirect
- * that always happens is a toll gate, not a choice.
+ * Both buttons leave for the same issuer and end in the same place — a signed-
+ * in vendor on the dashboard. The second only adds `prompt=create`, which asks
+ * the identity app to open on its sign-up screen instead of its sign-in one.
+ * That is worth a button of its own: someone here for the first time has no
+ * passkey to offer, and a screen demanding one is a dead end rather than an
+ * invitation.
  *
- * Registration goes the same way — the identity app offers "create an
- * account" on its own sign-in screen, so there is no second mode here.
+ * The page does not redirect on its own. It used to, back when there was
+ * nothing to choose; now there is.
  */
 export default function SignInPanel() {
   const [error, setError] = createSignal<string | null>(null);
 
   // Land on the dashboard, not back on /login — the login page bounces a
   // signed-in vendor straight off again.
-  const signIn = () => startSignIn(authConfig, new URL("/", window.location.origin).toString());
+  const home = () => new URL("/", window.location.origin).toString();
+  const signIn = () => startSignIn(authConfig, home());
+  const createAccount = () => startCreateAccount(authConfig, home());
 
   onMount(() => {
     const marker = readAuthError();
-    if (!marker) {
-      signIn();
-      return;
-    }
+    if (!marker) return;
     setError(ERROR_COPY[marker] ?? ERROR_COPY.sign_in_failed!);
     // Drop the marker so a reload does not re-show it.
     clearAuthError();
   });
 
   return (
-    <Show
-      when={error()}
-      fallback={
-        <p class="text-muted-foreground text-sm leading-relaxed">
-          Taking you to musubi to sign in…
-        </p>
-      }
-    >
-      {(message) => (
-        <div class="flex flex-col gap-6">
+    <div class="flex flex-col gap-6">
+      <Show when={error()}>
+        {(message) => (
           <p
             role="alert"
             class="border-border bg-background text-text rounded-sm border px-4 py-3 text-sm"
           >
             {message()}
           </p>
+        )}
+      </Show>
 
-          <button
-            type="button"
-            onClick={signIn}
-            class="bg-gold text-background w-full rounded-sm px-6 py-3 text-sm font-medium tracking-wide transition-opacity hover:opacity-90"
-          >
-            Try again
-          </button>
+      <p class="text-muted-foreground text-sm leading-relaxed">
+        Cire uses your musubi account to sign you in. Your passkey stays with musubi — Cire never
+        sees it.
+      </p>
 
-          <p class="text-muted-foreground text-center text-sm">
-            No account yet? You can create one on the next screen.
-          </p>
-        </div>
-      )}
-    </Show>
+      <div class="flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={signIn}
+          class="bg-gold text-background w-full rounded-sm px-6 py-3 text-sm font-medium tracking-wide transition-opacity hover:opacity-90"
+        >
+          Continue with musubi
+        </button>
+
+        <button
+          type="button"
+          onClick={createAccount}
+          class="border-border text-text hover:border-gold w-full rounded-sm border px-6 py-3 text-sm font-medium tracking-wide transition-colors"
+        >
+          Create account with musubi
+        </button>
+      </div>
+    </div>
   );
 }
