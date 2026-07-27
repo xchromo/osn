@@ -7,6 +7,7 @@ import {
   fetchSession,
   isAuthExpired,
   readAuthError,
+  resumeSession,
   signInUrl,
   signOut,
   startCreateAccount,
@@ -234,6 +235,117 @@ describe("startCreateAccount", () => {
       expect(url.pathname).toBe("/api/auth/oidc/start");
       expect(url.searchParams.get("prompt")).toBe("create");
       expect(url.searchParams.get("return_to")).toBe("https://host.test.invalid/");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("resumeSession", () => {
+  /** A `sessionStorage` stand-in that starts empty. */
+  const memoryStore = (seed: Record<string, string> = {}) => {
+    const map = new Map(Object.entries(seed));
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+      removeItem: (k: string) => void map.delete(k),
+      map,
+    };
+  };
+
+  const HOME = "https://host.test.invalid/";
+
+  it("carries a signed-in visitor through to the app", async () => {
+    const navigate = vi.fn();
+    const store = memoryStore();
+    const { fetch, calls } = stubFetch(json(SIGNED_IN));
+
+    const moved = await resumeSession(config({ fetch }), { home: HOME, storage: store, navigate });
+
+    expect(moved).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(HOME);
+    // First-party, cookie-bearing, and to this app's own API — not the issuer.
+    expect(calls[0]!.url).toBe(`${API_BASE}/api/auth/session`);
+    expect(calls[0]!.init?.credentials).toBe("include");
+  });
+
+  it("leaves a signed-out visitor on the page", async () => {
+    const navigate = vi.fn();
+    const { fetch } = stubFetch(json({ signedIn: false }));
+
+    const moved = await resumeSession(config({ fetch }), {
+      home: HOME,
+      storage: memoryStore(),
+      navigate,
+    });
+
+    expect(moved).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("treats an unreachable API as signed out rather than stranding the page", async () => {
+    const navigate = vi.fn();
+    const fetch = (() =>
+      Promise.reject(new Error("offline"))) as unknown as typeof globalThis.fetch;
+
+    const moved = await resumeSession(config({ fetch }), {
+      home: HOME,
+      storage: memoryStore(),
+      navigate,
+    });
+
+    expect(moved).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not ping-pong when the app bounces straight back", async () => {
+    const navigate = vi.fn();
+    const store = memoryStore({ "rp-auth.resumed-at": String(Date.now()) });
+    const { fetch } = stubFetch(json(SIGNED_IN));
+
+    const moved = await resumeSession(config({ fetch }), { home: HOME, storage: store, navigate });
+
+    expect(moved).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("carries a deliberate return visit through once the cooldown has passed", async () => {
+    const navigate = vi.fn();
+    const store = memoryStore({ "rp-auth.resumed-at": String(Date.now() - 60_000) });
+    const { fetch } = stubFetch(json(SIGNED_IN));
+
+    const moved = await resumeSession(config({ fetch }), { home: HOME, storage: store, navigate });
+
+    expect(moved).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(HOME);
+  });
+
+  it("forgets an earlier resume once the visitor is signed out", async () => {
+    const store = memoryStore({ "rp-auth.resumed-at": String(Date.now()) });
+    const { fetch } = stubFetch(json({ signedIn: false }));
+
+    await resumeSession(config({ fetch }), { home: HOME, storage: store, navigate: vi.fn() });
+
+    expect(store.getItem("rp-auth.resumed-at")).toBeNull();
+  });
+
+  it("works where the browser refuses storage", async () => {
+    const navigate = vi.fn();
+    const { fetch } = stubFetch(json(SIGNED_IN));
+
+    const moved = await resumeSession(config({ fetch }), { home: HOME, storage: null, navigate });
+
+    expect(moved).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(HOME);
+  });
+
+  it("defaults to the site root", async () => {
+    const navigate = vi.fn();
+    const { fetch } = stubFetch(json(SIGNED_IN));
+    vi.stubGlobal("window", { location: { origin: "https://host.test.invalid" } });
+    try {
+      await resumeSession(config({ fetch }), { storage: memoryStore(), navigate });
+      expect(navigate).toHaveBeenCalledWith("https://host.test.invalid/");
     } finally {
       vi.unstubAllGlobals();
     }

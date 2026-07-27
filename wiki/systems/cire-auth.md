@@ -87,6 +87,13 @@ Cire still adds no login surface of its own, and still owns no identity store �
 
 **Two doors, one journey (2026-07-28).** The login page offers *Continue with musubi* and *Create account with musubi*. Both leave for the same issuer and end in the same place, a signed-in organiser on the dashboard; the second only adds `prompt=create`, which asks the consent screen to open on its sign-up half. It earns its own button because someone here for the first time has no passkey to offer, and a screen demanding one is a dead end rather than an invitation. The page therefore does **not** redirect on mount any more — it did while there was nothing to choose. See [[oidc-provider]] for the `prompt` table and [[authorize-ui]] for the screen.
 
+**Resuming instead of redirecting (2026-07-28).** In place of the old redirect, the login page asks `GET /api/auth/session` behind the rendered page — `resumeSession()` in `@shared/rp-auth`. A visitor who still holds a cire session is sent to the dashboard with `location.replace`, so the login page leaves no history entry to bounce back through; everyone else sees the two buttons with no wait, because the check runs after the panel renders and an unreachable API reads as signed out.
+
+Two things about that check are worth keeping straight:
+
+- **It can only see cire's own cookie.** A session at the issuer is invisible from a `cireweddings.com` origin: `osn-api` sets its session cookie `SameSite=Lax` (`osn/api/src/lib/cookie-session.ts`), and a Lax cookie rides only top-level navigations, never a background request from another site. So a hidden-iframe `prompt=none` probe would report "signed out" in every browser, whatever the third-party-cookie policy — and asking properly means a top-level redirect, which is the behaviour this replaced. It is also why `prompt=none` stays off the start leg's allowlist.
+- **It backs off rather than looping.** `/` bounces a 401 to `/login`, and `/login` now bounces a session to `/`; a disagreement between the two — a session expiring between the calls — would ping-pong. `resumeSession` stamps `rp-auth.resumed-at` in `sessionStorage` and skips the next resume within 5 seconds, so a loop stops after one lap while a deliberate return visit minutes later still gets carried through. Signing out clears the stamp.
+
 ### Sign-in chain (click → cookie)
 
 ```

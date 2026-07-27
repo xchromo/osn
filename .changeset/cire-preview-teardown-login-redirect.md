@@ -18,6 +18,14 @@ one is a dead end rather than an invitation. The panel still explains a bounced
 sign-in (`?auth_error=…`) and strips the marker. The 401 handler still sends
 people to `/login`.
 
+One thing does happen unbidden: behind the rendered page, both panels call
+`resumeSession` from `@shared/rp-auth`, which asks `GET /api/auth/session` and
+sends someone who still holds a cire session to the dashboard. Nobody should be
+asked to sign in twice. It runs after the panel renders, so the usual visitor —
+signed out — waits for nothing, and it only ever sees cire's own cookie: a
+session at the issuer cannot be probed from this origin, which is the same
+reason `prompt=none` stays off the start leg's allowlist.
+
 `GET /api/auth/oidc/start` gained an optional `prompt`, **allowlisted to
 `create`**. Every other value is dropped rather than rejected: the query string
 is attacker-reachable, and forwarding it blind would let anyone turn a sign-in

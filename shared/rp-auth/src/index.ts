@@ -163,6 +163,80 @@ export async function fetchSession(config: RpAuthConfig): Promise<RpSession | nu
   };
 }
 
+export interface ResumeSessionOptions {
+  /** Where a signed-in visitor belongs. Defaults to the site root. */
+  home?: string;
+  /**
+   * Test seam. Defaults to `sessionStorage` — per-tab, and dies with the tab,
+   * which is the right lifetime for a guard about a single navigation. Pass
+   * `null` to run without a guard.
+   */
+  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
+  /**
+   * Test seam. Defaults to `location.replace`, so the sign-in page leaves no
+   * history entry: `Back` from the app would otherwise land on a page that
+   * bounces forward again.
+   */
+  navigate?: (url: string) => void;
+}
+
+const RESUME_GUARD_KEY = "rp-auth.resumed-at";
+
+/**
+ * How long one resume suppresses the next. A ping-pong — sign-in page sends
+ * you to the app, the app's first 401 sends you back — completes in well under
+ * a second, so a cooldown breaks the loop after a single lap. Someone opening
+ * the sign-in page again on purpose takes longer than this, and still gets
+ * carried through.
+ */
+const RESUME_COOLDOWN_MS = 5_000;
+
+/** `sessionStorage`, or `null` where the browser refuses it. */
+function defaultStorage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Carry a visitor who is already signed in through to the app, instead of
+ * asking them for a session they have got.
+ *
+ * This is deliberately not the old "redirect to the issuer on mount". It asks
+ * *this* app's own API over a first-party cookie, so it is a question the
+ * browser will actually answer; and it runs behind the rendered page, so a
+ * signed-out visitor — the usual visitor here — waits for nothing and is never
+ * navigated away unasked.
+ *
+ * It cannot see a session at the issuer. That cookie is `SameSite=Lax`, so no
+ * background request from a relying party's origin will ever carry it; asking
+ * needs a top-level redirect, which is the thing this replaces.
+ *
+ * Resolves `true` when it navigated.
+ */
+export async function resumeSession(
+  config: RpAuthConfig,
+  options: ResumeSessionOptions = {},
+): Promise<boolean> {
+  const store = options.storage === undefined ? defaultStorage() : options.storage;
+  const session = await fetchSession(config);
+  if (!session) {
+    // Signed out — forget any earlier resume, so the next real one runs.
+    store?.removeItem(RESUME_GUARD_KEY);
+    return false;
+  }
+
+  const last = Number(store?.getItem(RESUME_GUARD_KEY) ?? 0);
+  if (Number.isFinite(last) && Date.now() - last < RESUME_COOLDOWN_MS) return false;
+  store?.setItem(RESUME_GUARD_KEY, String(Date.now()));
+
+  const target = options.home ?? new URL("/", window.location.origin).toString();
+  (options.navigate ?? ((url: string) => window.location.replace(url)))(target);
+  return true;
+}
+
 export interface SignOutOptions {
   /** Drop every session for this profile, not just this browser's. */
   allDevices?: boolean;

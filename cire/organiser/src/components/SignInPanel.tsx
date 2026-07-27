@@ -1,6 +1,7 @@
 import {
   clearAuthError,
   readAuthError,
+  resumeSession,
   startCreateAccount,
   startSignIn,
   type RpAuthConfig,
@@ -30,8 +31,13 @@ const ERROR_COPY: Record<string, string> = {
  * no passkey to offer, and a screen demanding one is a dead end rather than an
  * invitation.
  *
- * The page does not redirect on its own. It used to, back when there was
- * nothing to choose; now there is.
+ * The page does not leave for the issuer on its own. It used to, back when
+ * there was nothing to choose; now there is. It does still ask cire/api, in
+ * the background, whether this browser already holds a cire session — someone
+ * who is signed in already wants the dashboard, not a second sign-in. That
+ * question only reaches as far as cire's own cookie: a session at musubi is
+ * invisible from here, because the issuer's cookie is `SameSite=Lax` and no
+ * background request from this origin will carry it.
  */
 export default function SignInPanel() {
   const [error, setError] = createSignal<string | null>(null);
@@ -44,10 +50,13 @@ export default function SignInPanel() {
 
   onMount(() => {
     const marker = readAuthError();
-    if (!marker) return;
-    setError(ERROR_COPY[marker] ?? ERROR_COPY.sign_in_failed!);
-    // Drop the marker so a reload does not re-show it.
-    clearAuthError();
+    if (marker) {
+      setError(ERROR_COPY[marker] ?? ERROR_COPY.sign_in_failed!);
+      // Drop the marker so a reload does not re-show it.
+      clearAuthError();
+    }
+    // Behind the rendered page, so the buttons are usable straight away.
+    void resumeSession(authConfig, { home: home() });
   });
 
   return (
