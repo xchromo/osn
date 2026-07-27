@@ -409,6 +409,24 @@ jobs:
       # relocated them to this app, which was never wired up — so sign-in on
       # musubi.social broke. Same repo Variable as the cire builds (one widget,
       # one sitekey); musubi.social must be in the widget's Domains list.
+      # Fail the deploy rather than ship an app nobody can sign into. An unset or
+      # renamed repo Variable expands to "", the app normalises that to "no
+      # widget", and osn-api then rejects every register/login with
+      # `400 turnstile_failed` — with a green build and a green deploy. That
+      # silent pairing is exactly what broke on 2026-07-27, and the unit tests
+      # cannot see it: they prove the sitekey is threaded to the components, not
+      # that a real value was baked into the bundle.
+      - name: Require the Turnstile sitekey
+        run: |
+          if [ -z "${VITE_TURNSTILE_SITEKEY}" ]; then
+            echo "::error::Repo Variable PUBLIC_TURNSTILE_SITEKEY is empty or unset."
+            echo "osn-api has TURNSTILE_SECRET_KEY set, so a build without the sitekey"
+            echo "fails closed on every sign-in and registration. See wiki/systems/turnstile.md."
+            exit 1
+          fi
+        env:
+          VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
+
       - name: Build osn/social
         run: bun run --cwd osn/social build
         env:

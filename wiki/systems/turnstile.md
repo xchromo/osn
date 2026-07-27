@@ -174,10 +174,13 @@ from under it.
 > token was sent, and osn-api fail-closed on every gated call. Both halves were
 > individually correct; the pairing was severed by relocation.
 >
-> Fixed by threading `VITE_TURNSTILE_SITEKEY` through the osn-social build (prod
-> **and** preview) into all three call sites. Guarded by
+> Fixed by threading `VITE_TURNSTILE_SITEKEY` through the `deploy-osn-social`
+> build into all three call sites. Guarded by
 > `osn/social/tests/components/turnstile-wiring.test.tsx`, which fails if any
-> ceremony call site drops the prop.
+> ceremony call site drops the prop, and by a non-empty check on the variable in
+> the deploy job — the test proves the prop is threaded, only the deploy check
+> can prove a real value reached it. (The osn-social preview workflow was deleted
+> in the same change, so `musubi.social` is the only origin building this app.)
 >
 > **Rule this leaves behind:** the sitekey/secret pairing is a property of the
 > *deployed surface that renders the form*, not of the repo. Whenever an auth
