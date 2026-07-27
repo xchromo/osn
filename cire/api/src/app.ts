@@ -608,6 +608,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
           {
             directoryService: vendorDirectoryService,
             orgMembership: vendorOrgMembership,
+            profileOrgs: vendorProfileOrgs,
             enquiryService,
           },
           osnAuthOptions,
