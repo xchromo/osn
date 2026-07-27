@@ -1,6 +1,6 @@
 ---
-title: Migrating OSN identity to musubi.dev
-description: Cutover plan for moving osn-api from id.cireweddings.com to id.musubi.dev and making musubi.dev the full OSN identity home
+title: Migrating OSN identity to musubi.social
+description: Cutover plan for moving osn-api from id.cireweddings.com to id.musubi.social and making musubi.social the full OSN identity home
 tags: [runbook, identity, migration, oidc, webauthn]
 status: cutover-done-pr-c-outstanding
 related:
@@ -15,16 +15,16 @@ related:
 last-reviewed: 2026-07-27
 ---
 
-# Migrating OSN identity to musubi.dev
+# Migrating OSN identity to musubi.social
 
-Moving osn-api from `id.cireweddings.com` to `id.musubi.dev`, with
-`musubi.dev` becoming the full OSN identity home: issuer, sign-in UI, and
+Moving osn-api from `id.cireweddings.com` to `id.musubi.social`, with
+`musubi.social` becoming the full OSN identity home: issuer, sign-in UI, and
 consent screen. This is the "dedicated OSN domain" that
 `[[production-deploy]]` has carried as deferred since the first prod deploy.
 
 > **The move shipped on 2026-07-27, ahead of PR C, on purpose.** The end state
-> is live: `osn-api` on `id.musubi.dev`, `@osn/social` on the **`musubi.dev`
-> apex**, `OSN_RP_ID = musubi.dev`. What the plan below calls step 6 / PR C —
+> is live: `osn-api` on `id.musubi.social`, `@osn/social` on the **`musubi.social`
+> apex**, `OSN_RP_ID = musubi.social`. What the plan below calls step 6 / PR C —
 > converting cire to the OIDC redirect flow — was **not** done first. The cost
 > was accepted knowingly and is stated plainly here so nobody reads a broken
 > flow as a bug:
@@ -54,7 +54,7 @@ ordering is not optional.
 
 This matters because of WebAuthn scoping. A passkey ceremony may only run on
 an origin that is same-site with the RP ID. Once `OSN_RP_ID` becomes
-`musubi.dev`, the cire origins (`host.`, `vendor.`, `invite.cireweddings.com`)
+`musubi.social`, the cire origins (`host.`, `vendor.`, `invite.cireweddings.com`)
 **can no longer run ceremonies at all** — they are a different registrable
 domain. Their replacement is the OIDC redirect flow, which needs the very
 page that does not exist.
@@ -66,20 +66,20 @@ ceremonies are illegal, and the redirect flow dead-ends.
 
 `deploy.yml` carries a `deploy-osn-social` job publishing the `osn-social`
 Pages project. It was written against `me.cireweddings.com` and **never served
-that hostname**: the 2026-07-27 decision to go straight to musubi.dev landed
+that hostname**: the 2026-07-27 decision to go straight to musubi.social landed
 before the Pages custom domain was attached, so the job now targets the
-**`musubi.dev` apex** with
-`OSN_AUTHORIZE_UI_URL = https://musubi.dev/authorize`. Feature-branch previews
+**`musubi.social` apex** with
+`OSN_AUTHORIZE_UI_URL = https://musubi.social/authorize`. Feature-branch previews
 live in a separate `osn-social-preview` project so a push to a branch can never
 overwrite what a live hostname serves.
 
 `[[authorize-ui]]` requires it be served under the **same registrable domain
 as osn-api**, because the session cookie and the per-request OIDC binding
 cookie are host-bound and only flow on same-site fetches with
-`credentials: "include"`. The apex `musubi.dev` is same-site with
-`id.musubi.dev`, so that holds. It is also why the apex, not `id.musubi.dev`,
-is the RP ID: the apex covers itself **and** every future `*.musubi.dev`
-surface, whereas an RP ID of `id.musubi.dev` would forbid a ceremony on the
+`credentials: "include"`. The apex `musubi.social` is same-site with
+`id.musubi.social`, so that holds. It is also why the apex, not `id.musubi.social`,
+is the RP ID: the apex covers itself **and** every future `*.musubi.social`
+surface, whereas an RP ID of `id.musubi.social` would forbid a ceremony on the
 apex — the one place a ceremony now runs.
 
 ### Why partial moves do not help
@@ -97,7 +97,7 @@ ordering that is safe.
 Changing `OSN_RP_ID` invalidates **every existing passkey**. Sessions do not
 bridge the move either: `__Host-` is exact-domain by prefix, so
 `__Host-osn_session` set on `id.cireweddings.com` is not sent to
-`id.musubi.dev`. An account whose only credential is a passkey, with no
+`id.musubi.social`. An account whose only credential is a passkey, with no
 recovery codes, is permanently locked out the moment the RP ID flips —
 every step-up route requires an existing access token, and the only
 unauthenticated door is `POST /login/recovery/complete`.
@@ -150,13 +150,13 @@ ladder did not move.
 
 | Where | Key | Before → now |
 |---|---|---|
-| `osn/api/wrangler.toml` `[env.production.vars]` | `OSN_RP_ID` | `cireweddings.com` → **`musubi.dev`** |
-| ″ | `OSN_ISSUER_URL` | `https://id.cireweddings.com` → **`https://id.musubi.dev`** |
-| ″ | `OSN_ORIGIN` | four cire origins → **`https://musubi.dev`** alone. The cire entries were removed, not kept: a ceremony from a different registrable domain is illegal whatever the list says, and leaving them would hide that. |
-| ″ | `OSN_CORS_ORIGIN` | **kept the cire origins**, added `https://musubi.dev`. Different list, different job — CORS governs bearer-token calls, which still work cross-site. |
-| ″ | `OSN_AUTHORIZE_UI_URL` | → **`https://musubi.dev/authorize`**. Stays explicit: unset it resolves against the *first* `OSN_ORIGIN` entry, which is right today by accident and breaks silently if that list is ever reordered. |
+| `osn/api/wrangler.toml` `[env.production.vars]` | `OSN_RP_ID` | `cireweddings.com` → **`musubi.social`** |
+| ″ | `OSN_ISSUER_URL` | `https://id.cireweddings.com` → **`https://id.musubi.social`** |
+| ″ | `OSN_ORIGIN` | four cire origins → **`https://musubi.social`** alone. The cire entries were removed, not kept: a ceremony from a different registrable domain is illegal whatever the list says, and leaving them would hide that. |
+| ″ | `OSN_CORS_ORIGIN` | **kept the cire origins**, added `https://musubi.social`. Different list, different job — CORS governs bearer-token calls, which still work cross-site. |
+| ″ | `OSN_AUTHORIZE_UI_URL` | → **`https://musubi.social/authorize`**. Stays explicit: unset it resolves against the *first* `OSN_ORIGIN` entry, which is right today by accident and breaks silently if that list is ever reordered. |
 | ″ | `OSN_EMAIL_FROM` | **unchanged — `hello@cireweddings.com`.** See the Resend note below; moving it would fail closed and take OTP with it. |
-| ″ `[[env.production.routes]]` | `pattern` | `id.cireweddings.com` → **`id.musubi.dev`**, `custom_domain = true` |
+| ″ `[[env.production.routes]]` | `pattern` | `id.cireweddings.com` → **`id.musubi.social`**, `custom_domain = true` |
 | `cire/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_ISSUER_URL` | both, in `[env.production]` **and** `[env.preview]` — the preview tier shares prod identity by design |
 | `zap/api/wrangler.toml` | `OSN_JWKS_URL`, `OSN_API_URL` | both |
 | `.github/workflows/deploy.yml` | `PUBLIC_OSN_ISSUER_URL` | three occurrences |
@@ -167,24 +167,23 @@ ladder did not move.
 
 Out-of-band, not in the repo:
 
-- **Zone.** ✅ `musubi.dev` is in the same Cloudflare account, so
-  `custom_domain = true` auto-provisions DNS + edge cert for `id.musubi.dev`.
-  The zone carries a **proxied wildcard record**; that does not interfere,
-  because a wildcard only answers names with no record of their own.
-- **Pages custom domain — OUTSTANDING.** Attach the **apex `musubi.dev`** to
-  the `osn-social` Pages project in the dashboard. A Pages custom domain is a
-  dashboard setting, not a wrangler route, so the deploy job cannot create it.
-  The apex is also the one name the wildcard does not cover, so watch for a
-  collision with any existing apex record. Until this is done the identity app
-  sits on `osn-social.pages.dev`, where the `__Host-` cookies do not reach it
-  and a ceremony is illegal.
-- **Turnstile — OUTSTANDING.** Add `musubi.dev` and `id.musubi.dev` to the
-  widget's domain list. The wrangler API token has no `challenge-widgets.write`
-  scope, so this is a dashboard step. Only bites once a secret is set — the
-  gate is inert today (`[[turnstile]]`).
+- **Zone.** ✅ `musubi.social` is in the same Cloudflare account, so
+  `custom_domain = true` auto-provisions DNS + edge cert for `id.musubi.social`.
+  If the zone carries a wildcard record it does not interfere — a wildcard only
+  answers names with no record of their own.
+- **Pages custom domain.** ✅ 2026-07-27 — the **apex `musubi.social`** is
+  attached to the `osn-social` Pages project. A Pages custom domain is a
+  dashboard setting, not a wrangler route, so the deploy job could not create
+  it. On `osn-social.pages.dev` the `__Host-` cookies would not reach the app
+  and a ceremony would be illegal.
+- **Turnstile.** ✅ 2026-07-27 — `musubi.social` is on the widget's domain list.
+  `id.musubi.social` is not on it and does not need to be: only hostnames that
+  render a form do, and osn-api serves JSON. The wrangler API token has no
+  `challenge-widgets.write` scope, so this was a dashboard step. Inert today in
+  any case — the gate needs a secret (`[[turnstile]]`).
 - **Resend — deliberately not blocking.** The account has only
   `cireweddings.com` verified, so `OSN_EMAIL_FROM` **stayed** on
-  `hello@cireweddings.com`. Moving it before verifying a musubi.dev sender
+  `hello@cireweddings.com`. Moving it before verifying a musubi.social sender
   would fail closed and take OTP step-up with it — and OTP is exactly the step
   that turns a recovery-code login back into a passkey. Verify the sender
   first, then move the var, in that order.
@@ -195,22 +194,23 @@ Out-of-band, not in the repo:
    later step; also ended the outage it was causing.
 2. ✅ Mint recovery codes for every account that must survive (above).
    2026-07-26 — both accounts.
-3. ✅ `musubi.dev` is in the Cloudflare account. Resend sender **not** verified,
+3. ✅ `musubi.social` is in the Cloudflare account. Resend sender **not** verified,
    and `OSN_EMAIL_FROM` stayed on cireweddings.com because of it.
 4. ✅ Build the `/authorize` page in `@osn/social` per `[[authorize-ui]]`
    (2026-07-26).
 5. ✅ Add an osn-social Pages job to `deploy.yml` (2026-07-26). Written for
-   `me.cireweddings.com`, retargeted to the **`musubi.dev` apex** before it ever
+   `me.cireweddings.com`, retargeted to the **`musubi.social` apex** before it ever
    served a hostname.
 6. ⬜ **Outstanding — this is now the critical path.** Register cire as an OIDC
    client; convert organiser, vendor and web from direct `@osn/client`
    ceremonies to the redirect flow.
 7. ✅ Flipped the osn-api vars + route on 2026-07-27, and the downstream
-   verifiers (cire-api, zap-api) with them. **The osn-social Pages custom domain
-   is the one piece still outstanding** — a dashboard step.
+   verifiers (cire-api, zap-api) with them. The apex is attached to the
+   `osn-social` Pages project and `musubi.social` is on the Turnstile widget,
+   both done the same day.
 8. ⬜ Re-enroll passkeys under the new RP ID; regenerate recovery codes.
-   Blocked on step 7's dashboard step: there is no origin to enroll from until
-   the apex serves the identity app.
+   Unblocked once the merge deploy publishes the app to the apex and
+   `https://id.musubi.social/health` answers 200.
 
 ### Steps 6 and 7 were deliberately reordered
 
@@ -246,12 +246,12 @@ that is the condition the trade rests on, and it will not hold twice.
 **Step 7 has shipped, so rollback is no longer free.** Reverting `OSN_RP_ID` to
 `cireweddings.com` does restore the old passkeys — credentials are never deleted
 server-side, only made unusable under a different RP ID — but it kills any
-passkey enrolled under `musubi.dev` since the flip, and it puts the issuer back
+passkey enrolled under `musubi.social` since the flip, and it puts the issuer back
 on a hostname the deployed frontends no longer name. A revert is therefore the
 whole branch, not one var.
 
 Keep the recovery-code sets from step 2 until re-enrolment is confirmed on
-`musubi.dev`. They are the only credential that spans both RP IDs.
+`musubi.social`. They are the only credential that spans both RP IDs.
 
 `OSN_PAIRWISE_SALT` is the one thing that must **never** be rotated in a
 rollback — it is the HMAC key behind every pairwise `sub`. See

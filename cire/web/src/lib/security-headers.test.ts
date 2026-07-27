@@ -57,7 +57,7 @@ describe("buildCsp", () => {
     // The "Link my Pulse account" flow fetches the OSN issuer (token grant +
     // profile + account-link), so connect-src must include it. The issuer moved
     // to its own domain on 2026-07-27 — see root `wiki/runbooks/musubi-identity-migration`.
-    expect(csp).toMatch(/connect-src[^;]*https:\/\/id\.musubi\.dev/);
+    expect(csp).toMatch(/connect-src[^;]*https:\/\/id\.musubi\.social/);
   });
 
   it("keeps script-src host-restricted (no wildcard, no bare scheme source)", () => {

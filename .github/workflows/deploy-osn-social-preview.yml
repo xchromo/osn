@@ -6,15 +6,15 @@ name: Preview — osn/social
 # non-main branch that touches osn/social, and can be run manually from the
 # Actions tab.
 #
-# This is deliberately NOT the `osn-social` project. That one serves musubi.dev
+# This is deliberately NOT the `osn-social` project. That one serves musubi.social
 # (the identity app + the OIDC consent screen) from its production deployment,
 # and this workflow pushes feature branches to a project's production branch —
 # pointed at `osn-social` it would put unreviewed branch code on a live
 # hostname.
 #
 # A preview on *.pages.dev cannot complete a passkey ceremony or an OIDC
-# round-trip: the RP ID is `musubi.dev` and the session cookie is host-bound to
-# id.musubi.dev. Previews are for looking at, not for signing in.
+# round-trip: the RP ID is `musubi.social` and the session cookie is host-bound to
+# id.musubi.social. Previews are for looking at, not for signing in.
 #
 # It touches NOTHING else — no API deploy, no D1 migrations — so it is safe to
 # run from a feature branch. It uses the `production` environment's Cloudflare
@@ -62,7 +62,7 @@ jobs:
           # Point the hosted preview at the live identity issuer so auth works;
           # otherwise the app defaults to http://localhost:4000 and only the
           # logged-out surfaces render.
-          VITE_OSN_ISSUER_URL: https://id.musubi.dev
+          VITE_OSN_ISSUER_URL: https://id.musubi.social
 
       # Idempotent: creates the Pages project on first run, no-ops (|| true) once
       # it already exists.

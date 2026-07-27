@@ -19,10 +19,10 @@ Phase 1. Three surfaces run in production on Cloudflare; the rest run locally.
 
 | Surface | Packages | Where it runs |
 |---|---|---|
-| Identity / auth API | `@osn/api` | Live — Worker on `id.musubi.dev` |
+| Identity / auth API | `@osn/api` | Live — Worker on `id.musubi.social` |
 | Wedding invites (Cire) | `@cire/api`, `@cire/web`, `@cire/organiser`, `@cire/vendor`, `@cire/db`, `@cire/theme` | Live — `cireweddings.com` zone |
 | Wedding marketing site | `@cire/landing` | Live — apex `cireweddings.com` |
-| Identity & graph UI | `@osn/social` | Live — Pages on the apex `musubi.dev` (also serves the OIDC consent screen) |
+| Identity & graph UI | `@osn/social` | Live — Pages on the apex `musubi.social` (also serves the OIDC consent screen) |
 | Events (Pulse) | `@pulse/app`, `@pulse/api`, `@pulse/db` | Local only |
 | Messaging (Zap) | `@zap/api`, `@zap/db` | Worker on `zap.cireweddings.com` — M1 in flight, client app not started |
 | OSN / Pulse marketing sites | `@osn/landing`, `@pulse/landing` | Built, not yet deployed |
@@ -115,7 +115,7 @@ Organised by domain. Five top-level directories, one workspace prefix each.
 
 ```
 osn/              # @osn/* — identity stack
-  api/              # Elysia identity server (:4000; prod Worker id.musubi.dev)
+  api/              # Elysia identity server (:4000; prod Worker id.musubi.social)
   client/           # Client SDK (Effect-based + SolidJS bindings)
   db/               # Drizzle schema — accounts, profiles, passkeys, sessions, graph, orgs
   ui/               # Shared SolidJS auth components (<SignIn>, <Register>, <SessionsView>…)

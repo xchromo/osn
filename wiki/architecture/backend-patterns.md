@@ -159,7 +159,7 @@ into the shared `appRuntime`; `startBunServer()` keeps `app.listen`, the
 ephemeral-key warning, outbound ARC key rotation, and the account-erasure
 sweeper). This was Phase 1 (P1) of the Cloudflare Workers migration; the later
 phases have since shipped too — osn-api runs a Workers `fetch` entry
-(`src/index.ts` + `main` in `wrangler.toml`) on `id.musubi.dev` against
+(`src/index.ts` + `main` in `wrangler.toml`) on `id.musubi.social` against
 Upstash-REST Redis. Zap/Pulse ship the same `createApp` + `local.ts` + Workers
 `index.ts` shape per [[database-environments]].
 

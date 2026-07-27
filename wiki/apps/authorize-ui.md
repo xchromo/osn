@@ -29,17 +29,17 @@ and talks to the provider through `createAuthorizeClient` in
 and `osn/client/tests/authorize.test.ts`.
 
 **Deployed 2026-07-26**, on `me.cireweddings.com` at first. **Moved to the
-`musubi.dev` apex 2026-07-27** with the rest of identity — see
+`musubi.social` apex 2026-07-27** with the rest of identity — see
 [[musubi-identity-migration]]. `@osn/social` has a Pages job in `deploy.yml`;
 `OSN_AUTHORIZE_UI_URL` points at it.
 
 ## Where it lives
 
 - **Route:** `/authorize` in `@osn/social` (the identity-domain web app),
-  served at `https://musubi.dev/authorize`.
+  served at `https://musubi.social/authorize`.
   In production the app must be served under the same registrable domain as
-  osn-api (`musubi.dev`) — the session cookie and the per-request binding
-  cookie are both host-bound to `id.musubi.dev` and flow on same-site fetches
+  osn-api (`musubi.social`) — the session cookie and the per-request binding
+  cookie are both host-bound to `id.musubi.social` and flow on same-site fetches
   with `credentials: "include"`. The apex is therefore in `OSN_CORS_ORIGIN`
   (every call it makes is cross-origin) and in `OSN_ORIGIN` (it runs the
   passkey ceremony). It is also the WebAuthn RP ID, which is what makes that
@@ -145,10 +145,10 @@ short-circuits consent), so state 4's copy can assume a third party.
    has never seen any of them. Single-profile accounts never see it.
 4. ~~Set `OSN_AUTHORIZE_UI_URL` in prod vars~~ — done 2026-07-26, along
    with the `deploy-osn-social` Pages job; re-pointed at
-   `https://musubi.dev/authorize` on 2026-07-27. Smoke check still open: full
+   `https://musubi.social/authorize` on 2026-07-27. Smoke check still open: full
    authorize → consent → token round-trip against a self-registered client
    (`POST /oidc/clients` makes this testable without an operator). It needs
-   the apex `musubi.dev` attached to the `osn-social` Pages project in the
+   the apex `musubi.social` attached to the `osn-social` Pages project in the
    dashboard first — see [[production-deploy]] §5.4 and
    [[musubi-identity-migration]].
 

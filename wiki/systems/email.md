@@ -195,7 +195,7 @@ setup steps.
 
 > **Email is live via Resend** — confirmed delivering from
 > `hello@cireweddings.com` on 2026-06-18. `RESEND_API_KEY` on the
-> deployed osn-api Worker (`id.musubi.dev` since the 2026-07-27 identity
+> deployed osn-api Worker (`id.musubi.social` since the 2026-07-27 identity
 > move — [[musubi-identity-migration]]) carries the full
 > transactional surface: OTP step-up codes, email-change OTPs, and
 > security-notice emails (recovery codes, passkey added/removed,
@@ -220,13 +220,13 @@ Environment variables for `@osn/api`:
 | `OSN_EMAIL_FROM` | optional | Verified sender address (default: `noreply@osn.local`; prod: `hello@cireweddings.com`) |
 
 > **The sender stayed on `cireweddings.com` through the identity move.** osn-api
-> now serves `id.musubi.dev`, but `cireweddings.com` is the only domain verified
+> now serves `id.musubi.social`, but `cireweddings.com` is the only domain verified
 > in Resend, and Resend refuses to send from a domain it cannot authenticate — a
 > premature switch would fail closed and take **OTP step-up** with it. That is
 > exactly the wrong thing to lose right now: after the RP-ID flip invalidated
 > every passkey, the way back into an account is recovery-code login **followed
 > by an OTP step-up** to enroll a new passkey. Move `OSN_EMAIL_FROM` only after
-> verifying a musubi.dev sender in Resend (steps 1–2 below, against the new
+> verifying a musubi.social sender in Resend (steps 1–2 below, against the new
 > domain). See [[musubi-identity-migration]].
 
 Before you deploy (Resend — the live path):

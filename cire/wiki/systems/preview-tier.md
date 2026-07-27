@@ -35,7 +35,7 @@ expect nothing to survive.
 
 ## What is shared with production, and what is not
 
-**Shared:** the OSN identity issuer (`id.musubi.dev` since the 2026-07-27
+**Shared:** the OSN identity issuer (`id.musubi.social` since the 2026-07-27
 identity move). A reviewer signs in with their real passkey, which is what makes
 the organiser portal reviewable at all — no separate identity tier to set up.
 Weddings they create land in the preview database.
