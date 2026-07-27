@@ -8,6 +8,7 @@ packages:
 related:
   - "[[osn-core]]"
   - "[[authorize-ui]]"
+  - "[[social-mobile-ux]]"
   - "[[oidc-provider]]"
   - "[[production-deploy]]"
   - "[[musubi-identity-migration]]"
@@ -46,6 +47,10 @@ No Tauri wrapper yet — the app ships as a web build only. Tauri wrapping is tr
 
 `BARE_ROUTES` in `src/App.tsx` is the allow-list that strips the sidebar. Add
 a route there only when leaving the flow would be a security problem.
+
+The layout is currently **desktop-only** — a fixed 240 px rail at every
+viewport width. The mobile audit + phased responsive-shell plan lives in
+[[social-mobile-ux]].
 
 ## Client surface
 
