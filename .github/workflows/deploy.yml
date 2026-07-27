@@ -392,10 +392,22 @@ jobs:
       # VITE_OSN_ISSUER_URL bakes in at build time. Without it the bundle falls
       # back to http://localhost:4000 and every call from the deployed app dials
       # the user's own machine.
+      #
+      # VITE_TURNSTILE_SITEKEY is the CLIENT half of the Turnstile gate, and is
+      # NOT optional here: osn-api already holds TURNSTILE_SECRET_KEY (set in
+      # #160), so `/register/begin` and the identifier-bound
+      # `/login/passkey/begin` fail closed (400 turnstile_failed) on any request
+      # without a token. Until 2026-07-27 the only surface running those
+      # ceremonies was cire/organiser, whose Astro build did read the sitekey;
+      # the musubi.social move (#321) plus the organiser's OIDC swap (#322)
+      # relocated them to this app, which was never wired up — so sign-in on
+      # musubi.social broke. Same repo Variable as the cire builds (one widget,
+      # one sitekey); musubi.social must be in the widget's Domains list.
       - name: Build osn/social
         run: bun run --cwd osn/social build
         env:
           VITE_OSN_ISSUER_URL: https://id.musubi.social
+          VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
 
       # Idempotent: creates the project on the first run, no-ops (|| true) after.
       # `pages deploy` against a project that does not exist fails outright in a

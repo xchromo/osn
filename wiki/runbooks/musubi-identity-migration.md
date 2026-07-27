@@ -183,8 +183,15 @@ Out-of-band, not in the repo:
 - **Turnstile.** ✅ 2026-07-27 — `musubi.social` is on the widget's domain list.
   `id.musubi.social` is not on it and does not need to be: only hostnames that
   render a form do, and osn-api serves JSON. The wrangler API token has no
-  `challenge-widgets.write` scope, so this was a dashboard step. Inert today in
-  any case — the gate needs a secret (`[[turnstile]]`).
+  `challenge-widgets.write` scope, so this was a dashboard step.
+  **The domain list was only half the job, and the other half was missed.**
+  osn-api's `TURNSTILE_SECRET_KEY` has been set since #160, so the gate is live,
+  not inert. Before this migration the sitekey reached the ceremony forms through
+  the **cire/organiser** Astro build; moving the ceremonies to `@osn/social`
+  (and stripping them from organiser in the OIDC swap) left the osn-social build
+  with no sitekey and its `SignIn`/`Register` with no `turnstileSiteKey` prop —
+  so every sign-in on the new apex returned `400 turnstile_failed` until
+  `VITE_TURNSTILE_SITEKEY` was wired through. See `[[turnstile]]`.
 - **Resend — deliberately not blocking.** The account has only
   `cireweddings.com` verified, so `OSN_EMAIL_FROM` **stayed** on
   `hello@cireweddings.com`. Moving it before verifying a musubi.social sender

@@ -63,6 +63,12 @@ jobs:
           # otherwise the app defaults to http://localhost:4000 and only the
           # logged-out surfaces render.
           VITE_OSN_ISSUER_URL: https://id.musubi.social
+          # The preview talks to the SAME osn-api as production, so it faces the
+          # same configured Turnstile gate and needs the sitekey too. Note this
+          # only yields a token if `osn-social-preview.pages.dev` is in the
+          # widget's Domains list — otherwise the widget error-callbacks (110200)
+          # and preview sign-in stays blocked. That entry is a dashboard step.
+          VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
 
       # Idempotent: creates the Pages project on first run, no-ops (|| true) once
       # it already exists.
