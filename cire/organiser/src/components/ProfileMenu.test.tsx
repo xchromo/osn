@@ -49,6 +49,23 @@ describe("ProfileMenu", () => {
     expect(img.src).toBe("https://cdn.test/alex.png");
   });
 
+  it("refuses a non-https avatar URL and falls back to the initial", () => {
+    // The `picture` claim is unvalidated upstream — the sink enforces https.
+    for (const avatarUrl of ["http://cdn.test/alex.png", "javascript:alert(1)", "not a url"]) {
+      const { unmount } = render(() => (
+        <ProfileMenu
+          session={{ ...SESSION, avatarUrl }}
+          onSecurity={() => {}}
+          onSignOut={() => {}}
+        />
+      ));
+      const trigger = screen.getByRole("button", { name: /account menu/i });
+      expect(trigger.querySelector("img")).toBeNull();
+      expect(trigger.textContent).toBe("A");
+      unmount();
+    }
+  });
+
   it("names the account (display name + handle) at the top of the open menu", async () => {
     render(() => <ProfileMenu session={SESSION} onSecurity={() => {}} onSignOut={() => {}} />);
     openMenu();

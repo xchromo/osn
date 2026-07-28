@@ -35,6 +35,19 @@ export default function ProfileMenu(props: {
   };
   const initial = () => name().charAt(0).toUpperCase();
 
+  // The avatar URL rides in from the OIDC `picture` claim with no validation
+  // at any earlier hop, so the sink enforces the scheme: render only an
+  // absolute https URL, else fall back to the initial (S-L1, prep-pr review).
+  const httpsAvatarUrl = () => {
+    const raw = props.session?.avatarUrl;
+    if (!raw) return null;
+    try {
+      return new URL(raw).protocol === "https:" ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+
   return (
     <DropdownMenu placement="bottom-end" gutter={8}>
       <DropdownMenu.Trigger
@@ -42,7 +55,7 @@ export default function ProfileMenu(props: {
         class="border-border bg-surface/40 hover:border-gold-dim flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border transition-colors duration-(--dur-fast)"
       >
         <Show
-          when={props.session?.avatarUrl}
+          when={httpsAvatarUrl()}
           fallback={
             <span aria-hidden="true" class="font-display text-gold text-[0.95rem] leading-none">
               {initial()}
