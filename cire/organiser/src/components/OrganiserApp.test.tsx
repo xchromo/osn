@@ -243,6 +243,19 @@ describe("OrganiserApp Dashboard", () => {
     expect(screen.queryByTestId("security-panel")).toBeNull();
   });
 
+  it("restores the security view from a #/security deep link on load", async () => {
+    // With the Security nav tab gone, the hash route is the only thing keeping
+    // the view alive across a hard refresh — assert the read side too.
+    history.replaceState(null, "", "#/security");
+    authFetchMock.mockResolvedValue(
+      listResponse([{ id: "wed_a", slug: "a", displayName: "Alice & Bob" }]),
+    );
+    render(() => <OrganiserApp />);
+
+    expect(screen.getByTestId("security-panel")).toBeTruthy();
+    expect(screen.queryByTestId("wedding-list")).toBeNull();
+  });
+
   it("signs out from the profile menu", async () => {
     authFetchMock.mockResolvedValue(
       listResponse([{ id: "wed_a", slug: "a", displayName: "Alice & Bob" }]),

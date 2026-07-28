@@ -56,6 +56,44 @@ describe("ProfileMenu", () => {
     expect(screen.getByText("@alex")).toBeTruthy();
   });
 
+  it("renders the loading/absent-session fallbacks without crashing", async () => {
+    // useAuth().session is a Resource: undefined while the probe is in flight,
+    // null when signed out — the masthead renders through both on every load.
+    render(() => <ProfileMenu session={null} onSecurity={() => {}} onSignOut={() => {}} />);
+    expect(screen.getByRole("button", { name: /account menu/i }).textContent).toBe("Y");
+    openMenu();
+    expect(await screen.findByText("Your account")).toBeTruthy();
+    expect(screen.queryByText(/@/)).toBeNull();
+  });
+
+  it("shows the email as the detail line when the account has no handle", async () => {
+    render(() => (
+      <ProfileMenu
+        session={{ ...SESSION, handle: null }}
+        onSecurity={() => {}}
+        onSignOut={() => {}}
+      />
+    ));
+    openMenu();
+    expect(await screen.findByText("Alex Host")).toBeTruthy();
+    expect(screen.getByText("alex@example.com")).toBeTruthy();
+    expect(screen.queryByText(/@alex$/)).toBeNull();
+  });
+
+  it("renders no detail line when there is nothing beyond the display name", async () => {
+    render(() => (
+      <ProfileMenu
+        session={{ ...SESSION, handle: null, email: null }}
+        onSecurity={() => {}}
+        onSignOut={() => {}}
+      />
+    ));
+    openMenu();
+    const name = await screen.findByText("Alex Host");
+    // The identity header holds only the primary line — no sibling detail span.
+    expect(name.parentElement?.querySelectorAll("span")).toHaveLength(1);
+  });
+
   it("falls back to the handle as the primary line (no duplicate detail row)", async () => {
     render(() => (
       <ProfileMenu
