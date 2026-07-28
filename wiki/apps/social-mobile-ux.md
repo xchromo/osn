@@ -2,25 +2,38 @@
 title: Social — Mobile UX analysis & plan
 description: Why @osn/social is unusable on phones today, and the phased plan to fix it
 tags: [app, identity, ux, mobile, plan]
-status: planned
+status: shipped
 packages:
   - "@osn/social"
 related:
   - "[[social]]"
   - "[[authorize-ui]]"
   - "[[component-library]]"
-last-reviewed: 2026-07-27
+last-reviewed: 2026-07-28
 ---
 
 # Social — Mobile UX analysis & plan
 
 `@osn/social` (live on the apex `musubi.social`) was designed as a desktop
-left-rail workbench and has **no responsive behaviour at all**. On a phone it
-is effectively broken: the fixed 240 px sidebar is always rendered, leaving
-~135 px of content on a 375 px viewport. This page is the audit of what's
-wrong and the phased plan to fix it, scoped to the app only (per
+left-rail workbench and had **no responsive behaviour at all**. On a phone it
+was effectively broken: the fixed 240 px sidebar always rendered, leaving
+~135 px of content on a 375 px viewport. This page is the audit of what was
+wrong and the phased plan that fixed it, scoped to the app only (per
 `DESIGN.md`, the shared `@osn/ui` primitives are never edited — cire and
 pulse consume them too).
+
+> **All five phases shipped 2026-07-28** in the same PR as this audit.
+> The findings below are kept as the record of the pre-fix state; the Plan
+> section now doubles as the implementation map. Key artefacts:
+> `src/components/nav.tsx` (shared nav source), `MobileNav.tsx` (bottom tab
+> bar), `MobileTopBar.tsx` (mobile header), `ResponsiveDialogContent.tsx`
+> (bottom-sheet dialog face), `AccountMenu` / `AuthDialogs` /
+> `ProfileSwitcherDialog` (account UI shared by both shells), safe-area +
+> `pb-nav` utilities and the 16 px mobile-input rule in `App.css`, and a
+> **Responsive layout** section in `DESIGN.md` that locks the system
+> (single `md` breakpoint, `max-md:` touch-target mechanism, sheet dialogs,
+> top-center mobile toasts). Verified headless-Chromium at 320/390/768/1280
+> widths — zero horizontal overflow, both themes; `/authorize` untouched.
 
 Platform priority is **iOS > Web > Android** (CLAUDE.md), so mobile Safari is
 the primary target for every fix below.
