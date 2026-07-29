@@ -29,14 +29,6 @@ export function isHeroEmpty(hero: {
 }
 
 /**
- * The footer's closing note is SHOWN only when it has text — there is no
- * built-in default, so a blank field means the guest simply never sees the line.
- */
-export function hasFooterMessage(message: string | null | undefined): boolean {
-  return hasText(message);
-}
-
-/**
  * The footer's personal block is EMPTY with neither a note nor an image. It does
  * not hide the footer itself (the legal links always render) — it means the
  * sign-off area above them is exactly what an untouched wedding shows.

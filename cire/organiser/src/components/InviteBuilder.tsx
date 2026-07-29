@@ -971,11 +971,12 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 </legend>
                 <p class="font-body text-text-muted text-[0.82rem]">
                   The last section of the invite — your own sign-off, below the events and above the
-                  page footer. A small image (a monogram, motif or your signature) and a closing
-                  line like "Looking forward to celebrating with you" or "No boxed gifts please".
-                  Add either, both, or neither: leave them empty and the whole section is skipped,
-                  so the invite ends on your events exactly as it does now. It is part of the public
-                  invite page, so don't put anything private here.
+                  page footer. A small decorative image (a monogram, motif or signature) and a
+                  closing line like "Looking forward to celebrating with you" or "No boxed gifts
+                  please". Add either, both, or neither: leave them empty and the whole section is
+                  skipped, so the invite ends on your events exactly as it does now. Guests see this
+                  only after they enter their code. The image is decorative — anything that needs to
+                  be read (including by a screen reader) should go in the note.
                 </p>
                 <SegmentBadge shown={footerShown()} />
                 <ImageField
