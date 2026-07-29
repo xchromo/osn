@@ -37,6 +37,18 @@ export function hasFooterMessage(message: string | null | undefined): boolean {
 }
 
 /**
+ * The footer's personal block is EMPTY with neither a note nor an image. It does
+ * not hide the footer itself (the legal links always render) — it means the
+ * sign-off area above them is exactly what an untouched wedding shows.
+ */
+export function isFooterEmpty(footer: {
+  message: string | null | undefined;
+  imageUrl: string | null | undefined;
+}): boolean {
+  return !hasText(footer.message) && !hasText(footer.imageUrl);
+}
+
+/**
  * The Our-Story section is HIDDEN when its heading, body and image are all absent.
  * (The eyebrow is a label, not content — it does not keep the section alive.)
  */

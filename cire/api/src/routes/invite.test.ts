@@ -530,6 +530,120 @@ describe("invite image upload + serve + remove", () => {
     expect(((await after.json()) as { hero: { imageUrl: null } }).hero.imageUrl).toBeNull();
   });
 
+  // Slot isolation. Until 0049 there were exactly two slots and the service
+  // branched `slot === "hero" ? … : …` everywhere, so a third slot would have
+  // been written into the story's columns. These pin each slot to its own.
+  it("uploads a footer image, serves it, and surfaces it on the public read", async () => {
+    const { app } = buildApp();
+
+    const up = await appRequest(app, `${orgBase}/image/footer`, {
+      method: "POST",
+      headers: await authHeaders(BOOTSTRAP_OWNER),
+      body: PNG,
+    });
+    expect(up.status).toBe(200);
+    const { imageUrl } = (await up.json()) as { imageUrl: string };
+    expect(imageUrl).toContain(`/api/invite/${SLUG}/image/footer`);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      footer: { imageUrl: string | null };
+      story: { imageUrl: string | null };
+      hero: { imageUrl: string | null };
+    };
+    expect(body.footer.imageUrl).toContain("/image/footer");
+    // The footer's key must NOT have landed in a sibling slot's column.
+    expect(body.story.imageUrl).toBeNull();
+    expect(body.hero.imageUrl).toBeNull();
+
+    const img = await appRequest(app, imageUrl);
+    expect(img.status).toBe(200);
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(PNG);
+
+    const del = await appRequest(app, `${orgBase}/image/footer`, {
+      method: "DELETE",
+      headers: await authHeaders(BOOTSTRAP_OWNER),
+    });
+    expect(del.status).toBe(200);
+    const after = await appRequest(app, `/api/invite/${SLUG}`);
+    expect(((await after.json()) as { footer: { imageUrl: null } }).footer.imageUrl).toBeNull();
+  });
+
+  it("keeps the story image when the footer image is removed", async () => {
+    const { app } = buildApp();
+    const headers = await authHeaders(BOOTSTRAP_OWNER);
+
+    for (const slot of ["story", "footer"]) {
+      const up = await appRequest(app, `${orgBase}/image/${slot}`, {
+        method: "POST",
+        headers,
+        body: PNG,
+      });
+      expect(up.status).toBe(200);
+    }
+
+    const del = await appRequest(app, `${orgBase}/image/footer`, { method: "DELETE", headers });
+    expect(del.status).toBe(200);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      footer: { imageUrl: string | null };
+      story: { imageUrl: string | null };
+    };
+    expect(body.footer.imageUrl).toBeNull();
+    expect(body.story.imageUrl).toContain("/image/story");
+  });
+
+  it("saves a footer crop into the footer's own column, leaving the story's alone", async () => {
+    const { app } = buildApp();
+    const headers = await authHeaders(BOOTSTRAP_OWNER);
+    const crop = { x: 0.1, y: 0.1, w: 0.5, h: 0.5, natW: 1000, natH: 1000 };
+
+    for (const slot of ["story", "footer"]) {
+      await appRequest(app, `${orgBase}/image/${slot}`, { method: "POST", headers, body: PNG });
+    }
+
+    const put = await appRequest(app, `${orgBase}/image/footer/crop`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ crop }),
+    });
+    expect(put.status).toBe(200);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      footer: { imageCrop: typeof crop | null };
+      story: { imageCrop: typeof crop | null };
+    };
+    expect(body.footer.imageCrop).toEqual(crop);
+    expect(body.story.imageCrop).toBeNull();
+  });
+
+  // `mobile` is a hero-only second rectangle (0046). The footer renders at one
+  // aspect, so it must be refused rather than silently written to its only crop.
+  it("400s a mobile-screen crop on the footer slot", async () => {
+    const { app } = buildApp();
+    const headers = await authHeaders(BOOTSTRAP_OWNER);
+    await appRequest(app, `${orgBase}/image/footer`, { method: "POST", headers, body: PNG });
+
+    const res = await appRequest(app, `${orgBase}/image/footer/crop`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ crop: { x: 0, y: 0, w: 1, h: 1 }, screen: "mobile" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("reports a null footer image for an uncustomised wedding", async () => {
+    const { app } = buildApp();
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as {
+      footer: { imageUrl: string | null; imageCrop: unknown };
+    };
+    expect(body.footer.imageUrl).toBeNull();
+    expect(body.footer.imageCrop).toBeNull();
+  });
+
   it("rejects a non-image body with 415", async () => {
     const { app } = buildApp();
     const res = await appRequest(app, `${orgBase}/image/hero`, {
@@ -540,9 +654,11 @@ describe("invite image upload + serve + remove", () => {
     expect(res.status).toBe(415);
   });
 
+  // Was `footer` until that became a real slot (0049) — any name outside
+  // INVITE_IMAGE_SLOTS must still be rejected rather than silently mapped.
   it("400s for an unknown slot", async () => {
     const { app } = buildApp();
-    const res = await appRequest(app, `${orgBase}/image/footer`, {
+    const res = await appRequest(app, `${orgBase}/image/banner`, {
       method: "POST",
       headers: await authHeaders(BOOTSTRAP_OWNER),
       body: PNG,

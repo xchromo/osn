@@ -20,7 +20,7 @@ import {
   type CropSlot,
   type ImageCrop,
 } from "../lib/image-crop";
-import { hasFooterMessage, isHeroEmpty, isStoryEmpty } from "../lib/invite-emptiness";
+import { isFooterEmpty, isHeroEmpty, isStoryEmpty } from "../lib/invite-emptiness";
 import { CIRE_WEB_URL } from "../lib/osn";
 import PaletteField, { type PaletteState, resolvedSeeds } from "./PaletteField";
 
@@ -29,7 +29,7 @@ type ThemeSection = "hero" | "story" | "details" | "welcome";
 
 const ImageCropModal = lazy(() => import("./ImageCropModal"));
 
-type ImageSlot = "hero" | "story";
+type ImageSlot = "hero" | "story" | "footer";
 
 /**
  * The font choices, labelled for the dropdown. The KEYS come from the shared
@@ -105,10 +105,10 @@ interface InviteCustomisation {
   // fields as "use the defaults" instead of crashing the builder.
   details?: { eyebrow: string | null; heading: string | null };
   welcome?: { message: string | null };
-  // Footer closing note (migration 0048). Optional on the wire for the same
-  // mid-deploy reason; unlike the fields above it has no built-in default, so
-  // absent simply means the guest footer shows no note.
-  footer?: { message: string | null };
+  // Footer closing note (0048) + its optional image (0049). Optional on the wire
+  // for the same mid-deploy reason; unlike the fields above neither has a
+  // built-in default, so absent simply means the guest footer shows neither.
+  footer?: { message: string | null; imageUrl?: string | null; imageCrop?: ImageCrop | null };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   // Optional host override for the first line of the copyable invite message
@@ -149,6 +149,13 @@ const DEFAULTS = {
   detailsEyebrow: "Celebrate With Us",
   detailsHeading: "Your Events",
   welcomeMessage: "We are delighted to invite you to celebrate with us.",
+};
+
+/** Human-readable slot names for the upload toasts. */
+const SLOT_LABELS: Record<ImageSlot, string> = {
+  hero: "Hero",
+  story: "Story",
+  footer: "Footer",
 };
 
 /** Trimmed live copy (or the default when blank), truncated to fit a preview card. */
@@ -346,9 +353,11 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       body: storyBody(),
       imageUrl: data()?.story.imageUrl,
     });
-  // The footer note has no default, so its badge is simply "has the organiser
-  // typed anything?" — blank means the guest footer renders without it.
-  const footerShown = () => hasFooterMessage(footerMessage());
+  // The footer has no defaults, so its badge asks "is there anything personal
+  // here at all?" — a note, an image, or both. Neither ⇒ the guest sees the
+  // plain footer (names over the legal links).
+  const footerShown = () =>
+    !isFooterEmpty({ message: footerMessage(), imageUrl: data()?.footer?.imageUrl });
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
@@ -523,7 +532,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
         throw new Error(body.error ?? `Upload failed (${res.status})`);
       }
       await refetch();
-      toast.success(`${slot === "hero" ? "Hero" : "Story"} image updated`);
+      toast.success(`${SLOT_LABELS[slot]} image updated`);
     } catch (err) {
       if (isAuthExpired(err)) return redirectToLogin();
       setError(err instanceof Error ? err.message : "Upload failed.");
@@ -867,18 +876,29 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 />
               </fieldset>
 
-              {/* ── Footer note ──────────────────────────────────────── */}
+              {/* ── Footer ───────────────────────────────────────────── */}
               <fieldset class="border-border flex flex-col gap-4 rounded-sm border p-4">
                 <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
-                  Footer Note
+                  Footer
                 </legend>
                 <p class="font-body text-text-muted text-[0.82rem]">
-                  An optional closing line at the very bottom of the invite, just above your names —
-                  "Looking forward to celebrating with you", "No boxed gifts please". Leave it blank
-                  and the footer shows your names and the legal links only, exactly as it does now.
-                  It is part of the public invite page, so don't put anything private in it.
+                  An optional sign-off at the very bottom of the invite, just above your names — a
+                  small image (a monogram, motif or your signature) and a closing line like "Looking
+                  forward to celebrating with you" or "No boxed gifts please". Add either, both, or
+                  neither: leave them empty and the footer shows your names and the legal links
+                  only, exactly as it does now. Both are part of the public invite page, so don't
+                  put anything private there.
                 </p>
                 <SegmentBadge shown={footerShown()} />
+                <ImageField
+                  label="Footer image"
+                  slot="footer"
+                  url={d().footer?.imageUrl ?? null}
+                  crop={d().footer?.imageCrop ?? null}
+                  onSelect={(f) => void uploadImage("footer", f)}
+                  onRemove={() => void removeImage("footer")}
+                  onSaveCrop={(c) => saveCrop("footer", c)}
+                />
                 <label class="flex flex-col gap-1.5">
                   <span class="font-body text-text-muted text-[0.72rem] tracking-[0.1em] uppercase">
                     Footer note (optional)

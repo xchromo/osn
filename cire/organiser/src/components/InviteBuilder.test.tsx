@@ -719,6 +719,23 @@ describe("InviteBuilder shown/hidden badges", () => {
     expect(authFetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("marks the footer 'Shown' from an image alone, with no note typed", async () => {
+    authFetchMock.mockResolvedValueOnce(
+      json({
+        ...EMPTY_CUSTOMISATION,
+        footer: { message: null, imageUrl: "/api/invite/anita-ben/image/footer?v=1" },
+      }),
+    );
+    const { container } = render(() => (
+      <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
+    ));
+
+    await waitFor(() => expect(badges(container)).toHaveLength(3));
+    expect(badges(container)[2].dataset.shown).toBe("true");
+    // …and the note field really is empty — the badge came from the image.
+    expect((screen.getByLabelText("Footer note (optional)") as HTMLTextAreaElement).value).toBe("");
+  });
+
   it("flips the footer badge live, and whitespace-only stays hidden", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
     const { container } = render(() => (

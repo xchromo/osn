@@ -5,6 +5,7 @@ import {
   hasFooterMessage,
   hasPinterest,
   hasText,
+  isFooterEmpty,
   isHeroEmpty,
   isStoryEmpty,
 } from "./invite-emptiness";
@@ -96,5 +97,21 @@ describe("hasFooterMessage", () => {
 
   it("is true once the couple has written something", () => {
     expect(hasFooterMessage("No boxed gifts please")).toBe(true);
+  });
+});
+
+describe("isFooterEmpty", () => {
+  const empty = { message: null, imageUrl: null };
+
+  it("is empty with neither a note nor an image", () => {
+    expect(isFooterEmpty(empty)).toBe(true);
+    expect(isFooterEmpty({ message: "  ", imageUrl: "  " })).toBe(true);
+    expect(isFooterEmpty({ message: undefined, imageUrl: undefined })).toBe(true);
+  });
+
+  // The two are independent — either alone keeps the sign-off block alive.
+  it("is not empty with only a note, or only an image", () => {
+    expect(isFooterEmpty({ ...empty, message: "No boxed gifts please" })).toBe(false);
+    expect(isFooterEmpty({ ...empty, imageUrl: "/api/invite/x/image/footer?v=1" })).toBe(false);
   });
 });

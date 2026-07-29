@@ -28,14 +28,20 @@ Single source of truth: `cire/api/src/schemas/invite.ts`.
 | Our Story            | `story`    | `storyEyebrow`, `storyHeading`, `storyBody`  |
 | Code Entry & Welcome | —          | `welcomeMessage` (post-claim greeting line)   |
 | Events ("details")   | —          | `detailsEyebrow`, `detailsHeading`            |
-| Footer               | —          | `footerMessage` (closing note, **no default**) |
+| Footer               | `footer`   | `footerMessage` (closing note, **no default**) |
 
 The `details`/`welcome` copy fields landed in migration
 `0028_details_welcome_copy.sql` — they closed the last hardcoded guest-facing
 copy (the "Celebrate With Us" / "Your Events" events header and the
 "We are delighted to invite you…" greeting).
 
-The **footer note** landed in `0048_invite_footer_message.sql`. It is the one
+The **footer** gained its two pieces in successive migrations:
+`0048_invite_footer_message.sql` (the note) and `0049_invite_footer_image.sql`
+(`footer_image_key` + `footer_image_crop` — a small centred monogram, motif or
+signature above it). They are INDEPENDENT: either alone renders, and the badge
+in the builder reflects "is there anything here at all" via `isFooterEmpty`.
+
+On the note specifically: It is the one
 copy field with **no built-in default**: it exists so a couple can add a closing
 line of their own ("Looking forward to celebrating with you", "No boxed gifts
 please"), and there is no sensible neutral sentence to invent on their behalf.
@@ -44,9 +50,23 @@ above — blank means the line is simply not rendered, and every existing weddin
 keeps today's footer (couple's title over the legal links) until an organiser
 fills it in. Cap 300 chars, same as the welcome greeting.
 
-Image slots: `INVITE_IMAGE_SLOTS = ["hero", "story"]`. The same union bounds the
-`:slot` route param, the R2 key namespace, and the observability span/log
-attributes (no free-form strings). Adding a slot is a conscious schema change.
+Image slots: `INVITE_IMAGE_SLOTS = ["hero", "story", "footer"]`. The same union
+bounds the `:slot` route param, the R2 key namespace, and the observability
+span/log attributes (no free-form strings). Adding a slot is a conscious schema
+change — and a wider one than it looks:
+
+- **`SLOT_COLUMNS` in `cire/api/src/services/invite.ts`** is the one place the
+  union maps onto storage (key column, crop column, and the hero-only mobile
+  crop column). Every read/write indexes it. Before `footer` landed the service
+  branched `slot === "hero" ? … : …` in five places, each of which would have
+  silently treated a third slot as the story slot; the map exists so that class
+  of bug can't recur.
+- **`loadReferencedKeys` in `asset-reconcile.ts` must list the new key column.**
+  This one is not a no-op if missed — that query is what marks an object LIVE,
+  so an unlisted slot's images read as orphans and get swept after the grace
+  window. Pinned by a reconcile test that seeds every slot.
+- `CROP_ASPECT` in `cire/organiser/src/lib/image-crop.ts` needs the slot's
+  default editor shape (`footer` is 1∶1 — it renders small and centred).
 
 A `null` text field (or an all-whitespace value, which the service normalises to
 `null`) means **use the built-in default** — so a partially-filled section still
@@ -59,7 +79,8 @@ never paint an empty full-screen hero or an empty "Our Story" surface. "Absent"
 means null, empty-string, **or whitespace-only** (typing only spaces does not
 fill a field). The single source of truth for these predicates is
 `cire/web/src/components/invite-emptiness.ts` (`hasText`, `isHeroEmpty`,
-`isStoryEmpty`, `hasFooterMessage`, `hasPinterest`, `hasDressCode`).
+`isStoryEmpty`, `hasFooterMessage`, `isFooterEmpty`, `hasPinterest`,
+`hasDressCode`).
 
 | Segment                       | Rendered when…                                            | Where                                   |
 | ----------------------------- | --------------------------------------------------------- | --------------------------------------- |
@@ -68,6 +89,7 @@ fill a field). The single source of truth for these predicates is
 | **Event → Inspiration**       | the event has a `pinterestUrl`                             | `DetailsModal.tsx` (`hasPinterest`)     |
 | **Event → Dress Code**        | the event has a dress-code description **OR** a palette swatch | `DetailsModal.tsx` (`hasDressCode`) |
 | **Footer note**               | `footerMessage` has text                                   | `SiteFooter.astro` (`hasFooterMessage`) |
+| **Footer image**              | the `footer` slot has an image                             | `SiteFooter.astro`                      |
 
 Image-only or title-only heroes are valid (the neutral "You're Invited" fallback
 title only renders **inside** an otherwise-shown hero). All built-in fallback
@@ -232,8 +254,10 @@ nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 `details_eyebrow` / `details_heading` / `welcome_message`
 (`0028_details_welcome_copy.sql`) + `footer_message`
 (`0048_invite_footer_message.sql` — the footer's closing note, which unlike its
-neighbours has no built-in default: NULL ⇒ nothing rendered) + the two
-**hero display** columns
+neighbours has no built-in default: NULL ⇒ nothing rendered) +
+`footer_image_key` / `footer_image_crop` (`0049_invite_footer_image.sql` — the
+footer's optional motif, same R2-key + crop-JSON storage as the other slots) +
+the two **hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two
 hero-display columns are NOT NULL with defaults that reproduce today's look, so a

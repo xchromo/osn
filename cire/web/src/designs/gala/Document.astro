@@ -30,6 +30,13 @@ const pageTitle = inviteTitle(initialInvite?.hero.title)
 // just saved lands without a rebuild.
 const paletteStyle = styleAttr(paletteRootVars(initialInvite?.theme ?? null))
 
+// The footer motif, like the hero, is served by the API — absolutise it here so
+// SiteFooter (which is also used by the legal pages and 404, where there is no
+// API origin in scope) stays a dumb presentational component.
+const footerImageUrl = initialInvite?.footer?.imageUrl
+  ? `${apiUrl}${initialInvite.footer.imageUrl}`
+  : null
+
 const heroSep = heroBase?.includes('?') ? '&' : '?'
 // Must stay in step with HERO_BG_VARIANT in components/invite-images.ts.
 const preloadHeroHref = heroBase ? `${heroBase}${heroSep}variant=hero-bg` : null
@@ -72,6 +79,8 @@ const preloadHeroHref = heroBase ? `${heroBase}${heroSep}variant=hero-bg` : null
     <SiteFooter
       closing={initialInvite?.hero.title ?? null}
       message={initialInvite?.footer?.message ?? null}
+      imageUrl={footerImageUrl}
+      imageCrop={initialInvite?.footer?.imageCrop ?? null}
     />
     {/* Site-wide consent surface. `client:idle` so it never competes with the
         invite's first paint — nothing third-party can load before it hydrates

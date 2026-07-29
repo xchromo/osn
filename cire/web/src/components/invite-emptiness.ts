@@ -59,6 +59,25 @@ export function hasFooterMessage(message: string | null | undefined): boolean {
   return hasText(message);
 }
 
+/** Footer-shaped content (the couple's closing note + their motif image). */
+export interface FooterContent {
+  message: string | null | undefined;
+  imageUrl: string | null | undefined;
+}
+
+/**
+ * The footer's personal block is EMPTY when the couple has set neither a note
+ * nor an image. Unlike the hero/story this does not hide a whole section — the
+ * footer still renders its legal links either way — it just means the sign-off
+ * area above them is unchanged from a wedding that never touched it.
+ *
+ * The two are independent: a note with no image renders the note, an image with
+ * no note renders the image.
+ */
+export function isFooterEmpty(footer: FooterContent): boolean {
+  return !hasText(footer.message) && !hasText(footer.imageUrl);
+}
+
 /** A pinterest URL is present (so the Inspiration segment renders) iff it has text. */
 export function hasPinterest(pinterestUrl: string | null | undefined): boolean {
   return hasText(pinterestUrl);

@@ -692,6 +692,11 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   footerMessage: text("footer_message"),
   heroImageKey: text("hero_image_key"),
   storyImageKey: text("story_image_key"),
+  // The footer's optional image (migration 0049) — a small centred monogram /
+  // motif / signature above the closing note. Same R2-object-key storage and
+  // same crop JSON shape as the other slots; NULL ⇒ nothing renders, which is
+  // what every pre-0049 wedding reads as.
+  footerImageKey: text("footer_image_key"),
   // JSON-encoded normalised crop rectangle `{x,y,w,h}` in SOURCE FRACTIONS (0..1)
   // the organiser chose for the hero / story image (migration 0021). NULL ⇒ the
   // default centre `object-cover` crop, so an un-cropped image renders exactly as
@@ -701,6 +706,7 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // no-store invite JSON the guest reads carries the new rectangle immediately.
   heroImageCrop: text("hero_image_crop"),
   storyImageCrop: text("story_image_crop"),
+  footerImageCrop: text("footer_image_crop"),
   // Phone-specific hero crop (migration 0046). The hero renders full-bleed at
   // wildly different viewport aspects, so it gets a SECOND rectangle (same JSON
   // shape) that the guest site applies below its desktop breakpoint. NULL ⇒
