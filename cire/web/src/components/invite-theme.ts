@@ -31,7 +31,7 @@ export interface InviteTheme {
   tones?: Partial<Record<ThemeSection, string | null>> | null;
 }
 
-export type ThemeSection = "hero" | "story" | "details" | "welcome";
+export type ThemeSection = "hero" | "story" | "details" | "welcome" | "footer";
 
 /**
  * Re-validate every seed at render time before it can reach a `style`.

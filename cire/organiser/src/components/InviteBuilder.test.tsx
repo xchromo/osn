@@ -292,9 +292,9 @@ describe("InviteBuilder theme", () => {
     await waitFor(() => screen.getByText("Save invite"));
 
     // One tone control per section, in guest-page order (hero, story, welcome,
-    // events); each offers the same three surfaces.
+    // events, closing); each offers the same three surfaces.
     const raised = screen.getAllByText("Raised");
-    expect(raised.length).toBe(4);
+    expect(raised.length).toBe(5);
     fireEvent.click(raised[2]); // welcome
     fireEvent.click(screen.getByText("Save invite"));
 
@@ -305,6 +305,25 @@ describe("InviteBuilder theme", () => {
     expect(sent.storyTone).toBeNull();
     expect(sent.detailsTone).toBeNull();
     expect(sent.heroTone).toBeNull();
+    expect(sent.footerTone).toBeNull();
+  });
+
+  it("PUTs the closing section's own tone (the last lane)", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
+
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    const raised = screen.getAllByText("Raised");
+    fireEvent.click(raised[4]); // closing section — last in guest-page order
+    fireEvent.click(screen.getByText("Save invite"));
+
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
+    const sent = sentBody("/theme");
+    expect(sent.footerTone).toBe("raised");
+    expect(sent.welcomeTone).toBeNull();
+    expect(sent.detailsTone).toBeNull();
   });
 
   it("seeds the hero display sliders from the loaded customisation", async () => {
@@ -604,7 +623,9 @@ describe("InviteBuilder theme", () => {
     expect(eyebrow.value).toBe("");
     expect((screen.getByLabelText("Welcome greeting") as HTMLInputElement).value).toBe("");
     // Same mid-deploy tolerance for the footer note (no `footer` key at all).
-    expect((screen.getByLabelText("Footer note (optional)") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText("Closing note (optional)") as HTMLTextAreaElement).value).toBe(
+      "",
+    );
   });
 
   it("seeds the footer note and sends it on Save invite", async () => {
@@ -616,7 +637,7 @@ describe("InviteBuilder theme", () => {
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
 
     const note = (await waitFor(() =>
-      screen.getByLabelText("Footer note (optional)"),
+      screen.getByLabelText("Closing note (optional)"),
     )) as HTMLTextAreaElement;
     expect(note.value).toBe("No boxed gifts please");
 
@@ -639,7 +660,7 @@ describe("InviteBuilder theme", () => {
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
 
     const note = (await waitFor(() =>
-      screen.getByLabelText("Footer note (optional)"),
+      screen.getByLabelText("Closing note (optional)"),
     )) as HTMLTextAreaElement;
     fireEvent.input(note, { target: { value: "" } });
     fireEvent.click(screen.getByText("Save invite"));
@@ -733,7 +754,9 @@ describe("InviteBuilder shown/hidden badges", () => {
     await waitFor(() => expect(badges(container)).toHaveLength(3));
     expect(badges(container)[2].dataset.shown).toBe("true");
     // …and the note field really is empty — the badge came from the image.
-    expect((screen.getByLabelText("Footer note (optional)") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText("Closing note (optional)") as HTMLTextAreaElement).value).toBe(
+      "",
+    );
   });
 
   it("flips the footer badge live, and whitespace-only stays hidden", async () => {
@@ -746,7 +769,7 @@ describe("InviteBuilder shown/hidden badges", () => {
     const footerBadge = () => badges(container)[2];
     expect(footerBadge().dataset.shown).toBe("false");
 
-    const field = screen.getByLabelText("Footer note (optional)");
+    const field = screen.getByLabelText("Closing note (optional)");
     fireEvent.input(field, { target: { value: "Looking forward to celebrating with you" } });
     await waitFor(() => expect(footerBadge().dataset.shown).toBe("true"));
 

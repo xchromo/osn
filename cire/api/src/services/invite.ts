@@ -61,6 +61,7 @@ export interface InviteTheme {
     story: SectionTone | null;
     details: SectionTone | null;
     welcome: SectionTone | null;
+    footer: SectionTone | null;
   };
 }
 
@@ -138,7 +139,7 @@ const EMPTY_THEME: InviteTheme = {
   bodyFont: null,
   palettePreset: null,
   palette: { ground: null, card: null, ink: null, gilt: null, bloom: null },
-  tones: { hero: null, story: null, details: null, welcome: null },
+  tones: { hero: null, story: null, details: null, welcome: null, footer: null },
 };
 
 // The defaults a wedding with no customisation row reports — identical to the
@@ -245,6 +246,7 @@ function toCustomisation(
     storyTone: string | null;
     detailsTone: string | null;
     welcomeTone: string | null;
+    footerTone: string | null;
     inviteMessage: string | null;
     // NOT NULL column, but a LEFT JOIN miss (no customisation row) yields null.
     designId: string | null;
@@ -311,6 +313,7 @@ function toCustomisation(
         story: c.storyTone as SectionTone | null,
         details: c.detailsTone as SectionTone | null,
         welcome: c.welcomeTone as SectionTone | null,
+        footer: c.footerTone as SectionTone | null,
       },
     },
     inviteMessage: c.inviteMessage,
@@ -393,6 +396,7 @@ export const inviteService = {
             storyTone: weddingInviteCustomisations.storyTone,
             detailsTone: weddingInviteCustomisations.detailsTone,
             welcomeTone: weddingInviteCustomisations.welcomeTone,
+            footerTone: weddingInviteCustomisations.footerTone,
             inviteMessage: weddingInviteCustomisations.inviteMessage,
             designId: weddingInviteCustomisations.designId,
             updatedAt: weddingInviteCustomisations.updatedAt,
@@ -554,6 +558,7 @@ export const inviteService = {
         storyTone: fields.storyTone,
         detailsTone: fields.detailsTone,
         welcomeTone: fields.welcomeTone,
+        footerTone: fields.footerTone,
         // Hero display sliders (already clamped into range by the schema decode).
         heroBlur: fields.heroBlur,
         heroTitleBackdropOpacity: fields.titleBackdropOpacity,

@@ -1,0 +1,158 @@
+---
+// The invite's CLOSING SECTION — the couple's own sign-off: an optional image
+// (monogram, motif, signature) over an optional closing note ("Looking forward
+// to celebrating with you", "No boxed gifts please").
+//
+// This is a SECTION OF THE INVITE, not part of the site footer. The distinction
+// matters:
+//   - `SiteFooter.astro` is site-wide chrome — the couple's title plus the legal
+//     links + privacy control. It renders on EVERY document (invite, /privacy,
+//     /terms, 404) and must always be there (compliance blocker C-H4).
+//   - This section is invite content, rendered immediately BEFORE that footer and
+//     only on the invite. Like the hero and Our Story it is a conditional
+//     segment: with neither a note nor an image it renders NOTHING — no empty
+//     surface, no stray padding above the legal row.
+//
+// Being a real section, it also carries a `tone` (which derived surface it sits
+// on) like the others, applied here server-side. There is no island: the guest
+// page SSRs this per request with `no-store`, so an organiser's save is live on
+// the next load — the same freshness contract `SiteFooter`'s `closing` has.
+//
+// NAMING — the storage and wire fields are `footer_*` / `footer` (the invite's
+// footer section, and the image slot's R2 namespace + public URL segment), while
+// the organiser-facing label is "Closing Section". That is deliberate, not
+// drift: `footer` is accurate in the data layer, but showing an organiser the
+// word "footer" next to a page that also has a legal footer would be ambiguous
+// about which one they're editing.
+//
+// This section renders BEFORE a guest claims their code, like the hero and Our
+// Story — only the events list is gated behind the unlock. The builder tells
+// organisers the content is public for exactly that reason.
+import { isFooterEmpty } from './invite-emptiness'
+import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from './image-crop'
+import { buildSrcSet, variantSrc } from './invite-images'
+import { sectionVars, styleAttr, type InviteTheme } from './invite-theme'
+
+// The closing image's display shape when no crop was saved (or a legacy crop
+// carries no source dims). Square: the slot is sized for a monogram, motif or
+// signature rather than a scene, and a square reads as deliberate at the small
+// width this section gives it.
+const CLOSING_IMAGE_ASPECT = 1
+
+interface Props {
+  /** The couple's closing note. Blank/whitespace-only ⇒ no note. */
+  message?: string | null
+  /**
+   * The couple's closing image as an ABSOLUTE URL (the caller prepends the API
+   * origin, as it does for the hero preload), or null for no image.
+   */
+  imageUrl?: string | null
+  /** Crop rectangle the organiser framed the closing image with, if any. */
+  imageCrop?: ImageCrop | null
+  /** The invite theme — supplies this section's tone (its surface). */
+  theme?: InviteTheme | null
+}
+
+const { message, imageUrl, imageCrop, theme } = Astro.props
+
+// The whole section is a conditional segment: nothing set ⇒ render nothing.
+// `isFooterEmpty` is the shared predicate the organiser builder mirrors for its
+// "Shown / Hidden — empty" badge, so the two can't disagree.
+const show = !isFooterEmpty({ message, imageUrl })
+
+// Trimmed so a note of "  text  " doesn't render its padding, matching how the
+// API stores it (it normalises on save; this covers a legacy row).
+const note = message?.trim() ?? ''
+
+// When a crop was saved, render the cropped region with the same CSS-fraction
+// technique the story photo uses (a background layer — backgrounds can't take a
+// srcset, so we ask for one bounded variant comfortably above the rendered width
+// at retina). With no crop, fall back to a plain responsive <img>.
+const cropStyle = imageUrl ? cropBackgroundStyle(variantSrc(imageUrl, 'card'), imageCrop) : null
+// The box adopts the crop's TRUE pixel aspect (from its captured source dims) so
+// the uniformly-scaled region fills it with no distortion and no empty bars; a
+// legacy crop with no dims falls back to the slot's square default.
+const imageAspect = String(cropAspectRatio(imageCrop, CLOSING_IMAGE_ASPECT))
+// Which derived surface this section sits on (`null` tone ⇒ the page ground).
+const toneStyle = styleAttr(sectionVars(theme ?? null, 'footer'))
+---
+{
+  show && (
+    <section class="invite-closing" style={toneStyle}>
+      {imageUrl &&
+        (cropStyle ? (
+          <div
+            aria-hidden="true"
+            class="motif motif-crop"
+            style={{ ...cropStyle, 'aspect-ratio': imageAspect }}
+          />
+        ) : (
+          /* Renders at most 200px wide — `thumb` (320w) covers it at 2× DPR. */
+          <img
+            src={imageUrl}
+            srcset={buildSrcSet(imageUrl, ['thumb'])}
+            sizes="200px"
+            alt=""
+            class="motif"
+            style={{ 'aspect-ratio': imageAspect }}
+          />
+        ))}
+      {note && <p class="note">{note}</p>}
+    </section>
+  )
+}
+
+<style>
+  .invite-closing {
+    /* The section's own surface, from its tone. Falls back to the page ground
+       token when the theme sets no tone — same as every other section. */
+    background-color: var(--invite-section-bg, var(--color-bg));
+    padding: 3.5rem 1.5rem;
+    text-align: center;
+    font-family: var(--font-body, 'Lato', system-ui, sans-serif);
+  }
+
+  /* The couple's motif — a monogram, signature or small flourish, not a scene.
+     Deliberately modest and centred: it opens the sign-off, so it should read as
+     a closing grace note rather than compete with the hero. Width-capped and
+     viewport-relative so it stays proportionate on a phone, where a flat 200px
+     would be half the screen. */
+  .invite-closing .motif {
+    display: block;
+    width: min(200px, 45vw);
+    height: auto;
+    margin: 0 auto;
+    /* An uncropped upload gets the square default; a cropped one gets its own
+       aspect from the inline style. `cover` only matters on the <img> path —
+       the crop path paints a sized background layer instead. */
+    object-fit: cover;
+    border-radius: 2px;
+  }
+
+  /* The cropped variant paints a background layer, so the box must clip it (an
+     empty div has no intrinsic dimensions — its size comes from the width +
+     aspect-ratio above). */
+  .invite-closing .motif-crop {
+    overflow: hidden;
+    background-repeat: no-repeat;
+  }
+
+  /* A motif with a note below it needs breathing room between them; a motif on
+     its own must not carry a trailing gap into the footer. */
+  .invite-closing .motif + .note {
+    margin-top: 1.75rem;
+  }
+
+  .invite-closing .note {
+    margin: 0 auto;
+    max-width: 34rem;
+    font-size: clamp(1rem, 2vw, 1.125rem);
+    line-height: 1.7;
+    font-style: italic;
+    color: var(--color-text, rgba(255, 255, 255, 0.82));
+    /* An organiser may type a multi-line note; honour the breaks they chose
+       without letting a long unbroken line overflow on a phone. */
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+</style>

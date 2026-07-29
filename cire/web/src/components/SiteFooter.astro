@@ -10,15 +10,6 @@
 // promise true. The footer is the one component every document shell already
 // renders, which makes it the right home.
 import { ConsentPreferencesLink } from './consent/ConsentBanner'
-import { hasFooterMessage } from './invite-emptiness'
-import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from './image-crop'
-import { buildSrcSet, variantSrc } from './invite-images'
-
-// The footer image's default display shape when no crop was saved (or a legacy
-// crop carries no source dims). Square: the slot is sized for a monogram, motif
-// or signature rather than a scene, and a square reads as deliberate at the
-// small width the footer gives it.
-const FOOTER_IMAGE_ASPECT = 1
 
 interface Props {
   /**
@@ -28,69 +19,11 @@ interface Props {
    * 404) ⇒ links only.
    */
   closing?: string | null
-  /**
-   * The couple's optional closing note, set in the invite builder ("Looking
-   * forward to celebrating with you", "No boxed gifts please"). It sits above
-   * the couple's name, so the sign-off still reads last.
-   *
-   * Like the other optional invite segments this has NO built-in default: blank
-   * or whitespace-only ⇒ nothing renders (checked with the shared
-   * `hasFooterMessage` predicate, so the organiser builder's "Shown / Hidden —
-   * empty" badge and this render can't disagree).
-   */
-  message?: string | null
-  /**
-   * The couple's optional footer image — a monogram, motif or signature above
-   * the note. An ABSOLUTE URL (the caller prepends the API origin, as it does
-   * for the hero preload), or null/absent for no image.
-   *
-   * Independent of `message`: either alone renders, and neither ⇒ the footer is
-   * exactly what it has always been (couple's title over the legal links).
-   */
-  imageUrl?: string | null
-  /** Crop rectangle the organiser framed the footer image with, if any. */
-  imageCrop?: ImageCrop | null
 }
 
-const { closing, message, imageUrl, imageCrop } = Astro.props
-
-const showMessage = hasFooterMessage(message)
-
-// When a crop was saved, render the cropped region with the same CSS-fraction
-// technique the story photo uses (a background layer — backgrounds can't take a
-// srcset, so we ask for one bounded variant comfortably above the rendered
-// width at retina). With no crop, fall back to a plain responsive <img>.
-const cropStyle = imageUrl ? cropBackgroundStyle(variantSrc(imageUrl, 'card'), imageCrop) : null
-// The box adopts the crop's TRUE pixel aspect (from its captured source dims) so
-// the uniformly-scaled region fills it with no distortion and no empty bars; a
-// legacy crop with no dims falls back to the slot's square default.
-const imageAspect = String(cropAspectRatio(imageCrop, FOOTER_IMAGE_ASPECT))
+const { closing } = Astro.props
 ---
 <footer class="site-footer">
-  {
-    imageUrl && (
-      <div class="motif">
-        {cropStyle ? (
-          <div
-            aria-hidden="true"
-            class="motif-img motif-crop"
-            style={{ ...cropStyle, 'aspect-ratio': imageAspect }}
-          />
-        ) : (
-          /* Renders at most 200px wide — `thumb` (320w) covers it at 2× DPR. */
-          <img
-            src={imageUrl}
-            srcset={buildSrcSet(imageUrl, ['thumb'])}
-            sizes="200px"
-            alt=""
-            class="motif-img"
-            style={{ 'aspect-ratio': imageAspect }}
-          />
-        )}
-      </div>
-    )
-  }
-  {showMessage && <p class="note">{message}</p>}
   {closing && <p class="closing">{closing}</p>}
   <nav aria-label="Legal">
     <a href="/privacy">Privacy Notice</a>
@@ -108,52 +41,6 @@ const imageAspect = String(cropAspectRatio(imageCrop, FOOTER_IMAGE_ASPECT))
     font-family: var(--font-body, "Lato", system-ui, sans-serif);
     font-size: 0.8125rem;
     color: var(--color-text-muted, rgba(255, 255, 255, 0.5));
-  }
-
-  /* The couple's footer image — a monogram, motif or signature, not a scene.
-     Deliberately small and centred: it opens the sign-off block above the note
-     and the names, so it has to read as a flourish rather than compete with the
-     hero. Width-capped and viewport-relative so it stays proportionate on a
-     phone, where 200px would be half the screen. */
-  .site-footer .motif {
-    display: flex;
-    justify-content: center;
-    margin: 0 0 1.25rem;
-  }
-
-  .site-footer .motif-img {
-    width: min(200px, 45vw);
-    height: auto;
-    /* An uncropped upload gets the square default; a cropped one gets its own
-       aspect from the inline style. `cover` only matters on the <img> path —
-       the crop path paints a sized background layer instead. */
-    object-fit: cover;
-    border-radius: 2px;
-  }
-
-  /* The cropped variant paints a background layer, so the box must clip it and
-     carry its own size (an empty div has no intrinsic dimensions). */
-  .site-footer .motif-crop {
-    overflow: hidden;
-    background-repeat: no-repeat;
-  }
-
-  /* The couple's closing note. Body font (it is a sentence, not a name) and
-     measure-capped so a longer note wraps to readable lines rather than one
-     wide band on desktop. Sits a little larger than the legal row so it reads
-     as part of the invitation. */
-  .site-footer .note {
-    margin: 0 auto 1rem;
-    max-width: 34rem;
-    font-size: clamp(0.9375rem, 2vw, 1.0625rem);
-    line-height: 1.6;
-    font-style: italic;
-    /* Deliberately not the muted legal grey — this is the couple speaking. */
-    color: var(--color-text, rgba(255, 255, 255, 0.82));
-    /* An organiser may type a multi-line note; honour the breaks they chose
-       without letting a long single line overflow on a phone. */
-    white-space: pre-line;
-    overflow-wrap: anywhere;
   }
 
   .site-footer .closing {

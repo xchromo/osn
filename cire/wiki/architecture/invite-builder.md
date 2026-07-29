@@ -28,18 +28,42 @@ Single source of truth: `cire/api/src/schemas/invite.ts`.
 | Our Story            | `story`    | `storyEyebrow`, `storyHeading`, `storyBody`  |
 | Code Entry & Welcome | —          | `welcomeMessage` (post-claim greeting line)   |
 | Events ("details")   | —          | `detailsEyebrow`, `detailsHeading`            |
-| Footer               | `footer`   | `footerMessage` (closing note, **no default**) |
+| Closing (`footer`)   | `footer`   | `footerMessage` (closing note, **no default**) |
 
 The `details`/`welcome` copy fields landed in migration
 `0028_details_welcome_copy.sql` — they closed the last hardcoded guest-facing
 copy (the "Celebrate With Us" / "Your Events" events header and the
 "We are delighted to invite you…" greeting).
 
-The **footer** gained its two pieces in successive migrations:
-`0048_invite_footer_message.sql` (the note) and `0049_invite_footer_image.sql`
-(`footer_image_key` + `footer_image_crop` — a small centred monogram, motif or
-signature above it). They are INDEPENDENT: either alone renders, and the badge
-in the builder reflects "is there anything here at all" via `isFooterEmpty`.
+### The closing section
+
+The invite's last section — the couple's own sign-off — built over three
+migrations: `0048_invite_footer_message.sql` (the note),
+`0049_invite_footer_image.sql` (`footer_image_key` + `footer_image_crop`, a
+small centred monogram / motif / signature above it) and
+`0050_invite_footer_tone.sql` (`footer_tone`, so it picks a surface like every
+other section). Note and image are INDEPENDENT: either alone renders.
+
+**It is NOT part of `SiteFooter`.** Two different things live at the bottom of
+an invite and the distinction is load-bearing:
+
+| | `InviteClosing.astro` | `SiteFooter.astro` |
+|---|---|---|
+| What | Invite content — the couple's motif + closing note | Site chrome — couple's title + Privacy/Terms/Privacy-choices |
+| Where | Only the invite, immediately above the footer | Every document (invite, `/privacy`, `/terms`, 404) |
+| When | Conditional — nothing set ⇒ **renders nothing at all** | Always (compliance blocker C-H4) |
+| Themed | Yes — its own `footer_tone` surface | No — inherits the root palette |
+
+The first implementation put the note and image *inside* `SiteFooter`. That was
+wrong in both directions: it would have rendered invite content on the legal
+pages, and it left the couple's words stranded in a legal-links block instead of
+in a section of their own that can carry a surface and hide when empty.
+
+**Naming.** Storage and the wire say `footer_*` / `footer` (the image slot's R2
+namespace and public URL segment too); the builder says "Closing Section". The
+data-layer name is accurate — it IS the invite's footer section — but showing an
+organiser "footer" beside a page that also has a legal footer would be ambiguous
+about which one they're editing. Deliberate mapping, not drift.
 
 On the note specifically: It is the one
 copy field with **no built-in default**: it exists so a couple can add a closing
@@ -88,8 +112,7 @@ fill a field). The single source of truth for these predicates is
 | **Our Story**                 | it has a heading **OR** a body **OR** a story image        | `InviteHeader.tsx` (`showStory`)        |
 | **Event → Inspiration**       | the event has a `pinterestUrl`                             | `DetailsModal.tsx` (`hasPinterest`)     |
 | **Event → Dress Code**        | the event has a dress-code description **OR** a palette swatch | `DetailsModal.tsx` (`hasDressCode`) |
-| **Footer note**               | `footerMessage` has text                                   | `SiteFooter.astro` (`hasFooterMessage`) |
-| **Footer image**              | the `footer` slot has an image                             | `SiteFooter.astro`                      |
+| **Closing section**           | it has a note **OR** an image (whole section)               | `InviteClosing.astro` (`isFooterEmpty`) |
 
 Image-only or title-only heroes are valid (the neutral "You're Invited" fallback
 title only renders **inside** an otherwise-shown hero). All built-in fallback
@@ -101,8 +124,8 @@ builder (the old values live in the PR #248 description). The Our-Story eyebrow 
 label, not content — it does not keep the section alive on its own.
 
 **Builder reflection (no surprises):** `InviteBuilder.tsx` shows a per-section
-badge — **"Shown"** vs **"Hidden — empty"** — on the Hero, Our Story and Footer
-Note fieldsets,
+badge — **"Shown"** vs **"Hidden — empty"** — on the Hero, Our Story and Closing
+Section fieldsets,
 driven by the **same** emptiness logic (mirrored in
 `cire/organiser/src/lib/invite-emptiness.ts`, since the two packages share no
 code). The badge updates **live** as the organiser types, so they know exactly
@@ -187,8 +210,8 @@ one colour keeps the rest coherent.
 ### Tones replace per-section colour
 
 Each section carries a `tone` — `ground` | `card` | `raised`, i.e. which derived
-surface it sits on (`hero_tone`, `story_tone`, `details_tone`, `welcome_tone`;
-`null` ⇒ `ground`). Alternating surfaces down the page is what made sections read
+surface it sits on (`hero_tone`, `story_tone`, `details_tone`, `welcome_tone`,
+`footer_tone`; `null` ⇒ `ground`). Alternating surfaces down the page is what made sections read
 as distinct; eight free colours were never what did that work. There is
 deliberately no "sit on the accent" tone — that needs the text tokens to flip
 too, and a half-flipped section is the unreadable output the derivation exists to
@@ -246,7 +269,7 @@ swatches say what guests should wear, and recolouring them would be a lie.
 FK ⇒ 1:1). Nullable text columns + nullable `hero_image_key` / `story_image_key` +
 nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 `palette_{ground,card,ink,gilt,bloom}` seeds + `palette_preset`, and the four
-`{hero,story,details,welcome}_tone` columns — all from
+`{hero,story,details,welcome,footer}_tone` columns — the first four from
 `0044_invite_palette.sql`, which dropped the eight
 `{hero,story,details,welcome}_{accent,surface}_color` columns added by `0014` +
 `0027`, back-filling the hero accent → `palette_gilt` and the hero surface →
@@ -256,8 +279,9 @@ nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 (`0048_invite_footer_message.sql` — the footer's closing note, which unlike its
 neighbours has no built-in default: NULL ⇒ nothing rendered) +
 `footer_image_key` / `footer_image_crop` (`0049_invite_footer_image.sql` — the
-footer's optional motif, same R2-key + crop-JSON storage as the other slots) +
-the two **hero display** columns
+closing section's optional motif, same R2-key + crop-JSON storage as the other
+slots) + `footer_tone` (`0050_invite_footer_tone.sql`) + the two
+**hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two
 hero-display columns are NOT NULL with defaults that reproduce today's look, so a

@@ -24,8 +24,8 @@ import { isFooterEmpty, isHeroEmpty, isStoryEmpty } from "../lib/invite-emptines
 import { CIRE_WEB_URL } from "../lib/osn";
 import PaletteField, { type PaletteState, resolvedSeeds } from "./PaletteField";
 
-/** The four sections whose tone an organiser chooses. */
-type ThemeSection = "hero" | "story" | "details" | "welcome";
+/** The sections whose tone an organiser chooses. */
+type ThemeSection = "hero" | "story" | "details" | "welcome" | "footer";
 
 const ImageCropModal = lazy(() => import("./ImageCropModal"));
 
@@ -155,7 +155,7 @@ const DEFAULTS = {
 const SLOT_LABELS: Record<ImageSlot, string> = {
   hero: "Hero",
   story: "Story",
-  footer: "Footer",
+  footer: "Closing",
 };
 
 /** Trimmed live copy (or the default when blank), truncated to fit a preview card. */
@@ -216,6 +216,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     story: null,
     details: null,
     welcome: null,
+    footer: null,
   });
 
   // Hero display sliders. Default to today's look (blur 28 backdrop, no title
@@ -254,6 +255,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       story: (d.theme.tones?.story as SectionTone | null) ?? null,
       details: (d.theme.tones?.details as SectionTone | null) ?? null,
       welcome: (d.theme.tones?.welcome as SectionTone | null) ?? null,
+      footer: (d.theme.tones?.footer as SectionTone | null) ?? null,
     });
     setHeroBlur(d.heroDisplay?.blur ?? HERO_BLUR_DEFAULT);
     setTitleBackdropOpacity(d.heroDisplay?.titleBackdrop?.opacity ?? 0);
@@ -292,6 +294,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     storyTone: tones().story,
     detailsTone: tones().details,
     welcomeTone: tones().welcome,
+    footerTone: tones().footer,
     heroBlur: heroBlur(),
     titleBackdropOpacity: titleBackdropOpacity(),
     titleBackdropBlur: titleBackdropBlur(),
@@ -876,22 +879,22 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 />
               </fieldset>
 
-              {/* ── Footer ───────────────────────────────────────────── */}
+              {/* ── Closing section ──────────────────────────────────── */}
               <fieldset class="border-border flex flex-col gap-4 rounded-sm border p-4">
                 <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
-                  Footer
+                  Closing Section
                 </legend>
                 <p class="font-body text-text-muted text-[0.82rem]">
-                  An optional sign-off at the very bottom of the invite, just above your names — a
-                  small image (a monogram, motif or your signature) and a closing line like "Looking
-                  forward to celebrating with you" or "No boxed gifts please". Add either, both, or
-                  neither: leave them empty and the footer shows your names and the legal links
-                  only, exactly as it does now. Both are part of the public invite page, so don't
-                  put anything private there.
+                  The last section of the invite — your own sign-off, below the events and above the
+                  page footer. A small image (a monogram, motif or your signature) and a closing
+                  line like "Looking forward to celebrating with you" or "No boxed gifts please".
+                  Add either, both, or neither: leave them empty and the whole section is skipped,
+                  so the invite ends on your events exactly as it does now. It is part of the public
+                  invite page, so don't put anything private here.
                 </p>
                 <SegmentBadge shown={footerShown()} />
                 <ImageField
-                  label="Footer image"
+                  label="Closing image"
                   slot="footer"
                   url={d().footer?.imageUrl ?? null}
                   crop={d().footer?.imageCrop ?? null}
@@ -901,17 +904,32 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 />
                 <label class="flex flex-col gap-1.5">
                   <span class="font-body text-text-muted text-[0.72rem] tracking-[0.1em] uppercase">
-                    Footer note (optional)
+                    Closing note (optional)
                   </span>
                   <textarea
                     rows={3}
-                    aria-label="Footer note (optional)"
+                    aria-label="Closing note (optional)"
                     placeholder="Looking forward to celebrating with you"
                     value={footerMessage()}
                     onInput={(e) => setFooterMessage(e.currentTarget.value)}
                     class="border-border bg-bg font-body text-text focus:border-gold rounded-sm border px-3 py-2 text-[0.88rem] outline-none"
                   />
                 </label>
+                <ToneField
+                  value={tones().footer}
+                  onChange={(v) => setTones((p) => ({ ...p, footer: v }))}
+                />
+                <SectionPreview
+                  label="Closing Section"
+                  section="footer"
+                  tokens={previewTokens()}
+                  surface={toneSurface("footer")}
+                  body={
+                    footerMessage().trim().length > 0
+                      ? sampleCopy(footerMessage(), "")
+                      : "Your closing note appears here."
+                  }
+                />
               </fieldset>
 
               {/* ── Invite message (not on the guest page) ───────────── */}
@@ -1037,8 +1055,9 @@ function SectionPreview(props: {
   tokens: Record<string, string>;
   /** The surface this section's tone paints, as a `var(--color-…)` reference. */
   surface: string;
-  eyebrow: string;
-  heading: string;
+  /** Optional: the closing section is body copy only — no eyebrow or heading. */
+  eyebrow?: string;
+  heading?: string;
   body: string;
 }) {
   return (
@@ -1056,18 +1075,22 @@ function SectionPreview(props: {
         }}
         class="flex min-h-28 flex-col items-center justify-center gap-1.5 overflow-hidden rounded-sm border p-4 text-center"
       >
-        <span
-          style={{ color: "var(--color-gold)" }}
-          class="text-[0.6rem] tracking-[0.18em] uppercase opacity-80"
-        >
-          {props.eyebrow}
-        </span>
-        <span
-          style={{ color: "var(--color-text)", "font-family": "var(--font-display)" }}
-          class="text-[1.5rem] leading-none font-light italic"
-        >
-          {props.heading}
-        </span>
+        <Show when={props.eyebrow}>
+          <span
+            style={{ color: "var(--color-gold)" }}
+            class="text-[0.6rem] tracking-[0.18em] uppercase opacity-80"
+          >
+            {props.eyebrow}
+          </span>
+        </Show>
+        <Show when={props.heading}>
+          <span
+            style={{ color: "var(--color-text)", "font-family": "var(--font-display)" }}
+            class="text-[1.5rem] leading-none font-light italic"
+          >
+            {props.heading}
+          </span>
+        </Show>
         {/* Body sample in the body font on the section surface, so the font and
             the text-on-surface contrast are both visible. */}
         <span
