@@ -28,12 +28,23 @@ pulse consume them too).
 > `src/components/nav.tsx` (shared nav source), `MobileNav.tsx` (bottom tab
 > bar), `MobileTopBar.tsx` (mobile header), `ResponsiveDialogContent.tsx`
 > (bottom-sheet dialog face), `AccountMenu` / `AuthDialogs` /
-> `ProfileSwitcherDialog` (account UI shared by both shells), safe-area +
+> `ProfileSwitcherDialog` (account UI shared by the shells — only the
+> active shell mounts, gated on an `md` matchMedia signal in `Layout`,
+> which also keeps the auth-dialog surface single-instance), safe-area +
 > `pb-nav` utilities and the 16 px mobile-input rule in `App.css`, and a
 > **Responsive layout** section in `DESIGN.md` that locks the system
 > (single `md` breakpoint, `max-md:` touch-target mechanism, sheet dialogs,
 > top-center mobile toasts). Verified headless-Chromium at 320/390/768/1280
 > widths — zero horizontal overflow, both themes; `/authorize` untouched.
+>
+> **Prep-pr review round (2026-07-28):** security pass (S-L1 duplicate
+> dialog mounts → resolved structurally by single-shell mounting; C-L1
+> nav icons now `aria-hidden`), perf pass (P-W1 both shells always
+> mounted → conditional mount + one `MobileChrome` chunk; P-I1 duplicate
+> dialog/memo work → falls out of P-W1; P-I2 `useIsMobile` first-frame
+> flip → synchronous matchMedia init), tests (T-M1/T-M2/T-U1/T-U2/T-S1
+> written; T-S2 Layout-composition test deferred — `AuthProvider`
+> bootstraps a network `POST /token`, so it needs a heavier fixture).
 
 Platform priority is **iOS > Web > Android** (CLAUDE.md), so mobile Safari is
 the primary target for every fix below.
