@@ -197,7 +197,6 @@ CREATE TABLE IF NOT EXISTS wedding_invite_customisations (
   story_tone TEXT,
   details_tone TEXT,
   welcome_tone TEXT,
-  footer_tone TEXT,
   invite_message TEXT,
   design_id TEXT NOT NULL DEFAULT 'classic',
   updated_at INTEGER NOT NULL,

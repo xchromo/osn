@@ -292,9 +292,10 @@ describe("InviteBuilder theme", () => {
     await waitFor(() => screen.getByText("Save invite"));
 
     // One tone control per section, in guest-page order (hero, story, welcome,
-    // events, closing); each offers the same three surfaces.
+    // events); each offers the same three surfaces. The closing section has NO
+    // control of its own — it reuses the welcome surface.
     const raised = screen.getAllByText("Raised");
-    expect(raised.length).toBe(5);
+    expect(raised.length).toBe(4);
     fireEvent.click(raised[2]); // welcome
     fireEvent.click(screen.getByText("Save invite"));
 
@@ -305,25 +306,22 @@ describe("InviteBuilder theme", () => {
     expect(sent.storyTone).toBeNull();
     expect(sent.detailsTone).toBeNull();
     expect(sent.heroTone).toBeNull();
-    expect(sent.footerTone).toBeNull();
   });
 
-  it("PUTs the closing section's own tone (the last lane)", async () => {
-    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
-    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // theme save
+  // The closing section deliberately adds NO tone field — it reuses the welcome
+  // surface, so the theme body must stay the four lanes it has always had.
+  it("sends no extra tone lane for the closing section", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
     await waitFor(() => screen.getByText("Save invite"));
 
-    const raised = screen.getAllByText("Raised");
-    fireEvent.click(raised[4]); // closing section — last in guest-page order
+    fireEvent.click(screen.getAllByText("Raised")[0]); // hero — make the half dirty
     fireEvent.click(screen.getByText("Save invite"));
 
     await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
-    const sent = sentBody("/theme");
-    expect(sent.footerTone).toBe("raised");
-    expect(sent.welcomeTone).toBeNull();
-    expect(sent.detailsTone).toBeNull();
+    expect(sentBody("/theme")).not.toHaveProperty("footerTone");
   });
 
   it("seeds the hero display sliders from the loaded customisation", async () => {

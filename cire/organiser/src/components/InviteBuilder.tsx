@@ -24,8 +24,8 @@ import { isFooterEmpty, isHeroEmpty, isStoryEmpty } from "../lib/invite-emptines
 import { CIRE_WEB_URL } from "../lib/osn";
 import PaletteField, { type PaletteState, resolvedSeeds } from "./PaletteField";
 
-/** The sections whose tone an organiser chooses. */
-type ThemeSection = "hero" | "story" | "details" | "welcome" | "footer";
+/** The four sections whose tone an organiser chooses. */
+type ThemeSection = "hero" | "story" | "details" | "welcome";
 
 const ImageCropModal = lazy(() => import("./ImageCropModal"));
 
@@ -216,7 +216,6 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     story: null,
     details: null,
     welcome: null,
-    footer: null,
   });
 
   // Hero display sliders. Default to today's look (blur 28 backdrop, no title
@@ -255,7 +254,6 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       story: (d.theme.tones?.story as SectionTone | null) ?? null,
       details: (d.theme.tones?.details as SectionTone | null) ?? null,
       welcome: (d.theme.tones?.welcome as SectionTone | null) ?? null,
-      footer: (d.theme.tones?.footer as SectionTone | null) ?? null,
     });
     setHeroBlur(d.heroDisplay?.blur ?? HERO_BLUR_DEFAULT);
     setTitleBackdropOpacity(d.heroDisplay?.titleBackdrop?.opacity ?? 0);
@@ -294,7 +292,6 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     storyTone: tones().story,
     detailsTone: tones().details,
     welcomeTone: tones().welcome,
-    footerTone: tones().footer,
     heroBlur: heroBlur(),
     titleBackdropOpacity: titleBackdropOpacity(),
     titleBackdropBlur: titleBackdropBlur(),
@@ -915,21 +912,24 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                     class="border-border bg-bg font-body text-text focus:border-gold rounded-sm border px-3 py-2 text-[0.88rem] outline-none"
                   />
                 </label>
-                <ToneField
-                  value={tones().footer}
-                  onChange={(v) => setTones((p) => ({ ...p, footer: v }))}
-                />
+                {/* No colour picker of its own — the closing section reuses the
+                    Code Entry & Welcome surface, so the couple's two direct
+                    addresses to their guests match. */}
                 <SectionPreview
                   label="Closing Section"
-                  section="footer"
+                  section="welcome"
                   tokens={previewTokens()}
-                  surface={toneSurface("footer")}
+                  surface={toneSurface("welcome")}
                   body={
                     footerMessage().trim().length > 0
                       ? sampleCopy(footerMessage(), "")
                       : "Your closing note appears here."
                   }
                 />
+                <p class="font-body text-text-muted text-[0.78rem] italic">
+                  Uses the colours you picked for Code Entry &amp; Welcome — the closing note is you
+                  speaking to your guests, same as the greeting.
+                </p>
               </fieldset>
 
               {/* ── Invite message (not on the guest page) ───────────── */}

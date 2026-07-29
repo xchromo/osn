@@ -29,6 +29,7 @@ Single source of truth: `cire/api/src/schemas/invite.ts`.
 | Code Entry & Welcome | —          | `welcomeMessage` (post-claim greeting line)   |
 | Events ("details")   | —          | `detailsEyebrow`, `detailsHeading`            |
 | Closing (`footer`)   | `footer`   | `footerMessage` (closing note, **no default**) |
+|   ↳ post-claim only, and reuses the welcome tone | | |
 
 The `details`/`welcome` copy fields landed in migration
 `0028_details_welcome_copy.sql` — they closed the last hardcoded guest-facing
@@ -40,9 +41,26 @@ copy (the "Celebrate With Us" / "Your Events" events header and the
 The invite's last section — the couple's own sign-off — built over three
 migrations: `0048_invite_footer_message.sql` (the note),
 `0049_invite_footer_image.sql` (`footer_image_key` + `footer_image_crop`, a
-small centred monogram / motif / signature above it) and
-`0050_invite_footer_tone.sql` (`footer_tone`, so it picks a surface like every
-other section). Note and image are INDEPENDENT: either alone renders.
+small centred monogram / motif / signature above it). Note and image are
+INDEPENDENT: either alone renders.
+
+**It is behind the claim gate.** It renders inside `InvitePage`'s
+`<Show when={claimResult()}>`, with the events list — not in the public shell
+(hero / Our Story / code entry) that anyone holding the URL can read. The
+closing note is addressed to the invited household, so it waits for the code
+like the events do. It is deliberately NOT given the events section's
+`opacity-0` class: the unlock choreography animates the events, and a section
+that needs a motion chunk to become visible is a section that can stay invisible
+when that chunk fails to load (the exact failure `UnlockReveal.motion.ts` warns
+about). It sits below every event card, so it is off-screen while the reveal
+plays.
+
+**It has no tone setting of its own.** It paints the WELCOME section's surface
+(`sectionVars(theme, "welcome")`, passed in as `themeVars`). The welcome
+greeting and the closing note are the couple's two direct addresses to their
+guests, so they read as a matched pair — and the builder gains no extra knob for
+a section whose whole job is a sentence and a motif. `THEME_SECTIONS` stays the
+four lanes it has always had.
 
 **It is NOT part of `SiteFooter`.** Two different things live at the bottom of
 an invite and the distinction is load-bearing:
@@ -52,12 +70,14 @@ an invite and the distinction is load-bearing:
 | What | Invite content — the couple's motif + closing note | Site chrome — couple's title + Privacy/Terms/Privacy-choices |
 | Where | Only the invite, immediately above the footer | Every document (invite, `/privacy`, `/terms`, 404) |
 | When | Conditional — nothing set ⇒ **renders nothing at all** | Always (compliance blocker C-H4) |
-| Themed | Yes — its own `footer_tone` surface | No — inherits the root palette |
+| Themed | Yes — reuses the **welcome** tone, no setting of its own | No — inherits the root palette |
+| Gated | Yes — only after the guest claims their code | No — always |
 
 The first implementation put the note and image *inside* `SiteFooter`. That was
-wrong in both directions: it would have rendered invite content on the legal
-pages, and it left the couple's words stranded in a legal-links block instead of
-in a section of their own that can carry a surface and hide when empty.
+wrong in three ways: it would have rendered invite content on the legal pages,
+it left the couple's words stranded in a legal-links block instead of a section
+of their own, and — because `SiteFooter` is outside the island — it exposed the
+note to anyone with the URL, before any code was entered.
 
 **Naming.** Storage and the wire say `footer_*` / `footer` (the image slot's R2
 namespace and public URL segment too); the builder says "Closing Section". The
@@ -112,7 +132,7 @@ fill a field). The single source of truth for these predicates is
 | **Our Story**                 | it has a heading **OR** a body **OR** a story image        | `InviteHeader.tsx` (`showStory`)        |
 | **Event → Inspiration**       | the event has a `pinterestUrl`                             | `DetailsModal.tsx` (`hasPinterest`)     |
 | **Event → Dress Code**        | the event has a dress-code description **OR** a palette swatch | `DetailsModal.tsx` (`hasDressCode`) |
-| **Closing section**           | it has a note **OR** an image (whole section)               | `InviteClosing.astro` (`isFooterEmpty`) |
+| **Closing section**           | it has a note **OR** an image (whole section), post-claim   | `InviteClosing.tsx` (`isFooterEmpty`)   |
 
 Image-only or title-only heroes are valid (the neutral "You're Invited" fallback
 title only renders **inside** an otherwise-shown hero). All built-in fallback
@@ -210,8 +230,9 @@ one colour keeps the rest coherent.
 ### Tones replace per-section colour
 
 Each section carries a `tone` — `ground` | `card` | `raised`, i.e. which derived
-surface it sits on (`hero_tone`, `story_tone`, `details_tone`, `welcome_tone`,
-`footer_tone`; `null` ⇒ `ground`). Alternating surfaces down the page is what made sections read
+surface it sits on (`hero_tone`, `story_tone`, `details_tone`, `welcome_tone`;
+`null` ⇒ `ground`). The closing section reuses the welcome tone rather than
+adding a fifth — see above. Alternating surfaces down the page is what made sections read
 as distinct; eight free colours were never what did that work. There is
 deliberately no "sit on the accent" tone — that needs the text tokens to flip
 too, and a half-flipped section is the unreadable output the derivation exists to
@@ -269,7 +290,7 @@ swatches say what guests should wear, and recolouring them would be a lie.
 FK ⇒ 1:1). Nullable text columns + nullable `hero_image_key` / `story_image_key` +
 nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 `palette_{ground,card,ink,gilt,bloom}` seeds + `palette_preset`, and the four
-`{hero,story,details,welcome,footer}_tone` columns — the first four from
+`{hero,story,details,welcome}_tone` columns — all from
 `0044_invite_palette.sql`, which dropped the eight
 `{hero,story,details,welcome}_{accent,surface}_color` columns added by `0014` +
 `0027`, back-filling the hero accent → `palette_gilt` and the hero surface →
@@ -280,8 +301,7 @@ nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 neighbours has no built-in default: NULL ⇒ nothing rendered) +
 `footer_image_key` / `footer_image_crop` (`0049_invite_footer_image.sql` — the
 closing section's optional motif, same R2-key + crop-JSON storage as the other
-slots) + `footer_tone` (`0050_invite_footer_tone.sql`) + the two
-**hero display** columns
+slots) + the two **hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two
 hero-display columns are NOT NULL with defaults that reproduce today's look, so a

@@ -764,10 +764,6 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   storyTone: text("story_tone"),
   detailsTone: text("details_tone"),
   welcomeTone: text("welcome_tone"),
-  // The closing section (migration 0050) — the couple's sign-off (motif + note)
-  // rendered above the site footer. A real invite section, so like its
-  // neighbours it picks which derived surface it sits on.
-  footerTone: text("footer_tone"),
   // Optional host override for the FIRST line of the message an organiser copies
   // to send a family their invite (migration 0023). NULL ⇒ the built-in default
   // prose. The copied message is always the same 3-line shape — this line, then

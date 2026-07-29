@@ -286,7 +286,7 @@ const sliderField = (min: number, max: number) =>
  * The named sections an organiser can tone. Closed on purpose — same philosophy
  * as the image slots: a few well-placed sections, not a page-builder.
  */
-export const THEME_SECTIONS = ["hero", "story", "details", "welcome", "footer"] as const;
+export const THEME_SECTIONS = ["hero", "story", "details", "welcome"] as const;
 export type ThemeSection = (typeof THEME_SECTIONS)[number];
 
 /**
@@ -359,8 +359,6 @@ export const InviteThemeBody = Schema.Struct({
   storyTone: ToneField,
   detailsTone: ToneField,
   welcomeTone: ToneField,
-  // The closing section (0050) — the couple's sign-off above the site footer.
-  footerTone: ToneField,
   // Hero display sliders. Non-nullable bounded ints — the builder always submits
   // all three, each is clamped into range on decode (out-of-range is silently
   // clamped, not rejected), and a non-integer is a ParseError → 400. The

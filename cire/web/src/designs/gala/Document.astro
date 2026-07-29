@@ -5,7 +5,6 @@ import InviteHeader from './InviteHeader'
 import InvitePage from './InvitePage'
 import { paletteRootVars, styleAttr } from '../../components/invite-theme'
 import SiteFooter from '../../components/SiteFooter.astro'
-import InviteClosing from '../../components/InviteClosing.astro'
 import { ConsentBanner } from '../../components/consent/ConsentBanner'
 import type { InviteDesignProps } from '../types'
 
@@ -30,12 +29,6 @@ const pageTitle = inviteTitle(initialInvite?.hero.title)
 // their no-store revalidation (`applyPaletteToRoot`) so a colour the organiser
 // just saved lands without a rebuild.
 const paletteStyle = styleAttr(paletteRootVars(initialInvite?.theme ?? null))
-
-// The closing section's motif, like the hero, is served by the API — absolutise
-// it here so InviteClosing stays a dumb presentational component.
-const closingImageUrl = initialInvite?.footer?.imageUrl
-  ? `${apiUrl}${initialInvite.footer.imageUrl}`
-  : null
 
 const heroSep = heroBase?.includes('?') ? '&' : '?'
 // Must stay in step with HERO_BG_VARIANT in components/invite-images.ts.
@@ -72,18 +65,15 @@ const preloadHeroHref = heroBase ? `${heroBase}${heroSep}variant=hero-bg` : null
       theme={initialInvite?.theme ?? null}
       details={initialInvite?.details ?? null}
       welcomeMessage={initialInvite?.welcome?.message ?? null}
-    />
-    {/* The couple's own sign-off — their motif and closing note. A real invite
-        SECTION (toned like the others), so with neither set it renders nothing
-        at all rather than an empty band above the footer. */}
-    <InviteClosing
-      message={initialInvite?.footer?.message ?? null}
-      imageUrl={closingImageUrl}
-      imageCrop={initialInvite?.footer?.imageCrop ?? null}
-      theme={initialInvite?.theme ?? null}
+      closing={{
+        message: initialInvite?.footer?.message ?? null,
+        imageUrl: initialInvite?.footer?.imageUrl ?? null,
+        imageCrop: initialInvite?.footer?.imageCrop ?? null,
+      }}
     />
     {/* Site-wide chrome: the couple's name over the legal links. Always here,
-        on the invite and on the legal pages alike. */}
+        on the invite and on the legal pages alike. The couple's own sign-off is
+        a section INSIDE InvitePage above — it sits behind the claim gate. */}
     <SiteFooter closing={initialInvite?.hero.title ?? null} />
     {/* Site-wide consent surface. `client:idle` so it never competes with the
         invite's first paint — nothing third-party can load before it hydrates

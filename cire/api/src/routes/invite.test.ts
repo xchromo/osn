@@ -1206,7 +1206,6 @@ describe("PUT /invite/theme (organiser)", () => {
     storyTone: "card",
     detailsTone: null,
     welcomeTone: "raised",
-    footerTone: "card",
     heroBlur: 28,
     titleBackdropOpacity: 0,
     titleBackdropBlur: 0,
@@ -1258,7 +1257,6 @@ describe("PUT /invite/theme (organiser)", () => {
       story: "card",
       details: null,
       welcome: "raised",
-      footer: "card",
     });
   });
 
@@ -1281,7 +1279,6 @@ describe("PUT /invite/theme (organiser)", () => {
       story: null,
       details: null,
       welcome: null,
-      footer: null,
     });
   });
 
@@ -1404,7 +1401,6 @@ describe("hero display sliders (migration 0018)", () => {
     storyTone: null,
     detailsTone: null,
     welcomeTone: null,
-    footerTone: null,
     heroBlur: 28,
     titleBackdropOpacity: 0,
     titleBackdropBlur: 0,
