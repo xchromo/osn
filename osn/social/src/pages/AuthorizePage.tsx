@@ -435,6 +435,31 @@ function ClientCard(props: { context: AuthorizeContext | undefined }) {
       </Show>
       <h1 class="text-foreground text-title font-medium">{client()?.name}</h1>
       <p class="text-muted-foreground text-body mt-1">wants to use your OSN account</p>
+      {/* Verifiable identity signal. The name above is self-asserted and can
+          impersonate a first-party app; the redirect host is what the client
+          actually registered, and third-party clients are called out so a
+          look-alike cannot pass itself off as an OSN app. */}
+      <Show
+        when={client()?.firstParty}
+        fallback={
+          <p class="text-muted-foreground text-caption mt-3 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
+            <span class="border-border text-muted-foreground rounded-full border px-2 py-0.5 font-medium">
+              Third-party app
+            </span>
+            <Show when={client()?.redirectDomain}>
+              {(domain) => (
+                <span>
+                  sends you to <span class="text-foreground font-medium">{domain()}</span>
+                </span>
+              )}
+            </Show>
+          </p>
+        }
+      >
+        <p class="text-caption mt-3 font-medium text-emerald-600 dark:text-emerald-400">
+          Verified OSN app
+        </p>
+      </Show>
     </div>
   );
 }

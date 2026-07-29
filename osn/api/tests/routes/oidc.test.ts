@@ -352,7 +352,7 @@ describe("GET /authorize/context", () => {
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      client: { clientId: string; name: string; firstParty: boolean };
+      client: { clientId: string; name: string; firstParty: boolean; redirectDomain: string };
       scopes: string[];
       signedIn: boolean;
       profiles: { id: string }[];
@@ -360,6 +360,8 @@ describe("GET /authorize/context", () => {
     };
     expect(body.client.clientId).toBe("cid_rp");
     expect(body.client.firstParty).toBe(false);
+    // Verifiable identity signal: the host the code is delivered to.
+    expect(body.client.redirectDomain).toBe("rp.example.com");
     expect(body.scopes).toEqual(["openid", "profile"]);
     expect(body.signedIn).toBe(true);
     expect(body.profiles).toHaveLength(1);

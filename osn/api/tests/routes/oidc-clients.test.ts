@@ -182,6 +182,15 @@ describe("POST /oidc/clients", () => {
     ["a non-https logo_url", { logo_url: "http://rp.example.com/logo.png" }],
     ["a javascript: logo_url", { logo_url: "javascript:alert(1)" }],
     ["a blank name", { name: "   " }],
+    // Anti-impersonation: a self-serve client may not pass itself off as a
+    // first-party OSN app, however it spells the name.
+    ["a reserved first-party name", { name: "Musubi" }],
+    ["a reserved name in a different case", { name: "MUSUBI" }],
+    ["a confusable homograph of a reserved name", { name: "Pu1se" }],
+    ["a zero-for-o homograph of a reserved name", { name: "0SN" }],
+    ["a spaced-out reserved name", { name: "M u s u b i" }],
+    ["a name with a bidi override", { name: "Pulse‮evil" }],
+    ["a name with a zero-width space", { name: "Mus​ubi" }],
   ])("rejects %s", async (_label, overrides) => {
     const h = setup();
     const { accessToken } = await register(h, "invalid@example.com", "invalid_user");

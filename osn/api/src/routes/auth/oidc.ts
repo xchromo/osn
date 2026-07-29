@@ -57,6 +57,20 @@ const clientKindOf = (client: { isFirstParty: boolean }) =>
   client.isFirstParty ? "first_party" : "third_party";
 
 /**
+ * The host a redirect URI delivers to, for the consent screen to display as a
+ * verifiable identity signal. The URI has already passed exact-match
+ * registration, so it always parses; the fallback only guards against a
+ * malformed hand-seeded row.
+ */
+const redirectHost = (redirectUri: string): string => {
+  try {
+    return new URL(redirectUri).host;
+  } catch {
+    return redirectUri;
+  }
+};
+
+/**
  * Pulls an `OidcError` out of an Effect failure. `Either` keeps the failure
  * typed, but the union also carries `DatabaseError`, and only the OIDC arm has
  * a wire code the relying party is allowed to see.
@@ -336,6 +350,11 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
                 name: client.name,
                 logoUrl: client.logoUrl,
                 firstParty: client.isFirstParty,
+                // The host the code will actually be delivered to for THIS
+                // request. A verifiable signal the consent screen shows next to
+                // the (self-asserted, spoofable) name so a user can tell a
+                // genuine first-party app from a look-alike third party.
+                redirectDomain: redirectHost(parked.redirectUri),
               },
               scopes: parked.scope.split(" ").filter((s) => s.length > 0),
               signedIn: accountId !== null,

@@ -41,6 +41,7 @@ import {
   OIDC_CLIENT_URI_MAX_LENGTH,
   OIDC_MAX_AGE_CEILING_SEC,
   OIDC_PARAM_MAX_LENGTH,
+  RESERVED_OIDC_CLIENT_NAMES,
 } from "./constants";
 import type { AuthContext } from "./context";
 import { DatabaseError, OidcError, type OidcErrorCode } from "./errors";
@@ -319,6 +320,60 @@ const generateBindingSecret = (): string => {
  * deny-list cannot collide by construction — `findClient` still enforces it
  * as defence in depth for hand-seeded rows.
  */
+/**
+ * True when a name carries a character that lets it lie about its identity on
+ * the consent screen without changing how it reads: bidirectional
+ * overrides/embeddings (which reverse or reorder glyphs), zero-width
+ * joiners/spaces, the BOM, and C0/C1 control codes. A legitimate app name
+ * needs none of them. Codepoint tests avoid a control-character regex literal.
+ */
+function hasDeceptiveNameChar(name: string): boolean {
+  for (const ch of name) {
+    const cp = ch.codePointAt(0)!;
+    if (cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f)) return true; // C0 / DEL / C1 controls
+    if (cp >= 0x200b && cp <= 0x200f) return true; // zero-width + LTR/RTL marks
+    if (cp >= 0x202a && cp <= 0x202e) return true; // bidi embeddings/overrides
+    if (cp >= 0x2060 && cp <= 0x2064) return true; // word-joiner + invisibles
+    if (cp >= 0x2066 && cp <= 0x206f) return true; // bidi isolates + deprecated formats
+    if (cp === 0xfeff) return true; // BOM / zero-width no-break space
+  }
+  return false;
+}
+
+/** Common Latin/digit look-alikes, folded so "Musub1" and "Musubi" collide. */
+const CONFUSABLE_FOLD: Record<string, string> = {
+  "0": "o",
+  "1": "l",
+  "3": "e",
+  "4": "a",
+  "5": "s",
+  "6": "g",
+  "7": "t",
+  "8": "b",
+  "9": "g",
+  "|": "l",
+  "!": "i",
+  $: "s",
+  "@": "a",
+};
+
+/**
+ * Folds a name to a confusable skeleton for impersonation checks: NFKC,
+ * lowercase, digit/symbol look-alikes mapped to their Latin twin, then every
+ * non-`[a-z]` stripped. "Musubi", "MUSUBI", "M-u-s-u-b-i" and "Musub1" all
+ * fold to `musubi`.
+ */
+export function clientNameSkeleton(name: string): string {
+  return [...name.normalize("NFKC").toLowerCase()]
+    .map((ch) => CONFUSABLE_FOLD[ch] ?? ch)
+    .join("")
+    .replace(/[^a-z]/g, "");
+}
+
+const RESERVED_NAME_SKELETONS: ReadonlySet<string> = new Set(
+  RESERVED_OIDC_CLIENT_NAMES.map(clientNameSkeleton),
+);
+
 export function validateClientRegistration(input: {
   name: string;
   redirectUris: string[];
@@ -326,9 +381,17 @@ export function validateClientRegistration(input: {
 }):
   | { ok: true; name: string; redirectUris: string[]; logoUrl: string | null }
   | { ok: false; message: string } {
-  const name = input.name.trim();
+  // NFKC first so length + skeleton see the same canonical form the consent
+  // screen renders (compatibility characters collapse to their base glyphs).
+  const name = input.name.normalize("NFKC").trim();
   if (name.length === 0 || name.length > OIDC_CLIENT_NAME_MAX_LENGTH) {
     return { ok: false, message: `name must be 1–${OIDC_CLIENT_NAME_MAX_LENGTH} characters` };
+  }
+  if (hasDeceptiveNameChar(name)) {
+    return { ok: false, message: "name must not contain control or direction-override characters" };
+  }
+  if (RESERVED_NAME_SKELETONS.has(clientNameSkeleton(name))) {
+    return { ok: false, message: "name is reserved and cannot be used" };
   }
 
   const uris = [...new Set(input.redirectUris)];
