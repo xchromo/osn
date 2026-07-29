@@ -24,8 +24,17 @@ import { ConsentPreferences } from "./ConsentPreferences";
  * returning guest who already decided never sees the banner flash on the way to
  * their invite. The trade is that a first-time guest sees it appear a tick after
  * paint rather than in the server-rendered HTML — acceptable, because nothing
- * third-party can load in that tick either: gates default to denied until the
- * same hydration completes.
+ * third-party loads in that tick either: gates sit at the required-only floor
+ * until the same hydration completes, whatever the opt-out defaults say.
+ *
+ * ## The banner has to be honest that things are already on
+ *
+ * The optional categories are opt-out (see `lib/consent/categories.ts`), so by
+ * the time a guest reads this banner the venue map and the moodboard are
+ * already loading. The copy therefore states that plainly and names the two
+ * companies, rather than asking a question whose answer has been assumed. A
+ * banner that said "may we?" while the request had already gone would be the
+ * worst of both postures: no prior consent AND a misleading account of it.
  *
  * ## The three actions
  *
@@ -34,7 +43,8 @@ import { ConsentPreferences } from "./ConsentPreferences";
  * slower, quieter or more buried than acceptance is the standard way a consent
  * banner stops collecting consent and starts manufacturing it, and it is worth
  * being explicit that this one does not: same size, same row, same styling.
- * "Choose" is the third route rather than the only alternative to accepting.
+ * That matters more under opt-out, not less — the off switch is the only thing
+ * a guest who disagrees with the default actually has.
  */
 export function ConsentBanner() {
   onMount(hydrateConsent);
@@ -54,8 +64,9 @@ export function ConsentBanner() {
           <div class="mx-auto flex max-w-3xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p class="font-body text-text-muted text-[0.78rem] leading-relaxed">
               We use a little storage to keep you signed in to your invite. Some parts — the venue
-              map and the Pinterest moodboard — load from other companies, so we only show them if
-              you say yes.{" "}
+              map and the Pinterest moodboard — are loaded from Google and Pinterest, who can see
+              your IP address and browser. That's switched on; you can turn it off here, or any time
+              from the footer.{" "}
               <a href="/privacy" class="text-gold underline underline-offset-2">
                 Privacy notice
               </a>

@@ -10,6 +10,7 @@ import {
   isGranted,
   makeConsentRecord,
   normaliseGrants,
+  preDecisionGrants,
 } from "./record";
 
 /**
@@ -28,11 +29,18 @@ import {
  *
  * `record()` starts `null` (= "no decision") and is only populated in
  * {@link hydrateConsent}, which callers run from `onMount`. That is what keeps
- * the server-rendered markup and the first client render identical: both show
- * the un-consented state, and an already-consented guest's embeds appear a tick
- * later once the cookie is read. Seeding the signal at module scope instead
- * would produce different HTML on server and client and risk Solid mis-patching
- * the hydrated tree.
+ * the server-rendered markup and the first client render identical: both sit at
+ * the required-only floor, and third-party content appears a tick later once
+ * the cookie has been read. Seeding the signal at module scope instead would
+ * produce different HTML on server and client and risk Solid mis-patching the
+ * hydrated tree.
+ *
+ * Note the floor — not the opt-out defaults — is what applies during that tick,
+ * even though optional categories are on by default. `record() === null` means
+ * two different things depending on whether hydration has run ("we haven't
+ * looked yet" vs "we looked, and there's nothing"), and only the second may
+ * resolve to the permissive defaults. {@link isCategoryGranted} is where that
+ * distinction is enforced.
  */
 
 const [record, setRecord] = createSignal<ConsentRecord | null>(null);
@@ -78,9 +86,15 @@ export const consentRecord = record;
 export const consentHydrated = hydrated;
 
 /**
- * Is `category` granted right now? Before hydration this is the default floor
- * (required categories only), so nothing third-party can load in the window
- * between first paint and the cookie read.
+ * Is `category` granted right now?
+ *
+ * Before hydration this is the FLOOR (required only) — not the opt-out
+ * defaults. The optional categories are on by default for a guest who hasn't
+ * decided, but we do not know whether this guest is that guest until the cookie
+ * has been read: they may have refused. Holding at the floor for that one tick
+ * is what stops a refusal being briefly ignored on every page load. After
+ * hydration, a `null` record resolves through `isGranted` to
+ * {@link preDecisionGrants}.
  */
 export function isCategoryGranted(category: ConsentCategory): boolean {
   if (!hydrated()) return defaultGrants()[category];
@@ -133,10 +147,16 @@ export function rejectAllConsent(): void {
 
 /**
  * The grants to seed the preferences dialog's toggles with: the guest's stored
- * choice if they have one, the deny-by-default floor if they don't.
+ * choice if they have one, the opt-out defaults if they don't.
+ *
+ * Seeding an undecided guest's dialog from {@link preDecisionGrants} rather
+ * than the floor is what makes the toggles TRUE — they show what is actually
+ * loading right now, which is the only reading of a checkbox that isn't
+ * misleading. A dialog that showed `embeds` unticked while the map was on
+ * screen would be describing a state the site is not in.
  */
 export function currentGrants(): ConsentGrants {
-  return record()?.grants ?? defaultGrants();
+  return record()?.grants ?? preDecisionGrants();
 }
 
 /**

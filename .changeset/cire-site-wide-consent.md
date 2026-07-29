@@ -18,11 +18,21 @@ all / Reject all / Choose, rendered through one component so refusal can never b
 visually demoted), the per-category preferences dialog, a `<ConsentGate>` wrapper,
 and a standing "Privacy Choices" control in the site footer.
 
-`<ConsentGate>` does not render its children while consent is absent, so a gated
+`<ConsentGate>` does not render its children while a category is off, so a gated
 component's effects never run — that is what makes the gate real for Pinterest's
 injected tracker rather than merely cosmetic. Google Maps falls back to the
 existing CSS map card instead of a permission notice, so refusing costs the guest
 only the interactive tiles.
+
+Defaults are **opt-out**: third-party content and preferences apply to a guest
+who hasn't decided, and the banner says so plainly — naming Google and Pinterest
+and offering the off switch — rather than asking a question whose answer has been
+assumed. Analytics stays opt-in, because nothing uses that category yet and a
+default can only cover what the guest was actually shown. Three grant maps are
+kept deliberately distinct: the required-only floor (what "Reject all" writes,
+and what applies before the cookie has been read), the opt-out defaults (what
+applies once we know there is no stored decision), and accept-all. Collapsing the
+first two would ignore a refusal for one tick on every page load.
 
 The vendor registry drives the preferences dialog and the `/privacy` third-party
 list, and a test asserts every declared origin is present in the CSP — so the
@@ -34,6 +44,7 @@ loads before any choice can apply. The fix is to self-host the fonts and remove
 the vendor rather than to put the site's typography behind a switch.
 
 Behaviour change: the legacy Pinterest consent key is deleted rather than
-migrated — it consented to Pinterest specifically, not to the broader `embeds`
-category that now also covers Google Maps — so guests who previously accepted the
-Pinterest embed are asked once more.
+migrated. Under the opt-out defaults this no longer changes what a returning
+guest sees — the embed loads either way — but it does mean the key is never
+promoted into a stored decision, so those guests still get the banner and a real
+chance to switch it off.

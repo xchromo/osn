@@ -10,12 +10,12 @@ import {
 import { vendorById } from "../../lib/consent/vendors";
 
 interface ConsentGateProps {
-  /** The category that must be granted before `children` may render. */
+  /** The category that must be switched on before `children` may render. */
   category: ConsentCategory;
   /** Registry id of the third party behind this gate — names it in the placeholder. */
   vendor: string;
   /**
-   * What to render instead when consent is absent. Omit for the standard
+   * What to render instead when the category is off. Omit for the standard
    * placeholder (vendor name + purpose + an in-place "allow" button). Pass
    * something else when the component already has a good un-consented state to
    * fall back to — `MapPreview` passes its CSS-drawn map card, which is a
@@ -26,7 +26,7 @@ interface ConsentGateProps {
 }
 
 /**
- * Renders `children` only once the guest has granted `category`.
+ * Renders `children` only while `category` is switched on.
  *
  * This is the single choke point that replaced the bespoke, Pinterest-shaped
  * gate: previously the one third party that happened to have a consent story
@@ -34,20 +34,26 @@ interface ConsentGateProps {
  * component that used it, while the Google Maps embed — an equivalent transfer
  * to an equivalent US recipient — had no gate at all, because nobody had
  * written it one. Consent lived wherever someone had remembered to put it.
- * Making the gate a wrapper inverts that: a new embed is un-consented by
- * construction, and shipping it *without* a decision means deliberately not
- * wrapping it rather than merely not thinking about it.
  *
- * Children are not rendered — not hidden — while consent is absent, so a gated
- * component's `onMount`/`createEffect` never runs and no request can escape.
- * That is the property that makes the gate meaningful for something like
- * Pinterest, whose entire tracker is injected from inside such an effect.
+ * Note what the wrapper does and does not guarantee. The `embeds` category is
+ * OPT-OUT (see `lib/consent/categories.ts`), so wrapping an embed does not stop
+ * it loading for an undecided guest — it makes the embed *governed*: listed in
+ * the preferences dialog, named in the privacy notice, and switchable off for
+ * good. The old arrangement could offer that for Pinterest and nothing else.
+ *
+ * Children are not rendered — not hidden — while the category is off, so a
+ * gated component's `onMount`/`createEffect` never runs and no request can
+ * escape. That is what makes a refusal real for something like Pinterest, whose
+ * entire tracker is injected from inside such an effect; a version that mounted
+ * always and hid its output behind a CSS class would have made the request
+ * anyway.
  */
 export function ConsentGate(props: ConsentGateProps) {
   // Read the persisted decision on mount. Every gate does this rather than
   // depending on a banner having mounted first, so an embed behaves correctly
   // on any page — including one that never shows the banner because the guest
-  // already decided.
+  // already decided. Until this runs the store sits at the required-only floor,
+  // so a stored refusal is never briefly overridden by the opt-out default.
   onMount(hydrateConsent);
 
   return (
@@ -66,12 +72,13 @@ export function ConsentGate(props: ConsentGateProps) {
  * The standard blocked-content notice: what would be here, who it comes from,
  * and two ways to act on it.
  *
- * Both routes are offered on purpose. "Allow" grants just this category, so the
- * guest who only wants to see the moodboard isn't forced through a settings
+ * Under the opt-out defaults this is almost always the result of a deliberate
+ * refusal rather than an un-answered question, so the copy explains what the
+ * guest is currently not seeing and offers the way back — it does not nag. Both
+ * routes are offered on purpose: "Allow" turns just this category back on, so a
+ * guest who changes their mind about the moodboard isn't sent through a settings
  * dialog to get it; "privacy choices" opens the full picture for the guest who
- * wants to know what else they'd be turning on before turning it on. Offering
- * only the first would be a one-click accept with no visible alternative, which
- * is the pattern regulators treat as consent that was not freely given.
+ * wants to see everything that switch covers before flipping it.
  */
 export function ConsentPlaceholder(props: { category: ConsentCategory; vendor: string }) {
   const vendor = () => vendorById(props.vendor);
@@ -81,10 +88,7 @@ export function ConsentPlaceholder(props: { category: ConsentCategory; vendor: s
   return (
     <div class="border-border/70 bg-surface-raised/60 mt-2 rounded-md border px-4 py-4 text-center">
       <p class="font-body text-text-muted text-[0.78rem] leading-relaxed">
-        <Show
-          when={vendor()?.purpose}
-          fallback={<>Content from {vendorName()} is blocked until you allow it.</>}
-        >
+        <Show when={vendor()?.purpose} fallback={<>Content from {vendorName()} is switched off.</>}>
           {(purpose) => (
             <>
               {vendorName()} would {purpose().charAt(0).toLowerCase() + purpose().slice(1)}
@@ -93,7 +97,8 @@ export function ConsentPlaceholder(props: { category: ConsentCategory; vendor: s
         </Show>
       </p>
       <p class="font-body text-text-muted/80 mt-1.5 text-[0.72rem] leading-relaxed">
-        It loads from {vendorName()}'s servers, which lets them see your IP address and browser.
+        It's switched off because you turned off {categoryTitle()}. It loads from {vendorName()}'s
+        servers, which lets them see your IP address and browser.
       </p>
       <div class="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <button

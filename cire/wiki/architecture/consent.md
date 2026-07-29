@@ -26,9 +26,13 @@ that was acceptable but because nobody had written it one. Consent lived
 wherever someone had remembered to put it, which meant a new embed shipped
 un-gated by default.
 
-The framework inverts that default. A third party is blocked unless it is
-wrapped, and the wrapper is one component. Shipping an ungated embed is now a
-deliberate act rather than an oversight.
+The framework fixes the structural problem rather than the Pinterest-shaped
+symptom: every third party is governed by one wrapper and declared in one
+registry, so a new embed either goes through the gate or is a visible, deliberate
+omission. Note this is about *control*, not about the answer — the defaults are
+opt-out (below), so a wrapped embed does load for an undecided guest. What the
+wrapper guarantees is that the guest can see it listed and switch it off, which
+the old arrangement could not offer for anything but Pinterest.
 
 ## The model
 
@@ -48,6 +52,49 @@ preferences dialog and so could never be withdrawn.
 
 There is deliberately **no `marketing` / `advertising` category**. We don't do
 it, and an unused toggle is a claim we'd have to keep true.
+
+## Defaults: opt-out, except analytics
+
+| Category | Applies before a decision? |
+|---|---|
+| `necessary` | yes (locked) |
+| `functional` | **yes** |
+| `embeds` | **yes** |
+| `analytics` | no |
+
+`embeds` and `functional` are **opt-out**: they apply to a guest who hasn't
+decided, and the banner's job is to say so and offer the off switch. That is a
+product decision for a private wedding invite — the venue map and the moodboard
+are content the couple put there for their guests — and it sits within the
+Australian framing the privacy notice sets out. It is **not** the ePrivacy
+posture for EU/UK visitors, who are entitled to prior consent. A known, accepted
+trade, recorded here so nobody later mistakes it for an oversight. Reversing it
+is one `defaultGranted` field in `categories.ts` plus two paragraphs of copy.
+
+`analytics` stays opt-in regardless, and the asymmetry is the point: nothing
+uses that category today, so a default couldn't be *informed* about anything. An
+analytics tag added later must not inherit consent from guests who were never
+told it existed.
+
+### Three grant maps, and why they can't be collapsed
+
+| Function | Meaning |
+|---|---|
+| `defaultGrants()` | **The floor.** Required only. What "Reject all" writes, AND what applies before the cookie has been read. |
+| `preDecisionGrants()` | **Unasked.** The opt-out defaults above. |
+| `allGrants()` | Everything. What "Accept all" writes. |
+
+Two traps this separation exists to avoid:
+
+1. **Refused ≠ unasked.** Under opt-in these were the same effective state, so
+   one function served both. Under opt-out they differ in what they *allow*, so
+   collapsing them would silently re-enable embeds for a guest who switched them
+   off.
+2. **Pre-hydration ≠ unasked.** `record() === null` means "we haven't looked
+   yet" before hydration and "we looked, there's nothing" after. Only the second
+   may resolve to the permissive defaults; the first must hold at the floor, or
+   every page load would ignore a refusal for one tick. Enforced in
+   `store.ts`'s `isCategoryGranted`.
 
 ## Files
 
@@ -78,7 +125,9 @@ undeclared transfer (silent, and the one that matters).
 1. Add a `ConsentVendor` entry to `CONSENT_VENDORS`.
 2. Add its origins to `CSP_DIRECTIVES` in `lib/security-headers.ts` —
    `vendors.test.ts` fails until you do.
-3. Wrap the component in `<ConsentGate category="…" vendor="…">`.
+3. Wrap the component in `<ConsentGate category="…" vendor="…">`. If it lands in
+   a category that is on by default, it starts loading for everyone — check that
+   is what you want, and that the banner copy still names it.
 4. Bump `CONSENT_POLICY_VERSION` in `record.ts` (this re-prompts everyone — see
    below).
 5. Add a row to the root `[[wiki/compliance/subprocessors]]` register.
@@ -89,9 +138,11 @@ Each vendor states plainly whether the gate actually blocks it. A registry that
 listed a vendor the gate didn't block would be a lie told in a compliance-shaped
 voice.
 
-- `"gated"` — no request until the category is granted. Pinterest and Google
-  Maps: both mount inside the click-opened details sheet, so they never appear
-  in server-rendered HTML and a client-side gate is genuinely sufficient.
+- `"gated"` — the guest's choice genuinely controls it: no request is made while
+  the category is switched off. Pinterest and Google Maps both mount inside the
+  click-opened details sheet, so they never appear in server-rendered HTML and a
+  client-side gate is sufficient. (With `embeds` on by default, "gated" means
+  *switchable*, not *withheld by default*.)
 - `"always"` — loads regardless. **Google Fonts only**, because the font
   `<link>` sits in the `<head>` of the server-rendered document. The right fix
   is to delete the vendor (self-host the two woff2 families), not to put the
@@ -144,10 +195,22 @@ mounted first.
 
 ## UI rules that are not negotiable
 
+- **The banner states that things are already on.** It names Google and
+  Pinterest and says the content is switched on with an offer to turn it off,
+  rather than posing a question whose answer has been assumed. Asserted by test.
 - **Reject is as easy as accept.** All three banner actions render through one
   `BannerButton` component, so they carry identical styling by construction —
   making accept "primary" would mean deliberately breaking them apart.
-  `ConsentBanner.test.tsx` asserts the classNames match.
+  `ConsentBanner.test.tsx` asserts the classNames match. This matters *more*
+  under opt-out, not less: the off switch is the only thing a guest who
+  disagrees with the default actually has.
+- **Rendering never writes a record.** The defaults apply without fabricating a
+  decision, so the banner keeps appearing until the guest genuinely makes one.
+  An implied consent silently promoted to a stored, timestamped one would cost
+  them the chance to refuse.
+- **The dialog's toggles show what is actually loading** — ticked for `embeds`
+  and `functional` on a first visit. A dialog showing `embeds` unticked while
+  the map was on screen would describe a state the site is not in.
 - **The dialog's toggles are a local draft** until Save. A guest who flicks a
   switch to see what it covers and then closes the dialog has granted nothing.
 - **Withdrawal is permanent and findable** — `ConsentPreferencesLink` in

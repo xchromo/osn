@@ -157,22 +157,35 @@ describe("MapPreview", () => {
     });
   });
 
-  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured, third-party content REFUSED", () => {
+  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured, no decision made yet", () => {
     const KEY = "test-embed-key";
 
-    it("makes NO request to Google when the guest has not decided yet", () => {
-      // The default state — no consent cookie at all. A configured key must not
-      // be enough on its own to load the embed, which is exactly the gap this
-      // component had before the consent framework: the key was the only
-      // condition, so every guest with an address hit Google on modal open.
+    it("DOES render the embed — third-party content is on by default (opt-out)", () => {
+      // No consent cookie at all. Under the opt-out defaults the map is part of
+      // the invite from the first visit; the banner tells the guest it is on and
+      // offers the off switch, rather than asking first.
       vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
       const { container } = render(() => <MapPreview event={baseEvent} />);
 
-      expect(container.querySelector("iframe")).toBeNull();
+      expect(container.querySelector("iframe")).not.toBeNull();
     });
 
-    it("makes NO request to Google when the guest explicitly refused", () => {
-      seedConsentForTest({ embeds: false });
+    it("still renders nothing when no key is configured", () => {
+      // The default only removes the consent condition; the key condition is
+      // independent and still gates the iframe.
+      const { container } = render(() => <MapPreview event={baseEvent} />);
+      expect(container.querySelector("iframe")).toBeNull();
+    });
+  });
+
+  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured, third-party content REFUSED", () => {
+    const KEY = "test-embed-key";
+
+    beforeEach(() => seedConsentForTest({ embeds: false }));
+
+    it("makes NO request to Google once the guest has switched it off", () => {
+      // The refusal has to beat the permissive default. A stored "no" and an
+      // absent record must never collapse into the same state.
       vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
       const { container } = render(() => <MapPreview event={baseEvent} />);
 
@@ -192,13 +205,13 @@ describe("MapPreview", () => {
       expect(link.href).toContain("https://www.google.com/maps/search/?api=1&query=");
     });
 
-    it("swaps the CSS card for the live embed the moment consent is granted", () => {
+    it("swaps the CSS card back for the live embed if the guest changes their mind", () => {
       vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
       const { container } = render(() => <MapPreview event={baseEvent} />);
       expect(container.querySelector("iframe")).toBeNull();
 
-      // Consent granted elsewhere on the page (the banner, or another gate's
-      // in-place button) reaches this component through the shared store.
+      // Re-enabled from the preferences dialog; the shared store reaches this
+      // component without it being re-created.
       seedConsentForTest({ embeds: true });
       render(() => <MapPreview event={baseEvent} />);
 

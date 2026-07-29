@@ -10,20 +10,41 @@ import {
   isGranted,
   makeConsentRecord,
   normaliseGrants,
+  preDecisionGrants,
 } from "./record";
 
 const NOW = new Date("2026-07-29T10:00:00.000Z");
 
-describe("defaultGrants", () => {
+describe("defaultGrants — the floor", () => {
   it("switches every optional category OFF and the required one ON", () => {
-    // This is the opt-in invariant: a guest who has never been asked is in
-    // exactly the same state as one who pressed "Reject all".
+    // What "Reject all" writes, and what applies before the stored decision has
+    // been read. NOT the no-decision state — see preDecisionGrants.
     expect(defaultGrants()).toEqual({
       necessary: true,
       functional: false,
       embeds: false,
       analytics: false,
     });
+  });
+});
+
+describe("preDecisionGrants — the opt-out defaults", () => {
+  it("switches third-party content and preferences ON for an undecided guest", () => {
+    expect(preDecisionGrants().embeds).toBe(true);
+    expect(preDecisionGrants().functional).toBe(true);
+    expect(preDecisionGrants().necessary).toBe(true);
+  });
+
+  it("leaves analytics OFF even though the other optional categories are on", () => {
+    // Nothing uses that category yet, so there is nothing a default could be
+    // informed about — an analytics tag added later must not inherit consent
+    // from guests who were never told it existed.
+    expect(preDecisionGrants().analytics).toBe(false);
+  });
+
+  it("is strictly more permissive than the floor, and strictly less than accept-all", () => {
+    expect(preDecisionGrants()).not.toEqual(defaultGrants());
+    expect(preDecisionGrants()).not.toEqual(allGrants());
   });
 });
 
@@ -83,7 +104,8 @@ describe("encode/decode round trip", () => {
 
   it("round-trips a reject-all record as a real decision, not an absence", () => {
     // The distinction the whole design turns on: "refused everything" must
-    // decode to a record (so we stop asking), not to null (which re-prompts).
+    // decode to a record (so we stop asking AND stop loading), not to null —
+    // which under opt-out would both re-prompt and silently re-enable embeds.
     const decoded = decodeConsentRecord(
       encodeConsentRecord(makeConsentRecord(defaultGrants(), NOW)),
     );
@@ -169,10 +191,19 @@ describe("decodeConsentRecord — inputs it must refuse to trust", () => {
 });
 
 describe("isGranted", () => {
-  it("falls back to the deny-by-default floor for a null record", () => {
-    expect(isGranted(null, "embeds")).toBe(false);
-    expect(isGranted(null, "analytics")).toBe(false);
+  it("falls back to the opt-out defaults for a null record", () => {
+    expect(isGranted(null, "embeds")).toBe(true);
+    expect(isGranted(null, "functional")).toBe(true);
     expect(isGranted(null, "necessary")).toBe(true);
+    expect(isGranted(null, "analytics")).toBe(false);
+  });
+
+  it("honours an explicit refusal over the permissive default", () => {
+    // The distinction the opt-out posture turns on: "never asked" allows
+    // embeds, "asked and refused" does not, and the two must never collapse.
+    const refused = makeConsentRecord(defaultGrants(), NOW);
+    expect(isGranted(refused, "embeds")).toBe(false);
+    expect(isGranted(null, "embeds")).toBe(true);
   });
 
   it("reads the stored decision when there is one", () => {

@@ -2,7 +2,12 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readConsentFromDocument } from "../../lib/consent/cookie";
-import { consentPreferencesOpen, resetConsentStoreForTest } from "../../lib/consent/store";
+import {
+  consentPreferencesOpen,
+  hydrateConsent,
+  isCategoryGranted,
+  resetConsentStoreForTest,
+} from "../../lib/consent/store";
 import { resetConsentForTest, seedConsentForTest } from "../../lib/consent/testing";
 import { ConsentGate } from "./ConsentGate";
 
@@ -30,16 +35,32 @@ describe("ConsentGate", () => {
     resetConsentForTest();
   });
 
-  it("does not construct its children before a decision is made", () => {
+  it("does not construct its children for a category that is off by default", () => {
+    // `analytics` is the opt-IN category — nothing has been disclosed about it,
+    // so nothing may load under it until the guest says so.
     const { Child, mounted } = makeSpyChild();
     const { queryByTestId } = render(() => (
-      <ConsentGate category="embeds" vendor="pinterest">
+      <ConsentGate category="analytics" vendor="pinterest">
         <Child />
       </ConsentGate>
     ));
 
     expect(mounted).not.toHaveBeenCalled();
     expect(queryByTestId("gated")).toBeNull();
+  });
+
+  it("DOES construct its children for a category that is on by default", () => {
+    // `embeds` is opt-OUT: an undecided guest gets the content, and the banner
+    // tells them so. This is the behaviour the whole posture rests on.
+    const { Child, mounted } = makeSpyChild();
+    const { getByTestId } = render(() => (
+      <ConsentGate category="embeds" vendor="pinterest">
+        <Child />
+      </ConsentGate>
+    ));
+
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(getByTestId("gated")).toBeTruthy();
   });
 
   it("does not construct its children when the guest refused", () => {
@@ -93,6 +114,10 @@ describe("ConsentGate", () => {
   });
 
   describe("the default placeholder", () => {
+    // Under opt-out the placeholder is the RESULT of a refusal, so every case
+    // here starts from one.
+    beforeEach(() => seedConsentForTest({ embeds: false }));
+
     it("names the vendor and what it would do", () => {
       const { container } = render(() => (
         <ConsentGate category="embeds" vendor="pinterest">
@@ -157,6 +182,7 @@ describe("ConsentGate", () => {
 
   describe("a custom fallback", () => {
     it("replaces the placeholder entirely", () => {
+      seedConsentForTest({ embeds: false });
       const { getByTestId, container } = render(() => (
         <ConsentGate
           category="embeds"
@@ -191,6 +217,7 @@ describe("ConsentGate", () => {
   it("reveals gated content across independent gates the moment consent lands", () => {
     // Two gates rendered separately (as two embeds in different modal sections
     // are) share the module-level store, so one grant unblocks both.
+    seedConsentForTest({ embeds: false });
     const a = render(() => (
       <ConsentGate category="embeds" vendor="pinterest">
         <div data-testid="a">A</div>
@@ -211,17 +238,20 @@ describe("ConsentGate", () => {
     expect(b.getByTestId("b")).toBeTruthy();
   });
 
-  it("stays closed if the store is reset without a cookie (the pre-hydration state)", () => {
-    // Before hydration completes there is no decision to read, and the gate must
-    // deny rather than optimistically allow — otherwise a tracker could slip out
-    // in the window between first paint and the cookie read.
+  it("holds at the FLOOR before hydration, even for an opt-out category", () => {
+    // The subtle one. `embeds` is on by default, but "on by default" only
+    // applies once we have READ the cookie and found no decision. Before that
+    // we do not know whether this guest refused, so the gate must deny — a
+    // refusal that were ignored for one tick on every page load would be a
+    // refusal ignored, full stop.
+    //
+    // A render() can't observe this directly (onMount hydrates immediately), so
+    // this asserts the store contract the gate depends on.
     resetConsentStoreForTest();
-    const { Child, mounted } = makeSpyChild();
-    render(() => (
-      <ConsentGate category="embeds" vendor="pinterest">
-        <Child />
-      </ConsentGate>
-    ));
-    expect(mounted).not.toHaveBeenCalled();
+    expect(isCategoryGranted("embeds")).toBe(false);
+    expect(isCategoryGranted("necessary")).toBe(true);
+
+    hydrateConsent();
+    expect(isCategoryGranted("embeds")).toBe(true);
   });
 });

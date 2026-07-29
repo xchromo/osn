@@ -111,7 +111,9 @@ const vendors = thirdPartyVendors()
   <h2>Cookies and content from other companies</h2>
   <p>
     We don’t use advertising or tracking cookies, and we don’t use analytics. The
-    storage we do use falls into a few groups, and you control all but the first:
+    storage we do use falls into a few groups, and you control all but the first.
+    <strong>Third-party content and preferences are on by default</strong> — you
+    can switch them off at any time, and analytics stays off unless you turn it on.
   </p>
   <ul>
     {Object.values(CATEGORY_META).map((category) => (
@@ -134,7 +136,7 @@ const vendors = thirdPartyVendors()
         <strong>{vendor.name}</strong> — {vendor.purpose}
         {vendor.transfer ? <> Data goes to {vendor.transfer}.</> : null}
         {vendor.enforcement === 'gated' ? (
-          <> <em>Only loads if you allow third-party content.</em></>
+          <> <em>On by default; stops loading if you switch off third-party content.</em></>
         ) : (
           <> <em>Loads on every visit — see the note below.</em></>
         )}
@@ -164,9 +166,21 @@ const vendors = thirdPartyVendors()
   </p>
   <p>
     Turning something off stops it loading from then on. Anything already sent
-    while it was switched on has already left your browser and we can’t recall it
-    — which is why everything optional starts switched <strong>off</strong> and
-    stays off until you say otherwise.
+    while it was switched on has already left your browser and we can’t recall it.
+    Because third-party content is on by default, that means the venue map and the
+    moodboard will have loaded at least once before you switch them off — we’d
+    rather say so than imply otherwise.
+  </p>
+  <p class="owner-note">
+    <strong>Note for the site owner:</strong> defaulting third-party content
+    <em>on</em> is a deliberate choice suited to a private, personal event, and it
+    fits the Australian framing set out at the top of this notice. It is
+    <strong>not</strong> what the EU/UK ePrivacy rules expect — they require
+    consent <em>before</em> a non-essential third party loads. If a meaningful
+    number of guests are in the EU or UK, flip <code>defaultGranted</code> to
+    <code>false</code> for the third-party-content category in
+    <code>cire/web/src/lib/consent/categories.ts</code> and update the two
+    paragraphs above; nothing else needs to change.
   </p>
 
   <h2>How long we keep it</h2>
