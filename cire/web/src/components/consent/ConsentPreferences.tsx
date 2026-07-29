@@ -140,6 +140,15 @@ export function ConsentPreferences() {
           Choose what this invite is allowed to load. You can change this at any time from the link
           in the footer of any page.
         </p>
+        {/* S-M1 residual, stated rather than glossed over: switching a category
+            off stops anything further loading, but code from that company which
+            already ran during this visit stays in the page until it is
+            reloaded. Claiming a clean revocation without a reload would
+            overstate what the toggle does. */}
+        <p class="font-body text-text-muted/80 mt-1.5 text-[0.76rem] leading-relaxed">
+          Switching something off takes effect straight away for anything not yet loaded. To also
+          clear content already loaded during this visit, reload the page afterwards.
+        </p>
 
         <div class="mt-5 flex flex-col gap-4">
           <For each={CATEGORY_LIST}>

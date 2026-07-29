@@ -1,12 +1,15 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readConsentFromDocument } from "../../lib/consent/cookie";
+import { defaultGrants } from "../../lib/consent/record";
 import {
   consentPreferencesOpen,
   hydrateConsent,
   isCategoryGranted,
   resetConsentStoreForTest,
+  saveConsent,
 } from "../../lib/consent/store";
 import { resetConsentForTest, seedConsentForTest } from "../../lib/consent/testing";
 import { ConsentGate } from "./ConsentGate";
@@ -61,6 +64,10 @@ describe("ConsentGate", () => {
 
     expect(mounted).toHaveBeenCalledTimes(1);
     expect(getByTestId("gated")).toBeTruthy();
+    // ...and the default applies WITHOUT fabricating a decision. If rendering
+    // wrote a record the banner would stop appearing and the guest would lose
+    // the chance to refuse.
+    expect(readConsentFromDocument()).toBeNull();
   });
 
   it("does not construct its children when the guest refused", () => {
@@ -236,6 +243,32 @@ describe("ConsentGate", () => {
 
     expect(a.getByTestId("a")).toBeTruthy();
     expect(b.getByTestId("b")).toBeTruthy();
+  });
+
+  it("DISPOSES gated children when consent is withdrawn on a mounted tree", () => {
+    // The withdrawal direction, and the compliance-critical one: it is what
+    // makes the standing "Privacy choices" footer link a real revocation rather
+    // than a record-keeping gesture. It also reaches teardown that no
+    // grant-direction test can — a `<Show>` that failed to dispose would leave
+    // the gated component's timers, observers and injected script tags live.
+    seedConsentForTest({ embeds: true });
+    const disposed = vi.fn();
+    const Child = () => {
+      onCleanup(disposed);
+      return <div data-testid="gated">content</div>;
+    };
+
+    const { queryByTestId, getByTestId } = render(() => (
+      <ConsentGate category="embeds" vendor="pinterest">
+        <Child />
+      </ConsentGate>
+    ));
+    expect(getByTestId("gated")).toBeTruthy();
+
+    saveConsent({ ...defaultGrants(), embeds: false });
+
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(queryByTestId("gated")).toBeNull();
   });
 
   it("holds at the FLOOR before hydration, even for an opt-out category", () => {

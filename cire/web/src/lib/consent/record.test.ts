@@ -56,7 +56,7 @@ describe("normaliseGrants", () => {
   });
 
   it("drops unknown keys instead of carrying them into the record", () => {
-    const grants = normaliseGrants({ embeds: true, marketing: true, __proto__: true });
+    const grants = normaliseGrants({ embeds: true, marketing: true });
     expect(grants).toEqual({
       necessary: true,
       functional: false,
@@ -64,6 +64,20 @@ describe("normaliseGrants", () => {
       analytics: false,
     });
     expect("marketing" in grants).toBe(false);
+  });
+
+  it("does not pollute Object.prototype from a JSON-parsed __proto__ key", () => {
+    // Must go through JSON.parse, not an object literal: in a literal
+    // `__proto__:` is a prototype SETTER, so the key never becomes an own
+    // property and `Object.entries` never sees it — a test written that way
+    // passes even against unsafe code. `JSON.parse` produces a real own
+    // property, which is the shape a tampered cookie actually delivers.
+    const hostile = JSON.parse('{"__proto__": {"polluted": true}, "embeds": true}') as unknown;
+    const grants = normaliseGrants(hostile);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect((grants as Record<string, unknown>).polluted).toBeUndefined();
+    expect(grants.embeds).toBe(true);
   });
 
   it("treats any non-`true` value as a refusal", () => {
@@ -161,15 +175,45 @@ describe("decodeConsentRecord — inputs it must refuse to trust", () => {
     expect(decodeConsentRecord(stale)).toBeNull();
   });
 
-  it("returns null when the decision timestamp is missing", () => {
-    const noTimestamp = encodeURIComponent(
-      JSON.stringify({
-        v: CONSENT_RECORD_VERSION,
-        policy: CONSENT_POLICY_VERSION,
-        grants: allGrants(),
-      }),
+  it("returns null when the decision timestamp is missing, unparsable, or absurdly long", () => {
+    // `decidedAt` is the one field kept as an audit trail, and it comes from a
+    // cookie the client can rewrite — so it fails closed like the version
+    // fields rather than being carried forward unchecked.
+    const withTimestamp = (decidedAt: unknown) =>
+      encodeURIComponent(
+        JSON.stringify({
+          v: CONSENT_RECORD_VERSION,
+          policy: CONSENT_POLICY_VERSION,
+          decidedAt,
+          grants: allGrants(),
+        }),
+      );
+
+    expect(decodeConsentRecord(withTimestamp(undefined))).toBeNull();
+    expect(decodeConsentRecord(withTimestamp("not-a-date"))).toBeNull();
+    expect(decodeConsentRecord(withTimestamp(""))).toBeNull();
+    expect(decodeConsentRecord(withTimestamp(1234567890))).toBeNull();
+    expect(
+      decodeConsentRecord(withTimestamp("2026-07-29T00:00:00.000Z".padEnd(200, "0"))),
+    ).toBeNull();
+    // ...and the real thing still decodes.
+    expect(decodeConsentRecord(withTimestamp(NOW.toISOString()))).not.toBeNull();
+  });
+
+  it("does not pollute Object.prototype via a tampered cookie", () => {
+    const raw = encodeURIComponent(
+      '{"v":' +
+        CONSENT_RECORD_VERSION +
+        ',"policy":"' +
+        CONSENT_POLICY_VERSION +
+        '","decidedAt":"' +
+        NOW.toISOString() +
+        '","grants":{"__proto__":{"polluted":true},"embeds":true}}',
     );
-    expect(decodeConsentRecord(noTimestamp)).toBeNull();
+    const decoded = decodeConsentRecord(raw);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(decoded!.grants.embeds).toBe(true);
   });
 
   it("sanitises a tampered record instead of honouring it", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CSP_DIRECTIVES } from "../security-headers";
+import { CSP_DIRECTIVES, CSP_REPORT_ENDPOINT } from "../security-headers";
 import { CONSENT_CATEGORIES, isConsentCategory } from "./categories";
 import {
   CONSENT_VENDORS,
@@ -28,6 +28,32 @@ describe("vendor registry ↔ CSP consistency", () => {
       }
     },
   );
+
+  it("claims every third-party origin the CSP permits", () => {
+    // The REVERSE direction, and the one that fails silently. A missing CSP
+    // entry breaks the embed in the browser; a missing REGISTRY entry leaves an
+    // origin that is contactable, CSP-permitted, and absent from the published
+    // privacy notice, the preferences dialog and the subprocessor register —
+    // because `privacy.astro` generates its disclosure from `thirdPartyVendors()`.
+    //
+    // Anything exempted below is FIRST-PARTY and therefore owes no third-party
+    // disclosure. Adding to this list is the one place that has to be justified
+    // in writing.
+    const FIRST_PARTY = new Set<string>([
+      "https://api.cireweddings.com", // cire-api: invite JSON + image bytes
+      "http://localhost:8787", // the same API in local dev
+      CSP_REPORT_ENDPOINT, // the violation collector on that same first-party API
+    ]);
+
+    const declared = new Set(CONSENT_VENDORS.flatMap((vendor) => vendor.origins));
+    const undeclared = [...cspOrigins]
+      .filter((source) => /^https?:\/\//.test(source))
+      .filter((origin) => !FIRST_PARTY.has(origin) && !declared.has(origin));
+
+    expect(undeclared, `CSP permits origins no vendor claims: ${undeclared.join(", ")}`).toEqual(
+      [],
+    );
+  });
 
   it("keeps the gated vendors' script/frame origins in the CSP too", () => {
     // Specific spot-checks, so a broad CSP rewrite that drops one of these
@@ -64,6 +90,21 @@ describe("vendor registry shape", () => {
     for (const vendor of thirdPartyVendors()) {
       expect(vendor.privacyUrl, `${vendor.name} has no privacy URL`).toBeTruthy();
       expect(vendor.transfer, `${vendor.name} has no transfer destination`).toBeTruthy();
+    }
+  });
+
+  it("only ever puts an https URL in the privacy-policy link", () => {
+    // `privacyUrl` is rendered straight into an <a href> by both the
+    // preferences dialog and /privacy. The values are hardcoded today, but the
+    // registry is the documented "add a vendor here" extension point — so a
+    // `javascript:` or `data:` URL pasted in later should fail the test run
+    // rather than become a same-origin script-execution sink on click.
+    for (const vendor of CONSENT_VENDORS) {
+      if (vendor.privacyUrl === null) continue;
+      expect(
+        vendor.privacyUrl.startsWith("https://"),
+        `${vendor.name}: privacyUrl must be https, got ${vendor.privacyUrl}`,
+      ).toBe(true);
     }
   });
 

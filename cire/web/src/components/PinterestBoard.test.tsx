@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readConsentFromDocument } from "../lib/consent/cookie";
+import { defaultGrants } from "../lib/consent/record";
+import { saveConsent } from "../lib/consent/store";
 import { resetConsentForTest, seedConsentForTest } from "../lib/consent/testing";
 import { PinterestBoard } from "./PinterestBoard";
 
@@ -413,6 +415,29 @@ describe("PinterestBoard", () => {
     );
     expect(link).not.toBeNull();
     expect(link!.textContent).toContain("View moodboard on Pinterest");
+  });
+
+  it("removes the injected tracker tag when the guest withdraws consent", async () => {
+    // The highest-risk teardown in the framework. Withdrawal unmounts
+    // PinterestEmbed, whose onCleanup must disconnect the MutationObserver,
+    // clear the cutoff timer and remove the <script>. A <Show> that failed to
+    // dispose would leave Pinterest's tag in the document after the guest
+    // switched third-party content off — a revocation that revoked nothing.
+    seedConsentForTest({ embeds: true });
+    const clearSpy = vi.spyOn(window, "clearTimeout");
+    const { container } = render(() => <PinterestBoard url={VALID_URL} eventName="Catholic" />);
+
+    const script = scriptHandle.last();
+    expect(script).toBeDefined();
+    // The capture harness intercepts the append, so assert removal via the spy
+    // on the node itself rather than via the document.
+    const removeSpy = vi.spyOn(script, "remove");
+
+    saveConsent({ ...defaultGrants(), embeds: false });
+
+    expect(container.querySelector("a[data-pin-do]")).toBeNull();
+    expect(removeSpy).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalled();
   });
 
   it("clears the fallback timer when the component unmounts", async () => {

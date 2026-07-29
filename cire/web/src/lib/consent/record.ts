@@ -133,11 +133,29 @@ export function encodeConsentRecord(record: ConsentRecord): string {
 }
 
 /**
+ * Is this a timestamp we are willing to carry forward as the record of when the
+ * guest decided?
+ *
+ * `decidedAt` is the one field documented as an audit trail, and it arrives
+ * from a cookie the client can rewrite — so it gets the same fail-closed
+ * treatment as the two version fields rather than a bare `typeof` check. The
+ * length bound stops a multi-kilobyte string being carried around in a field
+ * whose only legitimate value is an ISO-8601 instant.
+ */
+const MAX_TIMESTAMP_LENGTH = 40;
+
+function isPlausibleTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > MAX_TIMESTAMP_LENGTH) return false;
+  return !Number.isNaN(Date.parse(value));
+}
+
+/**
  * Parse a stored record back, or `null` if it cannot be trusted.
  *
  * Returns `null` — meaning "treat as never asked", i.e. re-prompt — for:
- * malformed/undecodable input, a structure-version mismatch, and a policy
- * version other than the current one. The policy check is the one that matters:
+ * malformed/undecodable input, a structure-version mismatch, a policy version
+ * other than the current one, and an implausible `decidedAt`. The policy check is the one that matters:
  * it is what guarantees a guest is re-asked after the vendor list changes,
  * instead of us silently reusing consent given for a smaller disclosure.
  */
@@ -158,7 +176,7 @@ export function decodeConsentRecord(raw: string | null | undefined): ConsentReco
 
   if (candidate.v !== CONSENT_RECORD_VERSION) return null;
   if (candidate.policy !== CONSENT_POLICY_VERSION) return null;
-  if (typeof candidate.decidedAt !== "string") return null;
+  if (!isPlausibleTimestamp(candidate.decidedAt)) return null;
 
   return {
     v: CONSENT_RECORD_VERSION,

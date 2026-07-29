@@ -1,6 +1,8 @@
 import { render, cleanup } from "@solidjs/testing-library";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 
+import { defaultGrants } from "../lib/consent/record";
+import { grantCategory, saveConsent } from "../lib/consent/store";
 import { resetConsentForTest, seedConsentForTest } from "../lib/consent/testing";
 import { MapPreview } from "./MapPreview";
 import type { EventSummary } from "./types";
@@ -205,17 +207,32 @@ describe("MapPreview", () => {
       expect(link.href).toContain("https://www.google.com/maps/search/?api=1&query=");
     });
 
-    it("swaps the CSS card back for the live embed if the guest changes their mind", () => {
+    it("swaps the CSS card for the live embed on the ALREADY-MOUNTED component", () => {
+      // Reactivity, not remount. `seedConsentForTest` resets the store to its
+      // pre-hydration state, so asserting against a second `render()` would only
+      // prove a fresh mount reads the cookie — a genuine loss of cross-island
+      // reactivity would still pass. Granting through the live store is what
+      // actually exercises the path the preferences dialog uses.
       vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
       const { container } = render(() => <MapPreview event={baseEvent} />);
       expect(container.querySelector("iframe")).toBeNull();
 
-      // Re-enabled from the preferences dialog; the shared store reaches this
-      // component without it being re-created.
-      seedConsentForTest({ embeds: true });
-      render(() => <MapPreview event={baseEvent} />);
+      grantCategory("embeds");
 
-      expect(document.querySelector("iframe")).not.toBeNull();
+      expect(container.querySelector("iframe")).not.toBeNull();
+    });
+
+    it("tears the embed back down when consent is withdrawn from the live store", () => {
+      // The withdrawal direction: the standing "Privacy choices" control has to
+      // be a real revocation, not just a cookie rewrite.
+      seedConsentForTest({ embeds: true });
+      vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
+      const { container } = render(() => <MapPreview event={baseEvent} />);
+      expect(container.querySelector("iframe")).not.toBeNull();
+
+      saveConsent({ ...defaultGrants(), embeds: false });
+
+      expect(container.querySelector("iframe")).toBeNull();
     });
   });
 });

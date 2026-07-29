@@ -48,3 +48,12 @@ migrated. Under the opt-out defaults this no longer changes what a returning
 guest sees — the embed loads either way — but it does mean the key is never
 promoted into a stored decision, so those guests still get the banner and a real
 chance to switch it off.
+
+Review follow-ups folded in before merge: `decidedAt` now fails closed on an
+unparsable or oversized value rather than being carried forward unchecked; the
+vendor registry's `privacyUrl` is asserted to be `https://` so a `javascript:`
+URL added later fails the test run instead of becoming an `href` sink; the
+registry↔CSP join is now asserted in **both** directions, since an origin the CSP
+permits with no vendor entry would be contactable but absent from the privacy
+notice; and the preferences dialog states plainly that switching a category off
+does not unload third-party code that already ran this visit.
