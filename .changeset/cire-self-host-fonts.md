@@ -31,3 +31,15 @@ CSP tightened to match: `fonts.googleapis.com` leaves `style-src` and
 (`security-headers.ts`), its `public/_headers` mirror, and the landing
 `_headers`; the guest CSP test now asserts the Google hosts' **absence** so a
 regression re-opening the flow fails loudly.
+
+Reconciled with the site-wide consent framework (#329), which had declared
+Google Fonts its one ungated (`enforcement: "always"`) vendor: the
+`google-fonts` entry is deleted from the consent vendor registry (satisfying
+its own registry-origins-⊆-CSP test), the preferences dialog and `/privacy` no
+longer disclose an ungated fonts vendor (tests flipped to assert the absence;
+`necessary`-category Turnstile keeps its "loads on every visit" disclosure by
+design), the `/privacy` owner-note is replaced by a plain "typefaces are
+served from this site" line, and `CONSENT_POLICY_VERSION` is bumped to
+`2026-07-30` so stored decisions re-prompt against the reduced disclosure.
+The Google Fonts subprocessor row is retired to Removed processors (the Fonts
+half of C-M20).
