@@ -35,6 +35,7 @@ import {
   AUTHORIZE_REQUEST_TTL_MS,
   ID_TOKEN_TTL_SEC,
   isReservedOidcClientId,
+  MAX_OIDC_CLIENT_ROWS_PER_ACCOUNT,
   MAX_OIDC_CLIENTS_PER_ACCOUNT,
   OIDC_CLIENT_MAX_REDIRECT_URIS,
   OIDC_CLIENT_NAME_MAX_LENGTH,
@@ -590,24 +591,32 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
   ): Effect.Effect<ClientRegistrationResult, OidcError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
-      const live = yield* Effect.tryPromise({
+      // One scan covers both caps: live rows (the active-slot cap) and total
+      // rows including disabled ones (the anti-churn storage cap).
+      const rows = yield* Effect.tryPromise({
         try: () =>
           db
-            .select({ id: oauthClients.id })
+            .select({ disabledAt: oauthClients.disabledAt })
             .from(oauthClients)
-            .where(
-              and(
-                eq(oauthClients.ownerAccountId, input.ownerAccountId),
-                isNull(oauthClients.disabledAt),
-              ),
-            ),
+            .where(eq(oauthClients.ownerAccountId, input.ownerAccountId)),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      if (live.length >= MAX_OIDC_CLIENTS_PER_ACCOUNT) {
+      const liveCount = rows.filter((r) => r.disabledAt === null).length;
+      if (liveCount >= MAX_OIDC_CLIENTS_PER_ACCOUNT) {
         return yield* Effect.fail(
           new OidcError({
             code: "invalid_request",
             description: `An account may hold at most ${MAX_OIDC_CLIENTS_PER_ACCOUNT} active clients`,
+          }),
+        );
+      }
+      if (rows.length >= MAX_OIDC_CLIENT_ROWS_PER_ACCOUNT) {
+        // Disabling frees a live slot but the row persists; the total cap stops
+        // create/disable churn from storing unbounded attacker-chosen strings.
+        return yield* Effect.fail(
+          new OidcError({
+            code: "invalid_request",
+            description: "Too many client registrations for this account",
           }),
         );
       }
@@ -1123,7 +1132,11 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             catch: (cause) =>
               new OidcError({
                 code: "server_error",
-                description: `Failed to sign ID token: ${cause}`,
+                // Generic on the wire — the cause (key-import messages, stack
+                // fragments) must not leak to the relying party. Kept internally
+                // for logs via `cause`.
+                description: "Failed to issue tokens",
+                cause,
               }),
           }),
           accessToken: Effect.tryPromise({
@@ -1139,7 +1152,8 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
             catch: (cause) =>
               new OidcError({
                 code: "server_error",
-                description: `Failed to sign access token: ${cause}`,
+                description: "Failed to issue tokens",
+                cause,
               }),
           }),
         },
@@ -1261,15 +1275,20 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       };
     });
 
-  /** Builds the success redirect back to the relying party. */
+  /**
+   * Builds the success redirect back to the relying party. Echoes the issuer
+   * identifier (RFC 9207) so an RP that receives the code can confirm which
+   * provider issued it and defend against mix-up attacks.
+   */
   const buildCodeRedirect = (redirectUri: string, code: string, state: string | null): string => {
     const url = new URL(redirectUri);
     url.searchParams.set("code", code);
+    url.searchParams.set("iss", config.issuerUrl);
     if (state !== null) url.searchParams.set("state", state);
     return url.toString();
   };
 
-  /** Builds the failure redirect back to the relying party. */
+  /** Builds the failure redirect back to the relying party (with `iss`, RFC 9207). */
   const buildErrorRedirect = (
     redirectUri: string,
     code: OidcErrorCode,
@@ -1279,6 +1298,7 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
     const url = new URL(redirectUri);
     url.searchParams.set("error", code);
     url.searchParams.set("error_description", description);
+    url.searchParams.set("iss", config.issuerUrl);
     if (state !== null) url.searchParams.set("state", state);
     return url.toString();
   };
@@ -1476,14 +1496,14 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
 
       // S-M1 oidc: the decision must come from the browser that parked the
       // request. Checked BEFORE the request is consumed, so a forged attempt
-      // does not burn the real user's pending flow. The hash is absent only
-      // for requests parked by a pre-upgrade instance mid-deploy. The error
-      // is byte-identical to the unknown-id case: a caller without the
-      // binding cookie must not learn that the id exists.
+      // does not burn the real user's pending flow. Every parked request now
+      // carries a binding hash (S-L4 — the mid-deploy tolerance was removed),
+      // so the binding is always enforced. The error is byte-identical to the
+      // unknown-id case: a caller without the binding cookie must not learn
+      // that the id exists.
       if (
-        parked.bindingHash !== undefined &&
-        (input.bindingSecret === null ||
-          !hexEqual(sha256Hex(input.bindingSecret), parked.bindingHash))
+        input.bindingSecret === null ||
+        !hexEqual(sha256Hex(input.bindingSecret), parked.bindingHash)
       ) {
         return yield* Effect.fail(
           new OidcError({ code: "invalid_request", description: "Unknown or expired request" }),
@@ -1495,8 +1515,8 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       // the request was parked — and `max_age` is re-checked outright, because
       // a user can sit on the consent screen while their session ages past it.
       const nowSec = Math.floor(Date.now() / 1000);
-      // `!= null` on purpose: both fields read as undefined off a request
-      // parked by a pre-upgrade instance, and undefined must mean "no demand".
+      // `!= null`: both fields are `number | null`, and null means "the request
+      // made no freshness demand".
       const tooOld =
         (parked.requireAuthAfter != null && input.authTime < parked.requireAuthAfter) ||
         (parked.maxAge != null && nowSec - input.authTime > parked.maxAge);

@@ -132,11 +132,12 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
    * matches unconditionally so a mid-deploy flow still completes.
    */
   const bindingMatches = (
-    bindingHash: string | undefined,
+    bindingHash: string,
     cookieHeader: string | undefined,
     requestId: string,
   ): boolean => {
-    if (bindingHash === undefined) return true;
+    // S-L4: every parked request carries a binding hash now, so there is no
+    // "no hash → accept" path that a future writer could trip into.
     const secret = readBindingCookie(cookieHeader, requestId, cookieConfig);
     if (secret === null) return false;
     // Constant-time, matching the repo rule for hash comparisons — both sides

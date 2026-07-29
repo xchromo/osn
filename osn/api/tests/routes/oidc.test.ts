@@ -205,6 +205,8 @@ describe("GET /authorize", () => {
     expect(loc.origin + loc.pathname).toBe(REDIRECT_URI);
     expect(loc.searchParams.get("error")).toBe("unsupported_response_type");
     expect(loc.searchParams.get("state")).toBe("st_123");
+    // RFC 9207: the issuer identifier rides along on the error redirect too.
+    expect(loc.searchParams.get("iss")).toBeTruthy();
   });
 
   it("rejects a plain code_challenge_method", async () => {

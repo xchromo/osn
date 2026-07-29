@@ -180,6 +180,15 @@ export function isReservedOidcClientId(clientId: string): boolean {
  */
 export const MAX_OIDC_CLIENTS_PER_ACCOUNT = 5;
 
+/**
+ * Cap on TOTAL client rows an account may accumulate, including disabled ones.
+ * Disabling frees a live slot but the row (with its attacker-chosen name + logo
+ * URL) persists, so without this a script could churn create/disable and store
+ * unbounded attacker-controlled strings under one account. Set well above the
+ * live cap so it only bites abuse, never a normal owner cycling a few apps.
+ */
+export const MAX_OIDC_CLIENT_ROWS_PER_ACCOUNT = 50;
+
 /** Bounds on client registration inputs — see `validateClientRegistration`. */
 export const OIDC_CLIENT_NAME_MAX_LENGTH = 64;
 export const OIDC_CLIENT_MAX_REDIRECT_URIS = 8;
