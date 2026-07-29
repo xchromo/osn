@@ -135,7 +135,11 @@ async function signIn(h: Harness, email: string, handle: string): Promise<string
  * ago" device can be simulated without waiting.
  */
 function ageSessions(h: Harness, seconds: number): void {
-  h.sqlite.run(`UPDATE sessions SET created_at = created_at - ${seconds}`);
+  // `authenticated_at` is the real auth_time (survives rotation); `created_at`
+  // is kept in lockstep so the aged session is internally consistent.
+  h.sqlite.run(
+    `UPDATE sessions SET created_at = created_at - ${seconds}, authenticated_at = COALESCE(authenticated_at, created_at) - ${seconds}`,
+  );
 }
 
 function authorizeUrl(params: Record<string, string>): string {
@@ -944,7 +948,9 @@ describe("auth freshness (S-H1)", () => {
 
     // Simulate the fresh sign-in the screen would drive: the session row is
     // re-created (created_at moves past the park instant). Same request id.
-    h.sqlite.run(`UPDATE sessions SET created_at = created_at + 120`);
+    h.sqlite.run(
+      `UPDATE sessions SET created_at = created_at + 120, authenticated_at = COALESCE(authenticated_at, created_at) + 120`,
+    );
     const freshAttempt = await decide();
     expect(freshAttempt.status).toBe(200);
   });
@@ -982,7 +988,9 @@ describe("auth freshness (S-H1)", () => {
     expect(staleAttempt.status).toBe(400);
     expect(((await staleAttempt.json()) as { error: string }).error).toBe("login_required");
 
-    h.sqlite.run(`UPDATE sessions SET created_at = created_at + 120`);
+    h.sqlite.run(
+      `UPDATE sessions SET created_at = created_at + 120, authenticated_at = COALESCE(authenticated_at, created_at) + 120`,
+    );
     expect((await decide()).status).toBe(200);
   });
 
@@ -1377,7 +1385,9 @@ describe("security-review fixes (prep-pr round)", () => {
     expect(((await stale.json()) as { error: string }).error).toBe("login_required");
 
     // A session created after the park (a real re-login) is accepted.
-    h.sqlite.run(`UPDATE sessions SET created_at = created_at + 120`);
+    h.sqlite.run(
+      `UPDATE sessions SET created_at = created_at + 120, authenticated_at = COALESCE(authenticated_at, created_at) + 120`,
+    );
     expect((await decide()).status).toBe(200);
   });
 

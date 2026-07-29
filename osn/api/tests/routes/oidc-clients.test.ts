@@ -140,8 +140,10 @@ describe("POST /oidc/clients", () => {
     expect(body.client.clientId).toMatch(/^cid_[a-f0-9]{12}$/);
     expect(body.client.confidential).toBe(false);
     expect(body.client_secret).toBeNull();
-    // Sector is derived from the first redirect URI, never caller-chosen.
-    expect(body.client.sectorIdentifier).toBe("newrp.example.com");
+    // Sector is the server-generated client_id itself, never caller-chosen and
+    // never a redirect-URI host: that keeps colluding self-serve clients from
+    // sharing a sector to correlate the same user across apps.
+    expect(body.client.sectorIdentifier).toBe(body.client.clientId);
   });
 
   it("returns a confidential client's secret exactly once and stores only the hash", async () => {

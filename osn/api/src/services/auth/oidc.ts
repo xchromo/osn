@@ -511,10 +511,14 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
    *  - `client_id` is server-generated, so it can never collide with a
    *    reserved audience and carries no user-chosen content;
    *  - the secret is returned exactly once and stored only as SHA-256;
-   *  - `sector_identifier` is derived from the first redirect URI's host —
-   *    self-serve clients cannot choose their sector, because choosing a
-   *    shared sector is how two colluding clients would defeat pairwise
-   *    subject isolation;
+   *  - `sector_identifier` is the server-generated `client_id` itself, so a
+   *    self-serve client gets a sector no one else can share. Deriving it from
+   *    a redirect-URI host (as an earlier cut did) was unsafe: the host is
+   *    attacker-chosen and unverified, so two colluding clients could register
+   *    the same first host and collapse to one `sub` per user — exactly the
+   *    cross-app correlation pairwise subjects exist to prevent. A genuinely
+   *    shared sector remains possible only for hand-seeded first-party clients,
+   *    whose `sector_identifier` an operator sets deliberately;
    *  - `is_first_party` is never settable here. First-party status is a
    *    hand-seeded trust decision, not a registration input.
    */
@@ -548,7 +552,11 @@ export function createOidcModule(ctx: AuthContext, profiles: ProfilesModule) {
       const clientId = genId("cid_");
       const clientSecret = input.confidential ? generateClientSecret() : null;
       const nowSec = Math.floor(Date.now() / 1000);
-      const sectorIdentifier = new URL(input.redirectUris[0]!).host;
+      // Server-assigned sector: the client_id itself. A self-serve client can
+      // never share a sector with another (that is reserved for hand-seeded
+      // first-party clients), so its pairwise `sub` is unique per client and
+      // colluding third parties cannot correlate the same user across apps.
+      const sectorIdentifier = clientId;
 
       yield* Effect.tryPromise({
         try: () =>
