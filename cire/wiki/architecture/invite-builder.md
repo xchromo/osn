@@ -44,11 +44,24 @@ migrations: `0049_invite_footer_message.sql` (the note),
 small centred monogram / motif / signature above it). Note and image are
 INDEPENDENT: either alone renders.
 
-**It is behind the claim gate.** It renders inside `InvitePage`'s
-`<Show when={claimResult()}>`, with the events list — not in the public shell
-(hero / Our Story / code entry) that anyone holding the URL can read. The
-closing note is addressed to the invited household, so it waits for the code
-like the events do. It is deliberately NOT given the events section's
+**It is behind the claim gate — enforced at the API, not in the render tree.**
+The first cut gated it only with `<Show when={claimResult()}>`, which controls
+rendering, not delivery: the note still shipped in the unauthenticated
+`GET /api/invite/:slug` body and in the SSR'd island props, so it was one `curl`
+away (S-H1). The gate is now real:
+
+- `inviteService.getForSlug` **redacts** `footer` from the public payload. Every
+  other field there (hero, story, events header, welcome greeting, theme) is
+  public by design — it paints the shell anyone opening the link sees.
+- `claimService.lookup` returns the closing content in the **claim response**,
+  beside the events list, to a session that proved household membership.
+- `GET /api/invite/:slug/image/footer` requires a valid `cire_session` **whose
+  family belongs to this wedding** (`inviteService.sessionOwnsWedding` — a bare
+  session only proves the holder claimed *some* household's code), and responds
+  `Cache-Control: private`. It 404s rather than 401/403, so an unclaimed visitor
+  cannot learn whether a closing image exists.
+
+`hero` and `story` stay public and publicly cacheable; only `footer` is gated. It is deliberately NOT given the events section's
 `opacity-0` class: the unlock choreography animates the events, and a section
 that needs a motion chunk to become visible is a section that can stay invisible
 when that chunk fails to load (the exact failure `UnlockReveal.motion.ts` warns

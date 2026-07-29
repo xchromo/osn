@@ -125,6 +125,27 @@ async function authHeaders(profileId: string): Promise<Record<string, string>> {
 
 const orgBase = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/invite`;
 
+/**
+ * Claim a seeded household's code and return its `cire_session` cookie header.
+ * The closing section's image is delivered only to a claimed session (S-H1), so
+ * the serve tests need a real one rather than a hand-made token.
+ */
+async function guestCookie(
+  app: ReturnType<typeof buildApp>["app"],
+  publicId = "TESTONE-IVY-AA11",
+): Promise<string> {
+  const res = await appRequest(app, "/api/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ publicId }),
+  });
+  expect(res.status).toBe(200);
+  const setCookie = res.headers.get("set-cookie") ?? "";
+  const token = /cire_session=([^;]+)/.exec(setCookie)?.[1];
+  expect(token).toBeTruthy();
+  return `cire_session=${token}`;
+}
+
 describe("GET /api/invite/:slug (public)", () => {
   it("returns all-null defaults for an uncustomised wedding, no auth needed", async () => {
     const { app } = buildApp();
@@ -253,7 +274,7 @@ describe("PUT /invite/text (organiser)", () => {
     expect(body.welcome.message).toBeNull();
   });
 
-  it("saves the footer note and surfaces it (trimmed) on the public read", async () => {
+  it("saves the footer note (trimmed) and surfaces it on the ORGANISER read", async () => {
     const { app } = buildApp();
     const put = await appRequest(app, `${orgBase}/text`, {
       method: "PUT",
@@ -262,17 +283,60 @@ describe("PUT /invite/text (organiser)", () => {
     });
     expect(put.status).toBe(200);
 
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
-    const body = (await pub.json()) as { footer: { message: string | null } };
+    const org = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
+    const body = (await org.json()) as { footer: { message: string | null } };
     expect(body.footer.message).toBe("No boxed gifts please");
+  });
+
+  // The delivery point for the closing section. Pinned here (beside the
+  // redaction test below) so the pair reads as one contract: withheld from the
+  // public payload, handed to a session that claimed a code.
+  it("delivers the footer note in the claim response instead", async () => {
+    const { app } = buildApp();
+    await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, footerMessage: "No boxed gifts please" }),
+    });
+
+    const claimed = await appRequest(app, "/api/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publicId: "TESTONE-IVY-AA11" }),
+    });
+    expect(claimed.status).toBe(200);
+    const body = (await claimed.json()) as { closing: { message: string | null } };
+    expect(body.closing.message).toBe("No boxed gifts please");
+  });
+
+  // S-H1. The closing section is addressed to the invited household, so it is
+  // delivered ONLY in the claim response. `GET /api/invite/:slug` is
+  // unauthenticated — anything it returns is readable by anyone with the slug,
+  // so the note must not be in it. Asserted on the RAW body, not a parsed field:
+  // the point is that the string never crosses the wire.
+  it("withholds the footer note from the unauthenticated public read", async () => {
+    const { app } = buildApp();
+    await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, footerMessage: "No boxed gifts please" }),
+    });
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const raw = await pub.text();
+    expect(raw).not.toContain("No boxed gifts please");
+    expect((JSON.parse(raw) as { footer: { message: null } }).footer.message).toBeNull();
+    // The public shell (hero/story/welcome copy) is unaffected — it is public by
+    // design and paints the invite before any code is entered.
+    expect(raw).toContain("Anita & Ben");
   });
 
   // The footer note is the first copy field with NO built-in default: null must
   // survive to the guest site so it renders nothing, rather than falling back.
   it("reports a null footer note for an uncustomised wedding (segment hidden)", async () => {
     const { app } = buildApp();
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
-    const body = (await pub.json()) as { footer: { message: string | null } };
+    const org = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
+    const body = (await org.json()) as { footer: { message: string | null } };
     expect(body.footer.message).toBeNull();
   });
 
@@ -293,8 +357,8 @@ describe("PUT /invite/text (organiser)", () => {
     });
     expect(clear.status).toBe(200);
 
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
-    const body = (await pub.json()) as { footer: { message: string | null } };
+    const org = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
+    const body = (await org.json()) as { footer: { message: string | null } };
     expect(body.footer.message).toBeNull();
   });
 
@@ -545,8 +609,8 @@ describe("invite image upload + serve + remove", () => {
     const { imageUrl } = (await up.json()) as { imageUrl: string };
     expect(imageUrl).toContain(`/api/invite/${SLUG}/image/footer`);
 
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
-    const body = (await pub.json()) as {
+    const org = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
+    const body = (await org.json()) as {
       footer: { imageUrl: string | null };
       story: { imageUrl: string | null };
       hero: { imageUrl: string | null };
@@ -556,7 +620,8 @@ describe("invite image upload + serve + remove", () => {
     expect(body.story.imageUrl).toBeNull();
     expect(body.hero.imageUrl).toBeNull();
 
-    const img = await appRequest(app, imageUrl);
+    // The bytes need a claimed session (S-H1) — see the gate tests below.
+    const img = await appRequest(app, imageUrl, { headers: { Cookie: await guestCookie(app) } });
     expect(img.status).toBe(200);
     expect(new Uint8Array(await img.arrayBuffer())).toEqual(PNG);
 
@@ -565,7 +630,7 @@ describe("invite image upload + serve + remove", () => {
       headers: await authHeaders(BOOTSTRAP_OWNER),
     });
     expect(del.status).toBe(200);
-    const after = await appRequest(app, `/api/invite/${SLUG}`);
+    const after = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
     expect(((await after.json()) as { footer: { imageUrl: null } }).footer.imageUrl).toBeNull();
   });
 
@@ -585,7 +650,7 @@ describe("invite image upload + serve + remove", () => {
     const del = await appRequest(app, `${orgBase}/image/footer`, { method: "DELETE", headers });
     expect(del.status).toBe(200);
 
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const pub = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
     const body = (await pub.json()) as {
       footer: { imageUrl: string | null };
       story: { imageUrl: string | null };
@@ -610,8 +675,8 @@ describe("invite image upload + serve + remove", () => {
     });
     expect(put.status).toBe(200);
 
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
-    const body = (await pub.json()) as {
+    const org = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
+    const body = (await org.json()) as {
       footer: { imageCrop: typeof crop | null };
       story: { imageCrop: typeof crop | null };
     };
@@ -636,12 +701,66 @@ describe("invite image upload + serve + remove", () => {
 
   it("reports a null footer image for an uncustomised wedding", async () => {
     const { app } = buildApp();
-    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const pub = await appRequest(app, orgBase, { headers: await authHeaders(BOOTSTRAP_OWNER) });
     const body = (await pub.json()) as {
       footer: { imageUrl: string | null; imageCrop: unknown };
     };
     expect(body.footer.imageUrl).toBeNull();
     expect(body.footer.imageCrop).toBeNull();
+  });
+
+  // ── S-H1: the closing motif is session-gated ──────────────────────────────
+  it("404s the footer image without a claimed session", async () => {
+    const { app } = buildApp();
+    await appRequest(app, `${orgBase}/image/footer`, {
+      method: "POST",
+      headers: await authHeaders(BOOTSTRAP_OWNER),
+      body: PNG,
+    });
+
+    // No cookie at all — the same 404 an absent image gives, so an unclaimed
+    // visitor cannot even learn whether a closing image exists.
+    const anon = await appRequest(app, `/api/invite/${SLUG}/image/footer`);
+    expect(anon.status).toBe(404);
+
+    // A garbage cookie is no better than none.
+    const bogus = await appRequest(app, `/api/invite/${SLUG}/image/footer`, {
+      headers: { Cookie: "cire_session=not-a-real-token" },
+    });
+    expect(bogus.status).toBe(404);
+  });
+
+  it("serves the footer image to a claimed session, marked private", async () => {
+    const { app } = buildApp();
+    await appRequest(app, `${orgBase}/image/footer`, {
+      method: "POST",
+      headers: await authHeaders(BOOTSTRAP_OWNER),
+      body: PNG,
+    });
+
+    const res = await appRequest(app, `/api/invite/${SLUG}/image/footer`, {
+      headers: { Cookie: await guestCookie(app) },
+    });
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    // No shared cache may keep a copy of session-gated bytes.
+    expect(res.headers.get("cache-control")).toContain("private");
+  });
+
+  // The public slots must NOT have been dragged behind the gate — the hero and
+  // story paint the invite shell before any code is entered.
+  it("still serves hero and story images with no session, publicly cacheable", async () => {
+    const { app } = buildApp();
+    for (const slot of ["hero", "story"]) {
+      await appRequest(app, `${orgBase}/image/${slot}`, {
+        method: "POST",
+        headers: await authHeaders(BOOTSTRAP_OWNER),
+        body: PNG,
+      });
+      const res = await appRequest(app, `/api/invite/${SLUG}/image/${slot}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toContain("public");
+    }
   });
 
   it("rejects a non-image body with 415", async () => {

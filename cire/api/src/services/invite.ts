@@ -1,4 +1,4 @@
-import { weddingInviteCustomisations, weddings } from "@cire/db";
+import { families, weddingInviteCustomisations, weddings } from "@cire/db";
 import type {
   FontStyleChoice,
   FontWeightChoice,
@@ -6,7 +6,7 @@ import type {
   PalettePresetKey,
   SectionTone,
 } from "@cire/theme";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { DbService, dbQuery } from "../db";
@@ -448,7 +448,21 @@ export const inviteService = {
     }).pipe(Effect.withSpan("cire.invite.getForWeddingId"));
   },
 
-  /** Public read by wedding slug — drives the guest site. 404 for unknown slug. */
+  /**
+   * Public read by wedding slug — drives the guest site. 404 for unknown slug.
+   *
+   * REDACTS the closing section. Everything else here (hero, story, events
+   * header, welcome greeting, theme) is public by design: it paints the invite
+   * shell that anyone opening the link sees before entering a code. The closing
+   * section is not — it is the couple's sign-off to the invited household, so it
+   * is delivered ONLY in the claim response (`claimService.lookup`), beside the
+   * events list, to a session that proved household membership.
+   *
+   * This is the enforcement point for that gate. The guest site's
+   * `<Show when={claimResult()}>` is presentation; without this redaction the
+   * note would still be one unauthenticated `curl` away, and the render gate
+   * would be decoration rather than a control.
+   */
   getForSlug(slug: string): Effect.Effect<InviteCustomisation, WeddingNotFound, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
@@ -456,8 +470,33 @@ export const inviteService = {
         db.select({ id: weddings.id }).from(weddings).where(eq(weddings.slug, slug)).all(),
       );
       if (!wedding) return yield* Effect.fail(new WeddingNotFound({ slug }));
-      return yield* inviteService.getForWedding(wedding.id, slug);
+      const full = yield* inviteService.getForWedding(wedding.id, slug);
+      return { ...full, footer: EMPTY.footer };
     }).pipe(Effect.withSpan("cire.invite.getForSlug"));
+  },
+
+  /**
+   * Does this claimed guest session belong to the wedding behind `slug`?
+   *
+   * The gate on the closing section's image. A valid `cire_session` proves the
+   * holder claimed SOME household's code — not necessarily one at this wedding —
+   * so the serve route must also bind the session to the slug it is asking for.
+   * Without this, any guest of any wedding could read every other wedding's
+   * motif, which is a lateral read, not a gate.
+   */
+  sessionOwnsWedding(familyId: string, slug: string): Effect.Effect<boolean, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const [row] = yield* dbQuery(() =>
+        db
+          .select({ familyId: families.id })
+          .from(families)
+          .innerJoin(weddings, eq(weddings.id, families.weddingId))
+          .where(and(eq(families.id, familyId), eq(weddings.slug, slug)))
+          .all(),
+      );
+      return Boolean(row);
+    }).pipe(Effect.withSpan("cire.invite.sessionOwnsWedding"));
   },
 
   /**

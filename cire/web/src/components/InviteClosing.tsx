@@ -15,8 +15,14 @@ import { buildSrcSet, type VariantName, variantSrc } from "./invite-images";
  *     /terms, 404) and must always be there (compliance blocker C-H4).
  *   - This is invite content, rendered by `InvitePage` as the last thing above
  *     that footer, and — like the events list — only AFTER the guest has
- *     claimed their code. It is behind the unlock because it is addressed to
- *     the invited household, not to anyone who happens to have the URL.
+ *     claimed their code, because it is addressed to the invited household.
+ *
+ * That gate is enforced at the API, not here (S-H1): `GET /api/invite/:slug` is
+ * unauthenticated, so it REDACTS the closing section, and the content is
+ * delivered in the claim response instead (`ClaimResult.closing`). The motif's
+ * bytes are likewise session-gated and served `Cache-Control: private`. This
+ * component therefore receives nothing at all until a code is entered — the
+ * render gate and the data gate are the same gate.
  *
  * Like the hero and Our Story it is a conditional segment: with neither a note
  * nor an image it renders NOTHING — no empty surface, no stray band above the

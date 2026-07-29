@@ -44,16 +44,10 @@ export interface InviteCustomisation {
   // older API simply keeps the built-in copy.
   details?: { eyebrow: string | null; heading: string | null };
   welcome?: { message: string | null };
-  // Footer closing note (0049) + its optional image (0050) — rendered by
-  // `InvitePage` → `InviteClosing` as the invite's last section (NOT by
-  // `SiteFooter`, which is site-wide chrome). Optional so a mid-deploy payload
-  // (older API) simply renders neither — and absent is also the steady-state
-  // "organiser hasn't set one" case, since neither has a built-in default.
-  footer?: {
-    message: string | null;
-    imageUrl?: string | null;
-    imageCrop?: ImageCrop | null;
-  };
+  // NOTE: the closing section (`footer_*`) is deliberately ABSENT here. It is
+  // addressed to the invited household, so the API redacts it from the public
+  // `GET /api/invite/:slug` this type describes and delivers it in the claim
+  // response instead (see `ClaimResult.closing`). S-H1.
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   /** Which design pack renders this invite (0045). Optional so payloads from

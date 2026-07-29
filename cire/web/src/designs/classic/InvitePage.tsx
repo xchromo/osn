@@ -4,7 +4,6 @@ import { Toaster } from "solid-toast";
 
 import { DetailsModal } from "../../components/DetailsModal";
 import { EventCard } from "../../components/EventCard";
-import type { ImageCrop } from "../../components/image-crop";
 import {
   applyPaletteToRoot,
   filterThemeVars,
@@ -47,17 +46,7 @@ interface LiveInvite {
   theme: InviteTheme | null;
   details: DetailsCopy | null;
   welcomeMessage: string | null;
-  closing: ClosingContent;
 }
-
-/** The closing section's content. All-null ⇒ the section renders nothing. */
-interface ClosingContent {
-  message: string | null;
-  imageUrl: string | null;
-  imageCrop: ImageCrop | null;
-}
-
-const EMPTY_CLOSING: ClosingContent = { message: null, imageUrl: null, imageCrop: null };
 
 // Built-in default copy, used when the organiser hasn't overridden it — the
 // pre-customisation hardcoded strings, so an un-customised invite is unchanged.
@@ -91,11 +80,6 @@ interface InvitePageProps {
    * Absent/null ⇒ the built-in default greeting.
    */
   welcomeMessage?: string | null;
-  /**
-   * The closing section's content, resolved server-side like `theme`. Absent ⇒
-   * no closing section (it has no built-in default copy or image).
-   */
-  closing?: ClosingContent | null;
 }
 
 export default function InvitePage(props: InvitePageProps) {
@@ -117,7 +101,6 @@ export default function InvitePage(props: InvitePageProps) {
     theme: props.theme ?? null,
     details: props.details ?? null,
     welcomeMessage: props.welcomeMessage ?? null,
-    closing: props.closing ?? EMPTY_CLOSING,
   });
   const [liveInvite] = createResource<LiveInvite>(
     async () => {
@@ -132,11 +115,6 @@ export default function InvitePage(props: InvitePageProps) {
           theme: body.theme ?? null,
           details: body.details ?? null,
           welcomeMessage: body.welcome?.message ?? null,
-          closing: {
-            message: body.footer?.message ?? null,
-            imageUrl: body.footer?.imageUrl ?? null,
-            imageCrop: body.footer?.imageCrop ?? null,
-          },
         };
       } catch {
         return propInvite();
@@ -260,20 +238,25 @@ export default function InvitePage(props: InvitePageProps) {
       </Show>
 
       {/* The couple's sign-off — their motif and closing note, the invite's last
-          section. Inside the claim gate with the events: it is addressed to the
-          invited household, not to anyone holding the URL. Deliberately NOT
-          `opacity-0` — the unlock choreography animates the events section, and
-          a section that depends on a motion chunk to become visible is a
-          section that can stay invisible when that chunk fails to load. It sits
-          below every event card, so it is off-screen while that plays out. */}
+          section. Its content arrives IN THE CLAIM RESPONSE, not the public
+          invite payload: it is addressed to the invited household, so the API
+          redacts it from `GET /api/invite/:slug` (S-H1). Reading it off
+          `claimResult()` is therefore both the render gate and the only place
+          the data exists — the two cannot drift apart. Deliberately NOT
+          `opacity-0`: the unlock choreography animates the events section, and a
+          section that depends on a motion chunk to become visible is one that
+          can stay invisible when that chunk fails to load. It sits below every
+          event card, so it is off-screen while that plays out. */}
       <Show when={claimResult()}>
-        <InviteClosing
-          apiUrl={props.apiUrl}
-          message={liveInvite().closing.message}
-          imageUrl={liveInvite().closing.imageUrl}
-          imageCrop={liveInvite().closing.imageCrop}
-          themeVars={filterThemeVars(welcomeVars())}
-        />
+        {(data) => (
+          <InviteClosing
+            apiUrl={props.apiUrl}
+            message={data().closing?.message}
+            imageUrl={data().closing?.imageUrl}
+            imageCrop={data().closing?.imageCrop}
+            themeVars={filterThemeVars(welcomeVars())}
+          />
+        )}
       </Show>
 
       <Show when={rsvpEvent()}>

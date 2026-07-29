@@ -65,11 +65,6 @@ const preloadHeroHref = heroBase ? `${heroBase}${heroSep}variant=hero-bg` : null
       theme={initialInvite?.theme ?? null}
       details={initialInvite?.details ?? null}
       welcomeMessage={initialInvite?.welcome?.message ?? null}
-      closing={{
-        message: initialInvite?.footer?.message ?? null,
-        imageUrl: initialInvite?.footer?.imageUrl ?? null,
-        imageCrop: initialInvite?.footer?.imageCrop ?? null,
-      }}
     />
     {/* Site-wide chrome: the couple's name over the legal links. Always here,
         on the invite and on the legal pages alike. The couple's own sign-off is
