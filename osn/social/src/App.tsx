@@ -11,11 +11,8 @@ import "./App.css";
 // Split out of the entry chunk: the consent screen never renders it, and that
 // route is a cold cross-origin landing where the shell is dead weight.
 const Sidebar = lazy(() => import("./components/Sidebar").then((m) => ({ default: m.Sidebar })));
-const MobileTopBar = lazy(() =>
-  import("./components/MobileTopBar").then((m) => ({ default: m.MobileTopBar })),
-);
-const MobileNav = lazy(() =>
-  import("./components/MobileNav").then((m) => ({ default: m.MobileNav })),
+const MobileChrome = lazy(() =>
+  import("./components/MobileChrome").then((m) => ({ default: m.MobileChrome })),
 );
 
 const ConnectionsPage = lazy(() =>
@@ -60,10 +57,14 @@ function Layout(props: { children?: import("solid-js").JSX.Element }) {
         when={bare()}
         fallback={
           <AuthProvider config={{ issuerUrl: OSN_ISSUER_URL }}>
-            <Sidebar />
-            <MobileTopBar />
+            {/* Mount only the active shell (P-W1): one chunk fetched, one
+                shell hydrating, and a single mounted auth-dialog surface at
+                any width (S-L1). The CSS hidden classes on each shell remain
+                as a paint-level fallback around the breakpoint flip. */}
+            <Show when={isMobile()} fallback={<Sidebar />}>
+              <MobileChrome />
+            </Show>
             <Content padForMobileNav>{props.children}</Content>
-            <MobileNav />
           </AuthProvider>
         }
       >
@@ -82,13 +83,14 @@ function Layout(props: { children?: import("solid-js").JSX.Element }) {
   );
 }
 
-/** Tracks the `md` breakpoint so JS-positioned chrome (the toaster) can follow
- *  the same mobile/desktop split as the CSS shells. */
+/** Tracks the `md` breakpoint so shell mounting and JS-positioned chrome (the
+ *  toaster) follow the same mobile/desktop split as the CSS. Client-only SPA,
+ *  so the signal initialises synchronously — correct from the first render
+ *  (P-I2), no post-mount flip. */
 function useIsMobile() {
-  const [isMobile, setIsMobile] = createSignal(false);
+  const mq = window.matchMedia("(max-width: 767px)");
+  const [isMobile, setIsMobile] = createSignal(mq.matches);
   onMount(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    setIsMobile(mq.matches);
     const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mq.addEventListener?.("change", onChange);
     onCleanup(() => mq.removeEventListener?.("change", onChange));

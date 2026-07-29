@@ -20,6 +20,7 @@ export function IconConnections(props: NavIconProps) {
   return (
     <svg
       class={props.class ?? "h-3.5 w-3.5"}
+      aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -39,6 +40,7 @@ export function IconDiscover(props: NavIconProps) {
   return (
     <svg
       class={props.class ?? "h-3.5 w-3.5"}
+      aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -58,6 +60,7 @@ export function IconOrganisations(props: NavIconProps) {
   return (
     <svg
       class={props.class ?? "h-3.5 w-3.5"}
+      aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -76,6 +79,7 @@ export function IconSettings(props: NavIconProps) {
   return (
     <svg
       class={props.class ?? "h-3.5 w-3.5"}
+      aria-hidden="true"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

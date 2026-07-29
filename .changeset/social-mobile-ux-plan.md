@@ -12,8 +12,12 @@ viewport width, ~135px of content on a phone). Now responsive at a single
   (`MobileTopBar`: wordmark, theme toggle, account control). Nav items are
   shared via `components/nav.tsx`; the account dropdown and auth/switcher
   dialogs are extracted (`AccountMenu`, `AuthDialogs`,
-  `ProfileSwitcherDialog`) and mounted per shell. `/` now highlights
-  Connections in both shells. The bare `/authorize` route keeps no shell.
+  `ProfileSwitcherDialog`). Only the active shell mounts — `Layout` gates on
+  a synchronously-initialised `md` matchMedia signal, so one shell chunk is
+  fetched, one shell hydrates, and exactly one auth-dialog surface exists at
+  any width (P-W1/P-I1/P-I2 + S-L1 from the prep-pr reviews). `/` now
+  highlights Connections in both shells; nav icons are `aria-hidden`
+  (C-L1). The bare `/authorize` route keeps no shell.
 - **Viewport** — `h-dvh` everywhere (`h-screen` gone), `viewport-fit=cover`
   + `pt-safe`/`pb-safe`/`px-safe`/`pb-nav` utilities, paired `theme-color`
   metas kept in sync with the resolved theme.
@@ -27,6 +31,9 @@ viewport width, ~135px of content on a phone). Now responsive at a single
   `active:` feedback, `touch-action: manipulation`, page padding
   `px-4 py-6 md:px-8 md:py-8`, toasts top-center on mobile.
 - **Guardrails** — `DESIGN.md` gains a Responsive layout section locking the
-  breakpoint policy; new `MobileNav` + `isNavActive` tests; verified
-  headless-Chromium at 320/390/768/1280 widths with zero horizontal
-  overflow in both themes.
+  breakpoint policy; new tests for `MobileNav`/`isNavActive`,
+  `MobileTopBar`, `ProfileSwitcherDialog` (success/failure/no-op switch
+  paths), `AuthDialogs` (close-on-session invariant),
+  `ResponsiveDialogContent` (sheet-class contract) and the `theme-color`
+  meta sync; verified headless-Chromium at 320/390/768/1280 widths with
+  zero horizontal overflow in both themes.
