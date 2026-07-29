@@ -683,7 +683,7 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // guest name, previously hardcoded to "We are delighted to invite you to
   // celebrate with us." NULL ⇒ the built-in default copy.
   welcomeMessage: text("welcome_message"),
-  // Closing note in the invite's footer (migration 0048) — a free-text line the
+  // Closing note in the invite's footer (migration 0049) — a free-text line the
   // couple signs off with ("Looking forward to celebrating with you", "No boxed
   // gifts please"). Unlike the welcome greeting there is NO built-in default:
   // NULL / whitespace-only ⇒ the footer note simply doesn't render, exactly like
@@ -692,7 +692,7 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   footerMessage: text("footer_message"),
   heroImageKey: text("hero_image_key"),
   storyImageKey: text("story_image_key"),
-  // The footer's optional image (migration 0049) — a small centred monogram /
+  // The footer's optional image (migration 0050) — a small centred monogram /
   // motif / signature above the closing note. Same R2-object-key storage and
   // same crop JSON shape as the other slots; NULL ⇒ nothing renders, which is
   // what every pre-0049 wedding reads as.
@@ -735,6 +735,17 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // + CSS-injection risk on the static guest site). NULL ⇒ the built-in token.
   themeHeadingFont: text("theme_heading_font"),
   themeBodyFont: text("theme_body_font"),
+  // Global typography OPTIONS (migration 0049) — heading size/weight/style +
+  // body weight/style. Closed enum keys from `@cire/theme`
+  // (`HEADING_SIZE_CHOICES` / `FONT_WEIGHT_CHOICES` / `FONT_STYLE_CHOICES`),
+  // validated in `cire/api/src/schemas/invite.ts`; the key resolves to a fixed
+  // CSS value in `@cire/theme`, never free text. NULL ⇒ the design pack's
+  // built-in look.
+  themeHeadingSize: text("theme_heading_size"),
+  themeHeadingWeight: text("theme_heading_weight"),
+  themeHeadingStyle: text("theme_heading_style"),
+  themeBodyWeight: text("theme_body_weight"),
+  themeBodyStyle: text("theme_body_style"),
   // The invite COLOUR SCHEME (migration 0044) — five seeds, named by their role
   // on the invite, from which every other colour is derived by `derivePalette`
   // in `@cire/theme`. This replaced the eight per-section accent/surface columns

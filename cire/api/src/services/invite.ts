@@ -1,5 +1,11 @@
 import { weddingInviteCustomisations, weddings } from "@cire/db";
-import type { PalettePresetKey, SectionTone } from "@cire/theme";
+import type {
+  FontStyleChoice,
+  FontWeightChoice,
+  HeadingSizeChoice,
+  PalettePresetKey,
+  SectionTone,
+} from "@cire/theme";
 import { eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
@@ -40,6 +46,17 @@ export class WeddingNotFound extends Data.TaggedError("WeddingNotFound")<{
 export interface InviteTheme {
   headingFont: FontChoice | null;
   bodyFont: FontChoice | null;
+  /**
+   * Global typography options (migration 0049) — heading size/weight/style +
+   * body weight/style. Closed enum keys; the guest site resolves each to a
+   * fixed CSS value in `@cire/theme` (`null` / unknown ⇒ the pack's built-in
+   * look).
+   */
+  headingSize: HeadingSizeChoice | null;
+  headingWeight: FontWeightChoice | null;
+  headingStyle: FontStyleChoice | null;
+  bodyWeight: FontWeightChoice | null;
+  bodyStyle: FontStyleChoice | null;
   /** Which curated scheme the organiser started from (presentation only). */
   palettePreset: PalettePresetKey | null;
   /**
@@ -113,7 +130,7 @@ export interface InviteCustomisation {
   welcome: {
     message: string | null;
   };
-  // Footer closing note (0048) + its optional image (0049) — a small centred
+  // Footer closing note (0049) + its optional image (0050) — a small centred
   // monogram / motif / signature above the note. Both `null` ⇒ the guest site
   // renders NEITHER; there is no built-in default here, unlike
   // `details` / `welcome`, and the two are independent (either alone is valid).
@@ -136,6 +153,11 @@ export interface InviteCustomisation {
 const EMPTY_THEME: InviteTheme = {
   headingFont: null,
   bodyFont: null,
+  headingSize: null,
+  headingWeight: null,
+  headingStyle: null,
+  bodyWeight: null,
+  bodyStyle: null,
   palettePreset: null,
   palette: { ground: null, card: null, ink: null, gilt: null, bloom: null },
   tones: { hero: null, story: null, details: null, welcome: null },
@@ -235,6 +257,11 @@ function toCustomisation(
     heroTitleBackdropBlur: number | null;
     themeHeadingFont: string | null;
     themeBodyFont: string | null;
+    themeHeadingSize: string | null;
+    themeHeadingWeight: string | null;
+    themeHeadingStyle: string | null;
+    themeBodyWeight: string | null;
+    themeBodyStyle: string | null;
     palettePreset: string | null;
     paletteGround: string | null;
     paletteCard: string | null;
@@ -298,6 +325,11 @@ function toCustomisation(
       // font is a bounded enum key, the colour an allow-listed CSS string.
       headingFont: c.themeHeadingFont as FontChoice | null,
       bodyFont: c.themeBodyFont as FontChoice | null,
+      headingSize: c.themeHeadingSize as HeadingSizeChoice | null,
+      headingWeight: c.themeHeadingWeight as FontWeightChoice | null,
+      headingStyle: c.themeHeadingStyle as FontStyleChoice | null,
+      bodyWeight: c.themeBodyWeight as FontWeightChoice | null,
+      bodyStyle: c.themeBodyStyle as FontStyleChoice | null,
       palettePreset: c.palettePreset as PalettePresetKey | null,
       palette: {
         ground: c.paletteGround,
@@ -383,6 +415,11 @@ export const inviteService = {
             heroTitleBackdropBlur: weddingInviteCustomisations.heroTitleBackdropBlur,
             themeHeadingFont: weddingInviteCustomisations.themeHeadingFont,
             themeBodyFont: weddingInviteCustomisations.themeBodyFont,
+            themeHeadingSize: weddingInviteCustomisations.themeHeadingSize,
+            themeHeadingWeight: weddingInviteCustomisations.themeHeadingWeight,
+            themeHeadingStyle: weddingInviteCustomisations.themeHeadingStyle,
+            themeBodyWeight: weddingInviteCustomisations.themeBodyWeight,
+            themeBodyStyle: weddingInviteCustomisations.themeBodyStyle,
             palettePreset: weddingInviteCustomisations.palettePreset,
             paletteGround: weddingInviteCustomisations.paletteGround,
             paletteCard: weddingInviteCustomisations.paletteCard,
@@ -544,6 +581,12 @@ export const inviteService = {
       const values = {
         themeHeadingFont: fields.headingFont,
         themeBodyFont: fields.bodyFont,
+        // Typography option keys (0049) — pure CSS, never bump the image version.
+        themeHeadingSize: fields.headingSize,
+        themeHeadingWeight: fields.headingWeight,
+        themeHeadingStyle: fields.headingStyle,
+        themeBodyWeight: fields.bodyWeight,
+        themeBodyStyle: fields.bodyStyle,
         palettePreset: fields.palettePreset,
         paletteGround: fields.paletteGround,
         paletteCard: fields.paletteCard,

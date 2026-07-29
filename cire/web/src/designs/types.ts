@@ -44,7 +44,7 @@ export interface InviteCustomisation {
   // older API simply keeps the built-in copy.
   details?: { eyebrow: string | null; heading: string | null };
   welcome?: { message: string | null };
-  // Footer closing note (0048) + its optional image (0049) — rendered by
+  // Footer closing note (0049) + its optional image (0050) — rendered by
   // `SiteFooter` above the couple's name. Optional so a mid-deploy payload
   // (older API) simply renders neither — and absent is also the steady-state
   // "organiser hasn't set one" case, since neither has a built-in default.

@@ -1,5 +1,5 @@
 -- The footer's optional image — a small centred monogram, motif or signature
--- rendered above the closing note added by `0048_invite_footer_message.sql`.
+-- rendered above the closing note added by `0049_invite_footer_message.sql`.
 -- The two are independent: a couple can have the note, the image, both, or
 -- neither, and the footer's decorative block only renders for whichever is set.
 --

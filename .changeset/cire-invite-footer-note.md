@@ -25,8 +25,8 @@ chose for "Code Entry & Welcome", so the couple's two direct addresses to their
 guests match and the builder gains no extra knob.
 
 - `@cire/db`: two forward-only D1 migrations on `wedding_invite_customisations`
-  — `footer_message` (`0048_invite_footer_message.sql`) and `footer_image_key` /
-  `footer_image_crop` (`0049_invite_footer_image.sql`), plus the lockstep DDL
+  — `footer_message` (`0049_invite_footer_message.sql`) and `footer_image_key` /
+  `footer_image_crop` (`0050_invite_footer_image.sql`), plus the lockstep DDL
   mirror in `cire/api/src/db/setup.ts`.
 - `@cire/api`: `footerMessage` on the total `PUT /invite/text` body
   (`copyField(300)`, over-cap ⇒ 400, trimmed and collapsed to `null` when

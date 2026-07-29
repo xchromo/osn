@@ -1,5 +1,8 @@
 import {
   FONT_CHOICES,
+  FONT_STYLE_CHOICES,
+  FONT_WEIGHT_CHOICES,
+  HEADING_SIZE_CHOICES,
   isSafeCssColor,
   PALETTE_PRESET_KEYS,
   PALETTE_SEED_KEYS,
@@ -17,7 +20,7 @@ import { Schema } from "effect";
  * the bounded span/log attributes. Adding a slot is a conscious schema change,
  * never a free-form string.
  *
- * `footer` (migration 0049) is the small centred image above the footer's
+ * `footer` (migration 0050) is the small centred image above the footer's
  * closing note — a monogram, motif or signature. Like the note it is entirely
  * optional: no key ⇒ nothing renders.
  */
@@ -297,9 +300,25 @@ export type ThemeSection = (typeof THEME_SECTIONS)[number];
  * footgun and a CSS/SSRF-injection surface), and a tone/preset key is likewise
  * bounded rather than free text.
  */
-export { FONT_CHOICES, PALETTE_PRESET_KEYS, PALETTE_SEED_KEYS, SECTION_TONES };
+export {
+  FONT_CHOICES,
+  FONT_STYLE_CHOICES,
+  FONT_WEIGHT_CHOICES,
+  HEADING_SIZE_CHOICES,
+  PALETTE_PRESET_KEYS,
+  PALETTE_SEED_KEYS,
+  SECTION_TONES,
+};
 
 const FontField = Schema.NullOr(Schema.Literal(...FONT_CHOICES));
+
+// Global typography options (migration 0049). Closed enum KEYS from
+// `@cire/theme` — each resolves there to a fixed CSS value (scale factor /
+// numeric weight / `normal`|`italic`), so free text can never reach a rendered
+// `style`. `null` ⇒ the design pack's built-in look.
+const HeadingSizeField = Schema.NullOr(Schema.Literal(...HEADING_SIZE_CHOICES));
+const WeightField = Schema.NullOr(Schema.Literal(...FONT_WEIGHT_CHOICES));
+const StyleField = Schema.NullOr(Schema.Literal(...FONT_STYLE_CHOICES));
 
 /** Which derived surface a section sits on. `null` ⇒ the page ground. */
 const ToneField = Schema.NullOr(Schema.Literal(...SECTION_TONES));
@@ -344,6 +363,12 @@ const ColorField = Schema.NullOr(
 export const InviteThemeBody = Schema.Struct({
   headingFont: FontField,
   bodyFont: FontField,
+  // Global typography options — heading size/weight/style + body weight/style.
+  headingSize: HeadingSizeField,
+  headingWeight: WeightField,
+  headingStyle: StyleField,
+  bodyWeight: WeightField,
+  bodyStyle: StyleField,
   // Which curated scheme the organiser started from (presentation only — the
   // five seeds are what render).
   palettePreset: PresetField,
