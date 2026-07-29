@@ -156,6 +156,19 @@ describe("GET /api/auth/oidc/start", () => {
     }
   });
 
+  it("rate-limits the redirect leg (429 once the per-IP bucket is spent)", async () => {
+    // A tight bucket overrides the permissive default from mkApp.
+    const app = createApp(freshDb(), {
+      oidc: issuer.config(),
+      oidcStartLimiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }),
+      oidcSessionLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+    });
+    const first = await appRequest(app, `/api/auth/oidc/start?return_to=${TEST_RETURN_TO}`);
+    expect(first.status).toBe(302);
+    const second = await appRequest(app, `/api/auth/oidc/start?return_to=${TEST_RETURN_TO}`);
+    expect(second.status).toBe(429);
+  });
+
   it("marks the cookie Secure on an https tier only", async () => {
     const insecure = mkApp(freshDb(), { oidc: issuer.config() });
     const insecureRes = await appRequest(

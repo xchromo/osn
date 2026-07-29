@@ -188,6 +188,12 @@ describe("POST /oidc/clients", () => {
     ["a reserved name in a different case", { name: "MUSUBI" }],
     ["a confusable homograph of a reserved name", { name: "Pu1se" }],
     ["a zero-for-o homograph of a reserved name", { name: "0SN" }],
+    // Cross-script + accented look-alikes must fold to the same skeleton, not
+    // slip through by being stripped (S-M1). "Мusubi" leads with a Cyrillic М;
+    // "Músübi" is accented Latin — both render as "Musubi".
+    ["a mixed Cyrillic/Latin reserved name", { name: "Мusubi" }],
+    ["an accented-Latin reserved name", { name: "Músübi" }],
+    ["a Cyrillic-c reserved name", { name: "сire" }],
     ["a spaced-out reserved name", { name: "M u s u b i" }],
     ["a name with a bidi override", { name: "Pulse‮evil" }],
     ["a name with a zero-width space", { name: "Mus​ubi" }],

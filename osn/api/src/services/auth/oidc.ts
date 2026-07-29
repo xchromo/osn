@@ -341,8 +341,15 @@ function hasDeceptiveNameChar(name: string): boolean {
   return false;
 }
 
-/** Common Latin/digit look-alikes, folded so "Musub1" and "Musubi" collide. */
+/**
+ * Look-alikes folded to their Latin twin so a name built from them collides
+ * with the reserved skeleton. Covers ASCII digit/symbol substitutions AND the
+ * common Cyrillic/Greek homoglyphs (all lowercase — the skeleton lowercases
+ * first), because Unicode normalisation never crosses scripts: "Мusubi" with a
+ * Cyrillic М would otherwise survive NFKC unchanged and slip through.
+ */
 const CONFUSABLE_FOLD: Record<string, string> = {
+  // Digits / symbols
   "0": "o",
   "1": "l",
   "3": "e",
@@ -356,16 +363,53 @@ const CONFUSABLE_FOLD: Record<string, string> = {
   "!": "i",
   $: "s",
   "@": "a",
+  // Cyrillic → Latin
+  а: "a",
+  в: "b",
+  с: "c",
+  ԁ: "d",
+  е: "e",
+  һ: "h",
+  і: "i",
+  ј: "j",
+  ӏ: "l",
+  м: "m",
+  н: "h",
+  о: "o",
+  р: "p",
+  ѕ: "s",
+  т: "t",
+  ԛ: "q",
+  ԝ: "w",
+  х: "x",
+  у: "y",
+  ѵ: "v",
+  // Greek → Latin
+  α: "a",
+  β: "b",
+  ε: "e",
+  ι: "i",
+  κ: "k",
+  ν: "v",
+  ο: "o",
+  ρ: "p",
+  τ: "t",
+  υ: "u",
+  χ: "x",
+  ω: "w",
 };
 
 /**
  * Folds a name to a confusable skeleton for impersonation checks: NFKC,
- * lowercase, digit/symbol look-alikes mapped to their Latin twin, then every
- * non-`[a-z]` stripped. "Musubi", "MUSUBI", "M-u-s-u-b-i" and "Musub1" all
- * fold to `musubi`.
+ * lowercase, strip combining marks (so accented Latin like "Músübi" collapses
+ * to base Latin), map digit/symbol/Cyrillic/Greek look-alikes to their Latin
+ * twin, then drop every remaining non-`[a-z]`. "Musubi", "MUSUBI",
+ * "M-u-s-u-b-i", "Musub1", "Мусубі" (Cyrillic) and "Músübi" all fold to
+ * `musubi`.
  */
 export function clientNameSkeleton(name: string): string {
-  return [...name.normalize("NFKC").toLowerCase()]
+  const base = name.normalize("NFKC").toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
+  return [...base]
     .map((ch) => CONFUSABLE_FOLD[ch] ?? ch)
     .join("")
     .replace(/[^a-z]/g, "");

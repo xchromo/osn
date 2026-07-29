@@ -324,6 +324,31 @@ describe("passkey management routes", () => {
       expect(err._tag).toBe("AuthError");
     });
 
+    // S-M2: a presented-but-stale binding must fail closed (409), never
+    // collapse into the account-wide session wipe.
+    it("fails closed (409) when the caller's session binding is stale", async () => {
+      const { app: verifiedApp, accessToken, tokens, profile, mintOtpStepUp } = await setupStepUp();
+      const pk = await seedPasskey(profile.accountId);
+      await seedPasskey(profile.accountId);
+      // The caller's session is revoked / rotated out while the 5-min access
+      // token is still valid, so its `osn_sid` now names no live row.
+      await Effect.runPromise(
+        svc.invalidateSession(tokens.refreshToken).pipe(Effect.provide(layer)),
+      );
+      const stepUp = await mintOtpStepUp();
+
+      const res = await verifiedApp.handle(
+        new Request(`http://localhost/passkeys/${pk}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "X-Step-Up-Token": stepUp,
+          },
+        }),
+      );
+      expect(res.status).toBe(409);
+    });
+
     // S-L4: default config rejects OTP step-up for delete. The dedicated
     // passkey-only AMR config knob is the intended production posture.
     it("rejects OTP step-up when passkeyDeleteAllowedAmr omits it", async () => {
