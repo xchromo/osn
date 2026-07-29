@@ -20,7 +20,7 @@ import {
   type CropSlot,
   type ImageCrop,
 } from "../lib/image-crop";
-import { isHeroEmpty, isStoryEmpty } from "../lib/invite-emptiness";
+import { hasFooterMessage, isHeroEmpty, isStoryEmpty } from "../lib/invite-emptiness";
 import { CIRE_WEB_URL } from "../lib/osn";
 import PaletteField, { type PaletteState, resolvedSeeds } from "./PaletteField";
 
@@ -105,6 +105,10 @@ interface InviteCustomisation {
   // fields as "use the defaults" instead of crashing the builder.
   details?: { eyebrow: string | null; heading: string | null };
   welcome?: { message: string | null };
+  // Footer closing note (migration 0048). Optional on the wire for the same
+  // mid-deploy reason; unlike the fields above it has no built-in default, so
+  // absent simply means the guest footer shows no note.
+  footer?: { message: string | null };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   // Optional host override for the first line of the copyable invite message
@@ -188,6 +192,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   const [detailsEyebrow, setDetailsEyebrow] = createSignal("");
   const [detailsHeading, setDetailsHeading] = createSignal("");
   const [welcomeMessage, setWelcomeMessage] = createSignal("");
+  const [footerMessage, setFooterMessage] = createSignal("");
   const [inviteMessage, setInviteMessage] = createSignal("");
   const [seeded, setSeeded] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
@@ -223,6 +228,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     setDetailsEyebrow(d.details?.eyebrow ?? "");
     setDetailsHeading(d.details?.heading ?? "");
     setWelcomeMessage(d.welcome?.message ?? "");
+    setFooterMessage(d.footer?.message ?? "");
     setInviteMessage(d.inviteMessage ?? "");
     setHeadingFont(d.theme.headingFont ?? "default");
     setBodyFont(d.theme.bodyFont ?? "default");
@@ -261,6 +267,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     detailsEyebrow: detailsEyebrow() || null,
     detailsHeading: detailsHeading() || null,
     welcomeMessage: welcomeMessage() || null,
+    footerMessage: footerMessage() || null,
     inviteMessage: inviteMessage() || null,
   });
 
@@ -339,6 +346,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       body: storyBody(),
       imageUrl: data()?.story.imageUrl,
     });
+  // The footer note has no default, so its badge is simply "has the organiser
+  // typed anything?" — blank means the guest footer renders without it.
+  const footerShown = () => hasFooterMessage(footerMessage());
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
@@ -855,6 +865,33 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   heading={sampleCopy(detailsHeading(), DEFAULTS.detailsHeading, 60)}
                   body="Event names, dates and the Respond buttons follow these colours."
                 />
+              </fieldset>
+
+              {/* ── Footer note ──────────────────────────────────────── */}
+              <fieldset class="border-border flex flex-col gap-4 rounded-sm border p-4">
+                <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
+                  Footer Note
+                </legend>
+                <p class="font-body text-text-muted text-[0.82rem]">
+                  An optional closing line at the very bottom of the invite, just above your names —
+                  "Looking forward to celebrating with you", "No boxed gifts please". Leave it blank
+                  and the footer shows your names and the legal links only, exactly as it does now.
+                  It is part of the public invite page, so don't put anything private in it.
+                </p>
+                <SegmentBadge shown={footerShown()} />
+                <label class="flex flex-col gap-1.5">
+                  <span class="font-body text-text-muted text-[0.72rem] tracking-[0.1em] uppercase">
+                    Footer note (optional)
+                  </span>
+                  <textarea
+                    rows={3}
+                    aria-label="Footer note (optional)"
+                    placeholder="Looking forward to celebrating with you"
+                    value={footerMessage()}
+                    onInput={(e) => setFooterMessage(e.currentTarget.value)}
+                    class="border-border bg-bg font-body text-text focus:border-gold rounded-sm border px-3 py-2 text-[0.88rem] outline-none"
+                  />
+                </label>
               </fieldset>
 
               {/* ── Invite message (not on the guest page) ───────────── */}

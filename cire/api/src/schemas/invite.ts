@@ -210,6 +210,12 @@ export const InviteTextBody = Schema.Struct({
   // "We are delighted to invite you to celebrate with us."). A short personal
   // sentence or two, so a modest cap.
   welcomeMessage: copyField(300),
+  // Closing note in the invite footer — the line the couple signs off with
+  // ("Looking forward to celebrating with you", "No boxed gifts please"). Unlike
+  // the fields above it has NO built-in default: null/whitespace ⇒ the footer
+  // note is not rendered. A short sign-off, so the same modest cap as the
+  // welcome greeting.
+  footerMessage: copyField(300),
   // Optional host override for the FIRST line of the copyable invite message
   // (the line above the guest-site URL + family code). A free-text string capped
   // at 600 chars — a couple of short sentences, enough for a warm personal note

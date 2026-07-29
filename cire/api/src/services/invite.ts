@@ -113,6 +113,11 @@ export interface InviteCustomisation {
   welcome: {
     message: string | null;
   };
+  // Footer closing note (migration 0048). `null` ⇒ the guest site renders NO
+  // note — there is no built-in default here, unlike `details` / `welcome`.
+  footer: {
+    message: string | null;
+  };
   heroDisplay: HeroDisplay;
   theme: InviteTheme;
   // Optional host override for the first line of the copyable invite message
@@ -145,6 +150,7 @@ const EMPTY: InviteCustomisation = {
   story: { eyebrow: null, heading: null, body: null, imageUrl: null, imageCrop: null },
   details: { eyebrow: null, heading: null },
   welcome: { message: null },
+  footer: { message: null },
   heroDisplay: DEFAULT_HERO_DISPLAY,
   theme: EMPTY_THEME,
   inviteMessage: null,
@@ -175,6 +181,7 @@ function toCustomisation(
     detailsEyebrow: string | null;
     detailsHeading: string | null;
     welcomeMessage: string | null;
+    footerMessage: string | null;
     heroImageKey: string | null;
     storyImageKey: string | null;
     heroImageCrop: string | null;
@@ -230,6 +237,7 @@ function toCustomisation(
     },
     details: { eyebrow: c.detailsEyebrow, heading: c.detailsHeading },
     welcome: { message: c.welcomeMessage },
+    footer: { message: c.footerMessage },
     heroDisplay: {
       // Persisted values already passed the clamp-on-write validation; a null
       // (no row / LEFT JOIN miss) falls back to the today's-look default so an
@@ -317,6 +325,7 @@ export const inviteService = {
             detailsEyebrow: weddingInviteCustomisations.detailsEyebrow,
             detailsHeading: weddingInviteCustomisations.detailsHeading,
             welcomeMessage: weddingInviteCustomisations.welcomeMessage,
+            footerMessage: weddingInviteCustomisations.footerMessage,
             heroImageKey: weddingInviteCustomisations.heroImageKey,
             storyImageKey: weddingInviteCustomisations.storyImageKey,
             heroImageCrop: weddingInviteCustomisations.heroImageCrop,
@@ -440,6 +449,7 @@ export const inviteService = {
         detailsEyebrow: normaliseCopy(fields.detailsEyebrow),
         detailsHeading: normaliseCopy(fields.detailsHeading),
         welcomeMessage: normaliseCopy(fields.welcomeMessage),
+        footerMessage: normaliseCopy(fields.footerMessage),
         inviteMessage: normaliseCopy(fields.inviteMessage),
       };
       yield* dbQuery(() =>

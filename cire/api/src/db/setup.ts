@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS wedding_invite_customisations (
   details_eyebrow TEXT,
   details_heading TEXT,
   welcome_message TEXT,
+  footer_message TEXT,
   hero_image_key TEXT,
   story_image_key TEXT,
   hero_image_crop TEXT,

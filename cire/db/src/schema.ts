@@ -683,6 +683,13 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // guest name, previously hardcoded to "We are delighted to invite you to
   // celebrate with us." NULL ⇒ the built-in default copy.
   welcomeMessage: text("welcome_message"),
+  // Closing note in the invite's footer (migration 0048) — a free-text line the
+  // couple signs off with ("Looking forward to celebrating with you", "No boxed
+  // gifts please"). Unlike the welcome greeting there is NO built-in default:
+  // NULL / whitespace-only ⇒ the footer note simply doesn't render, exactly like
+  // the hero / Our-Story / dress-code segments. So an existing wedding that
+  // never sets it keeps today's footer (couple's title + legal links).
+  footerMessage: text("footer_message"),
   heroImageKey: text("hero_image_key"),
   storyImageKey: text("story_image_key"),
   // JSON-encoded normalised crop rectangle `{x,y,w,h}` in SOURCE FRACTIONS (0..1)

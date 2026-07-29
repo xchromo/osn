@@ -10,6 +10,7 @@
 // promise true. The footer is the one component every document shell already
 // renders, which makes it the right home.
 import { ConsentPreferencesLink } from './consent/ConsentBanner'
+import { hasFooterMessage } from './invite-emptiness'
 
 interface Props {
   /**
@@ -19,11 +20,25 @@ interface Props {
    * 404) ⇒ links only.
    */
   closing?: string | null
+  /**
+   * The couple's optional closing note, set in the invite builder ("Looking
+   * forward to celebrating with you", "No boxed gifts please"). It sits above
+   * the couple's name, so the sign-off still reads last.
+   *
+   * Like the other optional invite segments this has NO built-in default: blank
+   * or whitespace-only ⇒ nothing renders (checked with the shared
+   * `hasFooterMessage` predicate, so the organiser builder's "Shown / Hidden —
+   * empty" badge and this render can't disagree).
+   */
+  message?: string | null
 }
 
-const { closing } = Astro.props
+const { closing, message } = Astro.props
+
+const showMessage = hasFooterMessage(message)
 ---
 <footer class="site-footer">
+  {showMessage && <p class="note">{message}</p>}
   {closing && <p class="closing">{closing}</p>}
   <nav aria-label="Legal">
     <a href="/privacy">Privacy Notice</a>
@@ -41,6 +56,24 @@ const { closing } = Astro.props
     font-family: var(--font-body, "Lato", system-ui, sans-serif);
     font-size: 0.8125rem;
     color: var(--color-text-muted, rgba(255, 255, 255, 0.5));
+  }
+
+  /* The couple's closing note. Body font (it is a sentence, not a name) and
+     measure-capped so a longer note wraps to readable lines rather than one
+     wide band on desktop. Sits a little larger than the legal row so it reads
+     as part of the invitation. */
+  .site-footer .note {
+    margin: 0 auto 1rem;
+    max-width: 34rem;
+    font-size: clamp(0.9375rem, 2vw, 1.0625rem);
+    line-height: 1.6;
+    font-style: italic;
+    /* Deliberately not the muted legal grey — this is the couple speaking. */
+    color: var(--color-text, rgba(255, 255, 255, 0.82));
+    /* An organiser may type a multi-line note; honour the breaks they chose
+       without letting a long single line overflow on a phone. */
+    white-space: pre-line;
+    overflow-wrap: anywhere;
   }
 
   .site-footer .closing {

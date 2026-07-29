@@ -5,7 +5,7 @@ related:
   - "[[index]]"
   - "[[monorepo-structure]]"
   - "[[invite-templates]]"
-last-reviewed: 2026-07-27
+last-reviewed: 2026-07-29
 ---
 
 # Invite Builder
@@ -28,11 +28,21 @@ Single source of truth: `cire/api/src/schemas/invite.ts`.
 | Our Story            | `story`    | `storyEyebrow`, `storyHeading`, `storyBody`  |
 | Code Entry & Welcome | —          | `welcomeMessage` (post-claim greeting line)   |
 | Events ("details")   | —          | `detailsEyebrow`, `detailsHeading`            |
+| Footer               | —          | `footerMessage` (closing note, **no default**) |
 
 The `details`/`welcome` copy fields landed in migration
 `0028_details_welcome_copy.sql` — they closed the last hardcoded guest-facing
 copy (the "Celebrate With Us" / "Your Events" events header and the
 "We are delighted to invite you…" greeting).
+
+The **footer note** landed in `0048_invite_footer_message.sql`. It is the one
+copy field with **no built-in default**: it exists so a couple can add a closing
+line of their own ("Looking forward to celebrating with you", "No boxed gifts
+please"), and there is no sensible neutral sentence to invent on their behalf.
+So it behaves like the conditional segments below rather than like the fields
+above — blank means the line is simply not rendered, and every existing wedding
+keeps today's footer (couple's title over the legal links) until an organiser
+fills it in. Cap 300 chars, same as the welcome greeting.
 
 Image slots: `INVITE_IMAGE_SLOTS = ["hero", "story"]`. The same union bounds the
 `:slot` route param, the R2 key namespace, and the observability span/log
@@ -49,7 +59,7 @@ never paint an empty full-screen hero or an empty "Our Story" surface. "Absent"
 means null, empty-string, **or whitespace-only** (typing only spaces does not
 fill a field). The single source of truth for these predicates is
 `cire/web/src/components/invite-emptiness.ts` (`hasText`, `isHeroEmpty`,
-`isStoryEmpty`, `hasPinterest`, `hasDressCode`).
+`isStoryEmpty`, `hasFooterMessage`, `hasPinterest`, `hasDressCode`).
 
 | Segment                       | Rendered when…                                            | Where                                   |
 | ----------------------------- | --------------------------------------------------------- | --------------------------------------- |
@@ -57,6 +67,7 @@ fill a field). The single source of truth for these predicates is
 | **Our Story**                 | it has a heading **OR** a body **OR** a story image        | `InviteHeader.tsx` (`showStory`)        |
 | **Event → Inspiration**       | the event has a `pinterestUrl`                             | `DetailsModal.tsx` (`hasPinterest`)     |
 | **Event → Dress Code**        | the event has a dress-code description **OR** a palette swatch | `DetailsModal.tsx` (`hasDressCode`) |
+| **Footer note**               | `footerMessage` has text                                   | `SiteFooter.astro` (`hasFooterMessage`) |
 
 Image-only or title-only heroes are valid (the neutral "You're Invited" fallback
 title only renders **inside** an otherwise-shown hero). All built-in fallback
@@ -68,7 +79,8 @@ builder (the old values live in the PR #248 description). The Our-Story eyebrow 
 label, not content — it does not keep the section alive on its own.
 
 **Builder reflection (no surprises):** `InviteBuilder.tsx` shows a per-section
-badge — **"Shown"** vs **"Hidden — empty"** — on the Hero and Our Story fieldsets,
+badge — **"Shown"** vs **"Hidden — empty"** — on the Hero, Our Story and Footer
+Note fieldsets,
 driven by the **same** emptiness logic (mirrored in
 `cire/organiser/src/lib/invite-emptiness.ts`, since the two packages share no
 code). The badge updates **live** as the organiser types, so they know exactly
@@ -218,7 +230,10 @@ nullable theme columns (`theme_heading_font`, `theme_body_font`, the five
 `0027`, back-filling the hero accent → `palette_gilt` and the hero surface →
 `palette_card`) + the nullable copy columns
 `details_eyebrow` / `details_heading` / `welcome_message`
-(`0028_details_welcome_copy.sql`) + the two **hero display** columns
+(`0028_details_welcome_copy.sql`) + `footer_message`
+(`0048_invite_footer_message.sql` — the footer's closing note, which unlike its
+neighbours has no built-in default: NULL ⇒ nothing rendered) + the two
+**hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two
 hero-display columns are NOT NULL with defaults that reproduce today's look, so a
@@ -255,7 +270,10 @@ CSV-import `R2Bucket` is text-only and is **not** widened in place). Routes:
   behind `osnAuth()` + `weddingOwner()`:
   - `GET /invite` → current customisation (text + image URLs + theme +
     `heroDisplay`).
-  - `PUT /invite/text` → upsert the five text fields (empty ⇒ default).
+  - `PUT /invite/text` → upsert the copy fields (total body — the builder always
+    submits every key). Empty/whitespace ⇒ `null`, which means "use the built-in
+    default" for every field except `footerMessage`, where it means "render
+    nothing".
   - `PUT /invite/theme` → upsert the theme (fonts + per-section colours) **plus the
     two hero display options** (`heroImageStyle ∈ {blurred,regular}`,
     `heroTitleBackdrop ∈ {none,solid}` — both required, total body). A bad colour,

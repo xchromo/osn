@@ -67,8 +67,12 @@ const preloadHeroHref = heroBase ? `${heroBase}${heroSep}variant=hero-bg` : null
       welcomeMessage={initialInvite?.welcome?.message ?? null}
     />
     {/* Sign the invite off in the couple's name, so the last thing a guest
-        reads is who invited them and not the legal links. */}
-    <SiteFooter closing={initialInvite?.hero.title ?? null} />
+        reads is who invited them and not the legal links. The optional closing
+        note sits above it; unset (the default) ⇒ it doesn't render at all. */}
+    <SiteFooter
+      closing={initialInvite?.hero.title ?? null}
+      message={initialInvite?.footer?.message ?? null}
+    />
     {/* Site-wide consent surface. `client:idle` so it never competes with the
         invite's first paint — nothing third-party can load before it hydrates
         anyway, since every ConsentGate defaults to denied until then. */}

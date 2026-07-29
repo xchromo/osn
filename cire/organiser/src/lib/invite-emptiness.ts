@@ -29,6 +29,14 @@ export function isHeroEmpty(hero: {
 }
 
 /**
+ * The footer's closing note is SHOWN only when it has text — there is no
+ * built-in default, so a blank field means the guest simply never sees the line.
+ */
+export function hasFooterMessage(message: string | null | undefined): boolean {
+  return hasText(message);
+}
+
+/**
  * The Our-Story section is HIDDEN when its heading, body and image are all absent.
  * (The eyebrow is a label, not content — it does not keep the section alive.)
  */

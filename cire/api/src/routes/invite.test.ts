@@ -115,6 +115,7 @@ const emptyText = JSON.stringify({
   detailsEyebrow: null,
   detailsHeading: null,
   welcomeMessage: null,
+  footerMessage: null,
   inviteMessage: null,
 });
 
@@ -162,6 +163,7 @@ describe("PUT /invite/text (organiser)", () => {
     detailsEyebrow: null,
     detailsHeading: null,
     welcomeMessage: null,
+    footerMessage: null,
     inviteMessage: null,
   };
 
@@ -249,6 +251,71 @@ describe("PUT /invite/text (organiser)", () => {
     expect(body.details.eyebrow).toBeNull();
     expect(body.details.heading).toBeNull();
     expect(body.welcome.message).toBeNull();
+  });
+
+  it("saves the footer note and surfaces it (trimmed) on the public read", async () => {
+    const { app } = buildApp();
+    const put = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, footerMessage: "  No boxed gifts please  " }),
+    });
+    expect(put.status).toBe(200);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as { footer: { message: string | null } };
+    expect(body.footer.message).toBe("No boxed gifts please");
+  });
+
+  // The footer note is the first copy field with NO built-in default: null must
+  // survive to the guest site so it renders nothing, rather than falling back.
+  it("reports a null footer note for an uncustomised wedding (segment hidden)", async () => {
+    const { app } = buildApp();
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as { footer: { message: string | null } };
+    expect(body.footer.message).toBeNull();
+  });
+
+  it("clears the footer note back to hidden when saved as whitespace", async () => {
+    const { app } = buildApp();
+    const headers = { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) };
+    const set = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ ...payload, footerMessage: "See you there!" }),
+    });
+    expect(set.status).toBe(200);
+
+    const clear = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ ...payload, footerMessage: "   " }),
+    });
+    expect(clear.status).toBe(200);
+
+    const pub = await appRequest(app, `/api/invite/${SLUG}`);
+    const body = (await pub.json()) as { footer: { message: string | null } };
+    expect(body.footer.message).toBeNull();
+  });
+
+  it("rejects an over-long footer note with 400 (cap 300)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, footerMessage: "x".repeat(301) }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts an exactly-at-cap footer note (300 chars)", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${orgBase}/text`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(BOOTSTRAP_OWNER)) },
+      body: JSON.stringify({ ...payload, footerMessage: "x".repeat(300) }),
+    });
+    expect(res.status).toBe(200);
   });
 
   it("rejects an over-long welcome greeting with 400 (cap 300)", async () => {
@@ -371,6 +438,7 @@ describe("co-host invite access (weddingMember)", () => {
         detailsEyebrow: null,
         detailsHeading: null,
         welcomeMessage: null,
+        footerMessage: null,
         inviteMessage: null,
       }),
     });
@@ -412,6 +480,7 @@ describe("co-host invite access (weddingMember)", () => {
         detailsEyebrow: null,
         detailsHeading: null,
         welcomeMessage: null,
+        footerMessage: null,
         inviteMessage: null,
       }),
     });
