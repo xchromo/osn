@@ -51,7 +51,7 @@ const FONT_LABELS: Record<string, string> = {
 const FONT_OPTIONS = FONT_CHOICES.map((value) => ({ value, label: FONT_LABELS[value] ?? value }));
 
 /**
- * Typography-option dropdowns (0049). Same shape as the fonts: the KEYS come
+ * Typography-option dropdowns (0048). Same shape as the fonts: the KEYS come
  * from the closed enums in `@cire/theme`, only the labels live here. "Default"
  * always means "whatever the design pack does".
  */
@@ -72,7 +72,7 @@ const FONT_STYLE_OPTIONS = FONT_STYLE_CHOICES.map((v) =>
 interface InviteTheme {
   headingFont: string | null;
   bodyFont: string | null;
-  // Global typography options (0049). Optional on the wire so a mid-deploy
+  // Global typography options (0048). Optional on the wire so a mid-deploy
   // payload from an older API seeds them as "default" instead of crashing.
   headingSize?: string | null;
   headingWeight?: string | null;
@@ -240,7 +240,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   // a tone (null ⇒ the page ground).
   const [headingFont, setHeadingFont] = createSignal("default");
   const [bodyFont, setBodyFont] = createSignal("default");
-  // Typography options (0049) — closed enum keys, "default" ⇒ the pack's look.
+  // Typography options (0048) — closed enum keys, "default" ⇒ the pack's look.
   const [headingSize, setHeadingSize] = createSignal("default");
   const [headingWeight, setHeadingWeight] = createSignal("default");
   const [headingStyle, setHeadingStyle] = createSignal("default");

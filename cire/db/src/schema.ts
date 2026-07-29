@@ -695,7 +695,7 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // The footer's optional image (migration 0050) — a small centred monogram /
   // motif / signature above the closing note. Same R2-object-key storage and
   // same crop JSON shape as the other slots; NULL ⇒ nothing renders, which is
-  // what every pre-0049 wedding reads as.
+  // what every pre-0050 wedding reads as.
   footerImageKey: text("footer_image_key"),
   // JSON-encoded normalised crop rectangle `{x,y,w,h}` in SOURCE FRACTIONS (0..1)
   // the organiser chose for the hero / story image (migration 0021). NULL ⇒ the
@@ -735,7 +735,7 @@ export const weddingInviteCustomisations = sqliteTable("wedding_invite_customisa
   // + CSS-injection risk on the static guest site). NULL ⇒ the built-in token.
   themeHeadingFont: text("theme_heading_font"),
   themeBodyFont: text("theme_body_font"),
-  // Global typography OPTIONS (migration 0049) — heading size/weight/style +
+  // Global typography OPTIONS (migration 0048) — heading size/weight/style +
   // body weight/style. Closed enum keys from `@cire/theme`
   // (`HEADING_SIZE_CHOICES` / `FONT_WEIGHT_CHOICES` / `FONT_STYLE_CHOICES`),
   // validated in `cire/api/src/schemas/invite.ts`; the key resolves to a fixed

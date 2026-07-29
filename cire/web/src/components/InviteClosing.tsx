@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 
 import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from "./image-crop";
 import { isFooterEmpty } from "./invite-emptiness";
-import { buildSrcSet, variantSrc } from "./invite-images";
+import { buildSrcSet, type VariantName, variantSrc } from "./invite-images";
 
 /**
  * The invite's CLOSING SECTION — the couple's own sign-off: an optional image
@@ -77,11 +77,17 @@ export function InviteClosing(props: InviteClosingProps) {
 
   // When a crop was saved, render the cropped region with the same CSS-fraction
   // technique the story photo uses (a background layer — backgrounds can't take
-  // a srcset, so we ask for one bounded variant comfortably above the rendered
-  // width at retina). With no crop, fall back to a plain responsive <img>.
+  // a srcset, so we pick one bounded variant).
+  //
+  // The crop layer scales the source by 100/w, so a TIGHT crop needs more source
+  // pixels than the 200px box suggests: at w = 0.4 the visible region is 40% of
+  // an already-downscaled image. Below half-width we ask for `card` (800w);
+  // otherwise `thumb` (320w) is ample and saves ~6× the bytes. Both are in the
+  // existing allowlist, so the transform cardinality guarantee is unaffected.
+  const cropVariant = (): VariantName => ((props.imageCrop?.w ?? 1) < 0.5 ? "card" : "thumb");
   const cropStyle = () => {
     const url = imageSrc();
-    return url ? cropBackgroundStyle(variantSrc(url, "card"), props.imageCrop) : null;
+    return url ? cropBackgroundStyle(variantSrc(url, cropVariant()), props.imageCrop) : null;
   };
 
   // The box adopts the crop's TRUE pixel aspect (from its captured source dims)
@@ -93,7 +99,9 @@ export function InviteClosing(props: InviteClosingProps) {
     <Show when={show()}>
       <section
         data-invite-closing
-        class="px-6 py-16 text-center md:px-8 md:py-20"
+        // `content-visibility: auto` defers layout/paint (and the crop path's
+        // background fetch) until this off-screen section approaches the viewport.
+        class="px-6 py-16 text-center [content-visibility:auto] md:px-8 md:py-20"
         // Paints the welcome section's surface; the text tokens below resolve
         // from the root palette, which already carries the organiser's scheme.
         style={{ ...props.themeVars, "background-color": "var(--invite-section-bg)" }}
@@ -103,12 +111,23 @@ export function InviteClosing(props: InviteClosingProps) {
             <Show
               when={cropStyle()}
               fallback={
-                /* Renders at most 200px wide — `thumb` (320w) covers it at 2× DPR. */
+                /* Two candidates so `sizes` has a real choice to make: `thumb`
+                   (320w) covers the 200px box at 1×, `card` (800w) at 3× on a
+                   phone. The bare `src` names `thumb` explicitly — an absent
+                   `variant` resolves to `card` server-side, which would mint a
+                   second transform-cache entry for a URL the browser never
+                   fetches under a `w`-descriptor srcset. `loading="lazy"`
+                   because this section is below every event card and is
+                   guaranteed off-screen at mount: without it the fetch races
+                   the in-viewport cards that ARE deferred, and bills a
+                   per-call Images transform for guests who never scroll here. */
                 <img
-                  src={url()}
-                  srcset={buildSrcSet(url(), ["thumb"])}
+                  src={variantSrc(url(), "thumb")}
+                  srcset={buildSrcSet(url(), ["thumb", "card"])}
                   sizes="200px"
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   class="mx-auto block h-auto w-[min(200px,45vw)] rounded-sm object-cover"
                   style={{ "aspect-ratio": imageAspect() }}
                 />

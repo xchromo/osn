@@ -312,7 +312,7 @@ export {
 
 const FontField = Schema.NullOr(Schema.Literal(...FONT_CHOICES));
 
-// Global typography options (migration 0049). Closed enum KEYS from
+// Global typography options (migration 0048). Closed enum KEYS from
 // `@cire/theme` — each resolves there to a fixed CSS value (scale factor /
 // numeric weight / `normal`|`italic`), so free text can never reach a rendered
 // `style`. `null` ⇒ the design pack's built-in look.

@@ -47,7 +47,7 @@ export interface InviteTheme {
   headingFont: FontChoice | null;
   bodyFont: FontChoice | null;
   /**
-   * Global typography options (migration 0049) — heading size/weight/style +
+   * Global typography options (migration 0048) — heading size/weight/style +
    * body weight/style. Closed enum keys; the guest site resolves each to a
    * fixed CSS value in `@cire/theme` (`null` / unknown ⇒ the pack's built-in
    * look).
@@ -193,7 +193,7 @@ function imagePath(slug: string, slot: InviteImageSlot, version: number): string
  * onto storage — every read/write below indexes this table rather than branching
  * on the slot name. That matters: while there were exactly two slots the code
  * branched `slot === "hero" ? … : …` everywhere, and adding a third (`footer`,
- * migration 0049) would have silently made every one of those branches treat it
+ * migration 0050) would have silently made every one of those branches treat it
  * as the story slot — writing the footer's image into `story_image_key`.
  *
  * `cropMobile` is hero-only (migration 0046): the hero is the one full-bleed
@@ -581,7 +581,7 @@ export const inviteService = {
       const values = {
         themeHeadingFont: fields.headingFont,
         themeBodyFont: fields.bodyFont,
-        // Typography option keys (0049) — pure CSS, never bump the image version.
+        // Typography option keys (0048) — pure CSS, never bump the image version.
         themeHeadingSize: fields.headingSize,
         themeHeadingWeight: fields.headingWeight,
         themeHeadingStyle: fields.headingStyle,
