@@ -1,6 +1,7 @@
 import { render, cleanup } from "@solidjs/testing-library";
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 
+import { resetConsentForTest, seedConsentForTest } from "../lib/consent/testing";
 import { MapPreview } from "./MapPreview";
 import type { EventSummary } from "./types";
 
@@ -20,9 +21,12 @@ const baseEvent: EventSummary = {
 };
 
 describe("MapPreview", () => {
+  beforeEach(resetConsentForTest);
+
   afterEach(() => {
     cleanup();
     vi.unstubAllEnvs();
+    resetConsentForTest();
   });
 
   it("links to a derived Google Maps search when only an address is present", () => {
@@ -87,8 +91,12 @@ describe("MapPreview", () => {
     expect(link.href).toContain(encodeURIComponent("12 Banksia Lane, Strathfield"));
   });
 
-  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured", () => {
+  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured, third-party content ALLOWED", () => {
     const KEY = "test-embed-key";
+
+    // The iframe hands Google the guest's IP and UA, so it only mounts once the
+    // `embeds` category is granted. These tests describe the consented path.
+    beforeEach(() => seedConsentForTest({ embeds: true }));
 
     it("renders a Google Maps Embed iframe keyed on the encoded address", () => {
       vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
@@ -146,6 +154,55 @@ describe("MapPreview", () => {
       ));
       expect(container.querySelector("iframe")).toBeNull();
       expect(getByRole("link")).toBeTruthy();
+    });
+  });
+
+  describe("with PUBLIC_GOOGLE_MAPS_EMBED_KEY configured, third-party content REFUSED", () => {
+    const KEY = "test-embed-key";
+
+    it("makes NO request to Google when the guest has not decided yet", () => {
+      // The default state — no consent cookie at all. A configured key must not
+      // be enough on its own to load the embed, which is exactly the gap this
+      // component had before the consent framework: the key was the only
+      // condition, so every guest with an address hit Google on modal open.
+      vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
+      const { container } = render(() => <MapPreview event={baseEvent} />);
+
+      expect(container.querySelector("iframe")).toBeNull();
+    });
+
+    it("makes NO request to Google when the guest explicitly refused", () => {
+      seedConsentForTest({ embeds: false });
+      vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
+      const { container } = render(() => <MapPreview event={baseEvent} />);
+
+      expect(container.querySelector("iframe")).toBeNull();
+    });
+
+    it("falls back to the CSS map card, not a bare permission notice", () => {
+      // The un-consented state has to remain a useful thing to put where a map
+      // goes. Refusing costs the guest the interactive tiles and nothing else:
+      // the venue is still named and the outbound maps link still works, since
+      // a link the guest chooses to follow is their navigation, not our transfer.
+      vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
+      const { getByRole, getByText } = render(() => <MapPreview event={baseEvent} />);
+
+      expect(getByText("12 Banksia Lane, Strathfield")).toBeTruthy();
+      const link = getByRole("link") as HTMLAnchorElement;
+      expect(link.href).toContain("https://www.google.com/maps/search/?api=1&query=");
+    });
+
+    it("swaps the CSS card for the live embed the moment consent is granted", () => {
+      vi.stubEnv("PUBLIC_GOOGLE_MAPS_EMBED_KEY", KEY);
+      const { container } = render(() => <MapPreview event={baseEvent} />);
+      expect(container.querySelector("iframe")).toBeNull();
+
+      // Consent granted elsewhere on the page (the banner, or another gate's
+      // in-place button) reaches this component through the shared store.
+      seedConsentForTest({ embeds: true });
+      render(() => <MapPreview event={baseEvent} />);
+
+      expect(document.querySelector("iframe")).not.toBeNull();
     });
   });
 });

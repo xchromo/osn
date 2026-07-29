@@ -4,7 +4,8 @@ tags: [todo, web]
 related:
   - "[[index]]"
   - "[[invite-builder]]"
-last-reviewed: 2026-07-27
+  - "[[consent]]"
+last-reviewed: 2026-07-29
 ---
 
 # cire/web
@@ -14,6 +15,10 @@ Frontend feature work. Tick items as PRs land; add new entries when scope is dis
 Completed feature history is archived in `[[changelog/completed-features]]` (Migrated from web.md, 2026-06-21). The 3 most recent done items are kept inline below for recent context.
 
 ## Open
+
+- [ ] **Self-host the two Google Fonts families** — the font `<link>` sits in the `<head>` of every document shell, so it is requested before any consent choice can be applied and is the ONE third party the site-wide consent gate does not cover (declared `enforcement: "always"` in the vendor registry, and disclosed as "loads on every visit" in both the preferences dialog and `/privacy`). Gating it is the wrong fix — it would either swap the typeface mid-visit or leave the prerendered legal pages inconsistent with the SSR'd invite. Download Cormorant Garamond + Lato as woff2 into `cire/web/public/fonts/`, replace the `<link rel=preload>`/`<noscript>` pair in `designs/classic/Document.astro`, `designs/gala/Document.astro`, `layouts/LegalLayout.astro` and `components/NotFoundDocument.astro` with a local `@font-face` block, then delete the `google-fonts` vendor entry, drop `fonts.googleapis.com` / `fonts.gstatic.com` from `CSP_DIRECTIVES`, bump `CONSENT_POLICY_VERSION`, and remove the owner-note paragraph from `privacy.astro`. Removes a US transfer entirely rather than asking guests to consent to it. See `[[consent]]`.
+
+- [x] **Site-wide consent framework — Pinterest gate generalised, Google Maps embed gated** (`claude/site-wide-consent-framework-jys0q2`, 2026-07-29) — consent was previously a property of one component: `PinterestBoard.tsx` owned its own `cire:pinterest-consent` localStorage key, signal, prompt and copy, and was the only gate on the site, while the Google Maps venue embed shipped an equivalent IP+UA transfer to Google with no gate at all. Replaced by `lib/consent/` (categories, vendor registry, versioned record, `cire_consent` cookie, shared Solid store) + `components/consent/` (banner with equal-weight Accept all / Reject all / Choose, per-category preferences dialog, `<ConsentGate>` wrapper, standing `ConsentPreferencesLink` in the footer). `<ConsentGate>` does not *render* its children while consent is absent, so a gated component's effects never run — the property that makes the gate real for Pinterest's injected tracker. Google Maps falls back to the existing CSS map card rather than a permission notice. The vendor registry drives the preferences dialog, the `/privacy` third-party list, and a test asserting every declared origin is in the CSP. The legacy Pinterest key is deleted, not migrated (it consented to Pinterest, not to the broader `embeds` category), so existing guests are re-prompted once. Google Fonts is declared `enforcement: "always"` and disclosed as ungated — see the open item above. Full contract in `[[consent]]`.
 
 - [x] **Host-dashboard UI polish — masthead de-dupe, host terminology, profile menu** (`claude/cire-dashboard-ui-polish`, 2026-07-27) — the portal masthead stacked "Organiser Portal" over "Organiser Dashboard"; now Cire (eyebrow) over "Host Dashboard", tab titles to match. All user-facing copy consolidated on **host** over **organiser** (RSVP "Host-entered" badge + tooltip + intro, co-hosts viewer description, login page) — API routes (`/api/organiser/*`), component names, and comments unchanged by design. The top-level "Security" tab left the section nav: account-scoped actions (Security & passkeys, Sign out) moved under a new avatar `ProfileMenu.tsx` (Kobalte DropdownMenu, names the signed-in account from the rp-auth session, initial fallback when no avatar). `#/security` deep link unchanged; the view gained an "All weddings" back affordance. Tests: `ProfileMenu.test.tsx` (identity lines, avatar/initial, select callbacks — Kobalte menus open on pointerdown / select on pointerup) + reworked OrganiserApp security/sign-out cases.
 
