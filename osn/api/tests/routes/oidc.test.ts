@@ -168,8 +168,11 @@ describe("GET /authorize", () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.get("location")).toBeNull();
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("invalid_client");
+    // A top-level navigation renders a branded HTML page, not raw JSON.
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("invalid_client");
+    expect(body).toContain("<!doctype html>");
   });
 
   it("renders (never redirects) an unregistered redirect_uri", async () => {
@@ -182,8 +185,11 @@ describe("GET /authorize", () => {
     expect(res.status).toBe(400);
     // The open-redirect guard: nothing may point a browser at an unvalidated URI.
     expect(res.headers.get("location")).toBeNull();
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("invalid_request");
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("invalid_request");
+    // Never reflect the attacker-supplied redirect URI into the page.
+    expect(body).not.toContain("attacker.example");
   });
 
   it("sets cache-control: no-store", async () => {
@@ -1068,7 +1074,8 @@ describe("token typing (S-M2)", () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.get("location")).toBeNull();
-    expect(((await res.json()) as { error: string }).error).toBe("invalid_client");
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("invalid_client");
   });
 });
 
