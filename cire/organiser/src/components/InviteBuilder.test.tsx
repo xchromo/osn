@@ -1582,6 +1582,137 @@ describe("InviteBuilder UX guards", () => {
 });
 
 /**
+ * The narrow-container section menu (2026-07-30). Below `@3xl/builder` the
+ * eight tabs can't share a line, and the row used to be a horizontally
+ * scrolling strip with Closing and Message parked off the right edge. They now
+ * collapse behind a trigger naming the current section and open as a grid that
+ * shows all eight at once.
+ *
+ * ONE tablist serves both surfaces (a per-surface copy would give every panel
+ * two `aria-labelledby` candidates), so what these tests assert is the
+ * COLLAPSE: `aria-expanded` on the trigger, the `hidden` class on the tablist,
+ * and the dismiss paths. happy-dom applies no CSS, so the container-query swap
+ * itself isn't observable here — the class list is the closest honest proxy.
+ */
+describe("InviteBuilder section menu (narrow containers)", () => {
+  afterEach(() => {
+    cleanup();
+    authFetchMock.mockReset();
+    redirectSpy.mockReset();
+    toastSuccess.mockReset();
+    toastError.mockReset();
+  });
+
+  const renderBuilder = async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+  };
+
+  const trigger = () => screen.getByRole("button", { name: /Choose a section/ });
+  const tablist = () => screen.getByRole("tablist");
+
+  it("names the current section and its position on the trigger, live", async () => {
+    await renderBuilder();
+
+    // Where the organiser IS, without opening anything — the one thing the
+    // scrolling strip couldn't tell them about an off-screen section.
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Invite section: Design, 1 of 8. Choose a section",
+    );
+    expect(trigger().textContent).toContain("Design");
+    expect(trigger().textContent).toContain("1/8");
+
+    await openSection(/^Closing/);
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Invite section: Closing, 7 of 8. Choose a section",
+    );
+    expect(trigger().textContent).toContain("7/8");
+  });
+
+  it("collapses the tablist behind the trigger and toggles it", async () => {
+    await renderBuilder();
+
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(trigger().getAttribute("aria-controls")).toBe(tablist().id);
+    expect(tablist().classList.contains("hidden")).toBe(true);
+
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(tablist().classList.contains("hidden")).toBe(false);
+
+    // All eight reachable in one screen — the point of replacing the strip.
+    expect(within(tablist()).getAllByRole("tab")).toHaveLength(8);
+
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes on a selection and hands focus back to the trigger", async () => {
+    await renderBuilder();
+    fireEvent.click(trigger());
+
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Message" }));
+
+    expect(document.getElementById("invite-message")!.hidden).toBe(false);
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    // Collapsing takes the clicked tab to `display: none` and focus with it —
+    // the trigger is where focus has to land.
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("leaves focus alone when a tab is clicked with the menu closed (wide row)", async () => {
+    await renderBuilder();
+
+    const lookTab = screen.getByRole("tab", { name: "Look" });
+    lookTab.focus();
+    fireEvent.click(lookTab);
+
+    expect(document.getElementById("invite-look")!.hidden).toBe(false);
+    expect(document.activeElement).toBe(lookTab);
+  });
+
+  it("closes on Escape from a tab, and on a press outside the nav", async () => {
+    await renderBuilder();
+
+    fireEvent.click(trigger());
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Design" }), { key: "Escape" });
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger());
+
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
+
+    // A press INSIDE the nav (the tablist's own padding) leaves it open.
+    fireEvent.click(trigger());
+    fireEvent.pointerDown(tablist());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("steps sections with ArrowDown/ArrowUp as well as the horizontal pair", async () => {
+    await renderBuilder();
+    fireEvent.click(trigger());
+
+    // The open menu is a two-column grid; the vertical arrows have to work or
+    // the widget looks broken to a keyboard user.
+    const designTab = screen.getByRole("tab", { name: "Design" });
+    fireEvent.keyDown(designTab, { key: "ArrowDown" });
+    const lookTab = screen.getByRole("tab", { name: "Look" });
+    expect(document.activeElement).toBe(lookTab);
+    expect(document.getElementById("invite-look")!.hidden).toBe(false);
+
+    fireEvent.keyDown(lookTab, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(designTab);
+
+    // Stepping keeps the menu open — only Escape, a selection, or an outside
+    // press dismisses it.
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+/**
  * Which preview layer is MOUNTED (perf P-I1). Both layers used to be mounted at
  * every width with a container query hiding one, so the idle layer still took
  * every token write on every keystroke and colour drag. The builder now measures

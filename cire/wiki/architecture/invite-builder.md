@@ -667,6 +667,43 @@ PR relies on, for a widget this codebase already hand-rolls elsewhere — see
   selection). `sectionTabRefs` (a `Map<string, HTMLButtonElement>`) is the
   imperative-focus mechanism, since Solid has no roving-tabindex primitive.
 
+**The tabs collapse into a menu on phones (2026-07-30).** Eight tabs cannot
+share a line below `@3xl/builder` (48rem), and the first cut let the row scroll
+horizontally: Closing and Message sat off the right edge with nothing to say so
+— the exact failure `ModuleSidebar` had already fixed for the module strip, on
+the surface where an organiser is least likely to go hunting. Below that
+threshold the tabs now collapse behind a **trigger naming the current section**
+— its label, its `n/8` position, and its Shown/Hidden dot, so the menu only has
+to be opened to MOVE, never to orient — which opens them as a **two-column
+grid**: all eight on screen at once (≈206px tall on a 390px phone, so nothing
+scrolls), 44px touch targets, absolutely positioned against the sticky bar so
+opening it overlays the form rather than shoving it down. From `@3xl/builder`
+up the trigger is `display: none` and the tabs are the static row they have
+always been — measured: at the crossover the eight pills plus the "Preview"
+button fit one line with room to spare.
+
+**One tablist, two presentations — not two tablists.** The narrow surface
+re-lays-out the SAME `role="tablist"` rather than rendering a second copy of the
+tabs inside a dialog (the shape `ModuleSidebar` uses, which is fine for a nav of
+plain buttons and wrong here): each panel's `aria-labelledby` points at
+`${id}-tab`, so a duplicate would give every panel two candidate labels and
+assistive tech two tabs widgets for one set of panels. Collapsed, the tablist is
+`display: none` — the panels' names still resolve, because accname follows
+`aria-labelledby` into hidden subtrees. The container-query swap needs no
+`ResizeObserver`; the only JS state is the open/closed signal, which is inert
+above the threshold since the wide row ignores it (`@3xl/builder:flex` beats
+both the `hidden` and `grid` toggles in the cascade — variants are emitted after
+base utilities).
+
+Dismissal, and the keyboard: selecting a section closes the menu **and hands
+focus back to the trigger** (collapsing takes the focused tab to `display: none`
+and focus with it — a click with the menu already closed, i.e. the wide row,
+leaves focus exactly where it was); `Escape` closes and restores focus; an
+outside `pointerdown` closes it via a capture-phase listener that exists only
+while open. `ArrowDown`/`ArrowUp` step sections alongside the APG horizontal
+pair, because the open menu is a grid and the vertical arrows are what a
+keyboard user reaches for there.
+
 **Sections stay MOUNTED — only visually hidden.** `SectionCard` (`fields.tsx`)
 takes a `hidden` prop and applies it as the native HTML `hidden` attribute on
 the `<fieldset>`, rather than the tab switch unmounting/remounting cards. This
