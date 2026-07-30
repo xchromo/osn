@@ -20,7 +20,7 @@ import type { ParsedEvent, ParsedFamily } from "../schemas/import";
 import { claimService } from "./claim";
 import { entitlementService } from "./entitlements";
 import { hostCodeService } from "./host-code";
-import { applyImport, diffAgainstDb } from "./import";
+import { applyImport, diffAgainstDb, mintEventSlug, mintUniqueEventSlug } from "./import";
 import { parseEventsCsv, parseGuestsCsv } from "./spreadsheet";
 
 /** Build a fresh in-memory DB layer for each test. */
@@ -1064,5 +1064,137 @@ describe("applyImport — capacity enforcement", () => {
     // Atomic: still 100 guests (no partial write).
     const n = (db.$client.query("SELECT COUNT(*) AS n FROM guests").get() as { n: number }).n;
     expect(n).toBe(100);
+  });
+});
+
+describe("event slugs: tenant-scoped uniqueness (migration 0051)", () => {
+  it("mintEventSlug never mints an empty slug", () => {
+    expect(mintEventSlug("Reception")).toBe("reception");
+    expect(mintEventSlug("  Grand   Fête!  ")).toBe("grand-f-te");
+    expect(mintEventSlug("💒🎉")).toBe("event");
+  });
+
+  it("mintUniqueEventSlug suffixes -2, -3 within a wedding", () => {
+    const used = new Set<string>();
+    expect(mintUniqueEventSlug("Ceremony", used)).toBe("ceremony");
+    expect(mintUniqueEventSlug("Ceremony!", used)).toBe("ceremony-2");
+    expect(mintUniqueEventSlug("CEREMONY", used)).toBe("ceremony-3");
+  });
+
+  it("two weddings can each import an event with the same name", async () => {
+    // Regression: events_slug_unique was GLOBAL pre-0051, so the second
+    // wedding's apply failed on UNIQUE(events.slug) for the same event name.
+    const sharedDb = createDb(":memory:");
+    seedBootstrapWedding(sharedDb);
+    const other = seedOtherWedding(sharedDb);
+    const sharedLayer = Layer.succeed(DbService, sharedDb);
+
+    const receptionPlan = (id: string): ImportPlan => ({
+      eventCreates: [
+        {
+          id,
+          event: {
+            name: "Reception",
+            startAt: "2026-11-28T18:00:00+11:00",
+            endAt: "",
+            timezone: "Australia/Sydney",
+            location: null,
+            address: null,
+            dressCodeDescription: null,
+            dressCodePalette: [],
+            pinterestUrl: null,
+            mapsUrl: null,
+            sortOrder: 0,
+          },
+        },
+      ],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [],
+      familyRemoves: [],
+      guestCreates: [],
+      guestUpdates: [],
+      guestRemoves: [],
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* applyImport("imp_a", receptionPlan("evt_slug_a"), BOOTSTRAP_WEDDING_ID);
+        yield* applyImport("imp_b", receptionPlan("evt_slug_b"), other.weddingId);
+      }).pipe(Effect.provide(sharedLayer)),
+    );
+
+    const slugs = sharedDb
+      .select({ weddingId: events.weddingId, slug: events.slug })
+      .from(events)
+      .all()
+      .filter((r) => r.slug === "reception");
+    expect(slugs.map((r) => r.weddingId).toSorted()).toEqual(
+      [BOOTSTRAP_WEDDING_ID, other.weddingId].toSorted(),
+    );
+  });
+
+  it("a sheet with duplicate event names applies with suffixed slugs", async () => {
+    const sharedDb = createDb(":memory:");
+    seedBootstrapWedding(sharedDb);
+    const sharedLayer = Layer.succeed(DbService, sharedDb);
+    const plan: ImportPlan = {
+      eventCreates: [
+        {
+          id: "evt_dup_1",
+          event: {
+            name: "Ceremony",
+            startAt: "2026-10-31T10:00:00+11:00",
+            endAt: "",
+            timezone: "Australia/Sydney",
+            location: null,
+            address: null,
+            dressCodeDescription: null,
+            dressCodePalette: [],
+            pinterestUrl: null,
+            mapsUrl: null,
+            sortOrder: 0,
+          },
+        },
+        {
+          id: "evt_dup_2",
+          event: {
+            name: "Ceremony!",
+            startAt: "2026-11-25T09:00:00+11:00",
+            endAt: "",
+            timezone: "Australia/Sydney",
+            location: null,
+            address: null,
+            dressCodeDescription: null,
+            dressCodePalette: [],
+            pinterestUrl: null,
+            mapsUrl: null,
+            sortOrder: 1,
+          },
+        },
+      ],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [],
+      familyRemoves: [],
+      guestCreates: [],
+      guestUpdates: [],
+      guestRemoves: [],
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* applyImport("imp_dup_names", plan, BOOTSTRAP_WEDDING_ID);
+      }).pipe(Effect.provide(sharedLayer)),
+    );
+
+    const slugs = sharedDb.select({ slug: events.slug }).from(events).all();
+    expect(slugs.map((r) => r.slug).toSorted()).toEqual(["ceremony", "ceremony-2"]);
   });
 });

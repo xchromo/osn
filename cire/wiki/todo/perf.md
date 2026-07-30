@@ -4,7 +4,7 @@ tags: [todo, performance]
 related:
   - "[[index]]"
   - "[[review-findings]]"
-last-reviewed: 2026-07-29
+last-reviewed: 2026-07-30
 ---
 
 # Performance Backlog
@@ -156,9 +156,9 @@ Deferred from the /prep-pr Step 6 performance review. VP-P-I2 (Google Fonts `dis
 
 Deferred (scale-dependent, not blocking at wedding-directory scale — hundreds to low-thousands of listings):
 - [ ] **VD-P-W2** — the `inWedding` correlated EXISTS subquery relies on `vendors_wedding_directory_uniq` (partial unique on `(wedding_id, directory_vendor_id) WHERE directory_vendor_id IS NOT NULL`) to serve the equality probe. The probe values are always non-null so the partial index applies; confirm with `EXPLAIN QUERY PLAN` on staging. If ever a scan, add a plain non-partial `(wedding_id, directory_vendor_id)` index, or LEFT JOIN `vendors` once instead of the per-row subquery.
-- [ ] **VD-P-I1** — OFFSET pagination is O(offset); fine at current scale (50-row cap). Switch to a keyed cursor on `(name, id)` if the directory reaches tens of thousands.
+- [ ] **VD-P-I1** — OFFSET pagination is O(offset); fine at current scale (50-row cap). Switch to a keyed cursor on `(name, id)` if the directory reaches tens of thousands. *Partially mitigated 2026-07-30 (data-layer review): the route's offset clamp tightened 1e6 → 10k, and browse's filter + `ORDER BY name, id` is now served by the `(listed, name, id)` composite (migration 0053) rather than a full sort.*
 - [ ] **VD-P-I2** — `getLiveListingById` does fetch + fetchCategories sequentially (matches `getListingByOrg`/`consumeClaim`); low-frequency write path. Parallelize if the service is extended.
-- [ ] **VD-P-I4** — `directory_vendors_listed_idx` becomes a no-op on the hot path once most rows are `live`; a partial `WHERE listed='live'` index is the future option if a scan ever shows up.
+- [x] **VD-P-I4** — ~~`directory_vendors_listed_idx` becomes a no-op on the hot path once most rows are `live`; a partial `WHERE listed='live'` index is the future option if a scan ever shows up.~~ Closed 2026-07-30 (data-layer review, migration 0053): replaced by the `(listed, name, id)` composite — even with `listed='live'` selecting ~all rows, the index now serves the `ORDER BY name, id`, which is what the page walk actually needs.
 
 ### Vendors S4 PR B — enquiry backend perf review notes (`feat/cire-vendors-enquiries`)
 
