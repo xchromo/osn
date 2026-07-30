@@ -1630,6 +1630,23 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     expect(trigger().textContent).toContain("7/8");
   });
 
+  it("mirrors the active section's Shown/Hidden dot on the trigger, live", async () => {
+    await renderBuilder();
+    const dot = () => trigger().querySelector(".rounded-full");
+
+    // Design has no Shown/Hidden state at all — no dot to mislead with.
+    expect(dot()).toBeNull();
+
+    // Hero starts empty on `EMPTY_CUSTOMISATION`, so the guest invite hides it.
+    await openSection(/^Hero/);
+    expect(dot()!.className).toContain("bg-text-muted/50");
+
+    // The dot flips the instant an edit gives the section content — it's the
+    // whole reason the trigger can be read instead of opened.
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "Anita & Ben" } });
+    await waitFor(() => expect(dot()!.className).toContain("bg-gold"));
+  });
+
   it("collapses the tablist behind the trigger and toggles it", async () => {
     await renderBuilder();
 
@@ -1689,6 +1706,31 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     fireEvent.click(trigger());
     fireEvent.pointerDown(tablist());
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
+
+    // Escape works from the TRIGGER too, not just from a tab — its own handler,
+    // reached whenever the menu was opened by keyboard and focus never moved.
+    fireEvent.keyDown(trigger(), { key: "Escape" });
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps ONE tablist whose tabs stay in the DOM while collapsed", async () => {
+    await renderBuilder();
+
+    // The narrow surface re-lays-out the same tablist rather than rendering a
+    // second copy: a duplicate would give every panel two `aria-labelledby`
+    // candidates and assistive tech two tabs widgets for one set of panels.
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
+
+    // Collapsed, the tabs are `display: none` — but they must remain IN the
+    // document, because each panel's accessible name is computed from its tab
+    // (accname follows `aria-labelledby` into hidden subtrees; it cannot follow
+    // it into an unmounted node).
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    for (const panel of ["invite-design", "invite-hero", "invite-message"]) {
+      const labelledBy = document.getElementById(panel)!.getAttribute("aria-labelledby")!;
+      expect(document.getElementById(labelledBy)).toBeInTheDocument();
+    }
   });
 
   it("steps sections with ArrowDown/ArrowUp as well as the horizontal pair", async () => {
