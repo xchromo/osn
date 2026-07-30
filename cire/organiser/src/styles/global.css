@@ -173,9 +173,22 @@
  * `min(100%, …)` keeps the single-column case from overflowing a container
  * narrower than the minimum.
  *
- * Do not put `col-span-*` on a child: under `auto-fit` a span wider than the
- * resolved column count creates an implicit column and breaks the row. When one
- * cell must be wider than the others, use an explicit container-query grid.
+ * Two invariants, both load-bearing:
+ *
+ * - **No `col-span-*` on a child.** Under `auto-fit` a span wider than the
+ *   resolved column count creates an implicit column and breaks the row. When
+ *   one cell must be wider than the others, use an explicit container-query grid.
+ * - **The track minimum must stay a fixed length.** `minmax(min(100%, <length>),
+ *   1fr)` never asks a child for its intrinsic contribution — which is exactly
+ *   what makes it safe to put `container-type: inline-size` (e.g. an event
+ *   card's `@container/card`) on an `auto-grid` child. Swapping the minimum for
+ *   `min-content` / `max-content` / `auto` would ask an inline-size container
+ *   for a contribution it cannot give, collapsing the track to zero width.
+ *
+ * `styles/layout-utilities.test.ts` guards both utility names and every custom
+ * property above against a silent rename or typo: Tailwind ignores an unknown
+ * class, and CSS ignores a custom property nobody reads — so the failure mode is
+ * 17 grids quietly collapsing to one column with the suite green.
  */
 @utility auto-grid {
   display: grid;

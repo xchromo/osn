@@ -53,6 +53,14 @@ behind it).
   the right reference for a viewport-anchored element anyway.
 - **`--page-max` is the knob.** The login page sets `[--page-max:30rem]` — a
   sign-in card has one job and shouldn't grow with the screen.
+- **It behaves differently inside a `<Portal>`.** The guests/events editors' save
+  bars are `position: fixed` inside a Portal (they must be, because an ancestor
+  panel declares `container-type`, which would otherwise become their containing
+  block). Appended to `document.body`, they have no query-container ancestor, so
+  `3cqi` falls back to the small-viewport size. That is the right reference for a
+  viewport-anchored bar, but it tracks a different box from the in-page frame —
+  they can disagree by a classic scrollbar's width. Accepted; do not assume
+  `page-frame` is context-free.
 
 100rem is a judgement, not a law: far enough that a widescreen gets the rail, a
 wide panel and the builder's live preview at once; short enough that a guest
@@ -78,13 +86,27 @@ actually in (the invite builder's field grids were querying the builder while
 sitting in the narrower form column). An intrinsic grid is right in both places
 with no ladder.
 
-Two constraints:
+Three constraints:
 
 - `min(100%, …)` keeps the one-column case from overflowing a container narrower
   than the minimum.
 - **Never `col-span-*` a child.** Under `auto-fit`, a span wider than the resolved
   column count creates an implicit column and breaks the row. When one cell must
   be wider, use an explicit container-query grid (Overview does).
+- **The track minimum must stay a fixed length.** `minmax(min(100%, <length>),
+  1fr)` never asks a child for its intrinsic contribution, and that is what makes
+  it safe to put `container-type: inline-size` on an `auto-grid` child — which the
+  event cards do. Swapping the minimum for `min-content` / `max-content` / `auto`
+  would ask an inline-size container for a contribution it cannot give and
+  collapse every such track to zero width. Invisible from the CSS alone, so it is
+  also asserted in `styles/layout-utilities.test.ts`.
+
+Both utility names, and every `--page-max` / `--auto-grid-*` override, are
+guarded by `cire/organiser/src/styles/layout-utilities.test.ts`. Tailwind ignores
+a class it doesn't recognise and CSS ignores a custom property nobody reads, so a
+rename or a typo (`[--autogrid-min:20rem]`) produces no build error, no lint
+error and no component-test failure — just every grid collapsing to one column.
+That guard is the one CSS-layer risk here that *is* mechanically checkable.
 
 ### Current minimums
 
@@ -133,6 +155,30 @@ component was previously reading a container it did not live in.
   reveals the list without a refetch, and `display: none` keeps its buttons out of
   the tab order when narrow. `EnquiryInbox` takes `selectedId` to mark the open
   row (`aria-current`), which only matters in the side-by-side case.
+
+  **This one is not just CSS, and it cost three bugs.** The old inbox-or-thread
+  `Show` pair was doing load-bearing work nobody had written down: it unmounted
+  the thread on every navigation. Read the three notes below before touching it.
+
+  1. The thread's `Show` is **`keyed` on the open enquiry's id**. Side by side you
+     can click row B while replying to row A, which keeps an unkeyed `Show`
+     truthy — Solid then reuses the same `EnquiryThread`, and its local `draft`
+     signal hands vendor A's half-typed reply to vendor B.
+  2. Solid's `Show` only *calls* a children function whose **arity is ≥ 1** (it
+     tests `children.length`). A zero-argument `{() => …}` is returned as a plain
+     child, so `keyed` silently does nothing — which is exactly how the first fix
+     failed. The children function consumes the keyed id.
+  3. `messages` is a `createResource` keyed on the selection, and reading a
+     resource mid-refetch yields the **previous** value. The resolved value
+     therefore carries its own `enquiryId`, and `messagesFor(id)` refuses
+     messages that aren't the named enquiry's — otherwise A's correspondence
+     renders under B's name for a round-trip. Re-fetching the *same* enquiry
+     (after sending) still matches, so the thread doesn't blank.
+  4. `handleSend` refreshes the list with `setCachedEnquiries`, **not**
+     `invalidateEnquiries` + `ensureEnquiriesLoaded`. Invalidation is
+     `cache.delete(...)`, which mints a new signal; the always-mounted inbox
+     keeps reading the orphan, so the round-trip is paid and nothing updates.
+     The store-level fix for all four caches is **P-W2** in [[perf]].
 - **Event cards** (`EventTable`) — cards flow in an `auto-grid`; each card is its
   own `@container/card` and its details grid switches at `@md/card`.
 
@@ -140,5 +186,15 @@ component was previously reading a container it did not live in.
 
 happy-dom does not evaluate container queries, so both surfaces of a two-surface
 component are in the DOM during tests and neither is hidden. Scope queries to the
-landmark you mean (the existing nav tests do this for the rail vs the sheet)
-rather than asserting on visibility.
+landmark you mean (the nav tests do this for the rail vs the sheet, the
+checklist/budget tests for each bucket or category `<section>`) rather than
+asserting on visibility. Do not assert on class strings.
+
+What that leaves testable, and where it lives:
+
+| What | Where |
+|---|---|
+| Utility names + custom-property wiring (the silent-collapse failure mode) | `styles/layout-utilities.test.ts` — static text, no DOM |
+| DOM containment of grid siblings, and per-group reorder indices | `ChecklistView.test.tsx`, `BudgetView.test.tsx` |
+| Master-detail behaviour: draft-per-enquiry, no cross-thread messages, placeholder, `aria-current` cardinality, post-reply refresh | `EnquiriesView.test.tsx`, `EnquiryInbox.test.tsx` |
+| The container queries themselves | Nothing. A browser-driven visual check is the only real test, and this package has no such harness. |
