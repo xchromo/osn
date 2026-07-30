@@ -2,12 +2,16 @@
 title: "Completed Features"
 tags: [changelog]
 related: [[TODO]], [[index]]
-last-reviewed: 2026-07-23
+last-reviewed: 2026-07-30
 ---
 
 # Completed Features
 
 Archive of completed feature work, moved here from [[TODO]] (and the per-area `wiki/todo/` shards) as PRs merge.
+
+### The typography fallbacks are single-sourced (`claude/cire-typography-preview-nf1gm5`)
+
+- [x] **T-S3 — the typography fallbacks are single-sourced** (`claude/cire-typography-preview-nf1gm5`, 2026-07-30) — `@cire/theme` owned what a SET option resolves to, but the UN-set state (the pack's base look, written as each `var()` fallback) was a literal retyped at ~30 call sites across both guest packs, the guest `global.css` and the organiser previews, with nothing checking they agreed. `TYPOGRAPHY_FALLBACKS` + `typographyVar()` + `headingSizeCss()` name them once; `TYPOGRAPHY_VAR_NAMES` does the same for the property spellings and `TYPOGRAPHY_VAR_KEYS` now derives from it. The organiser previews consume the helpers and hold no literal. The guest packs **cannot** — their declarations are Tailwind arbitrary-property classes and Tailwind emits CSS by scanning source *text*, so an interpolated class name produces no rule — so those stay literal and are held to the canonical values by `cire/theme/src/typography-fallbacks.test.ts`, which scans both packages and fails on a disagreeing fallback, a missing one (a bare `var()` renders at the CSS initial 400, not the pack's 300), or a variable nothing references any more. Verified by mutating a gala literal and by dropping a classic fallback. See [[invite-builder]].
 
 ### Hero phone crop — per-device framing for the full-bleed backdrop (`claude/hero-image-responsive-crop-b6b74u`)
 
