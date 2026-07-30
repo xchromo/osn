@@ -117,3 +117,37 @@ describe("maintenanceSweeps.sweepStalePreviews", () => {
     expect(deleted).toBe(0);
   });
 });
+
+describe("maintenanceSweeps — error channel", () => {
+  // The cron handler catches MaintenanceSweepError via Effect.catchAll; a throw
+  // that escaped as a defect would slip past it. These pin the typed mapping.
+  const throwingDb = {
+    delete: () => {
+      throw new Error("boom: delete");
+    },
+    select: () => {
+      throw new Error("boom: select");
+    },
+  } as unknown as Db;
+  const throwingLayer = Layer.succeed(DbService, throwingDb);
+
+  it("sweepExpiredVendorClaims fails with MaintenanceSweepError op=vendor_claims", async () => {
+    const err = await Effect.runPromise(
+      Effect.flip(
+        maintenanceSweeps.sweepExpiredVendorClaims(NOW).pipe(Effect.provide(throwingLayer)),
+      ),
+    );
+    expect(err._tag).toBe("MaintenanceSweepError");
+    expect(err.op).toBe("vendor_claims");
+    expect(err.reason).toContain("boom: delete");
+  });
+
+  it("sweepStalePreviews fails with MaintenanceSweepError op=stale_previews", async () => {
+    const err = await Effect.runPromise(
+      Effect.flip(maintenanceSweeps.sweepStalePreviews(NOW).pipe(Effect.provide(throwingLayer))),
+    );
+    expect(err._tag).toBe("MaintenanceSweepError");
+    expect(err.op).toBe("stale_previews");
+    expect(err.reason).toContain("boom: select");
+  });
+});

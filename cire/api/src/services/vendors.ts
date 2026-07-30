@@ -11,7 +11,7 @@ import { vendors } from "@cire/db";
 import { and, asc, eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { DbService, commitBatch, dbQuery } from "../db";
+import { DbService, commitGroupedBatches, dbQuery } from "../db";
 
 /** No vendor with this id under this wedding (missing or another wedding's). 404-class. */
 export class VendorNotInWedding extends Data.TaggedError("VendorNotInWedding") {}
@@ -90,25 +90,6 @@ const toDto = (r: VendorRow): VendorDto => ({
   createdAt: r.createdAt.getTime(),
   updatedAt: r.updatedAt.getTime(),
 });
-
-/** Load the vendor, scoped to the wedding, or fail 404-class. */
-function requireVendor(
-  weddingId: string,
-  vendorId: string,
-): Effect.Effect<VendorRow, VendorNotInWedding, DbService> {
-  return Effect.gen(function* () {
-    const db = yield* DbService;
-    const [row] = yield* dbQuery(() =>
-      db
-        .select()
-        .from(vendors)
-        .where(and(eq(vendors.id, vendorId), eq(vendors.weddingId, weddingId)))
-        .all(),
-    );
-    if (!row) return yield* Effect.fail(new VendorNotInWedding());
-    return row as VendorRow;
-  });
-}
 
 export const vendorsService = {
   list(weddingId: string): Effect.Effect<VendorDto[], never, DbService> {
@@ -242,12 +223,15 @@ export const vendorsService = {
       const db = yield* DbService;
       // Each id gets its array index as sort_order, scoped to (wedding, status)
       // so a foreign or wrong-status id is a no-op UPDATE rather than a write.
-      // One commitBatch, not db.transaction(): D1 has no BEGIN/COMMIT — batch()
-      // is its only atomic primitive (see db/index.ts).
+      // commitGroupedBatches, not db.transaction(): D1 has no BEGIN/COMMIT —
+      // batch() is its only atomic primitive — and the body allows up to 500
+      // ids, so the write set must chunk under the 50-statement batch cap.
+      // Singleton groups: each row's UPDATE is independent (a re-sent reorder
+      // converges), so chunking loses nothing.
       yield* dbQuery(() =>
-        commitBatch(
+        commitGroupedBatches(
           db,
-          orderedIds.map((id, index) =>
+          orderedIds.map((id, index) => [
             db
               .update(vendors)
               .set({ sortOrder: index })
@@ -258,7 +242,7 @@ export const vendorsService = {
                   eq(vendors.status, status),
                 ),
               ),
-          ),
+          ]),
         ),
       );
     }).pipe(Effect.withSpan("cire.vendors.reorder"));

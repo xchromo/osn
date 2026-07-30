@@ -17,7 +17,7 @@ import { budgetItems, payments, weddings } from "@cire/db";
 import { and, asc, eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { DbService, commitBatch, dbQuery } from "../db";
+import { DbService, commitGroupedBatches, dbQuery } from "../db";
 import type { ServiceCategory } from "../lib/service-categories";
 
 /** No item with this id under this wedding (missing or another wedding's). 404-class. */
@@ -336,12 +336,15 @@ export const budgetService = {
       const db = yield* DbService;
       // Each id gets its array index as sort_order, scoped to (wedding, category)
       // so a foreign or wrong-category id is a no-op UPDATE rather than a write.
-      // One commitBatch, not db.transaction(): D1 has no BEGIN/COMMIT — batch()
-      // is its only atomic primitive (see db/index.ts).
+      // commitGroupedBatches, not db.transaction(): D1 has no BEGIN/COMMIT —
+      // batch() is its only atomic primitive — and the body allows up to 500
+      // ids, so the write set must chunk under the 50-statement batch cap.
+      // Singleton groups: each row's UPDATE is independent (a re-sent reorder
+      // converges), so chunking loses nothing.
       yield* dbQuery(() =>
-        commitBatch(
+        commitGroupedBatches(
           db,
-          orderedIds.map((id, index) =>
+          orderedIds.map((id, index) => [
             db
               .update(budgetItems)
               .set({ sortOrder: index })
@@ -352,7 +355,7 @@ export const budgetService = {
                   eq(budgetItems.category, category),
                 ),
               ),
-          ),
+          ]),
         ),
       );
     }).pipe(Effect.withSpan("cire.budget.reorderItems"));

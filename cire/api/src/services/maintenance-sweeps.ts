@@ -24,7 +24,7 @@ import { rowsChanged } from "@shared/db-utils";
 import { and, eq, lt, lte } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { DbService, dbQuery } from "../db";
+import { DbService } from "../db";
 import { metricStalePreviewsSwept, metricVendorClaimsSwept } from "../metrics";
 import type { DeletableBucket } from "./r2-cleanup";
 import { reapR2Objects } from "./r2-cleanup";

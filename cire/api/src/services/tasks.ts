@@ -13,7 +13,7 @@ import { tasks } from "@cire/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
-import { DbService, commitBatch, dbQuery } from "../db";
+import { DbService, commitGroupedBatches, dbQuery } from "../db";
 import type { TimeframeBucket } from "../lib/checklist-buckets";
 
 /** No task with this id under this wedding (missing or another wedding's). 404-class. */
@@ -199,12 +199,15 @@ export const tasksService = {
       const db = yield* DbService;
       // Each id gets its array index as sort_order, scoped to (wedding, bucket)
       // so a foreign or wrong-bucket id is a no-op UPDATE rather than a write.
-      // One commitBatch, not db.transaction(): D1 has no BEGIN/COMMIT — batch()
-      // is its only atomic primitive (see db/index.ts).
+      // commitGroupedBatches, not db.transaction(): D1 has no BEGIN/COMMIT —
+      // batch() is its only atomic primitive — and the body allows up to 500
+      // ids, so the write set must chunk under the 50-statement batch cap.
+      // Singleton groups: each row's UPDATE is independent (a re-sent reorder
+      // converges), so chunking loses nothing.
       yield* dbQuery(() =>
-        commitBatch(
+        commitGroupedBatches(
           db,
-          orderedIds.map((id, index) =>
+          orderedIds.map((id, index) => [
             db
               .update(tasks)
               .set({ sortOrder: index })
@@ -215,7 +218,7 @@ export const tasksService = {
                   eq(tasks.timeframeBucket, bucket),
                 ),
               ),
-          ),
+          ]),
         ),
       );
     }).pipe(Effect.withSpan("cire.tasks.reorder"));

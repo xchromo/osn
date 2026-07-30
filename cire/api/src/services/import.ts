@@ -628,15 +628,20 @@ export function applyImport(
 
     // Slugs already taken by this wedding's surviving events, so fresh mints
     // can't collide on the (wedding_id, slug) unique index — within the sheet
-    // ("Ceremony" + "Ceremony!") or against events this plan keeps.
+    // ("Ceremony" + "Ceremony!") or against events this plan keeps. Skipped
+    // when the plan creates no events (P-I2) — the set is only consulted by
+    // mintUniqueEventSlug.
     const removedEventIds = new Set(plan.eventRemoves.map((er) => er.id));
-    const existingSlugRows = yield* dbQuery(() =>
-      db
-        .select({ id: events.id, slug: events.slug })
-        .from(events)
-        .where(eq(events.weddingId, weddingId))
-        .all(),
-    );
+    const existingSlugRows =
+      plan.eventCreates.length > 0
+        ? yield* dbQuery(() =>
+            db
+              .select({ id: events.id, slug: events.slug })
+              .from(events)
+              .where(eq(events.weddingId, weddingId))
+              .all(),
+          )
+        : [];
     const usedSlugs = new Set(
       existingSlugRows.filter((r) => !removedEventIds.has(r.id)).map((r) => r.slug),
     );

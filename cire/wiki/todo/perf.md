@@ -11,6 +11,15 @@ last-reviewed: 2026-07-30
 
 See [[review-findings]] for severity prefix conventions.
 
+### Data-layer review fixes — pre-merge review findings (claude/cire-data-layer-review-s7d6gt, 2026-07-30)
+
+Raised by the pre-merge performance review of the data-layer fix batch. See [[db]] + [[api]].
+
+- [x] **P-W1** (fixed on branch) — the reorder fix moved tasks/budget/vendors off `db.transaction()` onto ONE `commitBatch`, but the bodies allow up to 500 ids (vendors was uncapped) — over D1's 50-statement per-batch ceiling, a hard failure on a >50-row drag-and-drop save. All three now commit via `commitGroupedBatches` with singleton groups (each row's UPDATE independent; a re-sent reorder converges), and `ReorderVendorsBody` gained the same `maxItems(500)` cap as its siblings.
+- [x] **P-I2** (fixed on branch) — `applyImport` fetched the wedding's full `(id, slug)` set on every apply even when the plan created no events; now gated on `plan.eventCreates.length > 0`.
+- [ ] **P-I1** — *checked, accepted:* the two new daily sweeps are full scans (`vendor_claims.expires_at` and `imports.status='preview' AND uploaded_at<cutoff` have no index). Cron-only, and both sweeps bound their own tables' growth from now on — index write-amplification on the import hot path isn't justified (the same argument 0053 used to DROP `families_family_name_idx`). If a scan ever shows in traces: partial indexes, and collapse the preview sweep's SELECT+DELETE to `DELETE … RETURNING`.
+- [ ] **P-I3** — both enquiry inboxes remain unbounded list endpoints (no LIMIT/pagination; pre-existing — this branch only moved the sort into SQL, where `vendor_enquiries_wedding_last_msg_idx` now serves the wedding inbox). The vendor-side three-table join still materialises + sorts its full result. When vendor volume warrants: keyset pagination on `(last_message_at, id)` + a `(directory_vendor_id, last_message_at)` index.
+
 ### Closing section — review findings (claude/cire-footer-customisation-xkc09y, 2026-07-29)
 
 Raised by the pre-merge performance review of the invite's closing section. See the root wiki's `[[invite-builder]]`.

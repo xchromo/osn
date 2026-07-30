@@ -1198,3 +1198,102 @@ describe("event slugs: tenant-scoped uniqueness (migration 0051)", () => {
     expect(slugs.map((r) => r.slug).toSorted()).toEqual(["ceremony", "ceremony-2"]);
   });
 });
+
+describe("applyImport: finalize statements commit with the write set or not at all", () => {
+  it("a failed commit never executes the finalize statements", async () => {
+    const sharedDb = createDb(":memory:");
+    seedBootstrapWedding(sharedDb);
+    const sharedLayer = Layer.succeed(DbService, sharedDb);
+
+    // Two family creates share a publicId — the second insert trips the UNIQUE
+    // index and fails the commit partway through.
+    const plan: ImportPlan = {
+      eventCreates: [],
+      eventUpdates: [],
+      eventRemoves: [],
+      familyCreates: [
+        { id: "fam_fin_a", publicId: "FIN-DUP", familyName: "A" },
+        { id: "fam_fin_b", publicId: "FIN-DUP", familyName: "B" },
+      ],
+      familyRemoves: [],
+      guestCreates: [],
+      guestUpdates: [],
+      guestRemoves: [],
+      eventLinkCreates: [],
+      eventLinkRemoves: [],
+      warnings: [],
+    };
+
+    // The finalize statement is what the apply route uses to flip the change
+    // row's status; here a visible sentinel write stands in for it.
+    const finalize = [
+      sharedDb
+        .update(weddings)
+        .set({ displayName: "FINALIZED" })
+        .where(eq(weddings.id, BOOTSTRAP_WEDDING_ID)),
+    ];
+
+    const exit = await Effect.runPromiseExit(
+      applyImport("imp_finalize_fail", plan, BOOTSTRAP_WEDDING_ID, finalize).pipe(
+        Effect.provide(sharedLayer),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+
+    // The finalize write must not have run — it rides AFTER the data writes,
+    // so a failed commit leaves it unexecuted (the apply route relies on this
+    // to keep a failed apply's change row in `preview`).
+    const [w] = sharedDb
+      .select({ displayName: weddings.displayName })
+      .from(weddings)
+      .where(eq(weddings.id, BOOTSTRAP_WEDDING_ID))
+      .all();
+    expect(w!.displayName).not.toBe("FINALIZED");
+  });
+});
+
+describe("applyImport: event timestamps (migration 0054)", () => {
+  it("stamps created_at + updated_at on create, bumps only updated_at on update", async () => {
+    const { ev, fam } = await parsedFromCsv();
+    const sharedDb = createDb(":memory:");
+    seedBootstrapWedding(sharedDb);
+    const sharedLayer = Layer.succeed(DbService, sharedDb);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const plan = yield* diffAgainstDb(ev, fam, BOOTSTRAP_WEDDING_ID);
+        yield* applyImport("imp_ts_1", plan, BOOTSTRAP_WEDDING_ID);
+      }).pipe(Effect.provide(sharedLayer)),
+    );
+
+    const created = sharedDb.select().from(events).all();
+    expect(created.length).toBeGreaterThan(0);
+    for (const row of created) {
+      expect(row.createdAt).not.toBeNull();
+      expect(row.updatedAt).not.toBeNull();
+    }
+    const reception = created.find((r) => r.name === "Reception")!;
+    const originalCreatedAt = reception.createdAt!.getTime();
+
+    // Re-import with a changed Reception sort order → an event UPDATE.
+    const evTweaked = ev.map((e) =>
+      e.name === "Reception" ? Object.assign({}, e, { sortOrder: (e.sortOrder ?? 0) + 10 }) : e,
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const plan = yield* diffAgainstDb(evTweaked, fam, BOOTSTRAP_WEDDING_ID);
+        expect(plan.eventUpdates.length).toBeGreaterThan(0);
+        yield* applyImport("imp_ts_2", plan, BOOTSTRAP_WEDDING_ID);
+      }).pipe(Effect.provide(sharedLayer)),
+    );
+
+    const after = sharedDb
+      .select()
+      .from(events)
+      .all()
+      .find((r) => r.name === "Reception")!;
+    // created_at is immutable through updates; updated_at is (re)stamped.
+    expect(after.createdAt!.getTime()).toBe(originalCreatedAt);
+    expect(after.updatedAt).not.toBeNull();
+  });
+});
