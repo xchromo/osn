@@ -78,6 +78,9 @@ vi.mock("./ImageCropModal", () => ({
   ),
 }));
 
+// Real (unmocked) — the guard-lifecycle test asserts the builder's dirty state
+// reaches the process-global registry the dashboard consults.
+import { confirmNavigation } from "../lib/unsaved-guard";
 import InviteBuilder, { isDesignLocked } from "./InviteBuilder";
 
 function json(body: unknown, status = 200) {
@@ -248,6 +251,13 @@ describe("InviteBuilder theme", () => {
     expect(String(authFetchMock.mock.calls[2][0])).toMatch(/\/invite\/theme$/);
     expect(sentBody("/text").heroTitle).toBe("Anita & Ben");
     expect(sentBody("/theme").headingFont).toBe("georgia");
+
+    // A successful save refreshes both snapshots — the bar returns to clean
+    // (button disabled, saved indicator) rather than showing a stale dirty flag.
+    await waitFor(() =>
+      expect((screen.getByText("Save invite") as HTMLButtonElement).disabled).toBe(true),
+    );
+    screen.getByText("All changes saved");
   });
 
   it("disables Save on a clean form and shows the live dirty indicator on edit", async () => {
@@ -983,10 +993,31 @@ describe("design selector", () => {
     const radio = screen.getByRole("radio", { name: /Gala/ });
     expect(radio.contains(galaLink!)).toBe(false);
 
-    // Clicking it must never fire a design save.
+    // Clicking it must never fire a design save. preventDefault first so
+    // happy-dom doesn't actually fetch the guest URL (ECONNREFUSED noise in
+    // every test run).
+    galaLink!.addEventListener("click", (e) => e.preventDefault());
     fireEvent.click(galaLink!);
     expect(authFetchMock.mock.calls.some((c) => String(c[0]).endsWith("/design"))).toBe(false);
     expect(authFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed design save keeps the current selection and toasts the error", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json({}, 500)); // design PUT fails
+
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+
+    const gala = await waitFor(() => screen.getByRole("radio", { name: /Gala/ }));
+    fireEvent.click(gala);
+
+    // The design save bypasses the save bar, so the toast is the ONLY failure
+    // feedback — and the server-acknowledged selection must not move.
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Could not update the design"));
+    expect(screen.getByRole("radio", { name: /Classic/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(gala.getAttribute("aria-checked")).toBe("false");
   });
 
   it("ArrowRight lands on the locked card (perceivable, unselectable); the next step selects gala", async () => {
@@ -1160,6 +1191,31 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     );
   });
 
+  it("crop reset PUTs an explicit null — desktop and phone nouns both toast", async () => {
+    authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // initial load
+    authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // desktop reset
+    authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // phone reset
+
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+
+    // Desktop reset: `crop: null` must reach the API as an explicit null (not
+    // be dropped by serialisation), with no `screen` key.
+    const cropButtons = await waitFor(() => screen.getAllByRole("button", { name: "Crop" }));
+    fireEvent.click(cropButtons[0]);
+    await waitFor(() => screen.getByTestId("mock-crop-modal"));
+    fireEvent.click(screen.getByRole("button", { name: "mock-reset" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Crop reset"));
+    expect(lastSentBody("/image/hero/crop")).toEqual({ crop: null });
+
+    // Phone reset: same explicit null, routed to the mobile rectangle.
+    fireEvent.click(screen.getByRole("button", { name: "Phone crop" }));
+    const modal = await waitFor(() => screen.getByTestId("mock-crop-modal"));
+    expect(modal.getAttribute("data-slot")).toBe("hero-mobile");
+    fireEvent.click(screen.getByRole("button", { name: "mock-reset" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Phone crop reset"));
+    expect(lastSentBody("/image/hero/crop")).toEqual({ crop: null, screen: "mobile" });
+  });
+
   it("shows the phone framing in the hero preview via the device toggle", async () => {
     authFetchMock.mockResolvedValueOnce(
       json({
@@ -1299,6 +1355,56 @@ describe("InviteBuilder UX guards", () => {
     // The error renders next to the control that failed — inside the hero
     // section card — not in the distant save bar.
     expect(document.getElementById("invite-hero")!.contains(alert)).toBe(true);
+  });
+
+  it("wires the dirty state into the navigation guard across its lifecycle", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // text save
+    const confirmSpy = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirmSpy);
+
+    const { unmount } = render(() => (
+      <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
+    ));
+    await waitFor(() => screen.getByText("Save invite"));
+
+    // Clean load ⇒ navigation allowed without prompting.
+    expect(confirmNavigation()).toBe(true);
+    expect(confirmSpy).not.toHaveBeenCalled();
+
+    // Dirty ⇒ the registered guard prompts; a declined confirm vetoes.
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "A & B" } });
+    await waitFor(() => screen.getByText("Unsaved changes"));
+    expect(confirmNavigation()).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+
+    // Saved ⇒ clean again, no prompt.
+    fireEvent.click(screen.getByText("Save invite"));
+    await waitFor(() => screen.getByText("All changes saved"));
+    expect(confirmNavigation()).toBe(true);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+
+    // Unmounted ⇒ the guard unregisters; a dead builder can never veto
+    // unrelated navigation, even mid-edit.
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "X" } });
+    await waitFor(() => screen.getByText("Unsaved changes"));
+    unmount();
+    expect(confirmNavigation()).toBe(true);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a remove failure inside its own section, not the save bar", async () => {
+    authFetchMock.mockResolvedValueOnce(json(WITH_HERO_IMAGE)); // initial load
+    authFetchMock.mockResolvedValueOnce(json({ error: "Remove failed upstream" }, 500)); // DELETE
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "Remove" })));
+
+    const alert = await waitFor(() => screen.getByText("Remove failed upstream"));
+    expect(document.getElementById("invite-hero")!.contains(alert)).toBe(true);
+    expect(toastSuccess).not.toHaveBeenCalledWith("Image removed");
   });
 
   it("renders the composed preview pane and the section jump list", async () => {
