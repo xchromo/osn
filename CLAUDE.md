@@ -107,7 +107,26 @@ Don't hunt for it, retry it, or ask for it to be started when the tools aren't l
 
 Some tools start inactive — `tool_catalog` lists them, `activate_tools` promotes several in one call.
 
-**Read only.** The vault path is the `main` worktree's `wiki/`, so the write tools (`create_vault_file`, `patch_vault_file`, `search_and_replace`, …) would edit `main`, not your branch. Retrieve over MCP; edit wiki pages in your own worktree with Edit/Write.
+**It always shows you `main`, not your branch.** The vault path is baked into the connector as the `main` worktree's `wiki/`. Obsidian stays open on that one vault; nobody re-points it per branch. Two consequences:
+
+- **Read only.** The write tools (`create_vault_file`, `patch_vault_file`, `search_and_replace`, …) would edit `main`'s working tree, not your branch. Retrieve over MCP; edit wiki pages in your own worktree with Edit/Write.
+- **Your branch's own wiki edits are invisible to it.** Before trusting a page the branch might have changed, run the guard — one command, not a re-read of the wiki:
+
+  ```bash
+  git diff --name-only origin/main...HEAD -- wiki/   # pages this branch changed
+  ```
+
+  Empty output (the usual case) → MCP results are authoritative, use them. Any page you need in that list → read the branch copy with Read; MCP has the pre-branch version.
+
+Keep the vault fresh, since a stale `main` worktree means stale answers. Obsidian re-indexes on file change, and a fast-forward of a clean worktree is safe:
+
+```bash
+git -C ~/.work/osn.git/main pull --ff-only
+```
+
+If it refuses, leave it alone — never force or reset another worktree. Grep your own `wiki/` instead.
+
+That's the whole protocol: freshen, one guard command, then lean on semantic search instead of grepping and reading whole pages.
 
 **2. Obsidian CLI** — same limits: local machine, app running:
 
