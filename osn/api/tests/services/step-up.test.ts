@@ -1,6 +1,6 @@
 import { it, expect, describe } from "@effect/vitest";
 import { EmailError, EmailService, makeLogEmailLive } from "@shared/email";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { beforeAll } from "vitest";
 
 import { createAuthService } from "../../src/services/auth";
@@ -240,12 +240,15 @@ describe("verifyStepUpForAccountDelete (S-C1 purpose binding)", () => {
         cap.latest()!,
         "account_delete",
       );
-      // Verifier returns void, so pin acceptance on the Exit — the sibling
-      // test below pins the refusal side.
-      const exit = yield* Effect.exit(
+      // Accepting the token must also CONSUME its jti, so a replay fails.
+      // Asserting the replay proves both halves at once — a bare success
+      // check would stay green if acceptance ever stopped consuming, leaving
+      // a single-use step-up token replayable.
+      yield* auth.verifyStepUpForAccountDelete(profile.accountId, stepUpToken);
+      const err = yield* Effect.flip(
         auth.verifyStepUpForAccountDelete(profile.accountId, stepUpToken),
       );
-      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(err._tag).toBe("AuthError");
     }).pipe(Effect.provide(cap.layer));
   });
 

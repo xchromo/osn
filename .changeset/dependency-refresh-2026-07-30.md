@@ -29,12 +29,22 @@ Security-relevant: `@simplewebauthn/server` 13.3.0 → 13.3.2 closes
 GHSA-6hxq-p678-4hr2 (CVSS v4 Low 2.0), where a maliciously-crafted attestation
 `x5c` could present a self-signed "root certificate" rather than chaining to an
 RP-specified trust anchor. Reached through `verifyRegistrationResponse()` on the
-passkey registration path; exposure was limited because that call site uses
-`attestationType: "none"` with no `rootCertificates`. Tracked as S-L102.
+passkey registration path. Exposure was nil rather than merely limited: we
+configure no trust anchors anywhere, so `validateCertificatePath` short-circuits
+on `trustAnchorsPEM.length === 0` and no chain decision was ever made — in
+13.3.0 as much as in 13.3.2. Tracked as S-L102, which also records why
+`attestationType: "none"` is *not* the control here.
 
-Also of note: `jose` 6.2.3 → 6.2.4 tightens JOSE/JWT validation (Base64URL
+`jose` moves 6.2.3 → 6.2.4 only, which is a docs update plus an `exportJWK`
+refactor that drops `undefined`-valued properties. That change is inert for us:
+`exportKeyToJwk` immediately `JSON.stringify`s its result, and `thumbprintKid`
+feeds RFC 7638 canonicalisation over `kty`/`crv`/`x`/`y`, so existing `kid`s and
+stored JWKs are byte-identical. The JOSE input-validation hardening (Base64URL
 alphabet, UTF-8 in headers and claims, truncated ASN.1 key data, duplicate
-`crit`), which both ARC tokens and access JWTs sit on top of.
+`crit`) is in **6.2.5**, which this branch does *not* take — it published
+2026-07-29 and is inside the 3-day quarantine. That upgrade is tracked
+separately and matters, since `jose` sits under both ARC S2S tokens and the
+5-minute `osn-access` JWTs.
 
 `effect` 3.21.2 → 3.22.0 (deprecates `Graph.neighborsDirected`, unused here),
 with `@effect/vitest` 0.29 → 0.30 and `@effect/opentelemetry` 0.63 → 0.64
