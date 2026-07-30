@@ -20,9 +20,25 @@ the trigger is `display: none` and the tabs are the same static row as before.
 It re-lays-out the SAME `role="tablist"` rather than rendering a second copy of
 the tabs: each section panel's `aria-labelledby` points at `${id}-tab`, so a
 duplicate would give every panel two candidate labels and assistive tech two
-tabs widgets. Selecting a section closes the menu and hands focus back to the
-trigger (collapsing takes the focused tab to `display: none` and focus with it);
-`Escape` and an outside press also close it; `ArrowDown`/`ArrowUp` step sections
-alongside the existing `ArrowLeft`/`ArrowRight`/`Home`/`End`, since the open menu
-is a grid. Six tests cover the trigger's live naming, the collapse, the dismiss
-paths and the vertical arrows.
+tabs widgets.
+
+Four things dismiss the menu: a selection (which hands focus back to the
+trigger, since collapsing takes the focused tab to `display: none` and focus
+with it), `Escape`, an outside press, and **focus leaving the nav** — that last
+one because the menu is an opaque overlay across the top of the active section,
+so tabbing forward instead of selecting used to land focus in a form control the
+organiser could no longer see, with no keyboard way to uncover it. The observer
+that already picks the preview layer also collapses the menu when the container
+grows past the threshold, so a menu opened on a phone can't survive a rotate and
+start dropping focus on wide tab clicks.
+
+`ArrowDown`/`ArrowUp` work only while the menu is open — on the wide single-line
+row they belong to the browser, and handling them there swallowed page scroll —
+and they step by the grid's column count, so "down" is the item below rather
+than the one to the right. The trigger's accessible name carries the
+Shown/Hidden state as a clause, since its dot is `aria-hidden` and an
+`aria-label` would override any `sr-only` text.
+
+Twelve tests cover the trigger's live naming and state, the collapse, all four
+dismiss paths, the crossover collapse, both arrow contracts, and the
+single-tablist invariant.
