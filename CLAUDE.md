@@ -80,26 +80,53 @@ Phase 1 surfaces:
 
 ### Searching the wiki
 
-Check for Obsidian CLI first (requires Obsidian app running):
+Three ways, in order. Try each; drop to the next when it isn't there.
+
+**1. Obsidian MCP (`mcp__obsidian-wiki__*`) — preferred, local sessions only.** The MCP Connector plugin (`mcp-tools-istefox`) serving the `wiki` vault. Reachable when the `mcp__obsidian-wiki__*` tools are listed and a call returns; an error ending `is Obsidian open with the vault loaded?` means it isn't — drop to step 2.
+
+Where it exists:
+
+| Where you're running | Obsidian MCP? |
+|---|---|
+| Claude Code on Aniket's Mac, Obsidian open with the `wiki` vault | Yes — registered at user scope |
+| Claude Code on that Mac, Obsidian shut | No — the server can't resolve a port |
+| Claude Desktop | Only if the `.mcpb` is installed there as well; the Claude Code registration doesn't carry over |
+| Remote or cloud session, cloud agent, CI, another machine | **Never.** It reaches a local Obsidian over `127.0.0.1`. Skip to step 3 — the `obsidian` CLI is local-only too. |
+
+Don't hunt for it, retry it, or ask for it to be started when the tools aren't listed. Absent means absent: go to grep.
+
+| To... | Call |
+|---|---|
+| Search by meaning, not wording | `search_vault_smart` (semantic index over the vault) |
+| Search for an exact string | `search_vault_simple` (substring + surrounding context) |
+| Read one page / up to 20 pages | `get_vault_file`, `get_vault_files` |
+| Read one heading, field, or the outline only | `get_vault_file_partial`, `get_note_outline` |
+| Follow the graph | `get_backlinks`, `get_outgoing_links` |
+| Find pages by tag | `get_files_by_tag`, `list_tags` |
+| Orient in an unfamiliar area | `get_vault_overview`, `list_vault_files` |
+
+Some tools start inactive — `tool_catalog` lists them, `activate_tools` promotes several in one call.
+
+**Read only.** The vault path is the `main` worktree's `wiki/`, so the write tools (`create_vault_file`, `patch_vault_file`, `search_and_replace`, …) would edit `main`, not your branch. Retrieve over MCP; edit wiki pages in your own worktree with Edit/Write.
+
+**2. Obsidian CLI** — same limits: local machine, app running:
 
 ```bash
-# 1. Check availability
-which obsidian 2>/dev/null && OBSCLI=obsidian || OBSCLI=""
-
-# 2a. If available — use obsidian CLI (vault-aware, follows [[wikilinks]])
+which obsidian 2>/dev/null || echo "not installed"
 obsidian search query="arc tokens"                     # full-text search
 obsidian search:context query="arc tokens"             # search with line context
 obsidian tag name=systems verbose                      # list files tagged #systems
 obsidian read path=wiki/systems/arc-tokens.md          # read a page
 obsidian backlinks file=arc-tokens                     # find pages linking to it
 obsidian files folder=wiki/systems                     # list files in a folder
+```
 
-# 2b. Fallback — grep over markdown files (always works)
+**3. grep** — works everywhere, including remote and CI. Reads your worktree's own `wiki/`:
+
+```bash
 grep -r "arc token" wiki/ --include="*.md" -l          # find matching pages
 grep -r "arc token" wiki/ --include="*.md" -n          # with line numbers
 ```
-
-Note: `obsidian` CLI talks to running Obsidian app — fall back to grep if not open.
 
 ### Wiki maintenance rules
 
