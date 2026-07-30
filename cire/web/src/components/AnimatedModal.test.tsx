@@ -78,15 +78,21 @@ describe("AnimatedModal", () => {
     expect(dialog.getAttribute("aria-labelledby")).toBeNull();
   });
 
-  it("moves focus to the close button on open", async () => {
-    const { getByLabelText } = render(() => (
+  it("moves focus to the scroll container on open, so the keyboard can scroll it", async () => {
+    const { getByRole } = render(() => (
       <AnimatedModal onClose={() => {}} label="Event details">
         <p>body</p>
       </AnimatedModal>
     ));
 
+    // NOT the close button. That button is a sibling of the scrollport, so
+    // focusing it leaves the keyboard with nothing to scroll — its nearest
+    // scrollable ancestor is the `overflow-hidden` frame, then a `<body>` this
+    // component locks. Measured in a real browser with focus on the button:
+    // Arrow and PageDown moved a scrollable sheet 0px. With focus here:
+    // ArrowDown 0→40px, PageDown 40→594px, Home back to 0.
     await waitFor(() => {
-      expect(document.activeElement).toBe(getByLabelText("Close"));
+      expect(document.activeElement).toBe(scrollerOf(getByRole("dialog")));
     });
   });
 
@@ -205,6 +211,14 @@ describe("AnimatedModal", () => {
 
     // Still the first thing in the tab order, as before the restructure.
     expect(panel.querySelector("button")).toBe(close);
+
+    // The scrollport must be focusable itself: it is where focus lands on open,
+    // and `[tabindex]:not([tabindex="-1"])` is what puts it in the focus trap.
+    expect(scroller.getAttribute("tabindex")).toBe("0");
+    // Tabbing BACKWARDS scrolls a target to the top of the scrollport, which is
+    // exactly where the close chip sits — reserve its 52px footprint so no
+    // control is ever parked underneath it.
+    expect(scroller.className).toContain("scroll-pt-14");
   });
 
   it("keeps its own bottom padding by default, and drops it for flushBottom", () => {

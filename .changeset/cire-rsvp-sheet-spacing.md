@@ -46,3 +46,15 @@ non-positioned in-flow siblings — and gained `bg-surface` + `rounded-full`
 because content now passes underneath it as it scrolls. `DetailsModal` gets the
 fix for free. This also gives the sticky action bar a containing block that is
 the scrollport itself.
+
+**Keyboard scrolling, restored.** Pinning the close button outside the scrollport
+cost the sheet its keyboard: focus landed on that button, whose nearest
+scrollable ancestor is now the `overflow-hidden` frame and then a `<body>` the
+modal deliberately locks, so Arrow and Page keys moved a scrollable sheet 0px
+(measured). Focus now lands on the scroll container itself (`tabindex="0"`,
+which also puts it in the focus trap) — ArrowDown 0→40px, PageDown 40→594px,
+Home back to 0. The close button stays first in DOM, so it is still the first
+stop when tabbing round. The scroller also takes `scroll-pt-14`, reserving the
+button's 52px footprint so tabbing backwards — which scrolls a target to the top
+of the scrollport, exactly where the button sits — can never park a control
+underneath it.

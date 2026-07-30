@@ -64,6 +64,7 @@ export function AnimatedModal(props: AnimatedModalProps) {
   let backdropRef: HTMLDivElement;
   let panelRef: HTMLDivElement;
   let closeButtonRef: HTMLButtonElement | undefined;
+  let scrollRef: HTMLDivElement | undefined;
 
   // The element that had focus when the modal opened, so we can restore it on
   // close (mirrors AddToCalendar's popover focus-return pattern).
@@ -119,8 +120,16 @@ export function AnimatedModal(props: AnimatedModalProps) {
     document.addEventListener("keydown", onKeyDown);
     onCleanup(() => document.removeEventListener("keydown", onKeyDown));
 
-    // Move focus into the panel: the close button if present, else the panel.
-    (closeButtonRef ?? panelRef)?.focus();
+    // Move focus to the SCROLL CONTAINER, not the close button. The button is
+    // a sibling of the scrollport, so focusing it leaves the keyboard with
+    // nothing to scroll — its nearest scrollable ancestor is the
+    // `overflow-hidden` frame, then a `<body>` this component has deliberately
+    // locked. Measured before this line changed: Arrow and PageDown moved a
+    // scrollable sheet 0px. Focusing the scrollport itself restores that, and
+    // lands a screen-reader user on the content with the dialog's own name
+    // already announced from the panel. The close button stays first in DOM,
+    // so it is still the first stop when tabbing round.
+    (scrollRef ?? closeButtonRef ?? panelRef)?.focus();
 
     if (prefersReducedMotion()) {
       // Reduced motion: skip the imperative animation but still land on the
@@ -188,9 +197,27 @@ export function AnimatedModal(props: AnimatedModalProps) {
         </button>
         {/* `min-h-0` so this flex item may shrink below its content height —
             without it the panel's `max-h` cannot take effect and nothing
-            scrolls. */}
+            scrolls.
+
+            `tabindex="0"` makes the scrollport itself focusable, which is what
+            gives it a keyboard. Initial focus lands on the close button, and
+            that button is now a SIBLING of this box rather than a descendant —
+            so without a tab stop here the nearest scrollable ancestor of the
+            focused element is the `overflow-hidden` frame, then a `<body>` we
+            have deliberately locked, and Arrow/PageDown scroll nothing at all
+            until the guest tabs into the content. (Measured: they scrolled 0px.)
+            `[tabindex]:not([tabindex="-1"])` is already in FOCUSABLE_SELECTOR,
+            so this joins the focus trap cleanly.
+
+            `scroll-pt-14` (56px) keeps focus-driven scrolling clear of the
+            close button's 52px-tall footprint: tabbing BACKWARDS scrolls a
+            target to the top of the scrollport, which is exactly where the chip
+            sits. */}
         <div
-          class={`min-h-0 overflow-y-auto overscroll-contain px-6 pt-8 ${
+          ref={scrollRef}
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region MUST be focusable or it has no keyboard (WCAG 2.1.1; axe `scrollable-region-focusable`). This rule and that one disagree by construction on scrollports, and keyboard operability wins: measured, focus elsewhere left Arrow/PageDown moving this sheet 0px.
+          tabindex="0"
+          class={`min-h-0 scroll-pt-14 overflow-y-auto overscroll-contain px-6 pt-8 ${
             props.flushBottom ? "pb-0" : "pb-[max(2.5rem,env(safe-area-inset-bottom))] md:pb-10"
           }`}
         >
