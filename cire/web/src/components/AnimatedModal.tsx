@@ -23,6 +23,15 @@ interface AnimatedModalProps {
    * this prop can never become an arbitrary inline-style sink.
    */
   themeVars?: Record<string, string>;
+  /**
+   * Drop the panel's own bottom padding so a child can own the sheet's bottom
+   * edge — used by a full-bleed sticky action bar, which supplies its own
+   * safe-area padding. Without this the bar would either float above the
+   * panel's padding or have to cancel it with a negative margin, which
+   * `position: sticky` resolves against the scrollport and so hoists the bar
+   * up over the content instead of extending it down (see RsvpModal).
+   */
+  flushBottom?: boolean;
   children: JSX.Element;
 }
 
@@ -147,7 +156,9 @@ export function AnimatedModal(props: AnimatedModalProps) {
     >
       <div
         ref={panelRef}
-        class="border-border bg-surface relative max-h-[85dvh] w-full max-w-[480px] overflow-y-auto overscroll-contain rounded-t-[1.75rem] border px-6 pt-8 pb-[max(2.5rem,env(safe-area-inset-bottom))] opacity-0 md:mb-8 md:max-h-[85vh] md:rounded-lg md:pb-10"
+        class={`border-border bg-surface relative max-h-[85dvh] w-full max-w-[480px] overflow-y-auto overscroll-contain rounded-t-[1.75rem] border px-6 pt-8 opacity-0 md:mb-8 md:max-h-[85vh] md:rounded-lg ${
+          props.flushBottom ? "pb-0" : "pb-[max(2.5rem,env(safe-area-inset-bottom))] md:pb-10"
+        }`}
         style={filterThemeVars(props.themeVars)}
         onClick={(e) => e.stopPropagation()}
         role="dialog"

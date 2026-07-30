@@ -166,4 +166,27 @@ describe("AnimatedModal", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("keeps its own bottom padding by default, and drops it for flushBottom", () => {
+    const { getByRole, unmount } = render(() => (
+      <AnimatedModal onClose={() => {}} label="Default">
+        <p>body</p>
+      </AnimatedModal>
+    ));
+    const panel = getByRole("dialog");
+    expect(panel.className).toContain("pb-[max(2.5rem,env(safe-area-inset-bottom))]");
+    expect(panel.className).toContain("md:pb-10");
+    unmount();
+
+    const flush = render(() => (
+      <AnimatedModal onClose={() => {}} label="Flush" flushBottom>
+        <p>body</p>
+      </AnimatedModal>
+    ));
+    const flushPanel = flush.getByRole("dialog");
+    // A full-bleed sticky action bar owns the bottom edge — the panel must add
+    // nothing under it, or the bar floats above a dead band of surface.
+    expect(flushPanel.className).toContain("pb-0");
+    expect(flushPanel.className).not.toContain("md:pb-10");
+  });
 });

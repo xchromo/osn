@@ -548,4 +548,29 @@ describe("RsvpModal", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("seats the action bar on the sheet's bottom edge and balances the card insets", () => {
+    const { getByText } = render(() => (
+      <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={() => {}} />
+    ));
+
+    const panel = document.querySelector('[role="dialog"]') as HTMLElement;
+    // The sheet hands its bottom edge to the action bar (see AnimatedModal's
+    // `flushBottom`) instead of padding underneath it.
+    expect(panel.className).toContain("pb-0");
+
+    const bar = getByText("Save").parentElement as HTMLElement;
+    expect(bar.className).toContain("sticky");
+    // No negative bottom margin: `bottom: 0` resolves against the scrollport, so
+    // one would hoist the bar up over the last card rather than stretch it down.
+    expect(bar.className).not.toMatch(/-mb-/);
+
+    // The <legend> is laid out in the top border and the block-start padding is
+    // added below it, so the card takes no top padding of its own — otherwise
+    // its top inset runs ~3x the 20px on the other three sides.
+    const card = fieldsetFor("Priya");
+    expect(card.className).toContain("pt-0");
+    expect(card.className).toContain("pb-5");
+    expect(card.className).toContain("px-5");
+  });
 });
