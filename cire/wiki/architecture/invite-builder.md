@@ -641,7 +641,13 @@ desktop/phone frame toggle, so the tone rhythm down the page is visible while
 editing. Both layers share `HeroSample`/`SectionSample` and are styled with
 the SAME derived tokens the guest consumes (`derivePalette` +
 `typographyVars` from `@cire/theme`, resolved once in the `previewTokens`
-memo). The hero preview is **crop-aware** (saved rectangles render via the
+memo — and shared into `PaletteField` via its `tokens`/`adjustments` props,
+so the whole builder derives exactly once per colour-drag frame). Both
+layers stay permanently mounted with a CSS-only container-query switch — a
+deliberate trade (one markup source, no `ResizeObserver`) accepted as
+`P-I1` in `wiki/todo/perf.md` (cire wiki). The `url("…")` sink both layers'
+crop rendering shares (`cropBackgroundStyle`, lockstep organiser + guest
+copies) escapes its URL argument at the sink (S-L1). The hero preview is **crop-aware** (saved rectangles render via the
 guest's background-fraction technique — the framing never lies) and the phone
 frame uses the hero's phone rectangle, falling back to the desktop crop
 exactly as the guest site does. Tone pickers render **as their surface**
