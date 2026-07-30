@@ -1601,6 +1601,7 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     redirectSpy.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    vi.unstubAllGlobals();
   });
 
   const renderBuilder = async () => {
@@ -1711,6 +1712,52 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     // reached whenever the menu was opened by keyboard and focus never moved.
     fireEvent.keyDown(trigger(), { key: "Escape" });
     expect(trigger().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("collapses the menu when the container grows past the static-row threshold", async () => {
+    // A resizable stub: happy-dom runs no layout, so the only way to exercise a
+    // container CROSSING the threshold is to drive the callback by hand.
+    let report: ((width: number) => void) | undefined;
+    class ResizableObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        report = (width) =>
+          this.callback(
+            [{ contentRect: { width } } as unknown as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        report(600); // narrow: the menu surface
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizableObserver);
+    await renderBuilder();
+
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+
+    // Rotate / resize / collapse the dashboard rail — the tabs become the static
+    // row, which the open menu must not outlive. Left `true`, `selectSection`
+    // would "close" it on every wide tab click, focusing a `display: none`
+    // trigger and dropping focus to the body.
+    report!(900);
+    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
+
+    // The tab click that the stale state would have broken: focus stays put.
+    const lookTab = screen.getByRole("tab", { name: "Look" });
+    lookTab.focus();
+    fireEvent.click(lookTab);
+    expect(document.activeElement).toBe(lookTab);
+    expect(document.body).not.toBe(document.activeElement);
+
+    // 48rem at the 16px root `global.css` pins — the same content box
+    // `@3xl/builder` measures, so the JS collapse can't drift from the CSS swap.
+    report!(767);
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    report!(768);
+    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
   });
 
   it("keeps ONE tablist whose tabs stay in the DOM while collapsed", async () => {

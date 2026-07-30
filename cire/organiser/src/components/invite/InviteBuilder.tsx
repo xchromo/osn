@@ -112,6 +112,16 @@ interface InviteBuilderProps {
  */
 const WIDE_BUILDER_REM = 56;
 
+/**
+ * The threshold at which the section tabs stop being a collapsible menu and
+ * become the static row, mirroring the `@3xl/builder` container query on the
+ * tablist. Like {@link WIDE_BUILDER_REM} it has to exist in JS as well — not to
+ * decide what to mount (the swap is pure CSS) but to CLOSE the menu when the
+ * container grows past it, since a menu left open across the crossover would
+ * otherwise stay "open" forever on a surface that can no longer show it.
+ */
+const SECTION_MENU_REM = 48;
+
 /** Which preview layer is mounted. `unknown` means "not measured yet, or not
  *  measurable" and mounts both — see {@link watchBuilderWidth}. */
 type PreviewLayer = "unknown" | "narrow" | "wide";
@@ -292,6 +302,14 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       // `unknown` rather than deciding the builder is narrow.
       if (width === 0) return;
       setPreviewLayer(width >= WIDE_BUILDER_REM * rootFontPx() ? "wide" : "narrow");
+      // Collapse the section menu once the container can show the static row.
+      // Nothing else writes this signal except the trigger, so without this a
+      // menu opened narrow stays `true` for the rest of the session after a
+      // rotate/resize — and `selectSection` would then "close" it on every wide
+      // tab click, focusing a `display: none` trigger and dropping focus to the
+      // body. Measured off the same `contentRect` the container query evaluates,
+      // so the JS collapse point cannot drift from the CSS one.
+      if (width >= SECTION_MENU_REM * rootFontPx()) setSectionMenuOpen(false);
     });
     observer.observe(el);
     onCleanup(() => observer.disconnect());
@@ -469,6 +487,14 @@ export default function InviteBuilder(props: InviteBuilderProps) {
         return undefined;
     }
   };
+
+  /** The ACTIVE section's Shown/Hidden state, for the collapsed menu trigger's
+   *  dot. Memoised because the trigger reads it three times (the `Show` plus
+   *  two `classList` entries) and `navShown` funnels into the draft-reading
+   *  emptiness predicates — one subscription per keystroke instead of three.
+   *  Declared here, not beside `activeIndex`/`activeLabel`: `createMemo` runs
+   *  its computation eagerly, so it has to sit below `navShown`. */
+  const activeShown = createMemo(() => navShown(activeSection()));
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
@@ -789,13 +815,13 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                     class="border-border bg-surface/40 text-text hover:border-gold-dim font-body flex min-h-11 w-full items-center justify-between gap-3 rounded-sm border px-3 py-2 text-[0.75rem] tracking-[0.08em] uppercase transition-colors @3xl/builder:hidden"
                   >
                     <span class="flex min-w-0 items-center gap-2">
-                      <Show when={navShown(activeSection()) !== undefined}>
+                      <Show when={activeShown() !== undefined}>
                         <span
                           aria-hidden
                           class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
                           classList={{
-                            "bg-gold": navShown(activeSection()) === true,
-                            "bg-text-muted/50": navShown(activeSection()) === false,
+                            "bg-gold": activeShown() === true,
+                            "bg-text-muted/50": activeShown() === false,
                           }}
                         />
                       </Show>
