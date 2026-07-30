@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { derivePalette, PALETTE_PRESETS } from "@cire/theme";
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -547,12 +547,16 @@ describe("InviteBuilder theme", () => {
       '[aria-label="Colour scheme preview"]',
     ) as HTMLElement;
     expect(schemePreview.style.getPropertyValue("--invite-heading-weight")).toBe("700");
-    // (The body pair rides each section sample's WRAPPER so it cascades to the
-    // eyebrow and event card too, mirroring the guest `body` rule. That one is
-    // pinned in PaletteField.test.tsx instead: happy-dom's style parser drops a
-    // `var()` value for `font-weight`/`font-style` when it is applied through
-    // `setProperty` — which is the path Solid takes for a style object that
-    // also carries a dynamic value, as the section wrapper's surface is.)
+    // …and the sample INSIDE it consumes what the figure was handed. Asserting
+    // the figure alone would pass against the unfixed code: the bug was never
+    // the plumbing, it was a sample that hardcoded `font-light italic` and so
+    // ignored the variables it was given. Both halves of that seam, or neither.
+    const schemeHeading = within(schemePreview).getByText("Your Events");
+    expect(schemeHeading.getAttribute("style")).toContain(
+      "font-weight:var(--invite-heading-weight, 300)",
+    );
+    // (The section samples' body-pair cascade is pinned directly in
+    // invite/previews.test.tsx.)
     // Live preview must not trigger a network save.
     expect(authFetchMock).toHaveBeenCalledTimes(1);
   });

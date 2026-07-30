@@ -90,7 +90,7 @@ describe("PaletteField", () => {
    * as before.
    */
   it("its heading sample follows the typography variables, not a hardcoded look", () => {
-    const { container } = render(() => <PaletteField value={EMPTY} onChange={() => {}} />);
+    render(() => <PaletteField value={EMPTY} onChange={() => {}} />);
     const heading = screen.getByText("Your Events");
 
     const headingStyle = heading.getAttribute("style") ?? "";
@@ -103,14 +103,13 @@ describe("PaletteField", () => {
 
     // The body pair rides the panel wrapper and cascades, exactly as the guest
     // invite's `body` rule does — so the eyebrow and the event card follow the
-    // organiser's body weight/style too, not just one line.
-    const panel = container.querySelector(
-      '[aria-label="Colour scheme preview"] > div',
-    ) as HTMLElement;
-    const panelStyle = panel.getAttribute("style") ?? "";
-    expect(panelStyle).toContain("font-family:var(--font-body)");
-    expect(panelStyle).toContain("font-weight:var(--invite-body-weight, 400)");
-    expect(panelStyle).toContain("font-style:var(--invite-body-style, normal)");
+    // organiser's body weight/style too, not just one line. Anchored off the
+    // sample's own copy rather than a `> div` position, so a layout wrapper
+    // can't silently re-point the assertion.
+    const panel = screen.getByText("Celebrate with us").parentElement!;
+    expect(panel.className).toContain("[font-weight:var(--invite-body-weight,400)]");
+    expect(panel.className).toContain("[font-style:var(--invite-body-style,normal)]");
+    expect(panel.getAttribute("style")).toContain("font-family:var(--font-body)");
   });
 
   it("stays quiet when the scheme needs no contrast rescue", () => {

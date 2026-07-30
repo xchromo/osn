@@ -20,7 +20,9 @@ The body pair moved up a level at the same time. `--invite-body-weight` /
 mini event card behind. They now ride the section wrapper — beside the body
 face, and inheriting to every line under it — which is how `global.css` applies
 them to the guest invite's `<body>`. Headings keep pinning their own weight and
-style, so an italic body still never drags them along.
+style, so an italic body still never drags them along. The pair is written as
+Tailwind arbitrary properties, matching the guest packs' existing
+`[font-weight:var(--invite-heading-weight,300)]` idiom.
 
 No wire, schema or storage change: the same closed enum keys resolve through
 the same `typographyVars` map in `@cire/theme`.

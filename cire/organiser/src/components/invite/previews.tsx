@@ -237,14 +237,16 @@ export function SectionSample(props: {
     // card — mirroring `global.css`'s `body` rule on the guest invite. Pinning
     // them on the body line alone left the rest of the sample on the pack's
     // default, so a "Body weight: Bold" pick only moved one span.
+    //
+    // They are Tailwind arbitrary properties rather than inline style, which is
+    // the idiom the guest packs' heading elements already use
+    // (`[font-weight:var(--invite-heading-weight,300)]`). It also keeps them out
+    // of a style object that carries a dynamic value: Solid applies that one
+    // through `setProperty`, and happy-dom discards a `var()` value there, so
+    // the contract would be invisible to the tests.
     <div
-      style={{
-        "background-color": props.surface,
-        "font-family": "var(--font-body)",
-        "font-weight": "var(--invite-body-weight, 400)",
-        "font-style": "var(--invite-body-style, normal)",
-      }}
-      class={`flex flex-col items-center justify-center gap-1.5 p-4 text-center ${props.class ?? ""}`}
+      style={{ "background-color": props.surface, "font-family": "var(--font-body)" }}
+      class={`flex flex-col items-center justify-center gap-1.5 p-4 text-center [font-weight:var(--invite-body-weight,400)] [font-style:var(--invite-body-style,normal)] ${props.class ?? ""}`}
     >
       <Show when={props.eyebrow}>
         <span

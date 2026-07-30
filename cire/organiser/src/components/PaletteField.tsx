@@ -170,14 +170,11 @@ export default function PaletteField(props: {
           {/* The body face, weight and style ride the wrapper and cascade to
               every line below it — the same way `global.css` applies them to
               the guest invite's <body>. The heading pins its own pair, so an
-              italic body never drags the heading along. */}
+              italic body never drags the heading along. Arbitrary properties,
+              matching `SectionSample` and the guest packs. */}
           <div
-            class="flex flex-col gap-3 p-4"
-            style={{
-              "font-family": "var(--font-body)",
-              "font-weight": "var(--invite-body-weight, 400)",
-              "font-style": "var(--invite-body-style, normal)",
-            }}
+            class="flex flex-col gap-3 p-4 [font-weight:var(--invite-body-weight,400)] [font-style:var(--invite-body-style,normal)]"
+            style={{ "font-family": "var(--font-body)" }}
           >
             <span
               class="text-[0.6rem] tracking-[0.18em] uppercase"

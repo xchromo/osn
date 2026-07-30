@@ -670,6 +670,16 @@ applies to the third preview layer too — `PaletteField`'s "Colour scheme
 preview", which sits directly under the Look card's typography controls and was
 the one sample still hardcoded (fixed 2026-07-30).
 
+The body pair is written as **Tailwind arbitrary properties**
+(`[font-weight:var(--invite-body-weight,400)]`), the idiom the guest packs
+already use for their heading elements, rather than as inline style. That is
+not only symmetry: a wrapper's style object also carries the dynamic tone
+surface, and Solid applies a mixed object through `setProperty`, where
+happy-dom discards a `var()` value — so an inline declaration there is invisible
+to the tests. Classes keep the contract assertable (`previews.test.tsx`).
+Heading samples keep using inline style; their objects are fully static, which
+Solid compiles straight into the template's `style` attribute.
+
 **One save, dirty-checked per half — and dirty state is REACTIVE.** The draft
 lives in one `createStore` (`InviteDraft`); each half's serialised payload is
 compared in a memo against the last server-acknowledged snapshot (a signal,
