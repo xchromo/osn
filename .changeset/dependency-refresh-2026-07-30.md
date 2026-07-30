@@ -50,4 +50,10 @@ Ten `@osn/api` tests (of 644) were relying on "the Effect didn't fail" as their
 only assertion; each now asserts the behaviour its name claims, with no change
 to what is under test.
 
+`oxfmt` 0.44 → 0.59 spans four breaking formatter changes, but produces no
+output change here: the `fmt` script already excludes CSS, astro and markdown,
+and the `sort_imports` reclassification of subpath imports matches nothing in
+the tree. `bun run fmt` is a no-op on the current sources and `fmt:check` is
+clean. 0.60/0.61 stay out until they clear the 14-day minor window.
+
 Everything else is a patch/minor bugfix bump with no migration steps.
