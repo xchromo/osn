@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { AuthorizeError, createAuthorizeClient } from "../src/authorize";
+import {
+  AuthorizeError,
+  createAuthorizeClient,
+  DEFAULT_AUTHORIZE_TIMEOUT_MS,
+} from "../src/authorize";
 
 const config = { issuerUrl: "https://osn.example.com" };
 
@@ -312,6 +316,87 @@ describe("createAuthorizeClient", () => {
 
       expect((err as Error).message).toBe("already gone");
       expect(fn).not.toHaveBeenCalled();
+    });
+
+    // T-S1 / P-W1 / S-L3: `fetch` settles when HEADERS arrive. A server that
+    // flushes headers then stalls mid-body used to escape the deadline
+    // entirely — the exact indefinite spinner this feature exists to bound.
+    it("bounds a response whose headers arrive but whose body stalls", async () => {
+      vi.useFakeTimers();
+      try {
+        const quick = createAuthorizeClient({ ...config, timeoutMs: 50 });
+        stubFetch(
+          (call) =>
+            new Response(
+              // A body that never enqueues and never closes.
+              new ReadableStream({
+                start(controller) {
+                  call.init?.signal?.addEventListener(
+                    "abort",
+                    () => controller.error(new Error("aborted")),
+                    { once: true },
+                  );
+                },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+        );
+
+        const pending = quick.getContext(requestId).catch((e: unknown) => e);
+        await vi.advanceTimersByTimeAsync(50);
+        const err = (await pending) as AuthorizeError;
+
+        expect(err).toBeInstanceOf(AuthorizeError);
+        expect(err.code).toBe("unknown");
+        expect(err.terminal).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // T-S2: `0` is a documented opt-out and a falsy guard — the classic spot
+    // for a `||`-instead-of-`??` slip, which would silently reinstate a 10s
+    // deadline while every other test still passed.
+    it("honours timeoutMs: 0 as an opt-out", async () => {
+      vi.useFakeTimers();
+      try {
+        const noDeadline = createAuthorizeClient({ ...config, timeoutMs: 0 });
+        stubStalledFetch();
+        let settled = false;
+        void noDeadline.getContext(requestId).catch(() => {
+          settled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(DEFAULT_AUTHORIZE_TIMEOUT_MS * 3);
+        expect(settled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("exposes the default deadline as a constant", () => {
+      expect(DEFAULT_AUTHORIZE_TIMEOUT_MS).toBe(10_000);
+    });
+
+    // S-M1: aborting a fetch does not un-send it. `submitDecision` consumes the
+    // parked request, writes the consent row and mints the code, so a
+    // client-side deadline that fires mid-commit would surface a RETRYABLE
+    // error over a grant that actually happened. The read keeps its deadline;
+    // the write must not have one by default.
+    it("puts no default deadline on the state-changing decision POST", async () => {
+      vi.useFakeTimers();
+      try {
+        stubStalledFetch();
+        let settled = false;
+        void client.submitDecision({ requestId, profileId: "usr_1", approved: true }).catch(() => {
+          settled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(DEFAULT_AUTHORIZE_TIMEOUT_MS * 3);
+        expect(settled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("wraps a transport failure as a retryable AuthorizeError", async () => {

@@ -26,14 +26,16 @@ vi.mock("solid-toast", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../lib/api", () => ({
+const redirectToLogin = vi.fn();
+
+// T-U5: `isAuthExpired` comes from the REAL module, not a stand-in. A
+// hand-written copy would only re-implement one arm, so the point of
+// consolidating on the shared helper — that `lib/api.test.ts`'s shape
+// assertions transitively protect this call site — would be lost.
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
   apiUrl: (path: string) => `https://api.test${path}`,
-  redirectToLogin: vi.fn(),
-  // The view now uses the shared predicate on its load-failure path instead of
-  // a hand-inlined copy. Mirrored here (rather than left out) so the mock keeps
-  // the module's real surface — an absent export would be `undefined` at the
-  // call site and throw only on the error path the mock exists to exercise.
-  isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
+  redirectToLogin,
 }));
 
 const makeItem = (over: Partial<EnquiryListItem> = {}): EnquiryListItem => ({
@@ -67,6 +69,7 @@ const makeMessage = (over: Partial<EnquiryMessage> = {}): EnquiryMessage => ({
 
 beforeEach(() => {
   __resetEnquiriesCache();
+  redirectToLogin.mockReset();
   authFetch.mockReset();
   activeProfileId.mockReturnValue("p_me");
 });
@@ -87,6 +90,32 @@ describe("EnquiriesView", () => {
     setCachedEnquiries("wed_1", [makeItem()]);
     render(() => <EnquiriesView weddingId="wed_1" currency="AUD" canEdit={true} />);
     expect(await screen.findByText("Blue Roses")).toBeInTheDocument();
+  });
+
+  // The bug this replaced: the old inlined predicate read `_tag` first and
+  // returned false for any OTHER tag, so an Effect-wrapped expiry never reached
+  // the printout check and the organiser was left on an empty inbox.
+  it("redirects to sign-in when the initial load fails with an expiry", async () => {
+    const EnquiriesView = await importComponent();
+    authFetch.mockRejectedValue(
+      Object.assign(new Error("boom"), {
+        toString: () => "(FiberFailure) AuthExpiredError: session gone",
+      }),
+    );
+
+    render(() => <EnquiriesView weddingId="wed_1" currency="AUD" canEdit={true} />);
+
+    await waitFor(() => expect(redirectToLogin).toHaveBeenCalled());
+  });
+
+  it("does not redirect on an unrelated load failure", async () => {
+    const EnquiriesView = await importComponent();
+    authFetch.mockRejectedValue(new Error("network down"));
+
+    render(() => <EnquiriesView weddingId="wed_1" currency="AUD" canEdit={true} />);
+
+    await waitFor(() => expect(authFetch).toHaveBeenCalled());
+    expect(redirectToLogin).not.toHaveBeenCalled();
   });
 
   it("shows an empty-state when the store has no enquiries", async () => {

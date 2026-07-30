@@ -21,6 +21,12 @@ export class AuthExpiredError extends Data.TaggedError("AuthExpiredError")<{
 }> {}
 
 /**
+ * The tag as an error NAME at the head of the printout — bare, or behind
+ * Effect's `(FiberFailure)` prefix. Not "anywhere in the string".
+ */
+const FIBER_FAILURE_PRINTOUT = /^(?:\(FiberFailure\)\s*)?AuthExpiredError\b/;
+
+/**
  * True when `err` is — or wraps — an {@link AuthExpiredError}. Callers use it
  * to decide "bounce to sign-in" versus "show an error".
  *
@@ -37,10 +43,12 @@ export class AuthExpiredError extends Data.TaggedError("AuthExpiredError")<{
  *  2. the `_tag` discriminant — a structurally-equal error from another copy
  *     of this package (two versions in one `node_modules` tree defeat
  *     `instanceof`).
- *  3. the printout — the FiberFailure case, and the only one that can produce
- *     a false positive: an unrelated error whose message happens to quote the
- *     tag name reads as expired. That errs toward sending someone to sign in,
- *     which is recoverable; the alternative errs toward a dead screen.
+ *  3. the printout — the FiberFailure case. Effect renders it as
+ *     `(FiberFailure) AuthExpiredError: …`, so the match is ANCHORED to that
+ *     shape (S-L2) rather than scanning the whole string for the tag name.
+ *     An unanchored `includes` would classify any error whose message merely
+ *     quotes the tag — including one echoing a server-supplied code — as an
+ *     expiry, which is a sign-out decision taken on someone else's input.
  */
 export function isAuthExpiredError(err: unknown): boolean {
   if (err instanceof AuthExpiredError) return true;
@@ -51,7 +59,7 @@ export function isAuthExpiredError(err: unknown): boolean {
   // reach. This predicate runs inside `catch` blocks, so a throw here would
   // swap a recoverable expiry for an unhandled rejection.
   try {
-    return String(err).includes("AuthExpiredError");
+    return FIBER_FAILURE_PRINTOUT.test(String(err));
   } catch {
     return false;
   }

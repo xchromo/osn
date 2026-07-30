@@ -24,11 +24,22 @@ describe("isAuthExpired", () => {
 
   it("accepts an Effect FiberFailure printout", () => {
     // Effect wraps a failure before it reaches a plain `catch`, so neither
-    // `instanceof` nor an own `_tag` survives — only the printout does.
-    const wrapped = new Error(
-      "(FiberFailure) AuthExpiredError: Your session has expired. Sign in again.",
-    );
+    // `instanceof` nor an own `_tag` survives — only the printout does. The
+    // shape is Effect's real one, verified against a live FiberFailure in
+    // `osn/client/tests/errors.test.ts`: the tag heads the string.
+    const wrapped = {
+      toString: () => "(FiberFailure) AuthExpiredError: Your session has expired.",
+    };
     expect(isAuthExpired(wrapped)).toBe(true);
+  });
+
+  // S-L2: the printout arm is anchored, so a message that merely QUOTES the
+  // tag is not an expiry. `EnquiryApiError.message` is the server's `error`
+  // code verbatim — an unanchored match would hand a sign-out decision to
+  // whatever string the API returned.
+  it("rejects an error that merely quotes the tag in its message", () => {
+    const echoed = new Error("EnquiryApiError: AuthExpiredError");
+    expect(isAuthExpired(echoed)).toBe(false);
   });
 
   it("rejects an unrelated failure", () => {

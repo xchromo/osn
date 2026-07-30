@@ -23,8 +23,9 @@ const formatters = new Map<string, Intl.NumberFormat | null>();
 function formatterFor(currency: string, wholeUnits: boolean): Intl.NumberFormat | null {
   const key = `${currency}|${wholeUnits ? "0" : "d"}`;
   const hit = formatters.get(key);
-  // `hit === null` is a remembered failure, not a miss — check membership.
-  if (hit !== undefined || formatters.has(key)) return hit ?? null;
+  // `null` is a remembered failure and `undefined` is a miss; nothing ever
+  // stores `undefined`, so this one comparison distinguishes them.
+  if (hit !== undefined) return hit;
 
   let built: Intl.NumberFormat | null = null;
   try {

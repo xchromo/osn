@@ -107,14 +107,19 @@ export function AuthorizePage() {
     return Array.isArray(raw) ? raw[0] : raw;
   });
 
-  // Every issuer call this page makes hangs off one controller, aborted when
-  // the page goes away — a context read left in flight past unmount holds a
-  // connection open and resolves into a component that no longer exists.
-  const inflight = new AbortController();
-  onCleanup(() => inflight.abort());
+  // The context READ hangs off this controller, aborted when the page goes
+  // away — a read left in flight past unmount holds a connection open and
+  // resolves into a component that no longer exists.
+  //
+  // S-M1: the decision POST deliberately does NOT. Aborting a fetch does not
+  // un-send it, and that call is what records consent and mints the code — so
+  // cancelling it client-side cannot undo the grant, it only hides that the
+  // grant may have happened. Reads are safe to abandon; writes are not.
+  const inflightRead = new AbortController();
+  onCleanup(() => inflightRead.abort());
 
   const [context, { refetch }] = createResource(requestId, (id) =>
-    authorizeClient.getContext(id, { signal: inflight.signal }),
+    authorizeClient.getContext(id, { signal: inflightRead.signal }),
   );
 
   const [chosenId, setChosenId] = createSignal<string | null>(null);
@@ -216,10 +221,11 @@ export function AuthorizePage() {
     setSubmitting(true);
     setNotice(null);
     try {
-      const { redirectTo } = await authorizeClient.submitDecision(
-        { requestId: id, profileId, approved },
-        { signal: inflight.signal },
-      );
+      const { redirectTo } = await authorizeClient.submitDecision({
+        requestId: id,
+        profileId,
+        approved,
+      });
       setRedirecting(true);
       navigateTo(redirectTo);
     } catch (err) {
@@ -285,10 +291,13 @@ export function AuthorizePage() {
   return (
     <main class="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6 py-10">
       {/* A-L1: the region itself is always mounted — a live region added to
-          the DOM at the same moment as its text is not reliably announced. */}
-      <p class="sr-only" aria-live="polite">
+          the DOM at the same moment as its text is not reliably announced.
+          `<output>` carries an implicit `role="status"` (and with it
+          `aria-live="polite"`), which is the semantic element for a value the
+          page computes rather than one the user typed. */}
+      <output class="sr-only" aria-live="polite">
         {SCREEN_ANNOUNCEMENT[screen()]}
-      </p>
+      </output>
       <Switch>
         <Match when={screen() === "loading"}>
           <p class="text-muted-foreground text-body text-center">Checking this request…</p>

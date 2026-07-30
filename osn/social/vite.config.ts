@@ -38,7 +38,14 @@ export function issuerPreconnect(): Plugin {
       return [
         {
           tag: "link",
-          attrs: { rel: "preconnect", href: origin, crossorigin: "" },
+          // `use-credentials`, NOT a bare `crossorigin` — an empty value means
+          // anonymous mode, and the connection-pool key includes the
+          // credentials flag. The call this warms (`GET /authorize/context`) is
+          // `credentials: "include"`, so an anonymous preconnect lands in a
+          // different pool bucket: the handshake is not reused AND an extra
+          // idle TLS connection is opened. That is strictly worse than
+          // shipping no tag at all.
+          attrs: { rel: "preconnect", href: origin, crossorigin: "use-credentials" },
           injectTo: "head-prepend" as const,
         },
       ];

@@ -60,3 +60,48 @@ truncate a legitimate expansion.
 first `GET /recovery/status` read settled, under a blank gap — indistinguishable
 from a broken button on a slow link. A skeleton holds the status line's height
 and the button reads "Checking…" while it waits.
+
+---
+
+**Corrections from the prep-pr reviews, applied in-branch.**
+
+**S-M1 (security)** — the deadline and the page's unmount abort originally
+covered `submitDecision` as well. That call is state-changing: it consumes the
+parked request, records the consent row and mints the code. Aborting a fetch
+does not un-send it, so a timeout firing mid-commit surfaced a *retryable*
+error over a grant that had actually happened — Allow/Cancel became clickable
+again, the next click hit a consumed request and rendered "this sign-in request
+has expired", and a live consent sat in Connected apps the user believed they
+had cancelled. The write now carries no default deadline and no unmount signal;
+only the idempotent read does.
+
+**P-W1 / S-L3 / T-S1 (performance + security)** — the timer was cleared when
+`fetch` resolved, i.e. at response *headers*. A server that flushed headers and
+then stalled mid-body escaped the deadline entirely, which is the exact
+indefinite spinner the feature exists to bound. The body read moved inside the
+guarded window.
+
+**P-W2 / S-L1 (performance + security)** — the preconnect shipped
+`crossorigin=""`, which is *anonymous* mode. The connection-pool key includes
+the credentials flag, so an anonymous preconnect is not reused by the
+`credentials: "include"` context read: it opened a second idle TLS connection
+and the handshake was paid anyway — strictly worse than emitting no tag. Now
+`use-credentials`.
+
+**S-L2 (security)** — both `isAuthExpiredError` and cire's `isAuthExpired`
+matched the tag anywhere in the error printout, so an error whose message
+echoed a server-supplied code could decide to sign a user out. Both matches are
+now anchored to the tag heading the string, which is the shape Effect actually
+renders.
+
+**P-I1 (performance)** — the new recovery-codes skeleton keyed on raw
+`status.loading`, so the refetch after `acknowledge()` withdrew an
+already-known count from the screen. Gated on the cold read only.
+
+**P-I3 (performance)** — removed an unreachable branch in the money formatter's
+cache lookup.
+
+Test coverage added for each of the above, plus the gaps the test review named:
+the preconnect plugin, the `aria-live` region, the unmount abort, `logDevOtp`'s
+redaction, the `loggerLayer` fallback path, `timeoutMs: 0`, and the tightest
+legal RRULE walk.

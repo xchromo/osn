@@ -148,6 +148,31 @@ it.effect("expandRRule returns nothing when the window ends before dtstart", () 
   }),
 );
 
+// P-I5: the valve sits at MAX_SERIES_INSTANCES and the proof that it cannot
+// truncate has a margin of exactly ONE iteration — every step past the first
+// emits an instance, so `targetCount` is reached at step 260 and the guard
+// fires at 261. This is the tightest legal walk: a BYDAY whose only weekday
+// falls BEFORE dtstart's, so week 0 emits nothing and the whole expansion is
+// shifted one iteration later — the case that would fall off the end first.
+it.effect("expandRRule emits a full COUNT even when week 0 emits nothing", () =>
+  Effect.sync(() => {
+    // Saturday. BYDAY=SU is earlier in the week, so week 0 is skipped entirely.
+    const dtstart = new Date("2030-06-08T18:00:00.000Z");
+    expect(dtstart.getUTCDay()).toBe(6);
+    const parsed = {
+      freq: "WEEKLY" as const,
+      interval: 1,
+      byDay: [0],
+      count: MAX_SERIES_INSTANCES,
+      until: null,
+    };
+    const dates = expandRRule(parsed, dtstart, new Date("2100-01-01"));
+    expect(dates).toHaveLength(MAX_SERIES_INSTANCES);
+    // Nothing before dtstart leaked in from the skipped week.
+    expect(dates[0]!.getTime()).toBeGreaterThan(dtstart.getTime());
+  }),
+);
+
 it.effect("expandRRule bounds an unterminated walk without truncating a legal one", () =>
   Effect.sync(() => {
     const dtstart = new Date("2030-06-04T18:00:00.000Z");

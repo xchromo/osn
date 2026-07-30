@@ -156,6 +156,13 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
   // a rotation and would warn a brand-new user about codes they don't have.
   const locked = () => busy() || pending() || status.loading;
 
+  // P-I1: the skeleton and the "Checking…" label are for the COLD read only.
+  // `status.loading` is also true on the refetch `acknowledge()` triggers, and
+  // gating on it would withdraw an already-known count from the screen for a
+  // round-trip — the same "don't blank a warm value" rule that put `hasCodes()`
+  // and `mayHaveCodes()` on `.latest`.
+  const firstLoad = () => status.loading && status.latest === undefined;
+
   function requestGenerate() {
     if (locked()) return;
     setError(null);
@@ -239,7 +246,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
                 button — indistinguishable from a broken one. Reserve the
                 line's height so nothing shifts when the count lands. */}
             <Show
-              when={!status.loading}
+              when={!firstLoad()}
               fallback={
                 <div
                   class="bg-muted/50 h-5 w-56 animate-pulse rounded"
@@ -281,7 +288,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
                 ? "Generating…"
                 : // Same reason as the skeleton: say why the button is
                   // disabled instead of leaving it looking dead.
-                  status.loading
+                  firstLoad()
                   ? "Checking…"
                   : hasCodes()
                     ? "Generate new codes"

@@ -163,14 +163,6 @@ const toError = (status: number, body: ErrorBody): AuthorizeError => {
   );
 };
 
-const readBody = async (res: Response): Promise<unknown> => {
-  try {
-    return await res.json();
-  } catch {
-    return {};
-  }
-};
-
 export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeClient {
   const base = config.issuerUrl.replace(/\/$/, "");
   const timeoutMs = config.timeoutMs ?? DEFAULT_AUTHORIZE_TIMEOUT_MS;
@@ -190,7 +182,12 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
     url: string,
     init: RequestInit,
     options: AuthorizeCallOptions | undefined,
-  ): Promise<Response> => {
+    /**
+     * 0 disables the deadline for this call. Only the idempotent read opts in
+     * — see the note on `submitDecision`.
+     */
+    callTimeoutMs: number,
+  ): Promise<{ res: Response; json: unknown }> => {
     const caller = options?.signal;
     if (caller?.aborted) throw caller.reason;
 
@@ -200,15 +197,30 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
 
     let timedOut = false;
     const timer =
-      timeoutMs > 0
+      callTimeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             controller.abort();
-          }, timeoutMs)
+          }, callTimeoutMs)
         : undefined;
 
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      // The body read is INSIDE the guarded window on purpose. `fetch` settles
+      // when response HEADERS arrive, so clearing the deadline here would leave
+      // a server that flushes headers and then stalls mid-body free to hang for
+      // the browser's own multi-minute timeout — reintroducing exactly the
+      // indefinite spinner this deadline exists to bound.
+      let json: unknown;
+      try {
+        json = await res.json();
+      } catch (cause) {
+        // A malformed/empty body is not a failure — the status still classifies
+        // the response. An ABORT mid-body is, so let that one through.
+        if (controller.signal.aborted) throw cause;
+        json = {};
+      }
+      return { res, json };
     } catch (cause) {
       if (caller?.aborted) throw cause;
       if (timedOut) {
@@ -227,12 +239,13 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
     requestId: string,
     options?: AuthorizeCallOptions,
   ): Promise<AuthorizeContext> => {
-    const res = await send(
+    const { res, json: body } = await send(
       `${base}/authorize/context?request=${encodeURIComponent(requestId)}`,
       { method: "GET", credentials: "include", headers: { Accept: "application/json" } },
       options,
+      timeoutMs,
     );
-    const json = (await readBody(res)) as Partial<AuthorizeContext> & ErrorBody;
+    const json = body as Partial<AuthorizeContext> & ErrorBody;
     if (!res.ok || !json.client || !Array.isArray(json.scopes)) {
       throw toError(res.status, json);
     }
@@ -249,7 +262,7 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
     input: AuthorizeDecisionInput,
     options?: AuthorizeCallOptions,
   ): Promise<{ redirectTo: string }> => {
-    const res = await send(
+    const { res, json: body } = await send(
       `${base}/authorize/decision`,
       {
         method: "POST",
@@ -258,8 +271,22 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
         body: JSON.stringify(input),
       },
       options,
+      // NO default deadline on this one, deliberately (S-M1).
+      //
+      // Aborting a fetch does not un-send the request. This POST is the
+      // state-changing call: the server consumes the parked request, writes
+      // the consent row and mints the code. A client-side timeout that fires
+      // while the server is committing produces a RETRYABLE error, which
+      // re-enables Allow/Cancel — so a user who then clicks Cancel is told the
+      // request expired while a live consent grant sits in their Connected
+      // apps. The read is safely retryable and is the call that actually
+      // justified a deadline; presenting a non-idempotent write as retryable
+      // is what manufactures the mismatch.
+      //
+      // A caller may still pass its own `signal` and accept that trade.
+      0,
     );
-    const json = (await readBody(res)) as { redirectTo?: string } & ErrorBody;
+    const json = body as { redirectTo?: string } & ErrorBody;
     if (!res.ok || typeof json.redirectTo !== "string") {
       throw toError(res.status, json);
     }
