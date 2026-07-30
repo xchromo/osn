@@ -82,7 +82,7 @@ vi.mock("./ImageCropModal", () => ({
 // reaches the process-global registry the dashboard consults.
 import { confirmNavigation } from "../lib/unsaved-guard";
 import { captureDeclaredStyles } from "../test-support/declared-style";
-import InviteBuilder, { isDesignLocked } from "./InviteBuilder";
+import InviteBuilder, { isDesignLocked, SECTION_MENU_COLUMNS } from "./InviteBuilder";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -1624,11 +1624,24 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     expect(trigger().textContent).toContain("Design");
     expect(trigger().textContent).toContain("1/8");
 
+    // The Shown/Hidden state rides the LABEL, not just the dot: the dot is
+    // `aria-hidden` and an `aria-label` overrides subtree content, so an
+    // `sr-only` span in the button would be dropped. Without this clause the
+    // collapsed trigger conveys three things visually and two to a screen
+    // reader — and "you can read it instead of opening it" stops being true.
     await openSection(/^Closing/);
     expect(trigger().getAttribute("aria-label")).toBe(
-      "Invite section: Closing, 7 of 8. Choose a section",
+      "Invite section: Closing, 7 of 8, hidden — empty. Choose a section",
     );
     expect(trigger().textContent).toContain("7/8");
+
+    await openSection(/^Hero/);
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "Anita & Ben" } });
+    await waitFor(() =>
+      expect(trigger().getAttribute("aria-label")).toBe(
+        "Invite section: Hero, 3 of 8, shown. Choose a section",
+      ),
+    );
   });
 
   it("mirrors the active section's Shown/Hidden dot on the trigger, live", async () => {
@@ -1780,24 +1793,78 @@ describe("InviteBuilder section menu (narrow containers)", () => {
     }
   });
 
-  it("steps sections with ArrowDown/ArrowUp as well as the horizontal pair", async () => {
+  it("steps DOWN the open grid by a row, not along it", async () => {
     await renderBuilder();
     fireEvent.click(trigger());
 
-    // The open menu is a two-column grid; the vertical arrows have to work or
-    // the widget looks broken to a keyboard user.
+    // Row-major two-column grid: Design|Look / Hero|Our Story / … — so from
+    // Design, "down" is Hero (+2), and aliasing it to Look (+1, the item to the
+    // RIGHT) would make the arrows disagree with what the organiser can see.
     const designTab = screen.getByRole("tab", { name: "Design" });
     fireEvent.keyDown(designTab, { key: "ArrowDown" });
-    const lookTab = screen.getByRole("tab", { name: "Look" });
-    expect(document.activeElement).toBe(lookTab);
-    expect(document.getElementById("invite-look")!.hidden).toBe(false);
+    const heroTab = screen.getByRole("tab", { name: /^Hero/ });
+    expect(document.activeElement).toBe(heroTab);
+    expect(document.getElementById("invite-hero")!.hidden).toBe(false);
 
-    fireEvent.keyDown(lookTab, { key: "ArrowUp" });
+    fireEvent.keyDown(heroTab, { key: "ArrowUp" });
     expect(document.activeElement).toBe(designTab);
 
-    // Stepping keeps the menu open — only Escape, a selection, or an outside
-    // press dismisses it.
+    // The horizontal pair still steps one, along the row.
+    fireEvent.keyDown(designTab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Look" }));
+
+    // Stepping keeps the menu open — only Escape, a selection, an outside press
+    // or focus leaving the nav dismisses it.
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("leaves ArrowDown/ArrowUp to the browser on the wide static row", async () => {
+    await renderBuilder();
+
+    // Closed ⇒ the wide surface, where the tablist is one horizontal line. APG
+    // reserves Down/Up for the page there, and the row this replaced let a
+    // keyboard user scroll from a focused tab — swallowing that is a regression.
+    const designTab = screen.getByRole("tab", { name: "Design" });
+    designTab.focus();
+    const down = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      cancelable: true,
+      bubbles: true,
+    });
+    designTab.dispatchEvent(down);
+
+    expect(down.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(designTab);
+    expect(document.getElementById("invite-design")!.hidden).toBe(false);
+  });
+
+  it("closes when focus leaves the nav, so it can't obscure the field focus lands in", async () => {
+    await renderBuilder();
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+
+    // Tabbing forward out of the menu used to leave it up — an opaque overlay
+    // across the top of the active section, with focus in a form field behind
+    // it and no keyboard way to uncover it (WCAG 2.2 SC 2.4.11).
+    const outside = screen.getByRole("button", { name: "Preview" });
+    fireEvent.focusOut(tablist(), { relatedTarget: outside });
+    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
+
+    // Focus moving WITHIN the nav (tab → tab, or the close's own restore to the
+    // trigger) must not dismiss it.
+    fireEvent.click(trigger());
+    fireEvent.focusOut(tablist(), { relatedTarget: trigger() });
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps the arrow step in lockstep with the grid's column count", async () => {
+    await renderBuilder();
+
+    // `ArrowDown` steps by SECTION_MENU_COLUMNS, but the column count is a CSS
+    // fact the handler can't read back — and Tailwind only emits utilities it
+    // finds as literal source text, so the class can't be built from the
+    // constant either. This is the checkable half of that pair.
+    expect(tablist().className).toContain(`grid-cols-${SECTION_MENU_COLUMNS}`);
   });
 });
 

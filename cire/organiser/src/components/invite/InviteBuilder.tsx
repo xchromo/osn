@@ -122,6 +122,21 @@ const WIDE_BUILDER_REM = 56;
  */
 const SECTION_MENU_REM = 48;
 
+/**
+ * How many columns the open section menu lays out in. **Lockstep with the
+ * literal `grid-cols-2` utility on the tablist** — the column count is a CSS
+ * fact the key handler cannot read back, and `ArrowDown`/`ArrowUp` step by it
+ * so the arrows follow the visible geometry rather than the DOM order.
+ *
+ * The class stays a LITERAL at its usage site rather than being built from this
+ * constant: Tailwind extracts class names by scanning source text, so a
+ * `grid-cols-${…}` template would emit no CSS at all. Exported so a static
+ * drift guard in the tests can assert the two agree — the same treatment the
+ * `auto-grid` / `page-frame` utilities got, and the only mechanically checkable
+ * half of a CSS↔JS constant pair.
+ */
+export const SECTION_MENU_COLUMNS = 2;
+
 /** Which preview layer is mounted. `unknown` means "not measured yet, or not
  *  measurable" and mounts both — see {@link watchBuilderWidth}. */
 type PreviewLayer = "unknown" | "narrow" | "wide";
@@ -388,8 +403,8 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   // so keyboard navigation moves DOM focus imperatively via these refs.
   const sectionTabRefs = new Map<string, HTMLButtonElement>();
 
-  /** The section one step (±1) from `fromId`, wrapping around. */
-  function stepSection(fromId: string, delta: 1 | -1): string | undefined {
+  /** The section `delta` steps from `fromId`, wrapping around. */
+  function stepSection(fromId: string, delta: number): string | undefined {
     const ids = NAV_SECTIONS.map((s): string => s.id);
     const from = ids.indexOf(fromId);
     const fromIndex = from === -1 ? 0 : from;
@@ -403,11 +418,23 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     sectionTabRefs.get(id)?.focus();
   }
 
-  /** Arrow-key/Home/End roving-tabindex handler for the section tablist.
-   *  `ArrowDown`/`ArrowUp` step too, alongside the APG horizontal pair: open on
-   *  a narrow container the tablist is a two-column GRID, where a keyboard user
-   *  reaches for the vertical arrows and the horizontal ones alone would look
-   *  broken. Escape collapses the menu (a no-op on the static wide row). */
+  /**
+   * Arrow-key/Home/End roving-tabindex handler for the section tablist.
+   *
+   * `ArrowDown`/`ArrowUp` are handled ONLY while the menu is open, where the
+   * tablist is a {@link SECTION_MENU_COLUMNS}-column grid and a keyboard user
+   * reaches for the vertical arrows. On the wide static row the tablist is a
+   * single horizontal line, so APG reserves Down/Up for the browser — handling
+   * them there would swallow page scroll from a focused tab, which is a
+   * regression against the row this replaced.
+   *
+   * Open, the vertical pair steps by the COLUMN COUNT, not by one: in a
+   * row-major two-column grid the next item is to the right, and the one below
+   * is two along. Aliasing Down to Right would make the arrows disagree with
+   * what the organiser can see.
+   *
+   * Escape collapses the menu (a no-op on the static wide row).
+   */
   function onSectionTabKeyDown(e: KeyboardEvent, currentId: string) {
     if (e.key === "Escape") {
       if (!sectionMenuOpen()) return;
@@ -418,12 +445,18 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     let nextId: string | undefined;
     switch (e.key) {
       case "ArrowRight":
-      case "ArrowDown":
         nextId = stepSection(currentId, 1);
         break;
       case "ArrowLeft":
-      case "ArrowUp":
         nextId = stepSection(currentId, -1);
+        break;
+      case "ArrowDown":
+        if (!sectionMenuOpen()) return;
+        nextId = stepSection(currentId, SECTION_MENU_COLUMNS);
+        break;
+      case "ArrowUp":
+        if (!sectionMenuOpen()) return;
+        nextId = stepSection(currentId, -SECTION_MENU_COLUMNS);
         break;
       case "Home":
         nextId = NAV_SECTIONS[0]!.id;
@@ -495,6 +528,19 @@ export default function InviteBuilder(props: InviteBuilderProps) {
    *  Declared here, not beside `activeIndex`/`activeLabel`: `createMemo` runs
    *  its computation eagerly, so it has to sit below `navShown`. */
   const activeShown = createMemo(() => navShown(activeSection()));
+
+  /** The active section's Shown/Hidden state as a clause for the trigger's
+   *  accessible name — empty for the sections that have no such state. */
+  const shownSuffix = () => {
+    switch (activeShown()) {
+      case true:
+        return ", shown";
+      case false:
+        return ", hidden — empty";
+      default:
+        return "";
+    }
+  };
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
@@ -794,7 +840,26 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   the containing block), which is wider than this nav column by
                   the Preview button — a menu boxed into the column truncates
                   "Our Story" on a 390px phone. */}
-                <nav ref={sectionNav} aria-label="Invite sections" class="min-w-0 flex-1">
+                <nav
+                  ref={sectionNav}
+                  aria-label="Invite sections"
+                  class="min-w-0 flex-1"
+                  // Tabbing forward out of the open menu used to leave it up,
+                  // and the menu is an opaque overlay across the top of the
+                  // active section — so focus landed in a form field the
+                  // organiser could not see, with no keyboard way to uncover it
+                  // (WCAG 2.2 SC 2.4.11 Focus Not Obscured; Escape is bound to
+                  // the tabs and the trigger, not to the field they'd reach).
+                  // Closing on focus leaving the nav is what every popover
+                  // primitive does, and it costs nothing on the wide row where
+                  // the menu is never open.
+                  onFocusOut={(e) => {
+                    if (!sectionMenuOpen()) return;
+                    const next = e.relatedTarget;
+                    if (next instanceof Node && sectionNav?.contains(next)) return;
+                    setSectionMenuOpen(false);
+                  }}
+                >
                   {/* Narrow containers only: the current section as a menu
                     trigger. It names where the organiser IS (label, position,
                     Shown/Hidden dot) so the menu only has to be opened to move,
@@ -805,7 +870,13 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                     ref={(el) => (sectionMenuTrigger = el)}
                     aria-expanded={sectionMenuOpen()}
                     aria-controls={SECTION_MENU_ID}
-                    aria-label={`Invite section: ${activeLabel()}, ${activeIndex() + 1} of ${NAV_SECTIONS.length}. Choose a section`}
+                    // The dot is `aria-hidden`, and an `aria-label` overrides
+                    // subtree content — so an `sr-only` span inside the button
+                    // (what the tabs themselves use) would be dropped. The state
+                    // has to be folded into the label, or the collapsed trigger
+                    // tells a sighted organiser three things and a screen-reader
+                    // one only two. Wording matches `SegmentBadge`.
+                    aria-label={`Invite section: ${activeLabel()}, ${activeIndex() + 1} of ${NAV_SECTIONS.length}${shownSuffix()}. Choose a section`}
                     onClick={() => setSectionMenuOpen(!sectionMenuOpen())}
                     onKeyDown={(e) => {
                       if (e.key !== "Escape" || !sectionMenuOpen()) return;
