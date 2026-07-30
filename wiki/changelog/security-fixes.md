@@ -7,7 +7,7 @@ related:
   - "[[arc-tokens]]"
   - "[[redis]]"
   - "[[identity-model]]"
-last-reviewed: 2026-07-29
+last-reviewed: 2026-07-30
 ---
 
 # Security Fixes — Completed
@@ -254,3 +254,4 @@ Findings raised by the branch's own security review against code introduced by t
 - **S-L31** — No input format validation on `profile_id` in `/profiles/switch`. Fixed: TypeBox pattern.
 - **S-L32** — `findDefaultProfile` ORDER BY relied on SQLite boolean-as-integer semantics. Fixed: explicit ordering.
 - **S-L4 (org)** — No `maxLength` on internal route query params. Fixed: added 50 char limit.
+- **S-L102** — `@simplewebauthn/server` ≤13.3.0 let a maliciously-crafted attestation `x5c` present a self-signed "root certificate" instead of chaining back to an RP-specified trust anchor ([GHSA-6hxq-p678-4hr2](https://github.com/MasterKale/SimpleWebAuthn/security/advisories/GHSA-6hxq-p678-4hr2), CVSS v4 Low 2.0). Reached via `verifyRegistrationResponse()` in `osn/api/src/services/auth/passkeys.ts`. Exposure was limited — that call site registers with `attestationType: "none"` and passes no `rootCertificates`, so no trust-anchor decision was being relied on — but the affected function is on the passkey registration path. **Fixed** — bumped to 13.3.2 (in range, no code change). See [[passkey-primary]].

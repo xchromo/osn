@@ -1,6 +1,6 @@
 import { it, expect, describe } from "@effect/vitest";
 import { EmailError, EmailService, makeLogEmailLive } from "@shared/email";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { beforeAll } from "vitest";
 
 import { createAuthService } from "../../src/services/auth";
@@ -240,7 +240,12 @@ describe("verifyStepUpForAccountDelete (S-C1 purpose binding)", () => {
         cap.latest()!,
         "account_delete",
       );
-      yield* auth.verifyStepUpForAccountDelete(profile.accountId, stepUpToken);
+      // Verifier returns void, so pin acceptance on the Exit — the sibling
+      // test below pins the refusal side.
+      const exit = yield* Effect.exit(
+        auth.verifyStepUpForAccountDelete(profile.accountId, stepUpToken),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
     }).pipe(Effect.provide(cap.layer));
   });
 
