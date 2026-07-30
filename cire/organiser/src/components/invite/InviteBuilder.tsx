@@ -24,6 +24,7 @@
 import {
   derivePalette,
   fontStack,
+  paletteAdjustments,
   SECTION_TONES,
   type SectionTone,
   typographyVars,
@@ -176,16 +177,19 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   // switching away (unsaved-guard), and the browser asks on tab close/reload.
   onMount(() => {
     const unregister = registerUnsavedGuard(isDirty);
+    onCleanup(unregister);
+  });
+  // The beforeunload listener exists ONLY while dirty — a persistently
+  // registered one makes the page ineligible for the back/forward cache in
+  // Firefox/Safari even with a clean form (P-I3).
+  createEffect(() => {
+    if (!isDirty()) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!isDirty()) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
-    onCleanup(() => {
-      unregister();
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    });
+    onCleanup(() => window.removeEventListener("beforeunload", onBeforeUnload));
   });
 
   // The live scheme as a CSS-variable map, derived by the SAME function the
@@ -193,9 +197,13 @@ export default function InviteBuilder(props: InviteBuilderProps) {
   // organiser-side colour maths any more, so the preview cannot disagree with
   // what a guest sees. Memoised: many preview readers, and the trigger is a
   // colour-picker DRAG (pointermove) — without a memo each frame ran the full
-  // derivation once per reader.
+  // derivation once per reader. The seeds + adjustments memos are shared with
+  // PaletteField via props, so the whole builder derives exactly once per
+  // frame (P-W1).
+  const paletteSeeds = createMemo(() => resolvedSeeds(draft.palette));
+  const seedAdjustments = createMemo(() => paletteAdjustments(paletteSeeds()));
   const previewTokens = createMemo((): Record<string, string> => {
-    const vars: Record<string, string> = derivePalette(resolvedSeeds(draft.palette));
+    const vars: Record<string, string> = derivePalette(paletteSeeds());
     const heading = fontStack(fontOrDefault(draft.headingFont));
     if (heading) vars["--font-display"] = heading;
     const body = fontStack(fontOrDefault(draft.bodyFont));
@@ -569,6 +577,8 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   <PaletteField
                     value={draft.palette}
                     onChange={(next) => setDraft("palette", next)}
+                    tokens={previewTokens()}
+                    adjustments={seedAdjustments()}
                   />
                   {/* Most couples pick a preset and stop — the five fine
                       typography knobs stay one click away. */}

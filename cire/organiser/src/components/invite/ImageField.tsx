@@ -79,6 +79,7 @@ export default function ImageField(props: {
             >
               {(style) => (
                 <div
+                  role="img"
                   aria-label={`${props.label} (cropped)`}
                   // WYSIWYG with the guest render: the box adopts the crop's true
                   // pixel aspect, and the region scales uniformly inside it — what the
@@ -96,6 +97,7 @@ export default function ImageField(props: {
         <Show when={cropMobileStyle()}>
           {(style) => (
             <div
+              role="img"
               aria-label={`${props.label} (phone crop)`}
               // Same WYSIWYG contract as the main thumbnail, at a phone-ish
               // height: the tall region guests see below the desktop breakpoint.
