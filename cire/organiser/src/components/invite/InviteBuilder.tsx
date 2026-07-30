@@ -540,7 +540,11 @@ export default function InviteBuilder(props: InviteBuilderProps) {
               </div>
             </nav>
 
-            <div class="flex flex-col gap-8 @4xl/builder:flex-row @4xl/builder:items-start">
+            {/* Form and preview side by side from `@4xl/builder` up — a
+                threshold the panel could never actually reach while the page was
+                capped at 1100px, so the composed preview was effectively dead
+                code on the very screens it was written for. */}
+            <div class="flex flex-col gap-8 @4xl/builder:flex-row @4xl/builder:items-start @6xl/builder:gap-10">
               <div class="flex min-w-0 flex-1 flex-col gap-8">
                 {/* ── Design ─────────────────────────────────────────── */}
                 <SectionCard id="invite-design" legend="Design">
@@ -560,7 +564,11 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   onReset={resetLook}
                   description="Two fonts and five colours set the whole invite. Each section below picks how light or dark it sits — not its own colours."
                 >
-                  <div class="grid grid-cols-1 gap-4 @lg/builder:grid-cols-2">
+                  {/* `auto-grid`, not a `@lg/builder` step: these fields sit in
+                      the form column, which is narrower than the builder
+                      container once the preview pane appears — an intrinsic grid
+                      measures the box the fields are actually in. */}
+                  <div class="auto-grid [--auto-grid-min:15rem]">
                     <ChoiceField
                       label="Heading font"
                       options={FONT_OPTIONS}
@@ -583,7 +591,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   {/* Most couples pick a preset and stop — the five fine
                       typography knobs stay one click away. */}
                   <Disclosure summary="Fine-tune typography" hint="size, weight and italics">
-                    <div class="grid grid-cols-1 gap-4 @lg/builder:grid-cols-2">
+                    <div class="auto-grid [--auto-grid-min:15rem]">
                       <ChoiceField
                         label="Heading size"
                         options={HEADING_SIZE_OPTIONS}
@@ -882,7 +890,10 @@ export default function InviteBuilder(props: InviteBuilderProps) {
               </div>
 
               {/* ── Persistent composed preview (wide layouts) ─────────── */}
-              <aside class="hidden w-80 shrink-0 @4xl/builder:block">
+              {/* The miniature earns more room as the builder widens — at 20rem
+                  the hero's type is guesswork; by 24rem the tone rhythm down the
+                  page is legible, which is the whole point of the pane. */}
+              <aside class="hidden w-80 shrink-0 @4xl/builder:block @6xl/builder:w-96">
                 <div class="sticky top-12">
                   <PreviewPane
                     tokens={previewTokens()}

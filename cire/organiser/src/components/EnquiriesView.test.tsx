@@ -129,6 +129,24 @@ describe("EnquiriesView", () => {
     expect(await screen.findByText(/Enquiries aren't end-to-end encrypted/i)).toBeInTheDocument();
   });
 
+  // The master-detail contract: opening a thread no longer UNMOUNTS the inbox.
+  // On a wide panel the two sit side by side; on a narrow one the inbox is
+  // hidden with `@max-3xl/enquiries:hidden`, which happy-dom never applies — so
+  // here we can assert the row survived, and that it is marked as the open one.
+  it("keeps the inbox mounted, and marked, while a thread is open", async () => {
+    const EnquiriesView = await importComponent();
+    setCachedEnquiries("wed_1", [makeItem()]);
+    authFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+    );
+    render(() => <EnquiriesView weddingId="wed_1" currency="AUD" canEdit={true} />);
+    fireEvent.click(await screen.findByText("Blue Roses"));
+    await screen.findByText(/Enquiries aren't end-to-end encrypted/i);
+    const row = screen.getByRole("button", { name: /Blue Roses/ });
+    expect(row).toBeInTheDocument();
+    expect(row).toHaveAttribute("aria-current", "true");
+  });
+
   it("clicking Back returns to the inbox", async () => {
     const EnquiriesView = await importComponent();
     setCachedEnquiries("wed_1", [makeItem()]);

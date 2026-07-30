@@ -37,4 +37,28 @@ describe("EnquiryInbox", () => {
     fireEvent.click(screen.getByText("Blue Roses"));
     expect(onOpen).toHaveBeenCalledWith("enq_1");
   });
+
+  // `selectedId` only matters where the inbox and the thread are on screen
+  // together (the wide master-detail layout) — the row has to say which
+  // conversation is being read.
+  it("marks the open enquiry with aria-current", () => {
+    render(() => (
+      <EnquiryInbox
+        items={[item(), item({ id: "enq_2", vendorName: "Southbank Strings" })]}
+        currency="AUD"
+        selectedId="enq_2"
+        onOpen={() => {}}
+      />
+    ));
+    expect(screen.getByRole("button", { name: /Southbank Strings/ })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /Blue Roses/ })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks no row when nothing is open", () => {
+    render(() => <EnquiryInbox items={[item()]} currency="AUD" onOpen={() => {}} />);
+    expect(screen.getByRole("button", { name: /Blue Roses/ })).not.toHaveAttribute("aria-current");
+  });
 });
