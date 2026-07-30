@@ -119,6 +119,17 @@ function lastSentBody(suffix: string) {
   return call ? JSON.parse(call[1].body as string) : null;
 }
 
+/** Switches the builder's tabbed nav to the named section. The builder shows
+ *  one section at a time now — every OTHER section's controls are hidden
+ *  (native `hidden` attribute), which takes them out of the accessibility
+ *  tree, so a test reaching for a control by role must select its tab first.
+ *  (`getByLabelText`/`getByText` don't filter on `hidden`, so tests using
+ *  those queries are unaffected and need no tab switch.) */
+async function openSection(label: string | RegExp) {
+  const tab = await waitFor(() => screen.getByRole("tab", { name: label }));
+  fireEvent.click(tab);
+}
+
 describe("InviteBuilder theme", () => {
   afterEach(() => {
     cleanup();
@@ -1168,10 +1179,16 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES));
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
 
+    // Both slots offer the plain crop; only the hero offers the phone one —
+    // checked one tab at a time, since the builder shows one section at a time.
+    await openSection("Hero");
     await waitFor(() => screen.getByRole("button", { name: "Phone crop" }));
-    // Both slots offer the plain crop; only the hero offers the phone one.
-    expect(screen.getAllByRole("button", { name: "Crop" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "Crop" }).length).toBe(1);
     expect(screen.getAllByRole("button", { name: "Phone crop" }).length).toBe(1);
+
+    await openSection("Our Story");
+    await waitFor(() => screen.getByRole("button", { name: "Crop" }));
+    expect(screen.queryByRole("button", { name: "Phone crop" })).toBeNull();
   });
 
   it("a phone-crop save PUTs { crop, screen: 'mobile' } to the hero crop route", async () => {
@@ -1179,6 +1196,7 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // crop save
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "Phone crop" })));
     // The phone editor opens on the tall hero-mobile frame, seeded empty.
@@ -1200,8 +1218,8 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // crop save
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
-    // The hero card comes first, so its "Crop" is the first of the two.
     const cropButtons = await waitFor(() => screen.getAllByRole("button", { name: "Crop" }));
     fireEvent.click(cropButtons[0]);
     const modal = await waitFor(() => screen.getByTestId("mock-crop-modal"));
@@ -1221,6 +1239,7 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES)); // phone reset
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
     // Desktop reset: `crop: null` must reach the API as an explicit null (not
     // be dropped by serialisation), with no `screen` key.
@@ -1251,6 +1270,7 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
       <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
     ));
     await waitFor(() => screen.getByText("Save invite"));
+    await openSection("Hero");
 
     const preview = () => container.querySelector('[aria-label="Hero preview"]') as HTMLElement;
     // Desktop framing by default; the phone toggle sits beside the preview.
@@ -1288,6 +1308,7 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     // Without a saved phone crop the thumbnail is absent.
     authFetchMock.mockResolvedValueOnce(json(WITH_IMAGES));
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
     await waitFor(() => screen.getByRole("button", { name: "Phone crop" }));
     expect(screen.queryByLabelText("Hero background image (phone crop)")).toBeNull();
   });
@@ -1335,6 +1356,7 @@ describe("InviteBuilder UX guards", () => {
     vi.stubGlobal("confirm", confirmSpy);
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
     const remove = await waitFor(() => screen.getByRole("button", { name: "Remove" }));
     fireEvent.click(remove);
@@ -1351,6 +1373,7 @@ describe("InviteBuilder UX guards", () => {
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "Remove" })));
 
@@ -1423,6 +1446,7 @@ describe("InviteBuilder UX guards", () => {
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await openSection("Hero");
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "Remove" })));
 

@@ -116,8 +116,10 @@ describe("HeroSample", () => {
     const title = screen.getByText("Anita & Ben");
     const style = styles.of(title);
 
-    // The hero keeps its own responsive curve; only the scale is shared.
-    expect(style["font-size"]).toBe(headingSizeCss("clamp(1.25rem,6vw,2rem)"));
+    // The hero keeps its own responsive curve; only the scale is shared. `cqi`,
+    // not `vw` — the title scales off the preview frame's own width, not the
+    // real browser viewport (WT-P… mobile-preview proportions).
+    expect(style["font-size"]).toBe(headingSizeCss("clamp(1.25rem,9cqi,2rem)"));
     expect(style["font-weight"]).toBe(typographyVar("headingWeight"));
     expect(style["font-style"]).toBe(typographyVar("headingStyle"));
     expect(title.className).not.toContain("italic");

@@ -84,7 +84,8 @@ import {
   themePayload,
   type ThemeSection,
 } from "./model";
-import PreviewPane from "./PreviewPane";
+import PreviewModal from "./PreviewModal";
+import PreviewPane, { type PreviewPaneProps } from "./PreviewPane";
 import { HeroPreview, SectionPreview } from "./previews";
 
 export { isDesignLocked } from "./model";
@@ -119,8 +120,11 @@ function rootFontPx(): number {
   return Number.isFinite(size) && size > 0 ? size : 16;
 }
 
-/** The section-nav jump targets, in guest scroll order (+ the two non-page
- *  cards). Ids double as the fieldset anchors. */
+/** The builder's sections, in guest scroll order (+ the two non-page cards).
+ *  Ids double as the fieldset ids. The nav row above the form is a real tab
+ *  switcher — one section shown at a time — rather than the vertical stack of
+ *  every card the builder used to be, with a scroll-jump nav bolted to the
+ *  top of it. */
 const NAV_SECTIONS = [
   { id: "invite-design", label: "Design" },
   { id: "invite-look", label: "Look" },
@@ -283,6 +287,16 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     onCleanup(() => observer.disconnect());
   };
 
+  // Which section the tabbed nav is showing — one at a time, rather than the
+  // old vertical stack of every card. Defaults to the first section, guest
+  // scroll order.
+  const [activeSection, setActiveSection] = createSignal<(typeof NAV_SECTIONS)[number]["id"]>(
+    NAV_SECTIONS[0].id,
+  );
+  // The composed preview, opened as a modal — the only way to reach it below
+  // `@4xl/builder`, where there's no room for the sticky side pane.
+  const [previewModalOpen, setPreviewModalOpen] = createSignal(false);
+
   /** The surface a section's tone paints, for its preview card. */
   const toneSurface = (section: ThemeSection): string => {
     switch (draft.tones[section]) {
@@ -331,12 +345,6 @@ export default function InviteBuilder(props: InviteBuilderProps) {
         return undefined;
     }
   };
-
-  /** Anchor-free jump — the dashboard routes on `location.hash`, so a real
-   *  `#invite-hero` link would clobber the route and navigate away. */
-  function jumpTo(id: string) {
-    document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  }
 
   /**
    * The single save. The API keeps its two endpoints (`/text` + `/theme`) but
@@ -543,6 +551,37 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     setDraft("tones", "details", null);
   };
 
+  /** Props for the composed preview — shared by the sticky side pane (wide
+   *  layouts) and the mobile preview modal, so the two presentations of the
+   *  same preview can never drift apart. */
+  const previewProps = (d: () => InviteCustomisation): PreviewPaneProps => ({
+    tokens: previewTokens(),
+    toneSurface,
+    hero: {
+      shown: heroShown(),
+      imageUrl: d().hero.imageUrl,
+      crop: d().hero.imageCrop,
+      cropMobile: d().hero.imageCropMobile ?? null,
+      title: draft.heroTitle,
+      heroBlur: draft.heroBlur,
+      backdropOpacity: draft.titleBackdropOpacity,
+      backdropBlur: draft.titleBackdropBlur,
+    },
+    story: {
+      shown: storyShown(),
+      eyebrow: draft.storyEyebrow,
+      heading: draft.storyHeading,
+      body: draft.storyBody,
+    },
+    welcome: { message: draft.welcomeMessage },
+    events: { eyebrow: draft.detailsEyebrow, heading: draft.detailsHeading },
+    closing: {
+      shown: footerShown(),
+      message: draft.footerMessage,
+      imageUrl: d().footer?.imageUrl ?? null,
+    },
+  });
+
   return (
     // The ref measures the same box `@container/builder` does — see
     // `watchBuilderWidth`.
@@ -554,8 +593,9 @@ export default function InviteBuilder(props: InviteBuilderProps) {
         <p class="font-body text-gold text-[0.72rem] tracking-[0.2em] uppercase">Invite Builder</p>
         <h2 class="font-display text-text text-[1.4rem] font-light">Customise your invite</h2>
         <p class="font-body text-text-muted text-[0.82rem]">
-          Each card below is one section of the guest invite, in the order guests see them — images,
-          copy and colours together. Events and guests still come from your spreadsheet import.
+          Use the tabs below to move between sections of the guest invite, in the order guests see
+          them — images, copy and colours together. Events and guests still come from your
+          spreadsheet import.
         </p>
       </header>
 
@@ -569,41 +609,60 @@ export default function InviteBuilder(props: InviteBuilderProps) {
       >
         {(d) => (
           <form onSubmit={(e) => void saveInvite(e)} class="flex flex-col gap-6">
-            {/* ── Section jump list — sticky, mirrors the Shown/Hidden badges ── */}
-            <nav
-              aria-label="Invite sections"
-              class="border-border bg-bg/90 sticky top-0 z-20 -mx-6 border-b px-6 py-2 backdrop-blur"
-            >
-              <div class="flex gap-1 overflow-x-auto">
-                <For each={[...NAV_SECTIONS]}>
-                  {(item) => {
-                    const shown = () => navShown(item.id);
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => jumpTo(item.id)}
-                        class="font-body text-text-muted hover:text-text hover:bg-surface/60 flex shrink-0 items-center gap-1.5 rounded-sm px-2.5 py-1 text-[0.72rem] tracking-[0.08em] uppercase transition-colors"
-                      >
-                        <Show when={shown() !== undefined}>
-                          <span
-                            aria-hidden
-                            class="inline-block h-1.5 w-1.5 rounded-full"
-                            classList={{
-                              "bg-gold": shown() === true,
-                              "bg-text-muted/50": shown() === false,
-                            }}
-                          />
-                        </Show>
-                        {item.label}
-                        <Show when={shown() === false}>
-                          <span class="sr-only">(hidden — empty)</span>
-                        </Show>
-                      </button>
-                    );
-                  }}
-                </For>
-              </div>
-            </nav>
+            {/* ── Section tabs — sticky, one section shown at a time, dots mirror
+                the Shown/Hidden badges — plus, below `@4xl/builder` (where there's
+                no room for the sticky side preview), a button that opens the
+                composed preview in a modal instead. ── */}
+            <div class="border-border bg-bg/90 sticky top-0 z-20 -mx-6 flex items-center gap-2 border-b px-6 py-2 backdrop-blur">
+              <nav aria-label="Invite sections" class="min-w-0 flex-1 overflow-x-auto">
+                <div class="flex gap-1" role="tablist">
+                  <For each={[...NAV_SECTIONS]}>
+                    {(item) => {
+                      const shown = () => navShown(item.id);
+                      const active = () => activeSection() === item.id;
+                      return (
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={active()}
+                          onClick={() => setActiveSection(item.id)}
+                          class={`font-body flex shrink-0 items-center gap-1.5 rounded-sm px-2.5 py-1 text-[0.72rem] tracking-[0.08em] uppercase transition-colors ${
+                            active()
+                              ? "bg-gold/12 text-gold"
+                              : "text-text-muted hover:text-text hover:bg-surface/60"
+                          }`}
+                        >
+                          <Show when={shown() !== undefined}>
+                            <span
+                              aria-hidden
+                              class="inline-block h-1.5 w-1.5 rounded-full"
+                              classList={{
+                                "bg-gold": shown() === true,
+                                "bg-text-muted/50": shown() === false,
+                              }}
+                            />
+                          </Show>
+                          {item.label}
+                          <Show when={shown() === false}>
+                            <span class="sr-only">(hidden — empty)</span>
+                          </Show>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </nav>
+              {/* Hidden once the sticky side pane below can show instead — the
+                  same `@4xl/builder` threshold `showPreviewPane`/`showInlinePreviews`
+                  measure in JS. */}
+              <button
+                type="button"
+                onClick={() => setPreviewModalOpen(true)}
+                class="font-body text-gold border-gold/40 hover:bg-gold/10 shrink-0 rounded-sm border px-2.5 py-1 text-[0.72rem] tracking-[0.08em] uppercase transition-colors @4xl/builder:hidden"
+              >
+                Preview
+              </button>
+            </div>
 
             {/* Form and preview side by side from `@4xl/builder` up — a
                 threshold the panel could never actually reach while the page was
@@ -612,7 +671,11 @@ export default function InviteBuilder(props: InviteBuilderProps) {
             <div class="flex flex-col gap-8 @4xl/builder:flex-row @4xl/builder:items-start @6xl/builder:gap-10">
               <div class="flex min-w-0 flex-1 flex-col gap-8">
                 {/* ── Design ─────────────────────────────────────────── */}
-                <SectionCard id="invite-design" legend="Design">
+                <SectionCard
+                  id="invite-design"
+                  legend="Design"
+                  hidden={activeSection() !== "invite-design"}
+                >
                   <DesignPicker
                     entitlements={props.entitlements}
                     currentId={d().designId ?? "classic"}
@@ -626,6 +689,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 <SectionCard
                   id="invite-look"
                   legend="Look"
+                  hidden={activeSection() !== "invite-look"}
                   onReset={resetLook}
                   description="Two fonts and five colours set the whole invite. Each section below picks how light or dark it sits — not its own colours."
                 >
@@ -692,7 +756,13 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 </SectionCard>
 
                 {/* ── Hero ───────────────────────────────────────────── */}
-                <SectionCard id="invite-hero" legend="Hero" shown={heroShown()} onReset={resetHero}>
+                <SectionCard
+                  id="invite-hero"
+                  legend="Hero"
+                  shown={heroShown()}
+                  onReset={resetHero}
+                  hidden={activeSection() !== "invite-hero"}
+                >
                   {/* Preview FIRST — the display sliders below act on it, and
                       on small screens a preview below the sliders scrolls out
                       of view exactly when it's needed. Mounted only when this
@@ -779,6 +849,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   legend="Our Story"
                   shown={storyShown()}
                   onReset={resetStory}
+                  hidden={activeSection() !== "invite-story"}
                 >
                   <ImageField
                     label="Story photo"
@@ -834,6 +905,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   id="invite-welcome"
                   legend="Code Entry & Welcome"
                   onReset={resetWelcome}
+                  hidden={activeSection() !== "invite-welcome"}
                   description="The invite-code entry form, and the greeting a guest sees under their name after entering their code. Leave the greeting blank to use the default. Like the rest of the invite copy, the greeting is part of the public invite page — don't put anything private in it."
                 >
                   <TextField
@@ -865,6 +937,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   id="invite-events"
                   legend="Events Section"
                   onReset={resetEvents}
+                  hidden={activeSection() !== "invite-events"}
                   description="The header above the guest's event list. The colours also style the event cards, their buttons and the event pop-ups. The events themselves come from your spreadsheet import."
                 >
                   <TextField
@@ -903,6 +976,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                   id="invite-closing"
                   legend="Closing Section"
                   shown={footerShown()}
+                  hidden={activeSection() !== "invite-closing"}
                   description={
                     'The last section of the invite — your own sign-off, below the events and above the page footer. A small decorative image (a monogram, motif or signature) and a closing line like "Looking forward to celebrating with you" or "No boxed gifts please". Add either, both, or neither: leave them empty and the whole section is skipped, so the invite ends on your events exactly as it does now. Guests see this only after they enter their code. The image is decorative — anything that needs to be read (including by a screen reader) should go in the note.'
                   }
@@ -951,6 +1025,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                 <SectionCard
                   id="invite-message"
                   legend="Invite message"
+                  hidden={activeSection() !== "invite-message"}
                   description="Not part of the invite page — this is the first line of the message you copy from the Guests tab to send a household. Leave it blank to use the default. The guest-site link and the household's code are added automatically on the two lines below it."
                 >
                   <TextAreaField
@@ -972,37 +1047,20 @@ export default function InviteBuilder(props: InviteBuilderProps) {
               <Show when={showPreviewPane()}>
                 <aside class="hidden w-80 shrink-0 @4xl/builder:block @6xl/builder:w-96">
                   <div class="sticky top-12">
-                    <PreviewPane
-                      tokens={previewTokens()}
-                      toneSurface={toneSurface}
-                      hero={{
-                        shown: heroShown(),
-                        imageUrl: d().hero.imageUrl,
-                        crop: d().hero.imageCrop,
-                        cropMobile: d().hero.imageCropMobile ?? null,
-                        title: draft.heroTitle,
-                        heroBlur: draft.heroBlur,
-                        backdropOpacity: draft.titleBackdropOpacity,
-                        backdropBlur: draft.titleBackdropBlur,
-                      }}
-                      story={{
-                        shown: storyShown(),
-                        eyebrow: draft.storyEyebrow,
-                        heading: draft.storyHeading,
-                        body: draft.storyBody,
-                      }}
-                      welcome={{ message: draft.welcomeMessage }}
-                      events={{ eyebrow: draft.detailsEyebrow, heading: draft.detailsHeading }}
-                      closing={{
-                        shown: footerShown(),
-                        message: draft.footerMessage,
-                        imageUrl: d().footer?.imageUrl ?? null,
-                      }}
-                    />
+                    <PreviewPane {...previewProps(d)} />
                   </div>
                 </aside>
               </Show>
             </div>
+
+            {/* ── Mobile preview modal — the "Preview" button next to the
+                section tabs, the only way to reach the composed preview below
+                `@4xl/builder`. ── */}
+            <PreviewModal
+              open={previewModalOpen()}
+              onClose={() => setPreviewModalOpen(false)}
+              {...previewProps(d)}
+            />
 
             {/* ── Save bar — sticky so it's reachable from any section ── */}
             <div class="border-border bg-bg/90 sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-col gap-3 rounded-b-sm border-t px-6 py-4 backdrop-blur">

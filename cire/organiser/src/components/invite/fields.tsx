@@ -229,12 +229,18 @@ export function SectionCard(props: {
   /** Present ⇒ render a "Reset section" action that reverts the section's
    *  saveable fields to their defaults (a draft change — nothing is saved). */
   onReset?: () => void;
+  /** The builder shows one section at a time (a tab, not a scroll) — the
+   *  inactive cards stay MOUNTED (their draft state, dirty tracking and inline
+   *  previews all live regardless of visibility) and are hidden with the
+   *  native `hidden` attribute rather than unmounted. */
+  hidden?: boolean;
   children: JSX.Element;
 }) {
   return (
     <fieldset
       id={props.id}
-      class="border-border flex scroll-mt-24 flex-col gap-4 rounded-sm border p-4"
+      hidden={props.hidden}
+      class="border-border flex flex-col gap-4 rounded-sm border p-4"
     >
       <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
         {props.legend}
