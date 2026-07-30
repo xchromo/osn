@@ -21,7 +21,7 @@ Three candidates were weighed (2026-07-30):
 
 | Library | Verdict |
 |---|---|
-| **solid-dnd** | **Chosen.** Native Solid, ships sortable-list primitives + collision detection, ~14 kB raw / ~7 kB gzip. |
+| **solid-dnd** | **Chosen.** Native Solid, ships sortable-list primitives + collision detection. Measured main-chunk cost **+13.1 KiB raw / +4.3 KiB gzip**. |
 | [neodrag](https://github.com/PuruVJ/neodrag) | **Can't do the job.** It's a free-positioning *draggable* — no droppables, no collision detection, no reorder logic. Sortable lists would mean hand-writing the hit-testing and index projection. Actively maintained, but that doesn't help when the capability is absent. |
 | [dnd-kit](https://github.com/clauderic/dnd-kit) | Works (shipped briefly), but React-only adapters meant maintaining our own Solid adapter, and at ~105 kB raw it pushed the organiser's main chunk past Vite's 500 kB warning and forced a `lazy()` code-split. |
 
@@ -79,24 +79,47 @@ handler.
 **solid-dnd has no keyboard sensor and makes no announcements.** Grepping its
 bundle for `keydown`/`keyboard`/`ArrowUp` returns zero hits. (Neither does
 neodrag.) Swapping ▲/▼ buttons for dragging is therefore an accessibility
-*regression* unless the keyboard path is supplied by hand, so the list does three
-things itself:
+*regression* unless the whole keyboard story is supplied by hand. The list does
+five things itself — if you touch this component, none of them are optional:
 
 1. **The grip is a real `<button>`** — tabbable, and it owns an `onKeyDown` that
-   moves the row on **Arrow Up / Arrow Down** (with `preventDefault()` so the page
-   doesn't scroll out from under it).
-2. **Focus is restored explicitly** after a move. `<For>` is keyed, so the row's
-   node is *moved* rather than re-created — but a DOM move is a
+   moves the row on **Arrow Up / Arrow Down**, with `preventDefault()` so the page
+   doesn't scroll out from under it. `preventDefault` runs *before* the bounds
+   check, so a focused grip owns the arrows unconditionally rather than sometimes
+   moving the row and sometimes scrolling.
+2. **Arrow keys alone are NOT enough, and this is the subtle one.** NVDA and JAWS
+   run in browse mode by default and consume unmodified arrow keys for their own
+   virtual cursor; they forward them to a plain `<button>` only in focus mode,
+   which buttons don't trigger. A screen-reader user would read the hint, press
+   the arrows, and get nothing. So each row also renders **`sr-only` "Move X up" /
+   "Move X down" buttons**, activated by Enter/Space — the one keystroke class
+   browse mode reliably forwards, and precisely what the removed ▲/▼ pair used.
+   They are `focus:not-sr-only` so a sighted keyboard user never lands on an
+   invisible control (WCAG 2.4.7), and `disabled` at the list ends so AT reports
+   the boundary instead of the user pressing into nothing.
+3. **Focus is restored explicitly** after a keyboard move. `<For>` is keyed, so the
+   row's node is *moved* rather than re-created — but a DOM move is a
    remove-then-insert and focus does not reliably survive it. Without the explicit
    `.focus()`, one keypress moves the row and then focus is on `<body>`, so the
    row can't be walked further.
-3. **Every move is announced** through a polite `role="status"` live region
+4. **Every move is announced** through a polite `role="status"` live region
    ("Ceremony moved to position 2 of 3"), and each grip's `aria-label` carries its
    current position with an `aria-describedby` hint pointing at the shared
    instructions. A drag affordance is invisible to a screen-reader user otherwise.
+   The announcement **clears before it sets** — a live region only speaks when its
+   text changes, and walking one row down the list repeatedly produces the same
+   sentence every time, so setting it straight would make the second press silent.
+   Undo/discard clear the region rather than re-announcing, since an undo may have
+   reverted a field edit rather than a re-order.
+5. **Auto-repeat is ignored** (`if (event.repeat) return`). One press, one move —
+   matching the click semantics of the buttons this replaced. Repeat fires ~30×/s
+   and each move is a `structuredClone` draft checkpoint plus a full revalidation,
+   so a held key would both stall the list and burn the 100-slot undo stack in a
+   few seconds, silently discarding the edits the organiser actually wants back.
 
 Also required: `touch-none` (CSS `touch-action: none`) on the handle, or the
-browser scrolls instead of handing the gesture to solid-dnd.
+browser scrolls instead of handing the gesture to solid-dnd; and enough padding to
+clear the WCAG 2.5.8 24 px minimum target (`px-1 py-2` on a glyph this small).
 
 ## Testing drag in happy-dom
 

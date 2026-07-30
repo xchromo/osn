@@ -562,14 +562,21 @@ export function createGuestEventDraft(): GuestEventDraft {
     const count = draft.events.length;
     if (from === to || from < 0 || from >= count || to < 0 || to >= count) return;
     checkpoint();
+    // Splice AND renumber in one `produce`, not a move followed by a separate
+    // `renumberEvents()`. Solid memos are eager, so two store writes recompute
+    // `dirty`/`errors`/`warnings` twice — and all three walk every household and
+    // guest, so on a large wedding that doubling is most of the cost of a
+    // reorder. No intermediate state is observable either way.
     setDraft(
       "events",
       produce((events) => {
         const [moved] = events.splice(from, 1);
         events.splice(to, 0, moved!);
+        events.forEach((e, i) => {
+          e.sortOrder = i;
+        });
       }),
     );
-    renumberEvents();
   }
 
   function familyIndex(key: string) {

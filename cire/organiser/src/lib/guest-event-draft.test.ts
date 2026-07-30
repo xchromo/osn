@@ -339,6 +339,52 @@ describe("createGuestEventDraft — event editing (E6)", () => {
     });
   });
 
+  it("splices rather than swaps when moving across the middle of the list", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      // A 2-element list can't tell a splice from a swap, so add a third.
+      const key = store.addEvent();
+      store.updateEvent(key, {
+        name: "Brunch",
+        startAt: "2026-11-15T10:00:00+11:00",
+        timezone: "Australia/Sydney",
+      });
+      expect(store.draft.events.map((e) => e.name)).toEqual(["Ceremony", "Reception", "Brunch"]);
+
+      store.reorderEvents(0, 2);
+
+      // Splice: Ceremony lands LAST and the others close up. A swap would have
+      // produced ["Brunch", "Reception", "Ceremony"].
+      expect(store.draft.events.map((e) => e.name)).toEqual(["Reception", "Brunch", "Ceremony"]);
+      expect(store.toWire().events.map((e) => [e.name, e.sortOrder])).toEqual([
+        ["Reception", 0],
+        ["Brunch", 1],
+        ["Ceremony", 2],
+      ]);
+      dispose();
+    });
+  });
+
+  it("undo reverts a reorder including its sortOrder renumbering", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      store.reorderEvents(1, 0);
+      expect(store.draft.events.map((e) => e.name)).toEqual(["Reception", "Ceremony"]);
+
+      store.undo();
+
+      // reorderEvents is the only mutation that both checkpoints AND renumbers;
+      // a misordered checkpoint would restore the order but not the sortOrder.
+      expect(store.draft.events.map((e) => e.name)).toEqual(["Ceremony", "Reception"]);
+      expect(store.toWire().events.map((e) => [e.name, e.sortOrder])).toEqual([
+        ["Ceremony", 0],
+        ["Reception", 1],
+      ]);
+      expect(store.dirty()).toBe(false);
+      dispose();
+    });
+  });
+
   it("ignores a reorder that is a no-op or out of bounds", () => {
     createRoot((dispose) => {
       const store = loaded();

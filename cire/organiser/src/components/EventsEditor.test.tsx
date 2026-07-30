@@ -171,8 +171,21 @@ describe("EventsEditor", () => {
     expect(grip.tagName).toBe("BUTTON"); // tabbable ⇒ it can own the keyboard path
     expect(grip.getAttribute("aria-describedby")).toBe("reorder-hint");
     expect(screen.getByText(/press the up and down arrow keys/i)).toBeTruthy();
-    // The old ▲/▼ pair is gone.
-    expect(screen.queryByRole("button", { name: /Move Reception up/i })).toBeNull();
+
+    // The VISIBLE ▲/▼ pair is gone, but an Enter/Space-activated equivalent
+    // survives for assistive tech — NVDA/JAWS browse mode never forwards the
+    // grip's arrow keys, so removing this path entirely would be a regression.
+    // It is screen-reader-only (`sr-only`), revealed on focus.
+    const srUp = screen.getByRole("button", { name: /Move Reception up/i });
+    expect(srUp.className).toContain("sr-only");
+    expect(srUp.className).toContain("focus:not-sr-only");
+    expect(screen.queryByText("▲")).toBeNull();
+    expect(screen.queryByText("▼")).toBeNull();
+    // Disabled at the list ends so AT reports the boundary.
+    expect(
+      (screen.getByRole("button", { name: /Move Ceremony up/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((srUp as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("adds a new event via Add event", async () => {

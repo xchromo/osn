@@ -29,7 +29,8 @@ carries its current position, and an `aria-describedby` hint states the
 arrow-key affordance. `touch-action: none` on the handle keeps touch drags from
 being eaten by scrolling.
 
-At ~14 kB raw / ~7 kB gzip no code-splitting is needed, so the organiser's main
-chunk stays under Vite's 500 kB warning.
+Measured cost on the organiser's main chunk: **+13.1 KiB raw / +4.3 KiB gzip**
+(474,925 → 488,348 B raw). No code-splitting is needed — the chunk stays under
+Vite's 500 KiB warning, with ~23 KiB of headroom.
 
 Frontend-only: no API, schema or `sortOrder` semantics change.

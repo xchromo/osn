@@ -40,6 +40,11 @@ interface PreviewResponse {
   baseRevision: string;
 }
 
+/** Stand-in for a not-yet-named event. Deliberately the same string the row
+ *  displays, so a grip's label, the move announcement and the visible row all
+ *  call a blank event by the same name. */
+const UNNAMED_EVENT = "Untitled event";
+
 /**
  * The Events EDITOR (guest+event editor E6, §8). A re-orderable list of events
  * on top of the SHARED draft store (the same one the Guests editor uses — E6
@@ -54,11 +59,14 @@ interface PreviewResponse {
  * Field-invalid drafts can't be submitted — Save disables and the drawer shows
  * errors inline. Guests ride along unchanged (id-matched ⇒ no-op update).
  *
- * Re-ordering is pointer OR keyboard. solid-dnd ships a pointer sensor only —
- * it has no keyboard sensor and no announcements — so the grip also handles
- * Arrow Up/Down itself and every move is reported through a polite live region.
- * That's deliberate: it's what stops "drag instead of ▲/▼ buttons" from being an
- * accessibility regression, so don't drop it when touching this list.
+ * Re-ordering has THREE input paths, and all three are load-bearing. solid-dnd
+ * ships a pointer sensor only — no keyboard sensor, no announcements — so on top
+ * of dragging the grip handles Arrow Up/Down itself, each row carries `sr-only`
+ * move buttons (NVDA/JAWS browse mode never forwards the grip's arrow keys, so
+ * without an Enter/Space-activated path those users have none), and every move is
+ * reported through a polite live region. That's what stops "drag instead of ▲/▼
+ * buttons" from being an accessibility regression — see
+ * `[[cire/wiki/architecture/drag-and-drop]]` before removing any of it.
  */
 export default function EventsEditor(props: { weddingId: string }) {
   const { authFetch } = useAuth();
@@ -81,10 +89,23 @@ export default function EventsEditor(props: { weddingId: string }) {
   const eventKeys = createMemo(() => store.draft.events.map((e) => e.key));
 
   function announceMove(name: string, to: number) {
+    // Clear FIRST. A live region only re-announces when its text actually
+    // changes, and walking one row down the list repeatedly produces the same
+    // sentence every time ("X moved to position 2 of 3") — set straight, the
+    // signal's `===` equality would drop it and the second press would be
+    // silent. Solid applies each set synchronously, so this is two real DOM
+    // writes: empty, then the message.
+    setAnnouncement("");
     setAnnouncement(
-      `${name || "Event"} moved to position ${to + 1} of ${store.draft.events.length}.`,
+      `${name || UNNAMED_EVENT} moved to position ${to + 1} of ${store.draft.events.length}.`,
     );
   }
+
+  /** Undo/discard rewind the order without going through `announceMove`, so the
+   *  region would otherwise keep asserting a move that has just been reversed.
+   *  Cleared rather than re-announced: an undo may have reverted a field edit
+   *  rather than a re-order, and guessing which would be worse than silence. */
+  const clearAnnouncement = () => setAnnouncement("");
 
   /** Commit a drop. solid-dnd hands back the dragged row and the row it landed
    *  on; both ids are draft keys, so the move is their two indices in the current
@@ -291,7 +312,7 @@ export default function EventsEditor(props: { weddingId: string }) {
               `closestCenter` is the right detector for a single-column list. */}
           <DragDropProvider onDragEnd={handleDragEnd} collisionDetector={closestCenter}>
             <DragDropSensors />
-            <ul class="flex flex-col gap-3">
+            <ul class="flex flex-col gap-3" data-testid="event-list">
               <SortableProvider ids={eventKeys()}>
                 <For each={store.draft.events}>
                   {(event, index) => (
@@ -313,7 +334,8 @@ export default function EventsEditor(props: { weddingId: string }) {
           {/* Keyboard instructions, referenced by every grip's aria-describedby —
               the drag affordance is invisible to a screen-reader user otherwise. */}
           <p id="reorder-hint" class="sr-only">
-            Drag to re-order, or press the up and down arrow keys to move this event.
+            Drag to re-order, or press the up and down arrow keys to move this event. Move up and
+            move down buttons follow this handle.
           </p>
           {/* Screen-reader feedback for a completed move (drag or keyboard). */}
           <p class="sr-only" role="status" aria-live="polite">
@@ -381,7 +403,10 @@ export default function EventsEditor(props: { weddingId: string }) {
               <div class="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={store.undo}
+                  onClick={() => {
+                    store.undo();
+                    clearAnnouncement();
+                  }}
                   disabled={!store.canUndo() || busy()}
                   class="font-body text-text-muted hover:text-gold border-border rounded-sm border px-3 py-1.5 text-[0.72rem] tracking-[0.1em] uppercase transition disabled:opacity-40"
                 >
@@ -391,6 +416,7 @@ export default function EventsEditor(props: { weddingId: string }) {
                   type="button"
                   onClick={() => {
                     store.discard();
+                    clearAnnouncement();
                     setEditingKey(null);
                   }}
                   disabled={busy()}
@@ -446,8 +472,17 @@ function EventRowCard(props: {
   function handleKeyDown(event: KeyboardEvent) {
     const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
     if (delta === 0) return;
-    // Stop the page scrolling out from under the row being moved.
+    // Stop the page scrolling out from under the row being moved. Deliberately
+    // BEFORE the bounds check, so a focused grip owns Up/Down unconditionally:
+    // at either end of the list the key does nothing at all rather than
+    // sometimes moving the row and sometimes scrolling the page.
     event.preventDefault();
+    // One press, one move — matching the click semantics of the ▲/▼ buttons this
+    // replaced. Auto-repeat fires ~30×/s and every move is a full draft
+    // checkpoint (a structuredClone) plus a revalidation, so a held key would
+    // stall the list AND burn through the 100-slot undo stack in a few seconds,
+    // silently dropping the edits the organiser actually wants to undo.
+    if (event.repeat) return;
     props.onKeyboardMove(delta);
     // Re-focus the grip explicitly. `<For>` is keyed so this very node is MOVED
     // rather than re-created, but a DOM move is a remove-then-insert and focus
@@ -455,6 +490,24 @@ function EventRowCard(props: {
     // then focus is on <body>, so the row can't be walked further.
     handleEl.focus();
   }
+
+  /** One screen-reader move control. Activated with Enter/Space (or an AT's
+   *  "activate" command), so it works from browse mode where the grip's arrow
+   *  keys don't reach. Disabled at the list ends rather than silently no-op, so
+   *  AT reports the boundary instead of the user pressing into nothing. */
+  const moveButton = (delta: -1 | 1) => {
+    const atEnd = () => (delta === -1 ? props.index === 0 : props.index === props.count - 1);
+    return (
+      <button
+        type="button"
+        disabled={atEnd()}
+        onClick={() => props.onKeyboardMove(delta)}
+        class="border-border bg-surface font-body text-text-muted hover:text-gold sr-only rounded-sm border px-2 py-1 text-[0.7rem] tracking-[0.1em] uppercase focus:not-sr-only focus:relative focus:z-20"
+      >
+        Move {props.event.name || UNNAMED_EVENT} {delta === -1 ? "up" : "down"}
+      </button>
+    );
+  };
 
   return (
     <li
@@ -474,26 +527,47 @@ function EventRowCard(props: {
         "transition-transform": !!dndState.active.draggable && !sortable.isActiveDraggable,
       }}
     >
-      {/* The grip. A real <button> so it's tabbable and can own the keyboard
-          re-order path. `touch-none` is required — without it the browser
-          scrolls instead of handing the gesture to solid-dnd. */}
-      <button
-        type="button"
-        ref={handleEl}
-        aria-label={`Reorder ${props.event.name || "event"}, position ${props.index + 1} of ${props.count}`}
-        aria-describedby="reorder-hint"
-        // Spread FIRST so our keyboard handler can't be clobbered by a future
-        // solid-dnd sensor that also binds keydown.
-        {...sortable.dragActivators}
-        onKeyDown={handleKeyDown}
-        class="text-text-muted hover:text-gold focus-visible:text-gold cursor-grab touch-none px-1 text-[1.1rem] leading-none active:cursor-grabbing"
-      >
-        ⠿
-      </button>
+      {/* Re-order controls: a grip you drag, plus two activate-to-move buttons
+          that are only rendered for assistive tech. See `moveButton` below for
+          why the second path is NOT redundant. `touch-none` on the grip is
+          required — without it the browser scrolls instead of handing the
+          gesture to solid-dnd. */}
+      <div class="flex items-center">
+        <button
+          type="button"
+          ref={handleEl}
+          aria-label={`Reorder ${props.event.name || UNNAMED_EVENT}, position ${props.index + 1} of ${props.count}`}
+          aria-describedby="reorder-hint"
+          // Spread FIRST so our keyboard handler can't be clobbered by a future
+          // solid-dnd sensor that also binds keydown.
+          {...sortable.dragActivators}
+          onKeyDown={handleKeyDown}
+          // `py-2` is not decoration: it brings the handle to the WCAG 2.5.8
+          // 24px minimum target, on the row's only re-order affordance.
+          class="text-text-muted hover:text-gold focus-visible:text-gold cursor-grab touch-none px-1 py-2 text-[1.1rem] leading-none active:cursor-grabbing"
+        >
+          ⠿
+        </button>
+
+        {/* The arrow-key handler on the grip above is NOT enough on its own:
+            NVDA and JAWS run in browse mode by default and consume unmodified
+            arrow keys for their own virtual cursor, forwarding them to a plain
+            <button> only in focus mode (which buttons don't trigger). Those
+            users would read the hint, press the arrows and get nothing. The
+            ▲/▼ buttons this list replaced were Enter/Space-activated, which
+            browse mode DOES forward — so without these the swap to dragging is
+            a straight regression for screen-reader users. Visually hidden, but
+            revealed on focus so a sighted keyboard user never lands on an
+            invisible control (WCAG 2.4.7). */}
+        <span class="flex flex-col">
+          {moveButton(-1)}
+          {moveButton(1)}
+        </span>
+      </div>
 
       <div class="min-w-0 flex-1">
         <p class="font-display text-text truncate text-[1.15rem]">
-          {props.event.name || <span class="text-text-muted not-italic">Untitled event</span>}
+          {props.event.name || <span class="text-text-muted not-italic">{UNNAMED_EVENT}</span>}
         </p>
         <p class="font-body text-text-muted truncate text-[0.8rem]">
           <Show when={props.event.startAt} fallback="No start time set">
