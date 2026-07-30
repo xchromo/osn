@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
+import { headingSizeCss, typographyVar } from "@cire/theme";
 import { cleanup, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { captureDeclaredStyles } from "../../test-support/declared-style";
 import { HeroSample, SectionSample } from "./previews";
 
 /**
@@ -27,7 +29,10 @@ import { HeroSample, SectionSample } from "./previews";
 vi.mock("../../lib/api", () => ({ apiUrl: (path: string) => `https://api.test${path}` }));
 
 describe("SectionSample", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   const props = {
     surface: "var(--color-bg)",
@@ -66,13 +71,17 @@ describe("SectionSample", () => {
     expect(body.className).not.toContain("invite-body-weight");
   });
 
-  it("follows the heading variables, with the packs' literals as fallbacks", () => {
+  it("follows the heading variables, with the packs' base look as fallbacks", () => {
+    const styles = captureDeclaredStyles();
     render(() => <SectionSample {...props} />);
-    const heading = screen.getByText(props.heading).getAttribute("style") ?? "";
+    const heading = styles.of(screen.getByText(props.heading));
 
-    expect(heading).toContain("font-size:calc(1.5rem * var(--invite-heading-scale, 1))");
-    expect(heading).toContain("font-weight:var(--invite-heading-weight, 300)");
-    expect(heading).toContain("font-style:var(--invite-heading-style, normal)");
+    // Compared against `@cire/theme`, not against a literal retyped here: if
+    // the canonical fallback ever moves, this asserts the sample moved with it
+    // rather than pinning today's value in a second place (T-S3).
+    expect(heading["font-size"]).toBe(headingSizeCss("1.5rem"));
+    expect(heading["font-weight"]).toBe(typographyVar("headingWeight"));
+    expect(heading["font-style"]).toBe(typographyVar("headingStyle"));
   });
 
   it("keeps the heading free of a hardcoded weight or slant", () => {
@@ -87,9 +96,13 @@ describe("SectionSample", () => {
 });
 
 describe("HeroSample", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("follows the heading variables on the title, fallbacks intact", () => {
+    const styles = captureDeclaredStyles();
     render(() => (
       <HeroSample
         imageUrl={null}
@@ -101,11 +114,12 @@ describe("HeroSample", () => {
       />
     ));
     const title = screen.getByText("Anita & Ben");
-    const style = title.getAttribute("style") ?? "";
+    const style = styles.of(title);
 
-    expect(style).toContain("var(--invite-heading-scale, 1)");
-    expect(style).toContain("font-weight:var(--invite-heading-weight, 300)");
-    expect(style).toContain("font-style:var(--invite-heading-style, normal)");
+    // The hero keeps its own responsive curve; only the scale is shared.
+    expect(style["font-size"]).toBe(headingSizeCss("clamp(1.25rem,6vw,2rem)"));
+    expect(style["font-weight"]).toBe(typographyVar("headingWeight"));
+    expect(style["font-style"]).toBe(typographyVar("headingStyle"));
     expect(title.className).not.toContain("italic");
     expect(title.className).not.toContain("font-light");
   });

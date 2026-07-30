@@ -1,6 +1,7 @@
 import {
   DEFAULT_PRESET,
   derivePalette,
+  headingSizeCss,
   PALETTE_PRESET_KEYS,
   PALETTE_PRESETS,
   type PaletteAdjustment,
@@ -8,6 +9,7 @@ import {
   type PaletteSeeds,
   paletteAdjustments,
   resolveSeeds,
+  typographyVar,
 } from "@cire/theme";
 import { createMemo, For, Show } from "solid-js";
 
@@ -182,19 +184,20 @@ export default function PaletteField(props: {
             >
               Celebrate with us
             </span>
-            {/* Follows the typography variables with the guest packs' literal
-                fallbacks (300 / normal / ×1), so a size / weight / italics pick
-                shows HERE — this preview sits directly under the Look card's
-                typography controls, and a hardcoded `font-light italic` sample
-                would flatly contradict an explicit "Bold" or "Normal". */}
+            {/* Follows the typography variables, with the packs' base look as
+                each fallback (from `@cire/theme`, not retyped), so a size /
+                weight / italics pick shows HERE — this preview sits directly
+                under the Look card's typography controls, and a hardcoded
+                `font-light italic` sample would flatly contradict an explicit
+                "Bold" or "Normal". */}
             <span
               class="leading-none"
               style={{
                 color: "var(--color-text)",
                 "font-family": "var(--font-display)",
-                "font-size": "calc(1.5rem * var(--invite-heading-scale, 1))",
-                "font-weight": "var(--invite-heading-weight, 300)",
-                "font-style": "var(--invite-heading-style, normal)",
+                "font-size": headingSizeCss("1.5rem"),
+                "font-weight": typographyVar("headingWeight"),
+                "font-style": typographyVar("headingStyle"),
               }}
             >
               Your Events

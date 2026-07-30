@@ -672,13 +672,45 @@ the one sample still hardcoded (fixed 2026-07-30).
 
 The body pair is written as **Tailwind arbitrary properties**
 (`[font-weight:var(--invite-body-weight,400)]`), the idiom the guest packs
-already use for their heading elements, rather than as inline style. That is
-not only symmetry: a wrapper's style object also carries the dynamic tone
-surface, and Solid applies a mixed object through `setProperty`, where
-happy-dom discards a `var()` value — so an inline declaration there is invisible
-to the tests. Classes keep the contract assertable (`previews.test.tsx`).
-Heading samples keep using inline style; their objects are fully static, which
-Solid compiles straight into the template's `style` attribute.
+already use for their heading elements, rather than as inline style. Heading
+samples use inline style, because they resolve their values from `@cire/theme`
+(below) and a class name cannot be built at runtime.
+
+### The fallbacks are single-sourced too
+
+`typographyVars` has always been the one place a **set** option resolves to a
+value. The **un-set** state — the pack's own base look, written as each `var()`
+fallback — used to be a literal retyped at every call site, ~30 references
+across the two packs, the guest `global.css` and the previews, with nothing
+checking they agreed. A pack changing its base heading weight would have left
+every organiser preview misrepresenting "Default": the bug above, one level
+down (was `T-S3`).
+
+`@cire/theme` now names them once — `TYPOGRAPHY_FALLBACKS`, with
+`typographyVar("headingWeight")` → `var(--invite-heading-weight, 300)` and
+`headingSizeCss(base)` → `calc(<base> * var(--invite-heading-scale, 1))`, so a
+pack keeps its own responsive curve and only the multiplier is shared.
+`TYPOGRAPHY_VAR_NAMES` is the one spelling of the property names, and
+`TYPOGRAPHY_VAR_KEYS` derives from it.
+
+**Who can consume them, and who cannot.** The organiser's preview samples build
+their declarations at runtime, so they call the helpers and hold no literal.
+The guest packs CANNOT: their declarations are Tailwind arbitrary-property
+classes, and Tailwind generates CSS by scanning source **text** — an
+interpolated class name produces no rule at all. The same applies to the
+previews' class-based body pair. Those references stay literal by necessity and
+are held to the canonical values by `cire/theme/src/typography-fallbacks.test.ts`,
+which scans both packages and fails on a fallback that disagrees, a reference
+that omits its fallback (a bare `var()` renders at the CSS initial weight, not
+the pack's 300), or a variable no consumer references any more.
+
+> **Testing note.** Resolving a value through a helper makes Solid treat that
+> style object as computed, and it then applies those declarations via
+> `setProperty` — where happy-dom discards a `var()` value for `font-weight`,
+> `font-style` and `font-size`. Assertions therefore go through
+> `src/test-support/declared-style.ts`, which merges what Solid compiled into
+> the template attribute with what it set at runtime. It is a test-environment
+> limitation, not a browser one; do not reshape a component to work around it.
 
 **One save, dirty-checked per half — and dirty state is REACTIVE.** The draft
 lives in one `createStore` (`InviteDraft`); each half's serialised payload is

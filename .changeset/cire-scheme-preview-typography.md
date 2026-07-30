@@ -1,5 +1,6 @@
 ---
 "@cire/organiser": patch
+"@cire/theme": patch
 ---
 
 Fix: the host dashboard's live previews now reflect the typography settings.
@@ -26,3 +27,18 @@ Tailwind arbitrary properties, matching the guest packs' existing
 
 No wire, schema or storage change: the same closed enum keys resolve through
 the same `typographyVars` map in `@cire/theme`.
+
+Also closes the drift underneath it. `@cire/theme` has always been the single
+source of truth for what a SET option resolves to, but the UN-set state — the
+pack's base look, written as the `var()` fallback — was a literal repeated at
+every call site, ~30 references with nothing checking they agreed. A pack that
+changed its base heading weight would have left every organiser preview quietly
+misrepresenting "Default": this same bug, one level down.
+
+`TYPOGRAPHY_FALLBACKS`, `typographyVar()` and `headingSizeCss()` now name those
+values once. The organiser's preview samples call them and hold no literal at
+all. The guest packs cannot — their declarations are Tailwind arbitrary-property
+classes, and Tailwind generates CSS by scanning source text, so an interpolated
+class name emits no rule — so those stay literal and are held to the canonical
+values by a lockstep test that scans both packages, failing on a value that
+disagrees or a reference that omits its fallback.

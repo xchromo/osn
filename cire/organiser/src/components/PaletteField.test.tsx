@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
-import { PALETTE_PRESETS } from "@cire/theme";
+import { headingSizeCss, PALETTE_PRESETS, typographyVar } from "@cire/theme";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { captureDeclaredStyles } from "../test-support/declared-style";
 import PaletteField, { type PaletteState } from "./PaletteField";
 
 /**
@@ -17,7 +18,10 @@ import PaletteField, { type PaletteState } from "./PaletteField";
  * organiser for one colour and change another — so each is pinned to its key.
  */
 describe("PaletteField", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   const EMPTY: PaletteState = { preset: null, seeds: {} };
 
@@ -90,13 +94,16 @@ describe("PaletteField", () => {
    * as before.
    */
   it("its heading sample follows the typography variables, not a hardcoded look", () => {
+    const styles = captureDeclaredStyles();
     render(() => <PaletteField value={EMPTY} onChange={() => {}} />);
     const heading = screen.getByText("Your Events");
 
-    const headingStyle = heading.getAttribute("style") ?? "";
-    expect(headingStyle).toContain("font-weight:var(--invite-heading-weight, 300)");
-    expect(headingStyle).toContain("font-style:var(--invite-heading-style, normal)");
-    expect(headingStyle).toContain("font-size:calc(1.5rem * var(--invite-heading-scale, 1))");
+    // Against `@cire/theme`'s canonical fallbacks rather than a retyped
+    // literal — the sample must follow the packs' base look, not a copy of it.
+    const headingStyle = styles.of(heading);
+    expect(headingStyle["font-weight"]).toBe(typographyVar("headingWeight"));
+    expect(headingStyle["font-style"]).toBe(typographyVar("headingStyle"));
+    expect(headingStyle["font-size"]).toBe(headingSizeCss("1.5rem"));
     // The old hardcoded pair would win over the variables — it must be gone.
     expect(heading.className).not.toContain("italic");
     expect(heading.className).not.toContain("font-light");

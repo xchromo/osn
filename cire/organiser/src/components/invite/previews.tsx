@@ -15,6 +15,7 @@
  * hero's second crop rectangle exists (0046).
  */
 
+import { headingSizeCss, typographyVar } from "@cire/theme";
 import { createSignal, Show } from "solid-js";
 
 import { apiUrl } from "../../lib/api";
@@ -145,16 +146,17 @@ export function HeroSample(props: {
             : undefined
         }
       >
-        {/* Follows the typography variables with the guest hero's literal
-            fallbacks (300 / normal) so a weight/style/size pick shows here. */}
+        {/* Follows the typography variables — including the pack's base look
+            as each fallback, taken from `@cire/theme` rather than retyped, so
+            a pack that changes its base can't leave this sample behind. */}
         <span
           class="max-w-full text-center leading-none break-words"
           style={{
             color: "var(--color-gold)",
             "font-family": "var(--font-display)",
-            "font-size": "calc(clamp(1.25rem,6vw,2rem) * var(--invite-heading-scale, 1))",
-            "font-weight": "var(--invite-heading-weight, 300)",
-            "font-style": "var(--invite-heading-style, normal)",
+            "font-size": headingSizeCss("clamp(1.25rem,6vw,2rem)"),
+            "font-weight": typographyVar("headingWeight"),
+            "font-style": typographyVar("headingStyle"),
           }}
         >
           {titleText()}
@@ -256,17 +258,17 @@ export function SectionSample(props: {
           {props.eyebrow}
         </span>
       </Show>
-      {/* The heading sample follows the typography variables with the guest
-          packs' literal fallbacks (300 / normal) — it used to be decoratively
-          italic, which would now lie about an explicit "Normal" pick. */}
+      {/* The heading sample follows the typography variables, fallbacks from
+          `@cire/theme` — it used to be decoratively italic, which would now
+          lie about an explicit "Normal" pick. */}
       <Show when={props.heading}>
         <span
           style={{
             color: "var(--color-text)",
             "font-family": "var(--font-display)",
-            "font-size": "calc(1.5rem * var(--invite-heading-scale, 1))",
-            "font-weight": "var(--invite-heading-weight, 300)",
-            "font-style": "var(--invite-heading-style, normal)",
+            "font-size": headingSizeCss("1.5rem"),
+            "font-weight": typographyVar("headingWeight"),
+            "font-style": typographyVar("headingStyle"),
           }}
           class="leading-none"
         >

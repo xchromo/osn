@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { derivePalette, PALETTE_PRESETS } from "@cire/theme";
+import { derivePalette, PALETTE_PRESETS, typographyVar } from "@cire/theme";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -81,6 +81,7 @@ vi.mock("./ImageCropModal", () => ({
 // Real (unmocked) — the guard-lifecycle test asserts the builder's dirty state
 // reaches the process-global registry the dashboard consults.
 import { confirmNavigation } from "../lib/unsaved-guard";
+import { captureDeclaredStyles } from "../test-support/declared-style";
 import InviteBuilder, { isDesignLocked } from "./InviteBuilder";
 
 function json(body: unknown, status = 200) {
@@ -125,6 +126,7 @@ describe("InviteBuilder theme", () => {
     redirectSpy.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("seeds the font selects from the loaded theme", async () => {
@@ -523,6 +525,10 @@ describe("InviteBuilder theme", () => {
   it("updates the live previews' typography vars as a select changes (no save needed)", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load only
 
+    // Installed before the render: the samples resolve their fallbacks through
+    // `@cire/theme`, which makes those style objects computed, and happy-dom
+    // discards a `var()` value applied that way. See `test-support/declared-style`.
+    const styles = captureDeclaredStyles();
     const { container } = render(() => (
       <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
     ));
@@ -552,9 +558,7 @@ describe("InviteBuilder theme", () => {
     // the plumbing, it was a sample that hardcoded `font-light italic` and so
     // ignored the variables it was given. Both halves of that seam, or neither.
     const schemeHeading = within(schemePreview).getByText("Your Events");
-    expect(schemeHeading.getAttribute("style")).toContain(
-      "font-weight:var(--invite-heading-weight, 300)",
-    );
+    expect(styles.of(schemeHeading)["font-weight"]).toBe(typographyVar("headingWeight"));
     // (The section samples' body-pair cascade is pinned directly in
     // invite/previews.test.tsx.)
     // Live preview must not trigger a network save.
@@ -789,6 +793,7 @@ describe("InviteBuilder shown/hidden badges", () => {
     redirectSpy.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    vi.restoreAllMocks();
   });
 
   /** All segment badges, in DOM order: [hero, story, footer]. */
@@ -912,6 +917,7 @@ describe("design selector", () => {
     redirectSpy.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("renders a card per catalog design with the active one marked", async () => {
@@ -1136,6 +1142,7 @@ describe("InviteBuilder hero phone crop (migration 0046)", () => {
     redirectSpy.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    vi.restoreAllMocks();
   });
 
   // A customisation with both images uploaded, no crops saved yet.
