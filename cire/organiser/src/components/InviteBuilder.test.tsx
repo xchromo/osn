@@ -314,11 +314,15 @@ describe("InviteBuilder theme", () => {
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
     await waitFor(() => screen.getByText("Save invite"));
+    // The inline preview only mounts on its own tab (P-I2).
+    await openSection("Welcome");
 
     // The section fieldset carries its legend AND a live preview card.
     expect(screen.getAllByText("Code Entry & Welcome").length).toBeGreaterThanOrEqual(2);
     screen.getByLabelText("Code Entry & Welcome preview");
 
+    // "Gilt colour" lives in the (now hidden, but still mounted) Look
+    // section — `fireEvent` doesn't filter on the `hidden` attribute.
     fireEvent.click(screen.getByLabelText("Gilt colour"));
     const hex = await waitFor(() => screen.getByLabelText("Hex") as HTMLInputElement);
     // Seeded from the loaded theme, not the preset default (case per Kobalte).
@@ -341,6 +345,9 @@ describe("InviteBuilder theme", () => {
 
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
     await waitFor(() => screen.getByText("Save invite"));
+    // The Hero inline preview only mounts on its own tab (P-I2); "Fog" (the
+    // Look section's preset picker) is clickable regardless of active tab.
+    await openSection(/^Hero/);
 
     fireEvent.click(screen.getByText("Fog"));
     fireEvent.click(screen.getByText("Save invite"));
@@ -452,6 +459,7 @@ describe("InviteBuilder theme", () => {
       <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
     ));
     await waitFor(() => screen.getByText("Save invite"));
+    await openSection("Hero");
 
     const preview = () => container.querySelector('[aria-label="Hero preview"]') as HTMLElement;
     // The preview shows the title text and a NON-blurred (card) variant image so
@@ -508,6 +516,7 @@ describe("InviteBuilder theme", () => {
     ));
 
     await waitFor(() => screen.getByText("Save invite"));
+    await openSection(/^Hero/);
 
     // The WYSIWYG hero preview consumes the DERIVED tokens, driven live by the
     // scheme editor. Before any change: the built-in gold.
@@ -544,6 +553,7 @@ describe("InviteBuilder theme", () => {
       <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />
     ));
     await waitFor(() => screen.getByText("Save invite"));
+    await openSection(/^Hero/);
 
     const heroPreview = () =>
       container.querySelector('[aria-label="Hero preview"]') as HTMLElement | null;
@@ -582,10 +592,16 @@ describe("InviteBuilder theme", () => {
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
     await waitFor(() => screen.getByText("Save invite"));
 
-    // Each guest-page section has its own labelled preview card…
-    const events = screen.getByLabelText("Events Section preview");
+    // Each guest-page section has its own labelled preview card — but only
+    // one is mounted at a time now (P-I2), one tab per section.
+    await openSection(/^Our Story/);
     screen.getByLabelText("Our Story preview");
+
+    await openSection("Welcome");
     screen.getByLabelText("Code Entry & Welcome preview");
+
+    await openSection("Events");
+    const events = screen.getByLabelText("Events Section preview");
     // …showing the built-in copy until the organiser types.
     expect(events.textContent).toContain("Your Events");
 
@@ -1490,6 +1506,55 @@ describe("InviteBuilder UX guards", () => {
     expect(document.getElementById("invite-hero")!.hidden).toBe(false);
   });
 
+  it("wires the section tabs to their panels via aria-controls/aria-labelledby", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    const designTab = screen.getByRole("tab", { name: "Design" });
+    const designPanel = document.getElementById("invite-design")!;
+    expect(designPanel.getAttribute("role")).toBe("tabpanel");
+    expect(designTab.getAttribute("aria-controls")).toBe(designPanel.id);
+    expect(designPanel.getAttribute("aria-labelledby")).toBe(designTab.id);
+  });
+
+  it("moves focus AND activation with ArrowRight/ArrowLeft/Home/End (roving tabindex)", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    const designTab = screen.getByRole("tab", { name: "Design" });
+    const lookTab = screen.getByRole("tab", { name: "Look" });
+    // Only the active tab is in the normal Tab order (roving tabindex).
+    expect(designTab.tabIndex).toBe(0);
+    expect(lookTab.tabIndex).toBe(-1);
+
+    fireEvent.keyDown(designTab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(lookTab);
+    expect(lookTab.getAttribute("aria-selected")).toBe("true");
+    expect(lookTab.tabIndex).toBe(0);
+    expect(designTab.tabIndex).toBe(-1);
+    expect(document.getElementById("invite-look")!.hidden).toBe(false);
+
+    fireEvent.keyDown(lookTab, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(designTab);
+    expect(designTab.getAttribute("aria-selected")).toBe("true");
+
+    const messageTab = screen.getByRole("tab", { name: "Message" });
+    fireEvent.keyDown(designTab, { key: "End" });
+    expect(document.activeElement).toBe(messageTab);
+    expect(messageTab.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(messageTab, { key: "Home" });
+    expect(document.activeElement).toBe(designTab);
+    expect(designTab.getAttribute("aria-selected")).toBe("true");
+
+    // ArrowRight from the last tab wraps around to the first.
+    fireEvent.keyDown(messageTab, { key: "End" }); // back to Message
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Message" }), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Design" }));
+  });
+
   it("opens the composed preview in a modal from the mobile Preview button", async () => {
     authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
     render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
@@ -1577,12 +1642,31 @@ describe("InviteBuilder preview layer", () => {
     expect(inlinePreviewCount()).toBe(0);
   });
 
-  it("mounts only the inline previews on a narrow builder", async () => {
+  it("mounts only the ACTIVE section's inline preview on a narrow builder", async () => {
     stubResizeObserver(600);
     await renderBuilder();
 
     expect(screen.queryByLabelText("Invite preview")).not.toBeInTheDocument();
-    expect(inlinePreviewCount()).toBe(5);
+    // Design (the default tab) has no inline preview at all.
+    expect(inlinePreviewCount()).toBe(0);
+
+    // Switching tabs mounts exactly the active section's preview (P-I2) — a
+    // hidden tab's inline preview is unmounted, not merely hidden, so it
+    // isn't re-rendering on every keystroke for no one to see.
+    await openSection(/^Hero/);
+    expect(inlinePreviewCount()).toBe(1);
+    expect(
+      within(document.getElementById("invite-hero")!).queryAllByText("Live preview"),
+    ).toHaveLength(1);
+
+    await openSection(/^Our Story/);
+    expect(inlinePreviewCount()).toBe(1);
+    expect(
+      within(document.getElementById("invite-hero")!).queryAllByText("Live preview"),
+    ).toHaveLength(0);
+    expect(
+      within(document.getElementById("invite-story")!).queryAllByText("Live preview"),
+    ).toHaveLength(1);
   });
 
   it("keeps the crossover on the same content box as @4xl/builder", async () => {
@@ -1603,18 +1687,22 @@ describe("InviteBuilder preview layer", () => {
     // No ResizeObserver (and a 0-width report means `display: none`, not narrow)
     // — unmounting a layer we can't measure could leave the organiser with no
     // preview at all, so the CSS classes stay in charge and both are mounted.
+    // The inline layer is additionally gated to the active tab (P-I2), so
+    // switch to one that carries a preview to exercise the overlap.
     vi.stubGlobal("ResizeObserver", undefined);
     await renderBuilder();
+    await openSection(/^Hero/);
 
     expect(screen.getByLabelText("Invite preview")).toBeInTheDocument();
-    expect(inlinePreviewCount()).toBe(5);
+    expect(inlinePreviewCount()).toBe(1);
   });
 
   it("treats a zero-width report as unmeasured, not narrow", async () => {
     stubResizeObserver(0);
     await renderBuilder();
+    await openSection(/^Hero/);
 
     expect(screen.getByLabelText("Invite preview")).toBeInTheDocument();
-    expect(inlinePreviewCount()).toBe(5);
+    expect(inlinePreviewCount()).toBe(1);
   });
 });

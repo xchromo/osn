@@ -639,9 +639,33 @@ were never an option — the dashboard routes on `location.hash`, so a real
 it needed to be on every screen, and pinned the composed preview to a fixed
 scroll position an organiser had to scroll back up to see. Now `activeSection`
 (a signal in `InviteBuilder.tsx`) tracks which ONE section is showing; the nav
-pills set it (`role="tablist"`/`role="tab"`, `aria-selected`) instead of
-scrolling, and mirror the sections' Shown/Hidden badge state as dots, same as
-before.
+pills set it instead of scrolling, and mirror the sections' Shown/Hidden badge
+state as dots, same as before.
+
+**The ARIA tabs contract is complete, not just the roles.** The first cut
+declared `role="tablist"`/`role="tab"`/`aria-selected` on the nav but left the
+panel side of the relationship unwired — no `aria-controls`, no
+`role="tabpanel"`, no `aria-labelledby`, and every tab sat in the normal `Tab`
+sequence instead of a roving tabindex, which is worse than not using the role
+at all: assistive tech is told "this is a tabs widget" and then doesn't get
+tabs-widget behaviour (a security-review compliance finding, C-M1). Fixed to
+the full [WAI-ARIA APG tabs pattern](https://www.w3.org/WAI/ARIA/apg/patterns/tabs/),
+hand-wired rather than migrated to Kobalte's `Tabs` primitive (a bigger,
+riskier change to the `SectionCard`/`hidden`-attribute mount-persistence this
+PR relies on, for a widget this codebase already hand-rolls elsewhere — see
+`DesignPicker`'s roving-tabindex radiogroup, the pattern this mirrors):
+
+- Each tab: `id={`${item.id}-tab`}`, `aria-controls={item.id}` (the panel's
+  DOM id — already the fieldset's `id` prop), `tabIndex={active() ? 0 : -1}`.
+- Each panel (`SectionCard`'s `<fieldset>`): `role="tabpanel"`,
+  `aria-labelledby={`${props.id}-tab`}` — unconditional, since `SectionCard`
+  has exactly one consumer (the eight tab sections), so there's no case where
+  the tabpanel semantics would be wrong.
+- Keyboard: `ArrowRight`/`ArrowLeft` step (wrapping), `Home`/`End` jump to the
+  first/last tab — the APG "automatic activation" model, where moving focus
+  ALSO activates the section (same model `DesignPicker`'s arrows use for
+  selection). `sectionTabRefs` (a `Map<string, HTMLButtonElement>`) is the
+  imperative-focus mechanism, since Solid has no roving-tabindex primitive.
 
 **Sections stay MOUNTED — only visually hidden.** `SectionCard` (`fields.tsx`)
 takes a `hidden` prop and applies it as the native HTML `hidden` attribute on

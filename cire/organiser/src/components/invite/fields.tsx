@@ -215,10 +215,13 @@ export function InstantBadge() {
 }
 
 /**
- * The chrome every builder section shares: an anchored fieldset (`id` is the
- * section-nav jump target), the micro-caps legend, the optional Shown/Hidden
- * badge + per-section reset, and the optional description paragraph. Keeping
- * this in one place is what keeps eight section cards from drifting apart.
+ * The chrome every builder section shares: a fieldset that doubles as an ARIA
+ * `tabpanel` for the section nav's `id`/`aria-labelledby` pair (`props.id` is
+ * both the fieldset's DOM id — the tab's `aria-controls` target — and half of
+ * `${id}-tab`, the tab's own id), the micro-caps legend, the optional
+ * Shown/Hidden badge + per-section reset, and the optional description
+ * paragraph. Keeping this in one place is what keeps eight section cards from
+ * drifting apart.
  */
 export function SectionCard(props: {
   id: string;
@@ -240,6 +243,8 @@ export function SectionCard(props: {
     <fieldset
       id={props.id}
       hidden={props.hidden}
+      role="tabpanel"
+      aria-labelledby={`${props.id}-tab`}
       class="border-border flex flex-col gap-4 rounded-sm border p-4"
     >
       <legend class="font-body text-gold-dim px-2 text-[0.72rem] tracking-[0.1em] uppercase">
