@@ -187,6 +187,10 @@ describe("AnimatedModal", () => {
     // A full-bleed sticky action bar owns the bottom edge — the panel must add
     // nothing under it, or the bar floats above a dead band of surface.
     expect(flushPanel.className).toContain("pb-0");
+    // Assert the branch is exclusive. `toContain("pb-0")` alone is satisfied by
+    // a class list carrying BOTH paddings, and Tailwind resolves that clash by
+    // stylesheet source order — not by the order of the class attribute.
+    expect(flushPanel.className).not.toContain("pb-[max(2.5rem");
     expect(flushPanel.className).not.toContain("md:pb-10");
   });
 });
