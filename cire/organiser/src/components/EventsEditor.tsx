@@ -4,6 +4,7 @@ import { Portal } from "solid-js/web";
 import { toast } from "solid-toast";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
+import { createSortableItem, createSortableList, type SortableList } from "../lib/dnd-sortable";
 import { joinIso, OFFSET_OPTIONS, splitIso } from "../lib/event-datetime";
 import {
   ensureEventsLoaded,
@@ -36,9 +37,11 @@ interface PreviewResponse {
  * mutates the `events` slice E5 carried through untouched). Add/edit an event
  * via a drawer form (name, start/end + timezone, address, dress-code + palette
  * reusing {@link ColorPicker}, Pinterest/Maps URLs); delete with an impact
- * confirm; re-order (writes `sortOrder`). Save posts the WHOLE draft (events +
- * families) as DesiredState JSON to `changes/preview` → the shared
- * {@link ChangePreview} modal → `changes/apply` on confirm → refetch + toast.
+ * confirm; re-order by DRAGGING a row's grip handle (dnd-kit via the Solid
+ * bindings in `lib/dnd-sortable.ts` — pointer or keyboard, writes `sortOrder`).
+ * Save posts the WHOLE draft (events + families) as DesiredState JSON to
+ * `changes/preview` → the shared {@link ChangePreview} modal → `changes/apply`
+ * on confirm → refetch + toast.
  *
  * Field-invalid drafts can't be submitted — Save disables and the drawer shows
  * errors inline. Guests ride along unchanged (id-matched ⇒ no-op update).
@@ -53,6 +56,13 @@ export default function EventsEditor(props: { weddingId: string }) {
   const [preview, setPreview] = createSignal<PreviewResponse | null>(null);
   /** The draft key of the event whose drawer is open, or null when closed. */
   const [editingKey, setEditingKey] = createSignal<string | null>(null);
+
+  /** Drag-to-reorder for the event list. `ids` is read at drop time and holds
+   *  the pre-drag order, which is exactly what `reorderEvents` indexes into. */
+  const sortable = createSortableList({
+    ids: () => store.draft.events.map((e) => e.key),
+    onReorder: (from, to) => store.reorderEvents(from, to),
+  });
 
   const changesUrl = (op: string) =>
     apiUrl(`/api/organiser/weddings/${props.weddingId}/changes/${op}`);
@@ -188,7 +198,7 @@ export default function EventsEditor(props: { weddingId: string }) {
       <SectionIntro
         eyebrow="Schedule"
         title="Edit your events"
-        description="Add and re-order the events your guests can be invited to, set the details, and save. Every change is previewed before it's applied — you'll see exactly what will change, including anything that affects RSVPs or images."
+        description="Add the events your guests can be invited to, drag them by the grip to re-order, set the details, and save. Every change is previewed before it's applied — you'll see exactly what will change, including anything that affects RSVPs or images."
         actions={
           <Show when={store.loaded()}>
             <button
@@ -235,12 +245,10 @@ export default function EventsEditor(props: { weddingId: string }) {
                 <EventRowCard
                   event={event}
                   index={index()}
-                  count={store.draft.events.length}
+                  sortable={sortable}
                   hasError={(errorsByKey().get(event.key)?.length ?? 0) > 0}
                   onEdit={() => setEditingKey(event.key)}
                   onDelete={() => handleDelete(event)}
-                  onMoveUp={() => store.moveEvent(event.key, -1)}
-                  onMoveDown={() => store.moveEvent(event.key, 1)}
                 />
               )}
             </For>
@@ -351,42 +359,43 @@ export default function EventsEditor(props: { weddingId: string }) {
   );
 }
 
-/** One event summary row with re-order + edit/delete controls. */
+/** One event summary row: a drag handle to re-order, plus edit/delete controls. */
 function EventRowCard(props: {
   event: DraftEvent;
   index: number;
-  count: number;
+  sortable: SortableList;
   hasError: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
 }) {
+  const item = createSortableItem({
+    list: props.sortable,
+    id: () => props.event.key,
+    index: () => props.index,
+  });
+
   return (
     <li
+      ref={item.ref}
       class="border-border bg-surface/30 flex flex-wrap items-center gap-3 rounded-sm border p-4"
-      classList={{ "border-error/50": props.hasError }}
+      classList={{
+        "border-error/50": props.hasError,
+        // Lift the row being dragged clear of its neighbours.
+        "border-gold/60 bg-surface/80 shadow-lg": item.isDragging(),
+      }}
     >
-      <div class="flex flex-col">
-        <button
-          type="button"
-          aria-label={`Move ${props.event.name || "event"} up`}
-          disabled={props.index === 0}
-          onClick={props.onMoveUp}
-          class="text-text-muted hover:text-gold disabled:opacity-30"
-        >
-          ▲
-        </button>
-        <button
-          type="button"
-          aria-label={`Move ${props.event.name || "event"} down`}
-          disabled={props.index === props.count - 1}
-          onClick={props.onMoveDown}
-          class="text-text-muted hover:text-gold disabled:opacity-30"
-        >
-          ▼
-        </button>
-      </div>
+      {/* The grip. A real <button> so dnd-kit's keyboard sensor can drive it:
+          focus it, Space/Enter to lift, arrows to move, Escape to cancel. The
+          `touch-none` is required — without it the browser scrolls instead of
+          handing the touch to dnd-kit. */}
+      <button
+        type="button"
+        ref={item.handleRef}
+        aria-label={`Reorder ${props.event.name || "event"}`}
+        class="text-text-muted hover:text-gold focus-visible:text-gold cursor-grab touch-none px-1 text-[1.1rem] leading-none active:cursor-grabbing"
+      >
+        ⠿
+      </button>
 
       <div class="min-w-0 flex-1">
         <p class="font-display text-text truncate text-[1.15rem]">

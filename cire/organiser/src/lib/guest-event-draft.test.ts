@@ -327,14 +327,29 @@ describe("createGuestEventDraft — event editing (E6)", () => {
   it("reorders events and rewrites sortOrder to the new index", () => {
     createRoot((dispose) => {
       const store = loaded();
-      // Ceremony(0), Reception(1) → move Reception up.
-      const receptionKey = store.draft.events.find((e) => e.name === "Reception")!.key;
-      store.moveEvent(receptionKey, -1);
+      // Ceremony(0), Reception(1) → drag Reception to the top.
+      store.reorderEvents(1, 0);
       const wire = store.toWire();
       const reception = wire.events.find((e) => e.name === "Reception")!;
       const ceremony = wire.events.find((e) => e.name === "Ceremony")!;
       expect(reception.sortOrder).toBe(0);
       expect(ceremony.sortOrder).toBe(1);
+      expect(store.draft.events.map((e) => e.name)).toEqual(["Reception", "Ceremony"]);
+      dispose();
+    });
+  });
+
+  it("ignores a reorder that is a no-op or out of bounds", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      const before = store.draft.events.map((e) => e.name);
+      store.reorderEvents(0, 0);
+      store.reorderEvents(0, 5);
+      store.reorderEvents(-1, 1);
+      expect(store.draft.events.map((e) => e.name)).toEqual(before);
+      // No checkpoint was recorded, so the draft is untouched.
+      expect(store.dirty()).toBe(false);
+      expect(store.canUndo()).toBe(false);
       dispose();
     });
   });

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -141,7 +141,7 @@ describe("ModuleShell", () => {
     expect(screen.getByTestId("events")).toBeTruthy();
   });
 
-  it("shows the Schedule sub-tabs (Events + Edit) and switches to the events editor", () => {
+  it("shows the Schedule sub-tabs (Events + Edit) and switches to the events editor", async () => {
     const { onSub } = renderShell({ module: "schedule", sub: "list" });
     expect(screen.getByRole("tab", { name: /Events/ })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Edit/ })).toBeTruthy();
@@ -150,7 +150,8 @@ describe("ModuleShell", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /Edit/ }));
     expect(onSub).toHaveBeenCalledWith("edit");
-    expect(screen.getByTestId("events-editor")).toBeTruthy();
+    // The editor is `lazy()`-loaded (it carries dnd-kit), so it lands a tick later.
+    await waitFor(() => expect(screen.getByTestId("events-editor")).toBeTruthy());
     expect(screen.queryByTestId("events")).toBeNull();
   });
 

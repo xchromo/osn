@@ -158,18 +158,19 @@ describe("EventsEditor", () => {
     expect(save.disabled).toBe(true);
   });
 
-  it("reorders an event with the move controls", async () => {
+  it("exposes a focusable drag handle per event instead of arrow controls", async () => {
     primeLoad();
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Reception")).toBeTruthy());
 
-    // Move Reception up.
-    fireEvent.click(screen.getByRole("button", { name: /Move Reception up/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Save changes/i })).toBeTruthy());
-
-    // First rendered event heading is now Reception.
-    const headings = screen.getAllByText(/Ceremony|Reception/);
-    expect(headings[0]!.textContent).toContain("Reception");
+    // One grip per event, labelled by event name. Re-ordering itself is driven by
+    // dnd-kit (pointer or keyboard) — the index maths it hands back is covered in
+    // dnd-sortable.test.ts, and the commit in guest-event-draft.test.ts.
+    expect(screen.getByRole("button", { name: /Reorder Ceremony/i })).toBeTruthy();
+    const grip = screen.getByRole("button", { name: /Reorder Reception/i });
+    expect(grip.tagName).toBe("BUTTON"); // focusable ⇒ keyboard sorting works
+    // The old ▲/▼ pair is gone.
+    expect(screen.queryByRole("button", { name: /Move Reception up/i })).toBeNull();
   });
 
   it("adds a new event via Add event", async () => {
@@ -253,7 +254,9 @@ describe("EventsEditor", () => {
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: /Move Reception up/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Edit$/i })[0]!);
+    await waitFor(() => expect(screen.getByLabelText("Event name")).toBeTruthy());
+    fireEvent.input(screen.getByLabelText("Event name"), { target: { value: "Wedding Ceremony" } });
     await waitFor(() => expect(screen.getByRole("button", { name: /Save changes/i })).toBeTruthy());
 
     authFetchMock.mockImplementation((url: string) => {
@@ -286,7 +289,9 @@ describe("EventsEditor", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: /Review changes before applying/i })).toBeTruthy(),
+    );
     fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
 
     await waitFor(() => expect(screen.getByText(/changed elsewhere/i)).toBeTruthy());

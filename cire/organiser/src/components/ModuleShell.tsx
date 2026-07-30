@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, lazy, Show, Suspense } from "solid-js";
 
 import { peekCachedBudget } from "../lib/budget-store";
 import { defaultSub, isSubOf, type Module } from "../lib/dashboard-route";
@@ -6,7 +6,6 @@ import BudgetView from "./BudgetView";
 import ChecklistView from "./ChecklistView";
 import DirectoryBrowseView from "./DirectoryBrowseView";
 import EnquiriesView from "./EnquiriesView";
-import EventsEditor from "./EventsEditor";
 import EventTable from "./EventTable";
 import GuestsEditor from "./GuestsEditor";
 import GuestTable from "./GuestTable";
@@ -20,6 +19,11 @@ import RsvpView from "./RsvpView";
 import SettingsPanel from "./SettingsPanel";
 import UpsellPanel from "./UpsellPanel";
 import VendorsView from "./VendorsView";
+
+/** Code-split: the editor pulls in dnd-kit for drag-to-reorder, and it's a
+ *  write-only sub-tab most dashboard loads never open (same reasoning as
+ *  `EventTable`'s lazy `ImageCropModal`). */
+const EventsEditor = lazy(() => import("./EventsEditor"));
 
 interface ModuleShellProps {
   weddingId: string;
@@ -184,7 +188,9 @@ export default function ModuleShell(props: ModuleShellProps) {
             {/* Interactive events editor (E6) — a pure write surface, editor-gated
               (the API also gates changes/* with weddingEditor()). */}
             <Show when={active() === "edit" && props.canEdit}>
-              <EventsEditor weddingId={props.weddingId} />
+              <Suspense>
+                <EventsEditor weddingId={props.weddingId} />
+              </Suspense>
             </Show>
           </Show>
 
