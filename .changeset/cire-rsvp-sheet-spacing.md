@@ -30,6 +30,19 @@ its `mb-3` on top of another 20px. The card takes `pt-0` now, keeping `px-5
 pb-5`; the first control sits ~25px under the border, level with the 20px inset
 on the other three sides.
 
-`AnimatedModal`'s default (no `flushBottom`) is unchanged, so `DetailsModal`
-renders exactly as before. Regression tests pin the panel's two padding modes,
-the bar's lack of a negative bottom margin, and the card's asymmetric padding.
+`AnimatedModal`'s default padding branch (no `flushBottom`) is unchanged, so
+`DetailsModal`'s spacing is untouched — but see the close-button change below,
+which does alter both modals. Regression tests pin the two padding modes, the
+bar's lack of a negative bottom margin, and the card's asymmetric padding.
+
+**Close button no longer scrolls out of view.** Same component, adjacent defect:
+`AnimatedModal`'s "×" was `absolute` *inside* the panel, which was itself the
+scroll container, so on any sheet tall enough to scroll it left the viewport
+entirely and the guest was down to Escape or a backdrop tap. The panel is now a
+non-scrolling frame (`flex flex-col overflow-hidden`) holding the close button
+alongside a `min-h-0 overflow-y-auto` inner scroller that carries the padding.
+The button needs no z-index — a positioned box already paints over its
+non-positioned in-flow siblings — and gained `bg-surface` + `rounded-full`
+because content now passes underneath it as it scrolls. `DetailsModal` gets the
+fix for free. This also gives the sticky action bar a containing block that is
+the scrollport itself.

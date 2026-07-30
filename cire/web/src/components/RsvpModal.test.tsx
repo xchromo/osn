@@ -555,9 +555,12 @@ describe("RsvpModal", () => {
     ));
 
     const panel = document.querySelector('[role="dialog"]') as HTMLElement;
+    // The panel is a non-scrolling frame; its last child is the scroll
+    // container that carries the padding the action bar has to line up with.
+    const scroller = panel.lastElementChild as HTMLElement;
     // The sheet hands its bottom edge to the action bar (see AnimatedModal's
     // `flushBottom`) instead of padding underneath it.
-    expect(panel.className).toContain("pb-0");
+    expect(scroller.className).toContain("pb-0");
 
     // Anchor on the role, not on how deep the label's text node sits — a future
     // icon or <span> around "Save" would silently re-point `parentElement`.
@@ -570,11 +573,11 @@ describe("RsvpModal", () => {
     // keeps Cancel/Save clear of the iPhone home indicator. Losing it would be
     // invisible to every other assertion here.
     expect(bar.className).toContain("pb-[max(1rem,env(safe-area-inset-bottom))]");
-    // The bar is full-bleed only because `-mx-6` cancels the panel's `px-6`.
+    // The bar is full-bleed only because `-mx-6` cancels the scroller's `px-6`.
     // The number is written twice, in two components — pin both together so a
     // change to either fails at the coupling rather than in a screenshot.
     expect(bar.className).toContain("-mx-6");
-    expect(panel.className).toContain("px-6");
+    expect(scroller.className).toContain("px-6");
 
     // The <legend> is laid out in the top border and the block-start padding is
     // added below it, so the card takes no top padding of its own — otherwise

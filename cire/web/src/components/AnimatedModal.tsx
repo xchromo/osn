@@ -154,11 +154,16 @@ export function AnimatedModal(props: AnimatedModalProps) {
       class={`fixed inset-0 ${Z_CLASS.MODAL} flex items-end justify-center bg-black/70 opacity-0 md:items-center`}
       onClick={() => handleClose()}
     >
+      {/* The panel is a NON-scrolling frame; the scroller is the div below it.
+          Keeping the close button out of the scroll container is what stops it
+          leaving the viewport on a sheet tall enough to scroll — as an
+          `absolute` child of the scroller it used to scroll away with the
+          content, leaving Escape or a backdrop tap as the only way out. It also
+          gives a sticky footer inside the scroller a containing block that is
+          the scrollport itself. */}
       <div
         ref={panelRef}
-        class={`border-border bg-surface relative max-h-[85dvh] w-full max-w-[480px] overflow-y-auto overscroll-contain rounded-t-[1.75rem] border px-6 pt-8 opacity-0 md:mb-8 md:max-h-[85vh] md:rounded-lg ${
-          props.flushBottom ? "pb-0" : "pb-[max(2.5rem,env(safe-area-inset-bottom))] md:pb-10"
-        }`}
+        class="border-border bg-surface relative flex max-h-[85dvh] w-full max-w-[480px] flex-col overflow-hidden rounded-t-[1.75rem] border opacity-0 md:mb-8 md:max-h-[85vh] md:rounded-lg"
         style={filterThemeVars(props.themeVars)}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -167,15 +172,30 @@ export function AnimatedModal(props: AnimatedModalProps) {
         aria-label={props.labelledBy ? undefined : props.label}
         tabindex="-1"
       >
+        {/* No z-index: a positioned box already paints over its non-positioned
+            in-flow siblings, so this stays above the scroller without adding a
+            magic number outside `lib/z-index`. `bg-surface` (not transparent)
+            because content now passes UNDERNEATH the button as it scrolls, and
+            an opaque chip is what keeps a guest's name from colliding with the
+            glyph. */}
         <button
           ref={closeButtonRef}
-          class="text-text-muted hover:text-text focus-visible:ring-gold/60 absolute top-2 right-2 flex h-11 w-11 cursor-pointer items-center justify-center rounded-sm border-none bg-transparent text-2xl leading-none transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          class="text-text-muted hover:text-text focus-visible:ring-gold/60 bg-surface absolute top-2 right-2 flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border-none text-2xl leading-none transition-colors focus-visible:ring-2 focus-visible:outline-none"
           onClick={() => handleClose()}
           aria-label="Close"
         >
           &times;
         </button>
-        {props.children}
+        {/* `min-h-0` so this flex item may shrink below its content height —
+            without it the panel's `max-h` cannot take effect and nothing
+            scrolls. */}
+        <div
+          class={`min-h-0 overflow-y-auto overscroll-contain px-6 pt-8 ${
+            props.flushBottom ? "pb-0" : "pb-[max(2.5rem,env(safe-area-inset-bottom))] md:pb-10"
+          }`}
+        >
+          {props.children}
+        </div>
       </div>
     </div>
   );
