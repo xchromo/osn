@@ -149,6 +149,31 @@ component was previously reading a container it did not live in.
 - **Invite builder** (`invite/InviteBuilder`) — `@4xl/builder` puts the composed
   `PreviewPane` beside the form (sticky, `w-80`, `w-96` from `@6xl/builder`). This
   code predates this pass; it was simply unreachable under the old page cap.
+
+  It is also the one place that **measures instead of only querying**. The two
+  preview layers — five inline per-section previews, and the composed pane — used
+  to both be mounted at every width with the container query hiding one, so the
+  idle layer still took every token write on every keystroke and colour-drag
+  frame (perf **P-I1**). The builder now observes its own `@container/builder`
+  element and mounts one layer or the other:
+
+  - A `ResizeObserver`'s `contentRect` **is** the content box a container query
+    evaluates, so the mount crossover cannot drift from the CSS one.
+  - `WIDE_BUILDER_REM` is the threshold in JS, because container queries have no
+    `matchMedia` equivalent. It is compared against the root font size, not a
+    hard-coded 16px.
+  - The state is tri-state, and `unknown` mounts **both**: with no
+    `ResizeObserver`, before the first measurement, or while the builder sits in a
+    `display: none` ancestor, we don't know which side we're on, and unmounting an
+    unmeasurable layer could leave an organiser with no preview at all. The
+    container-query classes stay on both layers as the visual authority, so they
+    never both show in a browser — including during the first frame.
+  - Cost of the trade: crossing the threshold re-creates the newly mounted layer,
+    so its desktop/phone toggle returns to desktop.
+
+  Reach for this pattern only when mounting is what's expensive. Hiding with a
+  container query remains the default — it needs no JS and no threshold in two
+  places.
 - **Enquiries** (`EnquiriesView`) — `@3xl/enquiries` shows the inbox and the
   thread together. The inbox stays **mounted** while a thread is open and is
   hidden with `@max-3xl/enquiries:hidden`, so widening the panel mid-conversation
@@ -197,4 +222,5 @@ What that leaves testable, and where it lives:
 | Utility names + custom-property wiring (the silent-collapse failure mode) | `styles/layout-utilities.test.ts` — static text, no DOM |
 | DOM containment of grid siblings, and per-group reorder indices | `ChecklistView.test.tsx`, `BudgetView.test.tsx` |
 | Master-detail behaviour: draft-per-enquiry, no cross-thread messages, placeholder, `aria-current` cardinality, post-reply refresh | `EnquiriesView.test.tsx`, `EnquiryInbox.test.tsx` |
+| Which preview layer mounts, and that its crossover matches `@4xl/builder` | `InviteBuilder.test.tsx` — with a stub `ResizeObserver` reporting a fixed content-box width, since happy-dom runs no layout |
 | The container queries themselves | Nothing. A browser-driven visual check is the only real test, and this package has no such harness. |
