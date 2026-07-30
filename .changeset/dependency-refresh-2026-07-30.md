@@ -60,6 +60,21 @@ Ten `@osn/api` tests (of 644) were relying on "the Effect didn't fail" as their
 only assertion; each now asserts the behaviour its name claims, with no change
 to what is under test.
 
+The `@opentelemetry/*` SDK packages are held at `~2.9.0` rather than moved to
+2.10.0. The exporters and `sdk-logs` cannot follow yet — 0.221.0 is inside the
+14-day minor window — and the 0.220.0 exporters pin `core`/`resources`/
+`sdk-metrics`/`sdk-trace` to exactly 2.9.0, so taking only the SDK half splits
+the tree across two lines and links 2.10.0 packages against `core@2.9.0`. The
+tilde is deliberate: `^2.9.0` still admits 2.10.0. The whole line moves together
+once the exporters are eligible (2026-08-04).
+
+The root `esbuild` override rises `^0.27.0` → `^0.28.1`, closing
+GHSA-g7r4-m6w7-qqqr. The override had inverted from protective to harmful:
+wrangler 4.114 pins `esbuild 0.28.1` — the fixed version — and the `^0.27.0`
+floor was clamping the whole tree back down to the vulnerable 0.27.7. astro
+already declares `^0.28.0`, so `^0.28.1` now agrees with both consumers instead
+of fighting either. `bun audit` reports no vulnerabilities.
+
 `oxfmt` 0.44 → 0.59 spans four breaking formatter changes, but produces no
 output change here: the `fmt` script already excludes CSS, astro and markdown,
 and the `sort_imports` reclassification of subpath imports matches nothing in
