@@ -231,3 +231,15 @@ bunx tauri build         # Build app
 bun add solid-js --cwd osn/landing
 bun add drizzle-orm --cwd pulse/db
 ```
+
+## Cloudflare Workers debugging
+
+- Multi-service request misbehaving in prod → `wrangler tail` the actual failing service FIRST, before any architecture speculation.
+- Never `source` a secrets file to set a JSON/JWK-shaped secret — bash brace-expansion mangles `{"a":"b"}` unquoted. Extract with grep/sed, pipe via `printf`:
+  ```bash
+  VAL=$(grep -m1 '^KEY=' "$SF" | sed 's/^[^=]*=//'); printf '%s' "$VAL" | wrangler secret put KEY --env production
+  ```
+- `wrangler secret put/delete` doesn't cycle warm isolates — redeploy (`wrangler deploy --env production`) after a secret change when behavior must flip now.
+- First-ever deploy of a Worker (even with existing `wrangler.toml`) can crash at deploy-time module eval: `fileURLToPath(import.meta.url)` at module top level, or module-top-level `process.env` reads/validation, both undefined/unpopulated during workerd's deploy eval. Fix: defer both into request-time/lazy thunks. Verify with a real `wrangler deploy`, not `--dry-run` (dry-run doesn't catch these).
+- Named envs don't inherit top-level routes — add `[[env.production.routes]]` with `custom_domain = true` for a never-deployed named env.
+- Changing a shared package's schema (e.g. a DB package other services import) → run the FULL monorepo test suite before merging, not just that package's own tests.
