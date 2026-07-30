@@ -1,5 +1,5 @@
 ---
-title: "Drag and drop — dnd-kit through a SolidJS adapter"
+title: "Drag and drop — solid-dnd, and the keyboard path we own"
 tags: [architecture, organiser, frontend, accessibility]
 related:
   - "[[index]]"
@@ -8,108 +8,121 @@ related:
 last-reviewed: 2026-07-30
 ---
 
-# Drag and drop — dnd-kit through a SolidJS adapter
+# Drag and drop — solid-dnd, and the keyboard path we own
 
-Drag-to-reorder in the organiser portal is built on [dnd-kit](https://github.com/clauderic/dnd-kit).
-dnd-kit publishes a **React** adapter (`@dnd-kit/react`) and a framework-agnostic
-imperative core (`@dnd-kit/dom`). We take the core and wrap it in a small Solid
-adapter — `cire/organiser/src/lib/dnd-sortable.ts` — which is the Solid
-equivalent of React's `DragDropProvider` + `useSortable`.
+Drag-to-reorder in the organiser portal uses
+[solid-dnd](https://github.com/thisbeyond/solid-dnd) (`@thisbeyond/solid-dnd`).
+It's a purpose-built SolidJS library, so there is **no adapter layer** — the
+primitives are used directly in the component.
 
-Dependencies: `@dnd-kit/dom` + `@dnd-kit/abstract` on `@cire/organiser`. Do **not**
-add `@dnd-kit/core` or `@dnd-kit/react` — both are React-only.
+## Why solid-dnd, and what it costs us
 
-## The two primitives
+Three candidates were weighed (2026-07-30):
 
-| Primitive | Owns | Returns |
-|---|---|---|
-| `createSortableList({ ids, onReorder })` | One `DragDropManager` for the list, destroyed on owner cleanup | `{ manager, draggingId }` |
-| `createSortableItem({ list, id, index, disabled? })` | One `Sortable` registration per row, unregistered on cleanup | `{ ref, handleRef, isDragging }` |
+| Library | Verdict |
+|---|---|
+| **solid-dnd** | **Chosen.** Native Solid, ships sortable-list primitives + collision detection, ~14 kB raw / ~7 kB gzip. |
+| [neodrag](https://github.com/PuruVJ/neodrag) | **Can't do the job.** It's a free-positioning *draggable* — no droppables, no collision detection, no reorder logic. Sortable lists would mean hand-writing the hit-testing and index projection. Actively maintained, but that doesn't help when the capability is absent. |
+| [dnd-kit](https://github.com/clauderic/dnd-kit) | Works (shipped briefly), but React-only adapters meant maintaining our own Solid adapter, and at ~105 kB raw it pushed the organiser's main chunk past Vite's 500 kB warning and forced a `lazy()` code-split. |
 
-Typical shape:
+**The known risk, stated plainly: solid-dnd's last release was 0.7.5 in November
+2023 — nearly three years unmaintained.** It was adopted anyway because it is
+small, has zero runtime dependencies, and is pure DOM + geometry, so there's
+little for ecosystem churn to break. That reasoning is only worth anything if
+it's *checked*, so `EventsEditor.reorder.test.tsx` drives a real synthetic
+pointer drag end-to-end (sensor → collision detection → `onDragEnd` → commit)
+rather than merely asserting that the markup renders. If a Solid upgrade breaks
+the library, those tests fail. If it does become unworkable, the blast radius is
+one component — the DnD wiring is not abstracted across the codebase.
+
+## The primitives
 
 ```tsx
-const sortable = createSortableList({
-  ids: () => store.rows.map((r) => r.key),
-  onReorder: (from, to) => store.reorder(from, to),
-});
+<DragDropProvider onDragEnd={handleDragEnd} collisionDetector={closestCenter}>
+  <DragDropSensors />
+  <ul>
+    <SortableProvider ids={keys()}>
+      <For each={rows}>{(row, i) => <Row … />}</For>
+    </SortableProvider>
+  </ul>
+</DragDropProvider>
+```
 
-<ul>
-  <For each={store.rows}>
-    {(row, index) => <Row row={row} index={index()} sortable={sortable} />}
-  </For>
-</ul>
+`closestCenter` is the right detector for a single-column list. Inside a row:
 
-// …inside Row:
-const item = createSortableItem({ list: props.sortable, id: () => props.row.key, index: () => props.index });
-<li ref={item.ref}>
-  <button ref={item.handleRef} aria-label={`Reorder ${props.row.name}`} class="cursor-grab touch-none">⠿</button>
-  …
+```tsx
+const sortable = createSortable(props.row.key);
+<li ref={sortable.ref} style={maybeTransformStyle(sortable.transform)}>
+  <button {...sortable.dragActivators} onKeyDown={handleKeyDown}>⠿</button>
 </li>
 ```
 
-## Why the state stays yours
+### `ref` + `dragActivators`, not `use:sortable`
 
-dnd-kit **never reorders the DOM**. Mid-drag it applies transforms to the rows
-and projects the dragged row's would-be slot onto `sortable.index`; the real move
-happens when your state commits and Solid's `<For>` relocates the nodes, which
-dnd-kit then animates into.
+solid-dnd's `use:sortable` directive registers the node **and** attaches the drag
+activators to it **and** applies the transform — i.e. the whole row becomes the
+drag affordance, which would swallow text selection and the row's own buttons.
 
-Three consequences worth knowing before touching the adapter:
+For a **handle**, use `sortable.ref` instead and spread `sortable.dragActivators`
+onto the handle. The catch: `ref` registers the node *without* applying the
+transform (see `createSortable` — only the directive form sets up that effect),
+so the row must apply `maybeTransformStyle(sortable.transform)` itself. Use
+`maybeTransformStyle`, not `transformStyle`: it returns `{}` when there's no
+transform instead of writing an identity one.
 
-1. **`ids()` is read at drop time and still holds the PRE-drag order.** All the
-   index maths depends on that. Don't "helpfully" pre-apply the move.
-2. **The projected index wins over the drop target when they disagree** — it's
-   where the row visually sits. The adapter falls back to the target row's index
-   when the projection never moved (or is out of bounds). This mirrors
-   `@dnd-kit/helpers`' `move`, which we don't depend on because our state isn't
-   a plain array.
-3. **`source.index` is duck-typed, not `instanceof`-checked.** The `dragend`
-   event types its source as a bare `Draggable`; `isSortable()` is an
-   `instanceof SortableDraggable` test, which is awkward to fake in a test and
-   is exactly what `@dnd-kit/helpers` avoids. `dnd-sortable.test.ts` keeps a
-   guard asserting the real `SortableDraggable` still carries a numeric `index`,
-   so a dnd-kit upgrade that renames it fails there rather than silently in the
-   UI.
+Spread `dragActivators` **before** your own `onKeyDown` — later props win in
+Solid's spread, so putting it last would let a future sensor clobber the keyboard
+handler.
 
-## Accessibility is not optional here
+## Accessibility — this is the part to not break
 
-Replacing ▲/▼ buttons with dragging only stays accessible because the handle is
-a real focusable `<button>`. dnd-kit's default preset then gives us, for free:
+**solid-dnd has no keyboard sensor and makes no announcements.** Grepping its
+bundle for `keydown`/`keyboard`/`ArrowUp` returns zero hits. (Neither does
+neodrag.) Swapping ▲/▼ buttons for dragging is therefore an accessibility
+*regression* unless the keyboard path is supplied by hand, so the list does three
+things itself:
 
-- `KeyboardSensor` — **Space/Enter** to lift, **arrow keys** to move,
-  **Escape** to cancel, Space/Enter/Tab to drop.
-- `Accessibility` plugin — live-region announcements plus screen-reader
-  instructions wired to the draggable.
+1. **The grip is a real `<button>`** — tabbable, and it owns an `onKeyDown` that
+   moves the row on **Arrow Up / Arrow Down** (with `preventDefault()` so the page
+   doesn't scroll out from under it).
+2. **Focus is restored explicitly** after a move. `<For>` is keyed, so the row's
+   node is *moved* rather than re-created — but a DOM move is a
+   remove-then-insert and focus does not reliably survive it. Without the explicit
+   `.focus()`, one keypress moves the row and then focus is on `<body>`, so the
+   row can't be walked further.
+3. **Every move is announced** through a polite `role="status"` live region
+   ("Ceremony moved to position 2 of 3"), and each grip's `aria-label` carries its
+   current position with an `aria-describedby` hint pointing at the shared
+   instructions. A drag affordance is invisible to a screen-reader user otherwise.
 
-Two things you must supply yourself:
+Also required: `touch-none` (CSS `touch-action: none`) on the handle, or the
+browser scrolls instead of handing the gesture to solid-dnd.
 
-- `aria-label` on the handle naming the row ("Reorder Ceremony") — the grip
-  glyph alone is meaningless.
-- `touch-none` (CSS `touch-action: none`) on the handle, or the browser scrolls
-  the page instead of handing the gesture to dnd-kit.
+## Testing drag in happy-dom
 
-## Bundle cost — lazy-load the consumer
+happy-dom does no layout — every `getBoundingClientRect()` is zeroes, so
+`closestCenter` sees every row's centre at (0,0) and picks a collision
+arbitrarily. `EventsEditor.reorder.test.tsx` works around this by stubbing
+`Element.prototype.getBoundingClientRect` to return stacked rects derived from
+each row's *current* DOM position (so they stay correct after a reorder), then
+dispatching `pointerdown` → `pointermove` × 2 → `pointerup`. The first move gets
+past the sensor's activation threshold.
 
-dnd-kit is ~105 kB raw. Adding it to the organiser pushed the main chunk past
-Vite's 500 kB warning, so `ModuleShell` `lazy()`-loads the view that uses it
-(`EventsEditor`) behind a `<Suspense>` — the same treatment `EventTable` gives
-cropperjs via `ImageCropModal`. Keep that pattern for the next adopter: a
-drag-and-drop view should be a code-split chunk, not main-bundle weight for
-every dashboard load.
+The keyboard path needs none of that and is fully deterministic — it's the
+cheaper regression net of the two.
+
+What this still can't cover: drag *feel*, the shift/settle animation, and the
+grip's hover/focus styling. Those need a real browser.
 
 ## Scope + open follow-ups
-
-The adapter deliberately covers **one flat list per manager**. dnd-kit's `group`
-(multi-container sorting — dragging between columns) is not surfaced; add it here
-rather than reaching into `@dnd-kit/dom` from a component.
 
 Current adopters:
 
 - **Schedule → Edit** (`EventsEditor`) — see `[[guest-event-editor]]` E7.
 
-Still on arrow buttons, and the obvious next adopters (both would need the
-`group` support above, since each reorders within a bucket):
+Still on arrow buttons:
 
 - `ChecklistView` — tasks within a lead-time bucket, persisted via
-  `tasks/reorder`.
+  `tasks/reorder`. It reorders *within a bucket*, so adopting this means using
+  solid-dnd's multi-container support (a `SortableProvider` per bucket), which the
+  events list doesn't exercise.

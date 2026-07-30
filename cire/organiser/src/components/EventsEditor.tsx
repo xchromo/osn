@@ -1,10 +1,19 @@
 import { useAuth } from "@shared/rp-auth/solid";
+import {
+  closestCenter,
+  createSortable,
+  DragDropProvider,
+  DragDropSensors,
+  type DragEvent as SortableDragEvent,
+  maybeTransformStyle,
+  SortableProvider,
+  useDragDropContext,
+} from "@thisbeyond/solid-dnd";
 import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { toast } from "solid-toast";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
-import { createSortableItem, createSortableList, type SortableList } from "../lib/dnd-sortable";
 import { joinIso, OFFSET_OPTIONS, splitIso } from "../lib/event-datetime";
 import {
   ensureEventsLoaded,
@@ -37,14 +46,19 @@ interface PreviewResponse {
  * mutates the `events` slice E5 carried through untouched). Add/edit an event
  * via a drawer form (name, start/end + timezone, address, dress-code + palette
  * reusing {@link ColorPicker}, Pinterest/Maps URLs); delete with an impact
- * confirm; re-order by DRAGGING a row's grip handle (dnd-kit via the Solid
- * bindings in `lib/dnd-sortable.ts` — pointer or keyboard, writes `sortOrder`).
- * Save posts the WHOLE draft (events + families) as DesiredState JSON to
- * `changes/preview` → the shared {@link ChangePreview} modal → `changes/apply`
- * on confirm → refetch + toast.
+ * confirm; re-order by DRAGGING a row's grip handle (solid-dnd), writing
+ * `sortOrder`. Save posts the WHOLE draft (events + families) as DesiredState
+ * JSON to `changes/preview` → the shared {@link ChangePreview} modal →
+ * `changes/apply` on confirm → refetch + toast.
  *
  * Field-invalid drafts can't be submitted — Save disables and the drawer shows
  * errors inline. Guests ride along unchanged (id-matched ⇒ no-op update).
+ *
+ * Re-ordering is pointer OR keyboard. solid-dnd ships a pointer sensor only —
+ * it has no keyboard sensor and no announcements — so the grip also handles
+ * Arrow Up/Down itself and every move is reported through a polite live region.
+ * That's deliberate: it's what stops "drag instead of ▲/▼ buttons" from being an
+ * accessibility regression, so don't drop it when touching this list.
  */
 export default function EventsEditor(props: { weddingId: string }) {
   const { authFetch } = useAuth();
@@ -57,12 +71,45 @@ export default function EventsEditor(props: { weddingId: string }) {
   /** The draft key of the event whose drawer is open, or null when closed. */
   const [editingKey, setEditingKey] = createSignal<string | null>(null);
 
-  /** Drag-to-reorder for the event list. `ids` is read at drop time and holds
-   *  the pre-drag order, which is exactly what `reorderEvents` indexes into. */
-  const sortable = createSortableList({
-    ids: () => store.draft.events.map((e) => e.key),
-    onReorder: (from, to) => store.reorderEvents(from, to),
-  });
+  /** Live-region text announcing the last re-order. solid-dnd announces nothing,
+   *  so without this a keyboard/screen-reader user gets no feedback that the move
+   *  landed. */
+  const [announcement, setAnnouncement] = createSignal("");
+
+  /** The draft keys in current schedule order — `SortableProvider`'s id list, and
+   *  what a drop's draggable/droppable ids are resolved against. */
+  const eventKeys = createMemo(() => store.draft.events.map((e) => e.key));
+
+  function announceMove(name: string, to: number) {
+    setAnnouncement(
+      `${name || "Event"} moved to position ${to + 1} of ${store.draft.events.length}.`,
+    );
+  }
+
+  /** Commit a drop. solid-dnd hands back the dragged row and the row it landed
+   *  on; both ids are draft keys, so the move is their two indices in the current
+   *  order. `reorderEvents` itself no-ops on same-index/out-of-range. */
+  function handleDragEnd({ draggable, droppable }: SortableDragEvent) {
+    if (!droppable) return;
+    const keys = eventKeys();
+    const from = keys.indexOf(String(draggable.id));
+    const to = keys.indexOf(String(droppable.id));
+    if (from === -1 || to === -1 || from === to) return;
+    const name = store.draft.events[from]?.name ?? "";
+    store.reorderEvents(from, to);
+    announceMove(name, to);
+  }
+
+  /** Keyboard re-order: move the row at `index` one slot in `delta`'s direction.
+   *  Focus rides along for free — `<For>` is keyed, so the row's DOM node (and
+   *  the focused grip inside it) is MOVED rather than re-created. */
+  function handleKeyboardMove(index: number, delta: -1 | 1) {
+    const to = index + delta;
+    if (to < 0 || to >= store.draft.events.length) return;
+    const name = store.draft.events[index]?.name ?? "";
+    store.reorderEvents(index, to);
+    announceMove(name, to);
+  }
 
   const changesUrl = (op: string) =>
     apiUrl(`/api/organiser/weddings/${props.weddingId}/changes/${op}`);
@@ -239,20 +286,39 @@ export default function EventsEditor(props: { weddingId: string }) {
             </div>
           }
         >
-          <ul class="flex flex-col gap-3">
-            <For each={store.draft.events}>
-              {(event, index) => (
-                <EventRowCard
-                  event={event}
-                  index={index()}
-                  sortable={sortable}
-                  hasError={(errorsByKey().get(event.key)?.length ?? 0) > 0}
-                  onEdit={() => setEditingKey(event.key)}
-                  onDelete={() => handleDelete(event)}
-                />
-              )}
-            </For>
-          </ul>
+          {/* `DragDropSensors` registers solid-dnd's pointer sensor; the grip's own
+              Arrow-key handler covers keyboard (solid-dnd has no keyboard sensor).
+              `closestCenter` is the right detector for a single-column list. */}
+          <DragDropProvider onDragEnd={handleDragEnd} collisionDetector={closestCenter}>
+            <DragDropSensors />
+            <ul class="flex flex-col gap-3">
+              <SortableProvider ids={eventKeys()}>
+                <For each={store.draft.events}>
+                  {(event, index) => (
+                    <EventRowCard
+                      event={event}
+                      index={index()}
+                      count={store.draft.events.length}
+                      hasError={(errorsByKey().get(event.key)?.length ?? 0) > 0}
+                      onEdit={() => setEditingKey(event.key)}
+                      onDelete={() => handleDelete(event)}
+                      onKeyboardMove={(delta) => handleKeyboardMove(index(), delta)}
+                    />
+                  )}
+                </For>
+              </SortableProvider>
+            </ul>
+          </DragDropProvider>
+
+          {/* Keyboard instructions, referenced by every grip's aria-describedby —
+              the drag affordance is invisible to a screen-reader user otherwise. */}
+          <p id="reorder-hint" class="sr-only">
+            Drag to re-order, or press the up and down arrow keys to move this event.
+          </p>
+          {/* Screen-reader feedback for a completed move (drag or keyboard). */}
+          <p class="sr-only" role="status" aria-live="polite">
+            {announcement()}
+          </p>
         </Show>
       </Show>
 
@@ -359,39 +425,67 @@ export default function EventsEditor(props: { weddingId: string }) {
   );
 }
 
-/** One event summary row: a drag handle to re-order, plus edit/delete controls. */
+/** One event summary row: a drag handle to re-order, plus edit/delete controls.
+ *  Must be rendered inside the list's `DragDropProvider` + `SortableProvider`. */
 function EventRowCard(props: {
   event: DraftEvent;
   index: number;
-  sortable: SortableList;
+  count: number;
   hasError: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onKeyboardMove: (delta: -1 | 1) => void;
 }) {
-  const item = createSortableItem({
-    list: props.sortable,
-    id: () => props.event.key,
-    index: () => props.index,
-  });
+  const sortable = createSortable(props.event.key);
+  // Non-null: the row only ever renders inside the list's DragDropProvider.
+  const [dndState] = useDragDropContext()!;
+  let handleEl!: HTMLButtonElement;
+
+  /** Arrow Up/Down re-orders from the focused grip — solid-dnd has no keyboard
+   *  sensor, so this is the whole keyboard story for the list. */
+  function handleKeyDown(event: KeyboardEvent) {
+    const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    if (delta === 0) return;
+    // Stop the page scrolling out from under the row being moved.
+    event.preventDefault();
+    props.onKeyboardMove(delta);
+    // Re-focus the grip explicitly. `<For>` is keyed so this very node is MOVED
+    // rather than re-created, but a DOM move is a remove-then-insert and focus
+    // does not reliably survive it — without this, one keypress moves the row and
+    // then focus is on <body>, so the row can't be walked further.
+    handleEl.focus();
+  }
 
   return (
     <li
-      ref={item.ref}
+      ref={sortable.ref}
+      // `ref` (unlike solid-dnd's `use:sortable` directive) registers the node
+      // WITHOUT applying the drag/shift transform, which is what lets the grip —
+      // rather than the whole row — be the drag affordance. So apply it here.
+      style={maybeTransformStyle(sortable.transform)}
       class="border-border bg-surface/30 flex flex-wrap items-center gap-3 rounded-sm border p-4"
       classList={{
         "border-error/50": props.hasError,
         // Lift the row being dragged clear of its neighbours.
-        "border-gold/60 bg-surface/80 shadow-lg": item.isDragging(),
+        "border-gold/60 bg-surface/80 z-10 shadow-lg": sortable.isActiveDraggable,
+        // Animate the OTHER rows shifting aside, but never the dragged one —
+        // that must track the pointer without easing. Only while a drag is live,
+        // so the post-drop settle isn't double-animated.
+        "transition-transform": !!dndState.active.draggable && !sortable.isActiveDraggable,
       }}
     >
-      {/* The grip. A real <button> so dnd-kit's keyboard sensor can drive it:
-          focus it, Space/Enter to lift, arrows to move, Escape to cancel. The
-          `touch-none` is required — without it the browser scrolls instead of
-          handing the touch to dnd-kit. */}
+      {/* The grip. A real <button> so it's tabbable and can own the keyboard
+          re-order path. `touch-none` is required — without it the browser
+          scrolls instead of handing the gesture to solid-dnd. */}
       <button
         type="button"
-        ref={item.handleRef}
-        aria-label={`Reorder ${props.event.name || "event"}`}
+        ref={handleEl}
+        aria-label={`Reorder ${props.event.name || "event"}, position ${props.index + 1} of ${props.count}`}
+        aria-describedby="reorder-hint"
+        // Spread FIRST so our keyboard handler can't be clobbered by a future
+        // solid-dnd sensor that also binds keydown.
+        {...sortable.dragActivators}
+        onKeyDown={handleKeyDown}
         class="text-text-muted hover:text-gold focus-visible:text-gold cursor-grab touch-none px-1 text-[1.1rem] leading-none active:cursor-grabbing"
       >
         ⠿

@@ -163,12 +163,14 @@ describe("EventsEditor", () => {
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Reception")).toBeTruthy());
 
-    // One grip per event, labelled by event name. Re-ordering itself is driven by
-    // dnd-kit (pointer or keyboard) — the index maths it hands back is covered in
-    // dnd-sortable.test.ts, and the commit in guest-event-draft.test.ts.
-    expect(screen.getByRole("button", { name: /Reorder Ceremony/i })).toBeTruthy();
-    const grip = screen.getByRole("button", { name: /Reorder Reception/i });
-    expect(grip.tagName).toBe("BUTTON"); // focusable ⇒ keyboard sorting works
+    // One grip per event, labelled by name AND position — solid-dnd announces
+    // nothing, so the label carries the position itself. Re-ordering behaviour
+    // (pointer drag + keyboard) is covered in EventsEditor.reorder.test.tsx.
+    expect(screen.getByRole("button", { name: /Reorder Ceremony, position 1 of 2/i })).toBeTruthy();
+    const grip = screen.getByRole("button", { name: /Reorder Reception, position 2 of 2/i });
+    expect(grip.tagName).toBe("BUTTON"); // tabbable ⇒ it can own the keyboard path
+    expect(grip.getAttribute("aria-describedby")).toBe("reorder-hint");
+    expect(screen.getByText(/press the up and down arrow keys/i)).toBeTruthy();
     // The old ▲/▼ pair is gone.
     expect(screen.queryByRole("button", { name: /Move Reception up/i })).toBeNull();
   });
