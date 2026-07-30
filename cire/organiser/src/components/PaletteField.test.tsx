@@ -80,6 +80,39 @@ describe("PaletteField", () => {
     expect(onChange).toHaveBeenCalledWith({ preset: "chapel", seeds: {} });
   });
 
+  /**
+   * The scheme preview sits inside the builder's "Look" card, directly under
+   * the typography controls, and is styled with the shared token map — which
+   * carries the five typography variables. Its sample used to pin
+   * `font-light italic` at a literal `1.5rem`, so it contradicted every
+   * heading pick made an inch above it. Follow the variables (with the guest
+   * packs' literals as fallbacks) so a "Default" scheme still renders exactly
+   * as before.
+   */
+  it("its heading sample follows the typography variables, not a hardcoded look", () => {
+    const { container } = render(() => <PaletteField value={EMPTY} onChange={() => {}} />);
+    const heading = screen.getByText("Your Events");
+
+    const headingStyle = heading.getAttribute("style") ?? "";
+    expect(headingStyle).toContain("font-weight:var(--invite-heading-weight, 300)");
+    expect(headingStyle).toContain("font-style:var(--invite-heading-style, normal)");
+    expect(headingStyle).toContain("font-size:calc(1.5rem * var(--invite-heading-scale, 1))");
+    // The old hardcoded pair would win over the variables — it must be gone.
+    expect(heading.className).not.toContain("italic");
+    expect(heading.className).not.toContain("font-light");
+
+    // The body pair rides the panel wrapper and cascades, exactly as the guest
+    // invite's `body` rule does — so the eyebrow and the event card follow the
+    // organiser's body weight/style too, not just one line.
+    const panel = container.querySelector(
+      '[aria-label="Colour scheme preview"] > div',
+    ) as HTMLElement;
+    const panelStyle = panel.getAttribute("style") ?? "";
+    expect(panelStyle).toContain("font-family:var(--font-body)");
+    expect(panelStyle).toContain("font-weight:var(--invite-body-weight, 400)");
+    expect(panelStyle).toContain("font-style:var(--invite-body-style, normal)");
+  });
+
   it("stays quiet when the scheme needs no contrast rescue", () => {
     render(() => <PaletteField value={{ preset: "evergreen", seeds: {} }} onChange={() => {}} />);
     expect(screen.queryByText(/Adjusted to stay readable/)).toBeNull();

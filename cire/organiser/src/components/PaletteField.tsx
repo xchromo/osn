@@ -167,16 +167,38 @@ export default function PaletteField(props: {
           class="border-border overflow-hidden rounded-sm border"
           style={{ ...tokens(), "background-color": "var(--color-bg)" }}
         >
-          <div class="flex flex-col gap-3 p-4">
+          {/* The body face, weight and style ride the wrapper and cascade to
+              every line below it — the same way `global.css` applies them to
+              the guest invite's <body>. The heading pins its own pair, so an
+              italic body never drags the heading along. */}
+          <div
+            class="flex flex-col gap-3 p-4"
+            style={{
+              "font-family": "var(--font-body)",
+              "font-weight": "var(--invite-body-weight, 400)",
+              "font-style": "var(--invite-body-style, normal)",
+            }}
+          >
             <span
               class="text-[0.6rem] tracking-[0.18em] uppercase"
               style={{ color: "var(--color-gold)" }}
             >
               Celebrate with us
             </span>
+            {/* Follows the typography variables with the guest packs' literal
+                fallbacks (300 / normal / ×1), so a size / weight / italics pick
+                shows HERE — this preview sits directly under the Look card's
+                typography controls, and a hardcoded `font-light italic` sample
+                would flatly contradict an explicit "Bold" or "Normal". */}
             <span
-              class="text-[1.5rem] leading-none font-light italic"
-              style={{ color: "var(--color-text)", "font-family": "var(--font-display)" }}
+              class="leading-none"
+              style={{
+                color: "var(--color-text)",
+                "font-family": "var(--font-display)",
+                "font-size": "calc(1.5rem * var(--invite-heading-scale, 1))",
+                "font-weight": "var(--invite-heading-weight, 300)",
+                "font-style": "var(--invite-heading-style, normal)",
+              }}
             >
               Your Events
             </span>

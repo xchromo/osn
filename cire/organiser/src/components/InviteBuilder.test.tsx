@@ -540,6 +540,19 @@ describe("InviteBuilder theme", () => {
     await waitFor(() =>
       expect(heroPreview()!.style.getPropertyValue("--invite-heading-weight")).toBe("700"),
     );
+    // EVERY preview layer is styled from the same token map — including the
+    // colour-scheme sample inside the Look card, which sits closest to the
+    // typography controls and so is the one an organiser watches first.
+    const schemePreview = container.querySelector(
+      '[aria-label="Colour scheme preview"]',
+    ) as HTMLElement;
+    expect(schemePreview.style.getPropertyValue("--invite-heading-weight")).toBe("700");
+    // (The body pair rides each section sample's WRAPPER so it cascades to the
+    // eyebrow and event card too, mirroring the guest `body` rule. That one is
+    // pinned in PaletteField.test.tsx instead: happy-dom's style parser drops a
+    // `var()` value for `font-weight`/`font-style` when it is applied through
+    // `setProperty` — which is the path Solid takes for a style object that
+    // also carries a dynamic value, as the section wrapper's surface is.)
     // Live preview must not trigger a network save.
     expect(authFetchMock).toHaveBeenCalledTimes(1);
   });

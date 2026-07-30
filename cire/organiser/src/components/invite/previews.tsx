@@ -232,8 +232,18 @@ export function SectionSample(props: {
   class?: string;
 }) {
   return (
+    // The body weight + style ride the section wrapper alongside the body face
+    // and cascade to every line inside it — eyebrow, body copy and the event
+    // card — mirroring `global.css`'s `body` rule on the guest invite. Pinning
+    // them on the body line alone left the rest of the sample on the pack's
+    // default, so a "Body weight: Bold" pick only moved one span.
     <div
-      style={{ "background-color": props.surface, "font-family": "var(--font-body)" }}
+      style={{
+        "background-color": props.surface,
+        "font-family": "var(--font-body)",
+        "font-weight": "var(--invite-body-weight, 400)",
+        "font-style": "var(--invite-body-style, normal)",
+      }}
       class={`flex flex-col items-center justify-center gap-1.5 p-4 text-center ${props.class ?? ""}`}
     >
       <Show when={props.eyebrow}>
@@ -271,13 +281,10 @@ export function SectionSample(props: {
         )}
       </Show>
       {/* Body sample in the body font on the section surface, so the font and
-          the text-on-surface contrast are both visible. */}
+          the text-on-surface contrast are both visible. Weight + style are
+          inherited from the wrapper above. */}
       <span
-        style={{
-          color: "var(--color-text-muted)",
-          "font-weight": "var(--invite-body-weight, 400)",
-          "font-style": "var(--invite-body-style, normal)",
-        }}
+        style={{ color: "var(--color-text-muted)" }}
         class="max-w-full text-[0.62rem] break-words"
       >
         {props.body}
