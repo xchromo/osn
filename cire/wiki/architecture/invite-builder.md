@@ -686,10 +686,22 @@ the ACTIVE section. A "Preview" button next to the section tabs (hidden once
 the sticky pane can show instead — the same `@4xl/builder` CSS threshold, so
 the two never both offer a way in) opens `invite/PreviewModal.tsx`: the exact
 same `PreviewPane` in a `<Portal>` dialog, so there is still only one composed
-markup source, just two presentations of it. `InviteBuilder.tsx`'s
-`previewProps(d)` helper builds the shared prop object once and feeds both the
-sticky `<aside>` and the modal — a change to one can't silently skip the
-other.
+markup source, just two presentations of it. `InviteBuilder.tsx` shares the
+`hero`/`story`/`welcome`/`events`/`closing` slot values between the sticky
+`<aside>` and the modal via five small per-slot helpers
+(`heroPreviewProps(d)`, `storyPreviewProps()`, …), each called at its own JSX
+prop position on BOTH consumers — e.g. `hero={heroPreviewProps(d)}` on both
+`<PreviewPane>` and `<PreviewModal>` — so a change to one slot's shape can't
+silently skip the other consumer. **Not** a single function returning the
+whole `PreviewPaneProps` object spread with `{...}` onto each consumer — that
+was the first cut, and it shipped a real live-preview regression (caught by
+`InviteBuilder.test.tsx`'s "opens the composed preview in a modal…" test, not
+by inspection): Solid's compiler makes an individual JSX prop reactive by
+wrapping its expression in a getter, so `hero={heroPreviewProps(d)}`
+re-evaluates every time `props.hero` is read inside a tracking scope. A
+spread of an already-computed plain object has no such getter — the object
+is built once, when the `<Show>` render-prop runs, and both the aside AND
+the modal would freeze at whatever the form looked like on first render.
 
 **Mobile preview proportions (2026-07-30 fix).** `HeroSample`'s title used
 `font-size: clamp(1.25rem, 6vw, 2rem)` — `vw` resolves against the real

@@ -551,35 +551,45 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     setDraft("tones", "details", null);
   };
 
-  /** Props for the composed preview — shared by the sticky side pane (wide
-   *  layouts) and the mobile preview modal, so the two presentations of the
-   *  same preview can never drift apart. */
-  const previewProps = (d: () => InviteCustomisation): PreviewPaneProps => ({
-    tokens: previewTokens(),
-    toneSurface,
-    hero: {
-      shown: heroShown(),
-      imageUrl: d().hero.imageUrl,
-      crop: d().hero.imageCrop,
-      cropMobile: d().hero.imageCropMobile ?? null,
-      title: draft.heroTitle,
-      heroBlur: draft.heroBlur,
-      backdropOpacity: draft.titleBackdropOpacity,
-      backdropBlur: draft.titleBackdropBlur,
-    },
-    story: {
-      shown: storyShown(),
-      eyebrow: draft.storyEyebrow,
-      heading: draft.storyHeading,
-      body: draft.storyBody,
-    },
-    welcome: { message: draft.welcomeMessage },
-    events: { eyebrow: draft.detailsEyebrow, heading: draft.detailsHeading },
-    closing: {
-      shown: footerShown(),
-      message: draft.footerMessage,
-      imageUrl: d().footer?.imageUrl ?? null,
-    },
+  // Props for the composed preview's `hero`/`story`/`welcome`/`events`/
+  // `closing` slots — shared by the sticky side pane (wide layouts) and the
+  // mobile preview modal, so the two presentations can never drift apart.
+  //
+  // Kept as one small function PER SLOT, called at each JSX prop position,
+  // rather than one function returning the whole `PreviewPaneProps` object
+  // spread with `{...}`. Solid's compiler makes an individual JSX prop
+  // (`hero={heroPreviewProps(d)}`) reactive by wrapping its expression in a
+  // getter, so `props.hero` re-evaluates on every read; a spread of an
+  // ALREADY-COMPUTED plain object loses that — the object is built once, when
+  // the enclosing `<Show>` render-prop runs, and never again, so the preview
+  // would freeze at whatever the form looked like on first render.
+  const heroPreviewProps = (d: () => InviteCustomisation): PreviewPaneProps["hero"] => ({
+    shown: heroShown(),
+    imageUrl: d().hero.imageUrl,
+    crop: d().hero.imageCrop,
+    cropMobile: d().hero.imageCropMobile ?? null,
+    title: draft.heroTitle,
+    heroBlur: draft.heroBlur,
+    backdropOpacity: draft.titleBackdropOpacity,
+    backdropBlur: draft.titleBackdropBlur,
+  });
+  const storyPreviewProps = (): PreviewPaneProps["story"] => ({
+    shown: storyShown(),
+    eyebrow: draft.storyEyebrow,
+    heading: draft.storyHeading,
+    body: draft.storyBody,
+  });
+  const welcomePreviewProps = (): PreviewPaneProps["welcome"] => ({
+    message: draft.welcomeMessage,
+  });
+  const eventsPreviewProps = (): PreviewPaneProps["events"] => ({
+    eyebrow: draft.detailsEyebrow,
+    heading: draft.detailsHeading,
+  });
+  const closingPreviewProps = (d: () => InviteCustomisation): PreviewPaneProps["closing"] => ({
+    shown: footerShown(),
+    message: draft.footerMessage,
+    imageUrl: d().footer?.imageUrl ?? null,
   });
 
   return (
@@ -1047,7 +1057,15 @@ export default function InviteBuilder(props: InviteBuilderProps) {
               <Show when={showPreviewPane()}>
                 <aside class="hidden w-80 shrink-0 @4xl/builder:block @6xl/builder:w-96">
                   <div class="sticky top-12">
-                    <PreviewPane {...previewProps(d)} />
+                    <PreviewPane
+                      tokens={previewTokens()}
+                      toneSurface={toneSurface}
+                      hero={heroPreviewProps(d)}
+                      story={storyPreviewProps()}
+                      welcome={welcomePreviewProps()}
+                      events={eventsPreviewProps()}
+                      closing={closingPreviewProps(d)}
+                    />
                   </div>
                 </aside>
               </Show>
@@ -1059,7 +1077,13 @@ export default function InviteBuilder(props: InviteBuilderProps) {
             <PreviewModal
               open={previewModalOpen()}
               onClose={() => setPreviewModalOpen(false)}
-              {...previewProps(d)}
+              tokens={previewTokens()}
+              toneSurface={toneSurface}
+              hero={heroPreviewProps(d)}
+              story={storyPreviewProps()}
+              welcome={welcomePreviewProps()}
+              events={eventsPreviewProps()}
+              closing={closingPreviewProps(d)}
             />
 
             {/* ── Save bar — sticky so it's reachable from any section ── */}

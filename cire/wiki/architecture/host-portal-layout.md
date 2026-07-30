@@ -160,7 +160,10 @@ component was previously reading a container it did not live in.
   reason. Below `@4xl/builder`, where the sticky pane can't show, a "Preview"
   button next to the tabs opens the same `PreviewPane` in `PreviewModal.tsx`
   (a `<Portal>` dialog) instead — one composed-preview markup source, two
-  presentations, via a `previewProps(d)` helper both consume.
+  presentations, fed by five small per-slot prop helpers (`heroPreviewProps`,
+  `storyPreviewProps`, …) called at each consumer's own JSX prop position, NOT
+  spread from one pre-built object — see `[[invite-builder]]` for why the
+  spread version silently broke live updates.
 
   It is also the one place that **measures instead of only querying**. The two
   preview layers — five inline per-section previews, and the composed pane — used

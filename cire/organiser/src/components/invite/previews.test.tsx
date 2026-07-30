@@ -103,7 +103,7 @@ describe("HeroSample", () => {
 
   it("follows the heading variables on the title, fallbacks intact", () => {
     const styles = captureDeclaredStyles();
-    render(() => (
+    const { container } = render(() => (
       <HeroSample
         imageUrl={null}
         title="Anita & Ben"
@@ -123,6 +123,10 @@ describe("HeroSample", () => {
     expect(style["font-weight"]).toBe(typographyVar("headingWeight"));
     expect(style["font-style"]).toBe(typographyVar("headingStyle"));
     expect(title.className).not.toContain("italic");
+    // `cqi` only resolves against a query container — a class-string match on
+    // the font-size alone can't catch this container being dropped (happy-dom
+    // computes no layout, so the string would still "look" right).
+    expect(container.firstElementChild?.className).toContain("@container");
     expect(title.className).not.toContain("font-light");
   });
 });

@@ -1471,6 +1471,49 @@ describe("InviteBuilder UX guards", () => {
     expect(nav.textContent).toContain("Hero");
     expect(nav.textContent).toContain("Closing");
   });
+
+  it("shows one section at a time via the native `hidden` attribute", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    // Design is the default active tab; every other section starts hidden.
+    expect(document.getElementById("invite-design")!.hidden).toBe(false);
+    expect(document.getElementById("invite-hero")!.hidden).toBe(true);
+
+    // Switching tabs flips which fieldset carries `hidden` — the switch is a
+    // real attribute toggle, not a CSS class the DOM can't see. Regex name
+    // match: with `EMPTY_CUSTOMISATION` the Hero tab's accessible name is
+    // "Hero (hidden — empty)" (the sr-only Shown/Hidden suffix), not "Hero".
+    await openSection(/^Hero/);
+    expect(document.getElementById("invite-design")!.hidden).toBe(true);
+    expect(document.getElementById("invite-hero")!.hidden).toBe(false);
+  });
+
+  it("opens the composed preview in a modal from the mobile Preview button", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION));
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+    await waitFor(() => screen.getByText("Save invite"));
+
+    // No dialog until the button is clicked — the modal is the only way to
+    // reach the composed preview below `@4xl/builder`.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const dialog = await waitFor(() =>
+      screen.getByRole("dialog", { name: "Invite preview modal" }),
+    );
+    // The SAME composed preview the sticky side pane renders — one markup
+    // source shared via `previewProps()`, not a second copy.
+    expect(within(dialog).getByLabelText("Invite preview")).toBeInTheDocument();
+
+    // Live, not a stale snapshot taken when the modal opened.
+    fireEvent.input(screen.getByLabelText("Couple title"), { target: { value: "Anita & Ben" } });
+    await waitFor(() => expect(dialog.textContent).toContain("Anita & Ben"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
 });
 
 /**
