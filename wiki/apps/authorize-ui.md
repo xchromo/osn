@@ -12,7 +12,7 @@ related:
   - "[[passkey-primary]]"
   - "[[sessions]]"
   - "[[musubi-identity-migration]]"
-last-reviewed: 2026-07-28
+last-reviewed: 2026-07-30
 ---
 
 # Authorize UI — the OIDC consent screen
@@ -192,6 +192,39 @@ short-circuits consent), so state 4's copy can assume a third party.
 - `osn/social/public/_headers` carries `frame-ancestors 'none'`,
   `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
   `Referrer-Policy: strict-origin-when-cross-origin`.
+- **Every issuer call has a deadline** (AZ-P-I2, 2026-07-30). Both
+  `createAuthorizeClient` calls take an optional `signal` and run under a
+  default 10 s ceiling (`DEFAULT_AUTHORIZE_TIMEOUT_MS`, overridable via
+  `timeoutMs`); the page aborts its in-flight context read on unmount. This
+  is what makes the retry screen above reachable — a screen that only helps
+  once the promise settles is no help at all if the promise never does.
+  A timeout **or a transport failure** now arrives as a retryable
+  `AuthorizeError` with code `unknown`, which is what the error table has
+  always claimed; before this, a transport failure escaped as a raw
+  `TypeError`. A caller's own abort is re-thrown untouched — an unmount is
+  not an error state to render. The composition is hand-rolled rather than
+  `AbortSignal.any` + `AbortSignal.timeout`, so the timer can be cleared
+  when a call settles and older mobile browsers still reach the screen.
+- **The page announces its own transitions** (A-L1, 2026-07-30). `<Switch>`
+  swaps the whole screen without moving focus, so a screen reader heard
+  nothing when the page flipped to "Taking you back…" or to a terminal
+  state. An `aria-live="polite"` region carries a short label per screen.
+  Two details are load-bearing: the region is **always mounted** (a live
+  region added to the DOM in the same tick as its text is not reliably
+  announced), and the `error` screen is deliberately excluded, because its
+  message already carries `role="alert"` and announcing both reads the
+  failure twice.
+- **The issuer origin is preconnected** (AZ-P-I1, 2026-07-30). `/authorize`
+  is a cold cross-origin landing: the browser arrives from the relying party
+  with no warm connection, so `GET /authorize/context` paid DNS + TCP + TLS
+  before a byte moved. An `issuerPreconnect()` plugin in
+  `osn/social/vite.config.ts` emits `<link rel="preconnect" crossorigin>`
+  built from the **resolved** config's `VITE_OSN_ISSUER_URL` — resolved, not
+  `process.env`, so it sees exactly what the app's `import.meta.env` will,
+  `.env` files included. `crossorigin` is required, since the context read is
+  `credentials: "include"` and a preconnect opened in the wrong CORS mode is
+  a second connection rather than a reused one. A missing or malformed value
+  emits no tag rather than a dead one.
 
 ## Open questions (decide at build time, none block starting)
 

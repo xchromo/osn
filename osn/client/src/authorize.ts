@@ -22,6 +22,33 @@ import type { PublicProfile } from "./tokens";
 export interface AuthorizeClientConfig {
   /** OSN issuer base URL, e.g. http://localhost:4000 */
   issuerUrl: string;
+  /**
+   * How long either call may hang before it is aborted, in milliseconds.
+   * Defaults to {@link DEFAULT_AUTHORIZE_TIMEOUT_MS}.
+   *
+   * Without a ceiling a stalled issuer leaves the consent screen on its
+   * spinner until the browser's own (minutes-long, unspecified) timeout fires
+   * — the retry screen only helps once the promise settles. Pass `0` to opt
+   * out and rely on the caller's own `signal`.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * 10s. Long enough to survive a slow mobile handshake on a cold cross-origin
+ * landing, short enough that a hung issuer becomes a retry button rather than
+ * an indefinite spinner.
+ */
+export const DEFAULT_AUTHORIZE_TIMEOUT_MS = 10_000;
+
+/** Per-call options. Both calls accept a caller-owned abort signal. */
+export interface AuthorizeCallOptions {
+  /**
+   * Aborted by the caller — e.g. the consent screen cancelling an in-flight
+   * context read on unmount. Composed with the timeout, so whichever fires
+   * first wins.
+   */
+  signal?: AbortSignal;
 }
 
 /** The error codes the consent screen has to branch on. */
@@ -97,13 +124,16 @@ export interface AuthorizeClient {
    * Throws `AuthorizeError` with code `invalid_request` when the request has
    * expired, been consumed, or was opened in a different browser.
    */
-  getContext(requestId: string): Promise<AuthorizeContext>;
+  getContext(requestId: string, options?: AuthorizeCallOptions): Promise<AuthorizeContext>;
   /**
    * Post the user's answer. A denial is a decision — Cancel posts
    * `approved: false` rather than abandoning the request for its TTL.
    * The returned `redirectTo` is opaque: assign it, never parse it.
    */
-  submitDecision(input: AuthorizeDecisionInput): Promise<{ redirectTo: string }>;
+  submitDecision(
+    input: AuthorizeDecisionInput,
+    options?: AuthorizeCallOptions,
+  ): Promise<{ redirectTo: string }>;
 }
 
 interface ErrorBody {
@@ -143,13 +173,65 @@ const readBody = async (res: Response): Promise<unknown> => {
 
 export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeClient {
   const base = config.issuerUrl.replace(/\/$/, "");
+  const timeoutMs = config.timeoutMs ?? DEFAULT_AUTHORIZE_TIMEOUT_MS;
 
-  const getContext = async (requestId: string): Promise<AuthorizeContext> => {
-    const res = await fetch(`${base}/authorize/context?request=${encodeURIComponent(requestId)}`, {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
+  /**
+   * One fetch under two deadlines: the caller's `signal` and our own timeout.
+   * `AbortSignal.any` + `AbortSignal.timeout` would say this in one line, but
+   * hand-rolling keeps the client working on the older mobile browsers that
+   * still reach a consent screen — and it lets the timer be cleared, so a
+   * settled call leaves nothing pending.
+   *
+   * A timeout is surfaced as an `AuthorizeError` the page can render and
+   * retry; a caller abort is re-thrown untouched, because a component that
+   * cancelled its own read does not want an error screen for it.
+   */
+  const send = async (
+    url: string,
+    init: RequestInit,
+    options: AuthorizeCallOptions | undefined,
+  ): Promise<Response> => {
+    const caller = options?.signal;
+    if (caller?.aborted) throw caller.reason;
+
+    const controller = new AbortController();
+    const onCallerAbort = () => controller.abort(caller!.reason);
+    caller?.addEventListener("abort", onCallerAbort, { once: true });
+
+    let timedOut = false;
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, timeoutMs)
+        : undefined;
+
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (cause) {
+      if (caller?.aborted) throw cause;
+      if (timedOut) {
+        throw new AuthorizeError("unknown", 0, "This is taking too long. Try again.");
+      }
+      // A transport failure is the "anything else" arm of AuthorizeErrorCode:
+      // wrap it so every caller has one error type to branch on.
+      throw new AuthorizeError("unknown", 0, "Could not reach OSN. Check your connection.");
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
+    }
+  };
+
+  const getContext = async (
+    requestId: string,
+    options?: AuthorizeCallOptions,
+  ): Promise<AuthorizeContext> => {
+    const res = await send(
+      `${base}/authorize/context?request=${encodeURIComponent(requestId)}`,
+      { method: "GET", credentials: "include", headers: { Accept: "application/json" } },
+      options,
+    );
     const json = (await readBody(res)) as Partial<AuthorizeContext> & ErrorBody;
     if (!res.ok || !json.client || !Array.isArray(json.scopes)) {
       throw toError(res.status, json);
@@ -163,13 +245,20 @@ export function createAuthorizeClient(config: AuthorizeClientConfig): AuthorizeC
     };
   };
 
-  const submitDecision = async (input: AuthorizeDecisionInput): Promise<{ redirectTo: string }> => {
-    const res = await fetch(`${base}/authorize/decision`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
+  const submitDecision = async (
+    input: AuthorizeDecisionInput,
+    options?: AuthorizeCallOptions,
+  ): Promise<{ redirectTo: string }> => {
+    const res = await send(
+      `${base}/authorize/decision`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+      options,
+    );
     const json = (await readBody(res)) as { redirectTo?: string } & ErrorBody;
     if (!res.ok || typeof json.redirectTo !== "string") {
       throw toError(res.status, json);

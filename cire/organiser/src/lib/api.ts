@@ -17,7 +17,14 @@ export function isAuthExpired(err: unknown): boolean {
   if (typeof err === "object" && err !== null && "_tag" in err) {
     if ((err as { _tag: unknown })._tag === "AuthExpiredError") return true;
   }
-  return String(err).includes("AuthExpiredError");
+  // `String(x)` throws on a null-prototype object (no `toString` to reach).
+  // This runs inside `catch` blocks, so a throw here would swap a recoverable
+  // expiry for an unhandled rejection.
+  try {
+    return String(err).includes("AuthExpiredError");
+  } catch {
+    return false;
+  }
 }
 
 /**

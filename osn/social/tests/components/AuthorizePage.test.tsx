@@ -34,6 +34,14 @@ import { AuthorizePage } from "../../src/pages/AuthorizePage";
 
 const REQUEST_ID = "oar_0123456789ab";
 
+/**
+ * AZ-P-I2: every issuer call carries the page's abort signal, so a read left
+ * in flight past unmount is cancelled rather than resolving into a component
+ * that no longer exists. Asserted on each call rather than loosened away, so
+ * dropping the signal fails here instead of leaking quietly.
+ */
+const withAbortSignal = expect.objectContaining({ signal: expect.any(AbortSignal) });
+
 const alice = {
   id: "usr_1",
   handle: "alice",
@@ -151,7 +159,7 @@ describe("<AuthorizePage />", () => {
         "Your email belongs to your account, not this profile — every app you allow sees the same one.",
       ),
     ).toBeDefined();
-    expect(mocks.getContext).toHaveBeenCalledWith(REQUEST_ID);
+    expect(mocks.getContext).toHaveBeenCalledWith(REQUEST_ID, withAbortSignal);
   });
 
   it("posts an approval with the selected profile and assigns the redirect verbatim", async () => {
@@ -163,11 +171,14 @@ describe("<AuthorizePage />", () => {
     fireEvent.click(await screen.findByText("Allow"));
 
     await waitFor(() =>
-      expect(mocks.submitDecision).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        profileId: "usr_1",
-        approved: true,
-      }),
+      expect(mocks.submitDecision).toHaveBeenCalledWith(
+        {
+          requestId: REQUEST_ID,
+          profileId: "usr_1",
+          approved: true,
+        },
+        withAbortSignal,
+      ),
     );
     await waitFor(() => expect(assign).toHaveBeenCalledWith(redirectTo));
     expect(await screen.findByText("Taking you back…")).toBeDefined();
@@ -183,11 +194,14 @@ describe("<AuthorizePage />", () => {
     fireEvent.click(await screen.findByText("Cancel"));
 
     await waitFor(() =>
-      expect(mocks.submitDecision).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        profileId: "usr_1",
-        approved: false,
-      }),
+      expect(mocks.submitDecision).toHaveBeenCalledWith(
+        {
+          requestId: REQUEST_ID,
+          profileId: "usr_1",
+          approved: false,
+        },
+        withAbortSignal,
+      ),
     );
   });
 
@@ -239,11 +253,14 @@ describe("<AuthorizePage />", () => {
 
     fireEvent.click(await screen.findByText("Allow"));
     await waitFor(() =>
-      expect(mocks.submitDecision).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        profileId: "usr_2",
-        approved: true,
-      }),
+      expect(mocks.submitDecision).toHaveBeenCalledWith(
+        {
+          requestId: REQUEST_ID,
+          profileId: "usr_2",
+          approved: true,
+        },
+        withAbortSignal,
+      ),
     );
   });
 
@@ -257,11 +274,14 @@ describe("<AuthorizePage />", () => {
     fireEvent.click(await screen.findByText("Allow"));
 
     await waitFor(() =>
-      expect(mocks.submitDecision).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        profileId: "usr_2",
-        approved: true,
-      }),
+      expect(mocks.submitDecision).toHaveBeenCalledWith(
+        {
+          requestId: REQUEST_ID,
+          profileId: "usr_2",
+          approved: true,
+        },
+        withAbortSignal,
+      ),
     );
   });
 

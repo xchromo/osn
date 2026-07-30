@@ -233,4 +233,100 @@ describe("createAuthorizeClient", () => {
       expect(err.code).toBe("unknown");
     });
   });
+
+  // AZ-P-I2. Without a deadline a stalled issuer leaves the consent screen on
+  // its spinner until the browser gives up — the retry screen only helps once
+  // the promise settles, so the promise has to settle.
+  describe("deadlines", () => {
+    /** A fetch that hangs until its signal aborts, as a stalled issuer would. */
+    const stubStalledFetch = () =>
+      stubFetch(
+        (call) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = call.init?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+
+    it("gives up on a stalled issuer instead of hanging", async () => {
+      vi.useFakeTimers();
+      try {
+        const quick = createAuthorizeClient({ ...config, timeoutMs: 50 });
+        stubStalledFetch();
+
+        const pending = quick.getContext(requestId).catch((e: unknown) => e);
+        await vi.advanceTimersByTimeAsync(50);
+        const err = (await pending) as AuthorizeError;
+
+        expect(err).toBeInstanceOf(AuthorizeError);
+        expect(err.code).toBe("unknown");
+        // Retryable, not terminal: the parked request outlives a slow network.
+        expect(err.terminal).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("passes a signal to fetch and clears the timer once a call settles", async () => {
+      vi.useFakeTimers();
+      try {
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+        const { calls } = stubFetch(() => jsonResponse(sampleContext));
+
+        await createAuthorizeClient(config).getContext(requestId);
+
+        expect(calls[0]!.init?.signal).toBeInstanceOf(AbortSignal);
+        expect(calls[0]!.init?.signal?.aborted).toBe(false);
+        // A settled call must not leave a live timer behind — on the consent
+        // screen that would abort a later, unrelated request.
+        expect(clearSpy).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-throws a caller abort untouched rather than dressing it as a failure", async () => {
+      // The page aborts its own in-flight read on unmount; that is not an
+      // error state to render, so it must not arrive as an AuthorizeError.
+      const controller = new AbortController();
+      stubStalledFetch();
+
+      const pending = client
+        .getContext(requestId, { signal: controller.signal })
+        .catch((e: unknown) => e);
+      controller.abort(new Error("unmounted"));
+      const err = await pending;
+
+      expect(err).not.toBeInstanceOf(AuthorizeError);
+      expect((err as Error).message).toBe("unmounted");
+    });
+
+    it("does not call fetch at all when the caller's signal is already aborted", async () => {
+      const { fn } = stubFetch(() => jsonResponse(sampleContext));
+      const controller = new AbortController();
+      controller.abort(new Error("already gone"));
+
+      const err = await client
+        .getContext(requestId, { signal: controller.signal })
+        .catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe("already gone");
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("wraps a transport failure as a retryable AuthorizeError", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+      );
+
+      const err = (await client
+        .submitDecision({ requestId, profileId: "usr_1", approved: true })
+        .catch((e: unknown) => e)) as AuthorizeError;
+
+      expect(err).toBeInstanceOf(AuthorizeError);
+      expect(err.code).toBe("unknown");
+      expect(err.terminal).toBe(false);
+    });
+  });
 });

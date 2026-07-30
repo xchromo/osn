@@ -65,6 +65,39 @@ it.effect("parseRRule rejects BYDAY with MONTHLY", () =>
   }),
 );
 
+// S-L2: an UNTIL before the series start parses as valid grammar but can
+// never yield an instance, so without this the organiser gets a series and an
+// empty calendar with no error to explain it.
+it.effect("parseRRule rejects UNTIL before dtstart when dtstart is known", () =>
+  Effect.gen(function* () {
+    const dtstart = new Date("2030-06-04T18:00:00.000Z");
+    const err = yield* Effect.flip(
+      parseRRule("FREQ=WEEKLY;UNTIL=2030-01-01T00:00:00.000Z", dtstart),
+    );
+    expect(err.reason).toBe("parse_error");
+    expect(err.message).toMatch(/UNTIL/);
+  }),
+);
+
+it.effect("parseRRule accepts UNTIL at or after dtstart", () =>
+  Effect.gen(function* () {
+    const dtstart = new Date("2030-06-04T18:00:00.000Z");
+    // Boundary: equal is not "before" — a single-instance series is legal.
+    const same = yield* parseRRule("FREQ=WEEKLY;UNTIL=2030-06-04T18:00:00.000Z", dtstart);
+    expect(same.until?.toISOString()).toBe("2030-06-04T18:00:00.000Z");
+    const later = yield* parseRRule("FREQ=WEEKLY;UNTIL=2031-06-04T18:00:00.000Z", dtstart);
+    expect(later.until).not.toBeNull();
+  }),
+);
+
+it.effect("parseRRule leaves UNTIL unchecked when the caller has no dtstart", () =>
+  Effect.gen(function* () {
+    // The grammar alone can't judge it, so the two-arg form must not reject.
+    const parsed = yield* parseRRule("FREQ=WEEKLY;UNTIL=2030-01-01T00:00:00.000Z");
+    expect(parsed.until).not.toBeNull();
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // expandRRule
 // ---------------------------------------------------------------------------
@@ -99,6 +132,36 @@ it.effect("expandRRule MONTHLY walks by month", () =>
     const dates = expandRRule(parsed, dtstart, new Date("2100-01-01"));
     expect(dates).toHaveLength(3);
     expect(dates[1]!.getUTCMonth()).toBe((dates[0]!.getUTCMonth() + 1) % 12);
+  }),
+);
+
+// S-L2. `extend_window` hands the expander a horizon of now + 90 days, so a
+// series that starts further out than that legitimately arrives with an empty
+// window on every sweep — it must return immediately, not walk to a valve.
+it.effect("expandRRule returns nothing when the window ends before dtstart", () =>
+  Effect.sync(() => {
+    const dtstart = new Date("2030-06-04T18:00:00.000Z");
+    for (const freq of ["WEEKLY", "MONTHLY"] as const) {
+      const parsed = { freq, interval: 1, byDay: null, count: 10, until: null };
+      expect(expandRRule(parsed, dtstart, new Date("2030-01-01T00:00:00.000Z"))).toEqual([]);
+    }
+  }),
+);
+
+it.effect("expandRRule bounds an unterminated walk without truncating a legal one", () =>
+  Effect.sync(() => {
+    const dtstart = new Date("2030-06-04T18:00:00.000Z");
+    // The largest expansion the grammar admits: COUNT at the hard cap, with a
+    // horizon far enough out that only COUNT stops it. The valve sits at
+    // MAX_SERIES_INSTANCES, so this is the case that proves it can't bite.
+    const parsed = {
+      freq: "WEEKLY" as const,
+      interval: 1,
+      byDay: null,
+      count: MAX_SERIES_INSTANCES,
+      until: null,
+    };
+    expect(expandRRule(parsed, dtstart, new Date("2100-01-01"))).toHaveLength(MAX_SERIES_INSTANCES);
   }),
 );
 
