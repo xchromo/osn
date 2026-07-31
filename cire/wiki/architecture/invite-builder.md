@@ -5,7 +5,7 @@ related:
   - "[[index]]"
   - "[[monorepo-structure]]"
   - "[[invite-templates]]"
-last-reviewed: 2026-07-30
+last-reviewed: 2026-07-31
 ---
 
 # Invite Builder
@@ -40,9 +40,29 @@ copy (the "Celebrate With Us" / "Your Events" events header and the
 
 The invite's last section — the couple's own sign-off — built over three
 migrations: `0049_invite_footer_message.sql` (the note),
-`0050_invite_footer_image.sql` (`footer_image_key` + `footer_image_crop`, a
-small centred monogram / motif / signature above it). Note and image are
-INDEPENDENT: either alone renders.
+`0050_invite_footer_image.sql` (`footer_image_key` + `footer_image_crop`, the
+image above it). Note and image are INDEPENDENT: either alone renders.
+
+**The image is a closing hero — full-bleed, edge to edge** (2026-07-31). It
+shipped as a small centred square sized for a monogram or signature; couples
+reach for a photograph here, and at 200px the sign-off read like a stray avatar
+rather than the invite's closing image. It now mirrors the hero at the top of
+the page, and inherits the hero's three consequences:
+
+| | Before | Now |
+|---|---|---|
+| Box | `w-[min(200px,45vw)]`, centred, rounded | `w-full`, viewport edge to edge, square corners |
+| Height | the crop's own pixel aspect (`cropAspectRatio`, square fallback) | fixed `clamp(16rem,45vw,32rem)` — an aspect-driven full-bleed box would be as tall as the viewport is wide |
+| Crop | exact frame (`cropBackgroundStyle`) | FOCAL POINT over a cover fit (`heroCropBackgroundStyle`) — the band's shape is the viewport's, not the crop's, so an exact fit would letterbox |
+| Variants | `thumb` 320w / `card` 800w, `sizes="200px"` | `card` 800w / `hero` 1600w, `sizes="100vw"` |
+
+Two knock-ons: the section's horizontal padding moved off the `<section>` onto
+the note's own block (the band has to reach past it), and `CROP_ASPECT.footer`
+went 1∶1 → 16∶9 so the editor opens on the shape that actually gets published.
+The organiser's `SectionSample` mirrors the band edge-to-edge too — a framed
+thumbnail there would understate what saving publishes. `contain-intrinsic-size:
+auto 24rem` joined the section's `content-visibility: auto`, since a skipped
+band now collapses ~500px of scroll height rather than 200.
 
 **It is behind the claim gate — enforced at the API, not in the render tree.**
 The first cut gated it only with `<Show when={claimResult()}>`, which controls
@@ -72,7 +92,7 @@ plays.
 (`sectionVars(theme, "welcome")`, passed in as `themeVars`). The welcome
 greeting and the closing note are the couple's two direct addresses to their
 guests, so they read as a matched pair — and the builder gains no extra knob for
-a section whose whole job is a sentence and a motif. `THEME_SECTIONS` stays the
+a section whose whole job is a sentence and an image. `THEME_SECTIONS` stays the
 four lanes it has always had.
 
 **It is NOT part of `SiteFooter`.** Two different things live at the bottom of
@@ -80,7 +100,7 @@ an invite and the distinction is load-bearing:
 
 | | `InviteClosing.astro` | `SiteFooter.astro` |
 |---|---|---|
-| What | Invite content — the couple's motif + closing note | Site chrome — couple's title + Privacy/Terms/Privacy-choices |
+| What | Invite content — the couple's closing image + note | Site chrome — couple's title + Privacy/Terms/Privacy-choices |
 | Where | Only the invite, immediately above the footer | Every document (invite, `/privacy`, `/terms`, 404) |
 | When | Conditional — nothing set ⇒ **renders nothing at all** | Always (compliance blocker C-H4) |
 | Themed | Yes — reuses the **welcome** tone, no setting of its own | No — inherits the root palette |
@@ -123,7 +143,8 @@ change — and a wider one than it looks:
   so an unlisted slot's images read as orphans and get swept after the grace
   window. Pinned by a reconcile test that seeds every slot.
 - `CROP_ASPECT` in `cire/organiser/src/lib/image-crop.ts` needs the slot's
-  default editor shape (`footer` is 1∶1 — it renders small and centred).
+  default editor shape (`footer` is 16∶9 — it renders as a full-bleed closing
+  hero band, so it opens on the same wide frame the hero does).
 
 A `null` text field (or an all-whitespace value, which the service normalises to
 `null`) means **use the built-in default** — so a partially-filled section still
@@ -345,7 +366,7 @@ typography-option columns `theme_heading_size` / `theme_heading_weight` /
 (`0049_invite_footer_message.sql` — the footer's closing note, which unlike its
 neighbours has no built-in default: NULL ⇒ nothing rendered) +
 `footer_image_key` / `footer_image_crop` (`0050_invite_footer_image.sql` — the
-closing section's optional motif, same R2-key + crop-JSON storage as the other
+closing section's optional full-bleed image, same R2-key + crop-JSON storage as the other
 slots) + the two **hero display** columns
 `hero_image_style` (`blurred | regular`, **NOT NULL DEFAULT `blurred`**) and
 `hero_title_backdrop` (`none | solid`, **NOT NULL DEFAULT `none`**). The two

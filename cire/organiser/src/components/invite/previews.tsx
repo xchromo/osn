@@ -232,7 +232,12 @@ export function SectionSample(props: {
   surface: string;
   eyebrow?: string;
   heading?: string;
-  /** Optional small centred image (the closing section's motif). */
+  /**
+   * Optional image (today only the closing section's). It renders EDGE TO EDGE
+   * across the top of the sample, mirroring the guest invite, where the closing
+   * image is a full-bleed hero band above the note — a centred thumbnail here
+   * would understate what the organiser is about to publish.
+   */
   imageUrl?: string | null;
   body: string;
   /** Optional mini event card (the events section's preview). */
@@ -254,75 +259,76 @@ export function SectionSample(props: {
     // the contract would be invisible to the tests.
     <div
       style={{ "background-color": props.surface, "font-family": "var(--font-body)" }}
-      class={`flex flex-col items-center justify-center gap-1.5 p-4 text-center [font-weight:var(--invite-body-weight,400)] [font-style:var(--invite-body-style,normal)] ${props.class ?? ""}`}
+      class={`flex flex-col [font-weight:var(--invite-body-weight,400)] [font-style:var(--invite-body-style,normal)] ${props.class ?? ""}`}
     >
-      <Show when={props.eyebrow}>
-        <span
-          style={{ color: "var(--color-gold)" }}
-          class="text-[0.6rem] tracking-[0.18em] uppercase opacity-80"
-        >
-          {props.eyebrow}
-        </span>
-      </Show>
-      {/* The heading sample follows the typography variables, fallbacks from
-          `@cire/theme` — it used to be decoratively italic, which would now
-          lie about an explicit "Normal" pick. */}
-      <Show when={props.heading}>
-        <span
-          style={{
-            color: "var(--color-text)",
-            "font-family": "var(--font-display)",
-            "font-size": headingSizeCss("1.5rem"),
-            "font-weight": typographyVar("headingWeight"),
-            "font-style": typographyVar("headingStyle"),
-          }}
-          class="leading-none"
-        >
-          {props.heading}
-        </span>
-      </Show>
+      {/* The closing hero band: full width, fixed height, cover-fitted — the
+          guest render in miniature. It sits OUTSIDE the padded content block
+          below, which is what lets it reach the sample's edges. */}
       <Show when={props.imageUrl}>
         {(url) => (
-          <img
-            src={previewVariantSrc(url())!}
-            alt=""
-            class="border-border h-10 w-10 rounded-sm border object-cover"
-          />
+          <img src={previewVariantSrc(url())!} alt="" class="h-12 w-full shrink-0 object-cover" />
         )}
       </Show>
-      {/* Body sample in the body font on the section surface, so the font and
+      <div class="flex flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center">
+        <Show when={props.eyebrow}>
+          <span
+            style={{ color: "var(--color-gold)" }}
+            class="text-[0.6rem] tracking-[0.18em] uppercase opacity-80"
+          >
+            {props.eyebrow}
+          </span>
+        </Show>
+        {/* The heading sample follows the typography variables, fallbacks from
+          `@cire/theme` — it used to be decoratively italic, which would now
+          lie about an explicit "Normal" pick. */}
+        <Show when={props.heading}>
+          <span
+            style={{
+              color: "var(--color-text)",
+              "font-family": "var(--font-display)",
+              "font-size": headingSizeCss("1.5rem"),
+              "font-weight": typographyVar("headingWeight"),
+              "font-style": typographyVar("headingStyle"),
+            }}
+            class="leading-none"
+          >
+            {props.heading}
+          </span>
+        </Show>
+        {/* Body sample in the body font on the section surface, so the font and
           the text-on-surface contrast are both visible. Weight + style are
           inherited from the wrapper above. */}
-      <span
-        style={{ color: "var(--color-text-muted)" }}
-        class="max-w-full text-[0.62rem] break-words"
-      >
-        {props.body}
-      </span>
-      <Show when={props.card}>
-        {(card) => (
-          <div
-            class="mt-1 flex w-full max-w-[14rem] flex-col gap-1 rounded-sm border p-2 text-left"
-            style={{
-              "background-color": "var(--color-surface)",
-              "border-color": "var(--color-border)",
-            }}
-          >
-            <span class="text-[0.68rem]" style={{ color: "var(--color-text)" }}>
-              {card().name}
-            </span>
-            <span class="text-[0.6rem]" style={{ color: "var(--color-text-muted)" }}>
-              {card().meta}
-            </span>
-            <span
-              class="w-fit rounded-sm px-1.5 py-0.5 text-[0.58rem]"
-              style={{ "background-color": "var(--color-gold)", color: "var(--color-bg)" }}
+        <span
+          style={{ color: "var(--color-text-muted)" }}
+          class="max-w-full text-[0.62rem] break-words"
+        >
+          {props.body}
+        </span>
+        <Show when={props.card}>
+          {(card) => (
+            <div
+              class="mt-1 flex w-full max-w-[14rem] flex-col gap-1 rounded-sm border p-2 text-left"
+              style={{
+                "background-color": "var(--color-surface)",
+                "border-color": "var(--color-border)",
+              }}
             >
-              Respond
-            </span>
-          </div>
-        )}
-      </Show>
+              <span class="text-[0.68rem]" style={{ color: "var(--color-text)" }}>
+                {card().name}
+              </span>
+              <span class="text-[0.6rem]" style={{ color: "var(--color-text-muted)" }}>
+                {card().meta}
+              </span>
+              <span
+                class="w-fit rounded-sm px-1.5 py-0.5 text-[0.58rem]"
+                style={{ "background-color": "var(--color-gold)", color: "var(--color-bg)" }}
+              >
+                Respond
+              </span>
+            </div>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

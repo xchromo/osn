@@ -37,9 +37,12 @@ export interface ImageCrop {
  *                     matching the portrait viewport it targets. Not an upload
  *                     slot — the same hero image, framed a second time.
  *   - `story`       — the two-column story photo; a gentle 3∶2.
- *   - `footer`      — the footer monogram / motif / signature; square, since the
- *                     slot renders small and centred and a square reads as
- *                     deliberate at that size.
+ *   - `footer`      — the closing section's image; a wide 16∶9 frame, since it
+ *                     renders as a full-bleed closing hero spanning the guest
+ *                     page edge to edge (it was a small centred square before).
+ *                     The guest band is a fixed height and treats the rectangle
+ *                     as a FOCAL POINT, exactly like the hero, so this is the
+ *                     shape to frame in — not a promise of the exact crop.
  *   - `event`       — the event card photo; 4∶3.
  * The guest render is exact for any chosen shape (it reads the captured dims).
  */
@@ -47,7 +50,7 @@ export const CROP_ASPECT = {
   hero: 16 / 9,
   "hero-mobile": 9 / 16,
   story: 3 / 2,
-  footer: 1,
+  footer: 16 / 9,
   event: 4 / 3,
 } as const;
 

@@ -84,6 +84,24 @@ describe("SectionSample", () => {
     expect(heading["font-style"]).toBe(typographyVar("headingStyle"));
   });
 
+  it("renders the closing image edge to edge, as the guest band does", () => {
+    const { container } = render(() => (
+      <SectionSample {...props} imageUrl="/api/invite/anita-ben/image/footer?v=7" />
+    ));
+    const img = container.querySelector("img") as HTMLImageElement;
+
+    expect(img.getAttribute("src")).toBe(
+      "https://api.test/api/invite/anita-ben/image/footer?v=7&variant=card",
+    );
+    // Full width, cover-fitted — the miniature of the guest's full-bleed band.
+    // It must sit OUTSIDE the padded content block, or the preview would show a
+    // framed thumbnail for an image that publishes edge to edge.
+    expect(img.className).toContain("w-full");
+    expect(img.className).toContain("object-cover");
+    expect(img.className).not.toContain("w-10");
+    expect((img.parentElement as HTMLElement).className).not.toContain("p-4");
+  });
+
   it("keeps the heading free of a hardcoded weight or slant", () => {
     render(() => <SectionSample {...props} />);
     const heading = screen.getByText(props.heading);

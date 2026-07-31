@@ -1,13 +1,13 @@
 import { Show } from "solid-js";
 
-import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from "./image-crop";
+import { heroCropBackgroundStyle, type ImageCrop } from "./image-crop";
 import { isFooterEmpty } from "./invite-emptiness";
-import { buildSrcSet, type VariantName, variantSrc } from "./invite-images";
+import { buildSrcSet, variantSrc } from "./invite-images";
 
 /**
- * The invite's CLOSING SECTION — the couple's own sign-off: an optional image
- * (monogram, motif, signature) over an optional closing note ("Looking forward
- * to celebrating with you", "No boxed gifts please").
+ * The invite's CLOSING SECTION — the couple's own sign-off: an optional
+ * EDGE-TO-EDGE image over an optional closing note ("Looking forward to
+ * celebrating with you", "No boxed gifts please").
  *
  * This is a SECTION OF THE INVITE, not part of the site footer:
  *   - `SiteFooter.astro` is site-wide chrome — the couple's title plus the legal
@@ -28,6 +28,21 @@ import { buildSrcSet, type VariantName, variantSrc } from "./invite-images";
  * nor an image it renders NOTHING — no empty surface, no stray band above the
  * footer.
  *
+ * IMAGE SHAPE — the image is a CLOSING HERO: a full-bleed band spanning the
+ * viewport edge to edge, mirroring the hero at the top of the invite, with the
+ * note (when there is one) reading below it on the section surface. It was a
+ * small centred square before; a photograph is what couples reach for here, and
+ * a 200px thumbnail made the sign-off read like a stray avatar rather than the
+ * page's closing image. Consequences of full-bleed, all shared with the hero:
+ *   - the band is a FIXED responsive height, not the image's own aspect — an
+ *     edge-to-edge box at the source's ratio would be ~1600px tall on a desktop
+ *     for a square upload;
+ *   - so the image is COVER-fitted, and a saved crop is a FOCAL POINT
+ *     (`heroCropBackgroundStyle`) rather than an exact frame — same treatment
+ *     the hero backdrop gives the organiser's rectangle, for the same reason;
+ *   - the section's horizontal padding moved off the `<section>` onto the note's
+ *     own block, since the band has to reach past it.
+ *
  * SURFACE — it deliberately has NO tone setting of its own. It paints whatever
  * the organiser chose for the "Code Entry & Welcome" section (`themeVars`,
  * supplied by the caller as `sectionVars(theme, "welcome")`): the welcome
@@ -42,12 +57,17 @@ import { buildSrcSet, type VariantName, variantSrc } from "./invite-images";
  */
 
 /**
- * The closing image's display shape when no crop was saved (or a legacy crop
- * carries no source dims). Square: the slot is sized for a monogram, motif or
- * signature rather than a scene, and a square reads as deliberate at the small
- * width this section gives it.
+ * The closing hero band's height, shared by the plain `<img>` and the cropped
+ * background layer so the two paths can never disagree. A literal Tailwind class
+ * (the scanner reads source text — a computed class emits no CSS at all), held
+ * in one const rather than typed twice.
+ *
+ * Height, not aspect-ratio: the band is full-bleed, so an aspect-driven box
+ * would be as tall as the viewport is wide. `clamp` gives ~256px on a phone and
+ * ~512px from a laptop up — a closing image with presence, that still leaves the
+ * note and the site footer in view.
  */
-const CLOSING_IMAGE_ASPECT = 1;
+const BAND_CLASS = "block h-[clamp(16rem,45vw,32rem)] w-full";
 
 export interface InviteClosingProps {
   /** The couple's closing note. Blank/whitespace-only ⇒ no note. */
@@ -81,33 +101,29 @@ export function InviteClosing(props: InviteClosingProps) {
 
   const imageSrc = () => (props.imageUrl ? `${props.apiUrl}${props.imageUrl}` : null);
 
-  // When a crop was saved, render the cropped region with the same CSS-fraction
-  // technique the story photo uses (a background layer — backgrounds can't take
-  // a srcset, so we pick one bounded variant).
-  //
-  // The crop layer scales the source by 100/w, so a TIGHT crop needs more source
-  // pixels than the 200px box suggests: at w = 0.4 the visible region is 40% of
-  // an already-downscaled image. Below half-width we ask for `card` (800w);
-  // otherwise `thumb` (320w) is ample and saves ~6× the bytes. Both are in the
-  // existing allowlist, so the transform cardinality guarantee is unaffected.
-  const cropVariant = (): VariantName => ((props.imageCrop?.w ?? 1) < 0.5 ? "card" : "thumb");
+  // A saved crop paints a background layer instead of the `<img>` — and, because
+  // the band is a fixed viewport-width shape rather than the crop's own aspect,
+  // it is rendered as a FOCAL POINT (cover, centred on the crop's middle), the
+  // same treatment the hero backdrop gives its rectangle. An exact-fit render
+  // here would letterbox or shear whenever the crop's ratio differed from the
+  // band's. Backgrounds can't carry a `srcset`, so we name one bounded variant:
+  // `hero` (1600w), the width a full-bleed band actually needs.
   const cropStyle = () => {
     const url = imageSrc();
-    return url ? cropBackgroundStyle(variantSrc(url, cropVariant()), props.imageCrop) : null;
+    return url ? heroCropBackgroundStyle(variantSrc(url, "hero"), props.imageCrop) : null;
   };
-
-  // The box adopts the crop's TRUE pixel aspect (from its captured source dims)
-  // so the uniformly-scaled region fills it with no distortion and no empty
-  // bars; a legacy crop with no dims falls back to the square default.
-  const imageAspect = () => String(cropAspectRatio(props.imageCrop, CLOSING_IMAGE_ASPECT));
 
   return (
     <Show when={show()}>
       <section
         data-invite-closing
-        // `content-visibility: auto` defers layout/paint (and the crop path's
-        // background fetch) until this off-screen section approaches the viewport.
-        class="px-6 py-16 text-center [content-visibility:auto] md:px-8 md:py-20"
+        // No horizontal padding of its own — the band reaches the viewport edge,
+        // and the note below carries its own. `content-visibility: auto` defers
+        // layout/paint (and the crop path's background fetch) until this
+        // off-screen section approaches the viewport; the intrinsic-size hint
+        // keeps a skipped band from collapsing the scroll height to nothing,
+        // which now matters more than it did at 200px.
+        class="text-center [contain-intrinsic-size:auto_24rem] [content-visibility:auto]"
         // Paints the welcome section's surface; the text tokens below resolve
         // from the root palette, which already carries the organiser's scheme.
         style={{ ...props.themeVars, "background-color": "var(--invite-section-bg)" }}
@@ -117,25 +133,25 @@ export function InviteClosing(props: InviteClosingProps) {
             <Show
               when={cropStyle()}
               fallback={
-                /* Two candidates so `sizes` has a real choice to make: `thumb`
-                   (320w) covers the 200px box at 1×, `card` (800w) at 3× on a
-                   phone. The bare `src` names `thumb` explicitly — an absent
-                   `variant` resolves to `card` server-side, which would mint a
-                   second transform-cache entry for a URL the browser never
+                /* Two candidates so `sizes` has a real choice to make: `card`
+                   (800w) covers the band on a phone, `hero` (1600w) from a
+                   laptop up (and on a retina phone). The bare `src` names
+                   `card` explicitly — an absent `variant` resolves to `card`
+                   server-side anyway, and naming it keeps the browser from
+                   minting a second transform-cache entry for a URL it never
                    fetches under a `w`-descriptor srcset. `loading="lazy"`
                    because this section is below every event card and is
                    guaranteed off-screen at mount: without it the fetch races
                    the in-viewport cards that ARE deferred, and bills a
                    per-call Images transform for guests who never scroll here. */
                 <img
-                  src={variantSrc(url(), "thumb")}
-                  srcset={buildSrcSet(url(), ["thumb", "card"])}
-                  sizes="200px"
+                  src={variantSrc(url(), "card")}
+                  srcset={buildSrcSet(url(), ["card", "hero"])}
+                  sizes="100vw"
                   alt=""
                   loading="lazy"
                   decoding="async"
-                  class="mx-auto block h-auto w-[min(200px,45vw)] rounded-sm object-cover"
-                  style={{ "aspect-ratio": imageAspect() }}
+                  class={`${BAND_CLASS} object-cover`}
                 />
               }
             >
@@ -143,25 +159,32 @@ export function InviteClosing(props: InviteClosingProps) {
                 <div
                   aria-hidden="true"
                   // The cropped variant paints a background layer, so the box
-                  // clips it and takes its size from the width + aspect-ratio
-                  // (an empty div has no intrinsic dimensions).
-                  class="mx-auto w-[min(200px,45vw)] overflow-hidden rounded-sm bg-no-repeat"
-                  style={{ ...style(), "aspect-ratio": imageAspect() }}
+                  // owns its size (an empty div has no intrinsic dimensions) —
+                  // the same band height the <img> path uses.
+                  class={BAND_CLASS}
+                  style={style()}
                 />
               )}
             </Show>
           )}
         </Show>
         <Show when={note()}>
-          <p
-            // `whitespace-pre-line` honours the line breaks an organiser typed;
-            // `break-words` stops a long unbroken line overflowing on a phone.
-            // Not the muted grey — this is the couple speaking.
-            class="font-body text-text mx-auto max-w-[34rem] text-[clamp(1rem,2vw,1.125rem)] leading-relaxed break-words whitespace-pre-line italic data-[has-image=true]:mt-7"
-            data-has-image={imageSrc() ? "true" : "false"}
-          >
-            {note()}
-          </p>
+          {/* The note's own block owns the section padding now that the band
+              above it is full-bleed. */}
+          <div class="px-6 py-16 md:px-8 md:py-20">
+            <p
+              // `whitespace-pre-line` honours the line breaks an organiser typed;
+              // `break-words` stops a long unbroken line overflowing on a phone.
+              // Not the muted grey — this is the couple speaking.
+              class="font-body text-text mx-auto max-w-[34rem] text-[clamp(1rem,2vw,1.125rem)] leading-relaxed break-words whitespace-pre-line italic"
+              // Not a styling hook (the block above owns the spacing) — it
+              // records that the couple's words follow their image, which the
+              // tests pin so the two can't silently swap order.
+              data-has-image={imageSrc() ? "true" : "false"}
+            >
+              {note()}
+            </p>
+          </div>
         </Show>
       </section>
     </Show>

@@ -15,8 +15,14 @@ import {
 describe("CROP_ASPECT", () => {
   it("opens each slot on a sensible default shape", () => {
     expect(CROP_ASPECT.hero).toBeCloseTo(16 / 9);
+    expect(CROP_ASPECT["hero-mobile"]).toBeCloseTo(9 / 16);
     expect(CROP_ASPECT.story).toBeCloseTo(3 / 2);
     expect(CROP_ASPECT.event).toBeCloseTo(4 / 3);
+    // The closing image is a full-bleed hero band on the guest page, so its
+    // editor opens wide — not the square it used when it rendered as a small
+    // centred motif. A stale square here would have organisers framing a shape
+    // the guest band then crops away.
+    expect(CROP_ASPECT.footer).toBeCloseTo(16 / 9);
   });
 });
 
