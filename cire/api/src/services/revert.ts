@@ -5,7 +5,8 @@ import { Effect, Data } from "effect";
 
 import { DbService, dbQuery } from "../db";
 import { metricImportReverted } from "../metrics";
-import type { ImportSummary, ParsedFamily } from "../schemas/import";
+import type { ChangeScope, ImportSummary, ParsedFamily } from "../schemas/import";
+import { currentEventsAsParsed } from "./changes";
 import { applyImport, diffAgainstDb, ImportError } from "./import";
 import { R2Service, fetchUpload, R2Error } from "./r2-imports";
 import { parseEventsCsv, parseGuestsCsv } from "./spreadsheet";
@@ -31,6 +32,13 @@ export type RevertError = NoPriorImport | R2Error | RevertParseError | ImportErr
  * claim code and stable ids survive (rename-proof, no re-mint). A legacy prior-
  * import sheet carries no fidelity columns, so it reconciles by name exactly as
  * before.
+ *
+ * BLANK HALF ⇒ UNMANAGED HALF. A before-image always captures both sheets, but
+ * the legacy prior-import path replays a stored UPLOAD, and a single-sheet
+ * upload stores `""` in the slot it didn't carry. An empty sheet is therefore
+ * read as "this half was not captured", scoping it out of the diff — never as
+ * "the wedding had no events / no households", which would reconcile by deleting
+ * everything. Both halves blank is not a reconcilable snapshot and fails.
  */
 function reconcileToSnapshot(
   targetImportId: string,
@@ -40,20 +48,35 @@ function reconcileToSnapshot(
   finalize: BatchItem<"sqlite">[] = [],
 ): Effect.Effect<ImportSummary, RevertParseError | ImportError, DbService> {
   return Effect.gen(function* () {
-    const events = yield* parseEventsCsv(eventsCsv).pipe(
+    const hasEvents = eventsCsv.trim().length > 0;
+    const hasGuests = guestsCsv.trim().length > 0;
+    if (!hasEvents && !hasGuests) {
+      return yield* Effect.fail(new RevertParseError({ reason: "snapshot carries neither sheet" }));
+    }
+    const scope: ChangeScope = !hasEvents ? "guests" : !hasGuests ? "events" : "both";
+
+    // A guests-only snapshot still needs an event list to resolve its attendance
+    // columns; take it from live state, as the guests-only apply path does.
+    const events = yield* (
+      hasEvents ? parseEventsCsv(eventsCsv) : currentEventsAsParsed(weddingId)
+    ).pipe(
       Effect.mapError(
         (e) =>
           new RevertParseError({ reason: `events parse failed: ${(e as { _tag: string })._tag}` }),
       ),
     );
-    const families = yield* parseGuestsCsv(guestsCsv, events).pipe(
-      Effect.mapError(
-        (e) =>
-          new RevertParseError({ reason: `guests parse failed: ${(e as { _tag: string })._tag}` }),
-      ),
-    );
+    const families = hasGuests
+      ? yield* parseGuestsCsv(guestsCsv, events).pipe(
+          Effect.mapError(
+            (e) =>
+              new RevertParseError({
+                reason: `guests parse failed: ${(e as { _tag: string })._tag}`,
+              }),
+          ),
+        )
+      : [];
 
-    const plan = yield* diffAgainstDb(events, families as ParsedFamily[], weddingId);
+    const plan = yield* diffAgainstDb(events, families as ParsedFamily[], weddingId, { scope });
     return yield* applyImport(targetImportId, plan, weddingId, finalize);
   });
 }

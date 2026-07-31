@@ -10,8 +10,13 @@ import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { weddingEditor } from "../middleware/wedding-editor";
 import { runCire } from "../observability";
 import { ApplyBody, DesiredState, RevertBody } from "../schemas/import";
-import type { ImportPlan, ParsedFamily } from "../schemas/import";
-import { decodeChangeBody, GENESIS_REVISION, headRevision } from "../services/changes";
+import type { ChangeScope, ImportPlan, ParsedFamily } from "../schemas/import";
+import {
+  currentEventsAsParsed,
+  decodeChangeBody,
+  GENESIS_REVISION,
+  headRevision,
+} from "../services/changes";
 import { captureBeforeImage, pruneBeforeImages } from "../services/checkpoint";
 import { CapacityExceeded } from "../services/entitlements";
 import { applyImport, diffAgainstDb } from "../services/import";
@@ -37,6 +42,13 @@ const manualParse = { parse: () => ({}) };
 interface ChangeSummary {
   baseRevision: string;
   removeManual: boolean;
+  /**
+   * Which halves of the wedding the change is authoritative over — `"both"`
+   * unless the organiser uploaded a single sheet. Read back at apply so the
+   * re-diff manages exactly the halves the preview did; a legacy row written
+   * before partial uploads existed has no `scope` and defaults to `"both"`.
+   */
+  scope?: ChangeScope;
   eventCreates: number;
   eventUpdates: number;
   eventRemoves: number;
@@ -51,27 +63,41 @@ interface ChangeSummary {
  * Re-derive the DesiredState an apply must re-diff, from the change row's stored
  * inputs. Both front doors persist their input at preview under the row's
  * `eventsR2Key`/`guestsR2Key`:
- *  - `kind = 'import'` — the two uploaded CSVs (re-parsed, exactly the import).
+ *  - `kind = 'import'` — the uploaded CSVs (re-parsed, exactly the import). A
+ *    single-sheet upload stored `""` in the slot it didn't carry, so `scope`
+ *    (not the stored bytes) decides which slots are read.
  *  - `kind = 'editor'` — the DesiredState JSON in the events key (guests key is
  *    an empty sentinel); JSON-decoded back to a DesiredState.
+ *
  * Re-reading at apply is the TOCTOU defence: the DB may have shifted since
- * preview, so the plan is always freshly diffed against live state.
+ * preview, so the plan is always freshly diffed against live state. For a
+ * guests-only change the event list is re-hydrated from LIVE state here too — an
+ * event added between preview and apply is therefore a column the guest sheet
+ * *could* have resolved, never a stale snapshot.
  */
-function desiredStateFromRow(row: {
-  kind: "import" | "editor";
-  eventsR2Key: string;
-  guestsR2Key: string;
-}) {
+function desiredStateFromRow(
+  row: {
+    kind: "import" | "editor";
+    eventsR2Key: string;
+    guestsR2Key: string;
+  },
+  scope: ChangeScope,
+  weddingId: string,
+) {
   return Effect.gen(function* () {
     if (row.kind === "editor") {
       const json = yield* fetchUpload(row.eventsR2Key);
       return yield* Schema.decodeUnknown(Schema.parseJson(DesiredState))(json);
     }
-    const eventsCsv = yield* fetchUpload(row.eventsR2Key);
-    const guestsCsv = yield* fetchUpload(row.guestsR2Key);
-    const events = yield* parseEventsCsv(eventsCsv);
-    const families = yield* parseGuestsCsv(guestsCsv, events);
-    return { events, families: families as ParsedFamily[] };
+    const events =
+      scope === "guests"
+        ? yield* currentEventsAsParsed(weddingId)
+        : yield* parseEventsCsv(yield* fetchUpload(row.eventsR2Key));
+    const families =
+      scope === "events"
+        ? []
+        : ((yield* parseGuestsCsv(yield* fetchUpload(row.guestsR2Key), events)) as ParsedFamily[]);
+    return { events, families };
   });
 }
 
@@ -87,12 +113,14 @@ function desiredStateFromRow(row: {
  * wedding-scoped through the path.
  *
  * The four verbs:
- *  - `preview` — accepts EITHER a DesiredState JSON (editor draft-save) OR
- *    `{eventsCsv, guestsCsv}` (spreadsheet upload). Both funnel through
+ *  - `preview` — accepts EITHER a DesiredState JSON (editor draft-save) OR a
+ *    spreadsheet upload carrying `eventsCsv`, `guestsCsv`, or BOTH (either sheet
+ *    may be omitted — an organiser re-working only the guest list uploads only
+ *    that sheet, and the schedule is left alone). Both funnel through
  *    `decodeChangeBody` → the one reconcile: DesiredState → `diffAgainstDb` →
  *    plan. Persists a `preview` change row (input in R2, `baseRevision` +
- *    `removeManual` in the summary). Returns `{changeId, plan, warnings,
- *    baseRevision}`.
+ *    `removeManual` + `scope` in the summary). Returns `{changeId, plan,
+ *    warnings, baseRevision, scope}`.
  *  - `apply` — `{changeId}`. Re-reads the head revision and 409s if it moved
  *    since preview (optimistic concurrency — a co-host applied in between).
  *    Re-diffs against live state (TOCTOU), checkpoints the before-image (E3),
@@ -141,14 +169,17 @@ export const createOrganiserChangeRoutes = (
                 // never our own diff reads.
                 const baseRevision = yield* headRevision(weddingId);
 
-                const decoded = yield* decodeChangeBody(raw);
+                const decoded = yield* decodeChangeBody(raw, weddingId);
 
                 // Persist the change's input for the apply-time re-diff. Import:
-                // the two uploaded CSVs. Editor: the DesiredState JSON in the
-                // events slot (guests slot empty), with a byte cap on both.
+                // the uploaded CSVs, with `""` in the slot of a sheet the
+                // organiser didn't upload (the row's `scope` is what marks it
+                // as absent rather than empty). Editor: the DesiredState JSON in
+                // the events slot (guests slot empty), with a byte cap on both.
                 const changeId = crypto.randomUUID();
-                const eventsPayload =
-                  decoded.uploadedCsv?.eventsCsv ?? JSON.stringify(decoded.desiredState);
+                const eventsPayload = decoded.uploadedCsv
+                  ? (decoded.uploadedCsv.eventsCsv ?? "")
+                  : JSON.stringify(decoded.desiredState);
                 const guestsPayload = decoded.uploadedCsv?.guestsCsv ?? "";
                 const totalBytes =
                   new TextEncoder().encode(eventsPayload).length +
@@ -167,12 +198,13 @@ export const createOrganiserChangeRoutes = (
                   decoded.desiredState.events,
                   decoded.desiredState.families as ParsedFamily[],
                   weddingId,
-                  { removeManual: decoded.removeManual },
+                  { removeManual: decoded.removeManual, scope: decoded.scope },
                 );
 
                 const summary: ChangeSummary = {
                   baseRevision,
                   removeManual: decoded.removeManual,
+                  scope: decoded.scope,
                   eventCreates: plan.eventCreates.length,
                   eventUpdates: plan.eventUpdates.length,
                   eventRemoves: plan.eventRemoves.length,
@@ -202,7 +234,7 @@ export const createOrganiserChangeRoutes = (
                 );
 
                 yield* Effect.logInfo(
-                  `change preview accepted: kind=${decoded.kind} families=${decoded.desiredState.families.length} events=${decoded.desiredState.events.length} removeManual=${decoded.removeManual}`,
+                  `change preview accepted: kind=${decoded.kind} scope=${decoded.scope} families=${decoded.desiredState.families.length} events=${decoded.desiredState.events.length} removeManual=${decoded.removeManual}`,
                   { changeId },
                 );
 
@@ -214,6 +246,10 @@ export const createOrganiserChangeRoutes = (
                   // prefixes serve identically until the alias is deleted.
                   importId: changeId,
                   baseRevision,
+                  // Echoed so the preview UI can say WHICH halves this change
+                  // touches ("guests only — your schedule is untouched") rather
+                  // than leaving an organiser to infer it from empty counts.
+                  scope: decoded.scope,
                   plan: {
                     ...plan,
                     eventCreates: [...plan.eventCreates],
@@ -335,13 +371,16 @@ export const createOrganiserChangeRoutes = (
 
                 // Re-derive the desired state from the row's stored input and
                 // re-diff against LIVE state (TOCTOU defence), honouring the
-                // provenance toggle captured at preview.
-                const desired = yield* desiredStateFromRow(row);
+                // provenance toggle AND the sheet scope captured at preview. A
+                // row written before partial uploads existed has no `scope`, so
+                // it defaults to `"both"` — the historical behaviour.
+                const scope: ChangeScope = stored.scope ?? "both";
+                const desired = yield* desiredStateFromRow(row, scope, weddingId);
                 const plan = yield* diffAgainstDb(
                   desired.events,
                   desired.families as ParsedFamily[],
                   weddingId,
-                  { removeManual: stored.removeManual ?? false },
+                  { removeManual: stored.removeManual ?? false, scope },
                 );
 
                 // E3 checkpoint: snapshot the pre-change state at full fidelity
