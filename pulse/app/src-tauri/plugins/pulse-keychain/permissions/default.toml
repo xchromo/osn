@@ -2,5 +2,9 @@
 
 [default]
 identifier = "pulse-keychain:default"
-description = "Default permissions for the pulse-keychain plugin: set, get, delete."
-permissions = ["allow-set", "allow-get", "allow-delete"]
+description = """
+Deliberately empty. The keychain holds session credentials and the webview must
+never reach it; Rust callers use the PulseKeychainExt trait, which the ACL does
+not gate. Nothing belongs in this list.
+"""
+permissions = []

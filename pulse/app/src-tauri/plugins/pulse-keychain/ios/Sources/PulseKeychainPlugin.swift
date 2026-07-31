@@ -2,6 +2,13 @@ import Foundation
 import Security
 import Tauri
 
+// Every item written here is device-only and never syncs to iCloud Keychain.
+//
+// One iOS behaviour callers must plan for: keychain items outlive the app.
+// Deleting Pulse does not clear this service, so a reinstall reads back the
+// previous install's credentials. Whatever stores a session token here has to
+// treat a found token as untrusted until the server validates it, and call
+// delete() on sign-out rather than relying on uninstall to clean up.
 private let keychainService = "com.osn.pulse.keychain"
 
 class SetArgs: Decodable {

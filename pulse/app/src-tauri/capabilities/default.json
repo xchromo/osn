@@ -6,7 +6,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "pulse-bridge:default",
-    "pulse-keychain:default"
+    "pulse-bridge:default"
   ]
 }
