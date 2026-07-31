@@ -5,12 +5,23 @@ related:
   - "[[index]]"
   - "[[review-findings]]"
   - "[[host-portal-layout]]"
-last-reviewed: 2026-07-30
+last-reviewed: 2026-07-31
 ---
 
 # Performance Backlog
 
 See [[review-findings]] for severity prefix conventions.
+
+### Single-sheet CSV uploads — review findings (claude/cire-dashboard-csv-uploads-zk5rt0, 2026-07-31)
+
+Pre-merge performance review of the partial-upload branch. D1 read accounting per scope (excluding the write set): `events`-only genuinely saves reads at preview; `guests`-only was a **+1 regression** versus a two-sheet upload of identical content, until P-W1 was fixed. Note for the record: the events-only preview saving does **not** carry to apply — `captureBeforeImage` correctly re-reads `families`/`guests`/`guest_events` to snapshot the guest half, which is load-bearing for revert because an events-only change that removes an event cascades `guest_events` + `rsvps`. Nothing on the branch pushes any path near the Free-tier 50-query-per-invocation cap. See [[guest-event-editor]] §3.1, [[api]].
+
+- [x] **P-W1** (fixed on branch) — **`currentEventsAsParsed` serialised the wedding's events to CSV and re-parsed them to recover a list of names.** It ran `stateExportService.eventsCsv(weddingId, "full")` — a second `SELECT` on `events`, same table, same wedding, same invocation — then paid an O(events × cells) serialise / re-parse / re-validate pass (`JSON.parse` of the palette and two `new URL()` per event on the way out; character-by-character `parseCsvBounded`, `detectFormulaInjection` over every cell, and per-row ISO/URL re-validation on the way back). Its only consumers read `name` (`parseGuestsCsv`'s column matching) and `id`. It ran on BOTH hot paths — preview and apply — so a guests-only upload paid it twice. **Fixed:** the helper now maps DB rows straight to `ParsedEvent` with a projected select. This also removed a correctness bug (see **S-L*/S-M1** note in [[security]]): the round trip re-applied the untrusted-upload guards to our own rows, so a legitimate address of `-12 Smith Street` made a guests-only upload 422 and blame an events sheet the organiser never uploaded.
+- [x] **P-W2** (fixed by P-W1) — preview discards its computed plan and apply recomputes everything, so the hydration cost above was paid twice per upload. The re-diff itself is a deliberate TOCTOU defence and stays; fixing P-W1 removed the redundant serialise/parse inside it rather than weakening the safety property.
+- [x] **P-I1** (fixed on branch) — `diffAgainstDb` read `weddings.codeStyle` unconditionally, though its only consumer (`generateFamilyCode` in the `familyCreates` loop) is unreachable under `scope: "events"` — `desiredFamilies` is `[]` by construction. One wasted D1 round trip on every events-only preview and apply. **Fixed:** gated on `manageGuests`, defaulting to `"secure"`, matching the shape of the three reads below it.
+- [x] **P-I2** (fixed on branch) — `existingEvents` used an unprojected `db.select()` while only `id` and `name` are ever read. Pre-existing, but the new guests-only branch made it worse-shaped: that branch's entire purpose is to build a name → id map, and it dragged full event rows (descriptions, palettes, URLs) across the D1 wire to do it. **Fixed:** projected to `{id, name}`, matching the convention already used for `guests` and `guestEvents` in the same function.
+- [ ] **P-I3** — `storeUpload` writes an empty R2 object for the omitted sheet, and issues its two `put`s sequentially rather than concurrently. One wasted Class-A op and one serialised round trip per single-sheet preview (negligible against the 1M/month free quota, but real latency for no stored value). Deliberately NOT fixed by skipping the empty put: `revertImport`'s legacy fallback fetches both stored keys, and a missing object would fail that fetch where a zero-byte one is handled by the blank-half branch. Parallelising the two puts is the safe half and remains open.
+- **No frontend concerns.** `ImportPanel` reads both files via `Promise.all`, `SCOPE_HINTS` is a module constant, the `scope()` accessor is a two-signal read, and `import-errors.ts` is pure string formatting on failure paths only.
 
 ### Invite builder mobile section menu — review findings (claude/mobile-invite-builder-submenu-017xyv, 2026-07-30)
 
