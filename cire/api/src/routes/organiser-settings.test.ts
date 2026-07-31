@@ -286,6 +286,22 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect(body.wedding.rsvpDeadlineTimezone).toBeNull();
   });
 
+  it("refuses to store a zone against a wedding with no deadline date", async () => {
+    // The other direction of the same invariant: not "clearing the date drops
+    // the zone" but "a zone can never be the only half stored". A hand-crafted
+    // body takes this path, and it is the branch that would strand an orphan
+    // zone if the pairing guard ever moved inside the date-provided check.
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    expect(res.status).toBe(200);
+
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBeNull();
+    expect(row.rsvpDeadlineTimezone).toBeNull();
+  });
+
   it("accepts a deadline with no zone (read back as UTC)", async () => {
     const { app, db } = buildApp();
     const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { rsvpDeadline: "2027-02-20" });
