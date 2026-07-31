@@ -1,0 +1,6 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+identifier = "pulse-keychain:default"
+description = "Default permissions for the pulse-keychain plugin: set, get, delete."
+permissions = ["allow-set", "allow-get", "allow-delete"]
