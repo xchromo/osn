@@ -1,6 +1,6 @@
 import { imports } from "@cire/db";
 import { and, desc, eq, lt } from "drizzle-orm";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { Elysia } from "elysia";
 
 import { DbService, dbQuery } from "../db";
@@ -9,8 +9,8 @@ import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { weddingEditor } from "../middleware/wedding-editor";
 import { runCire } from "../observability";
-import { ApplyBody, DesiredState, RevertBody } from "../schemas/import";
-import type { ChangeScope, ImportPlan, ParsedFamily } from "../schemas/import";
+import { ApplyBody, ChangeScope, DesiredState, RevertBody } from "../schemas/import";
+import type { ImportPlan, ParsedFamily } from "../schemas/import";
 import {
   currentEventsAsParsed,
   decodeChangeBody,
@@ -38,19 +38,41 @@ const ONE_MB = 1 * 1024 * 1024;
  * which of two files, which row, or what to change. (Preview used to omit
  * `column` and apply used to omit everything but `error`, so the same bad upload
  * produced two different, equally unhelpful bodies.) `snippet` is deliberately
- * NOT reflected: it is raw cell content from an untrusted upload, and the
- * reason-lockdown contract in `services/spreadsheet.ts` keeps sheet data out of
- * API responses.
+ * NOT reflected: it is raw cell content from an untrusted upload.
+ *
+ * WHICH FIELDS ARE TRUSTED (the reason-lockdown contract in
+ * `services/spreadsheet.ts`, stated precisely so it stays durable):
+ *  - `reason` — a static literal from a closed union. Never cell content.
+ *  - `sheet`, `row`, `column` (numeric) — structural metadata we computed.
+ *  - `MissingRequiredColumn.column` — always a member of
+ *    `REQUIRED_EVENT_COLUMNS`/`REQUIRED_GUEST_COLUMNS`, i.e. our own constant.
+ *  - `UnmatchedEventColumn.column` — **untrusted**: a header cell copied
+ *    verbatim out of the uploaded file. Reflected (the organiser needs to be
+ *    told which heading didn't match) but TRUNCATED, since a cell may be up to
+ *    `MAX_CELL_LENGTH`. It is the organiser's own upload coming back to them,
+ *    and the client renders it through SolidJS text interpolation, which
+ *    escapes — but a future renderer or log sink must treat it as untrusted.
+ *  - `FormulaInjectionDetected.snippet` — untrusted, and withheld entirely.
  */
+
+/** Cap on the one untrusted value this body reflects (see above). */
+const MAX_REFLECTED_LABEL = 64;
+
+function truncateLabel(s: string): string {
+  return s.length > MAX_REFLECTED_LABEL ? `${s.slice(0, MAX_REFLECTED_LABEL)}…` : s;
+}
 function parseErrorBody(e: SpreadsheetParseError): Record<string, unknown> {
   const sheet = e.sheet ?? null;
   switch (e._tag) {
     case "MalformedSpreadsheet":
+      // Wire names stay `row`/`column`; the error's fields are `atRow`/`atColumn`
+      // so an unset coordinate can't read back as the runtime's own Error.column
+      // (see the note on MalformedSpreadsheet).
       return {
         error: "Malformed spreadsheet",
         reason: e.reason,
-        row: e.row ?? null,
-        column: e.column ?? null,
+        row: e.atRow ?? null,
+        column: e.atColumn ?? null,
         sheet,
       };
     case "FormulaInjectionDetected":
@@ -63,7 +85,7 @@ function parseErrorBody(e: SpreadsheetParseError): Record<string, unknown> {
     case "MissingRequiredColumn":
       return { error: "Missing required column", column: e.column, sheet };
     case "UnmatchedEventColumn":
-      return { error: "Unmatched event column", column: e.column, sheet };
+      return { error: "Unmatched event column", column: truncateLabel(e.column), sheet };
   }
 }
 
@@ -407,7 +429,16 @@ export const createOrganiserChangeRoutes = (
                 // provenance toggle AND the sheet scope captured at preview. A
                 // row written before partial uploads existed has no `scope`, so
                 // it defaults to `"both"` — the historical behaviour.
-                const scope: ChangeScope = stored.scope ?? "both";
+                // Decoded, not asserted: `summary` is JSON off a DB row, so a
+                // legacy/corrupt value must land on the safe default explicitly
+                // rather than flowing into `!==` comparisons that happen to be
+                // safe today. `"both"` is the conservative choice — it manages
+                // both halves, so a partial change degrades to re-parsing an
+                // empty slot and 422ing, never to a silent one-sided delete.
+                const scope = Option.getOrElse(
+                  Schema.decodeUnknownOption(ChangeScope)(stored.scope),
+                  (): ChangeScope => "both",
+                );
                 const desired = yield* desiredStateFromRow(row, scope, weddingId);
                 const plan = yield* diffAgainstDb(
                   desired.events,

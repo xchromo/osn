@@ -42,8 +42,14 @@ const SHEET_LABEL: Record<SheetKind, string> = {
   guests: "your guests sheet",
 };
 
+/**
+ * Explicit two-value check rather than `SHEET_LABEL[sheet]`. The body is cast
+ * from `res.json()`, so `sheet` is unvalidated at runtime — indexing a record
+ * with it would happily return an inherited prototype key (`"constructor"`
+ * yields a function, which `capitalise()` then throws on).
+ */
 function sheetLabel(sheet: SheetKind | null | undefined): string | null {
-  return sheet ? SHEET_LABEL[sheet] : null;
+  return sheet === "events" || sheet === "guests" ? SHEET_LABEL[sheet] : null;
 }
 
 /**

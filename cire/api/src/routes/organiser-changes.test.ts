@@ -260,6 +260,105 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
     expect(db.select().from(events).all()).toHaveLength(3);
   });
 
+  it("a legacy row with no stored scope applies as 'both' (the safe default)", async () => {
+    const { app, db } = buildApp();
+    await seedBothSheets(app);
+
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+
+    // Strip `scope` to reproduce a row previewed before this feature shipped and
+    // applied after. The `?? "both"` default is otherwise never executed — every
+    // row the new preview writes stamps a scope — so a broken read would be
+    // invisible, and it fails in the destructive direction (a partial change
+    // silently managing both halves).
+    const [row] = db.select().from(imports).where(eq(imports.id, changeId)).all();
+    const summary = JSON.parse(row!.summary) as Record<string, unknown>;
+    delete summary.scope;
+    db.update(imports)
+      .set({ summary: JSON.stringify(summary) })
+      .where(eq(imports.id, changeId))
+      .run();
+
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    expect(applyRes.status).toBe(200);
+    expect(db.select().from(events).all()).toHaveLength(2);
+    expect(db.select().from(families).all()).toHaveLength(2);
+  });
+
+  it("a guests-only apply re-reads the schedule LIVE, not from the preview snapshot", async () => {
+    const { app, db } = buildApp();
+    await seedBothSheets(app);
+
+    const guestsOnlyCsv = [
+      "Family ID,Family Name,Guest First Name,Guest Last Name,Mehndi,Reception",
+      "1,Testfamily,Ada,Testfamily,yes,yes",
+    ].join("\n");
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      guestsCsv: guestsOnlyCsv,
+    });
+    expect(previewRes.status).toBe(200);
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+
+    // Drop an event between preview and apply. Direct event routes don't advance
+    // headRevision, so the 409 concurrency guard doesn't fire — the apply-time
+    // re-hydration is the only thing standing between the sheet and a silently
+    // dropped invitation. Asserting the located 422 is what distinguishes live
+    // re-reading from replaying the preview's snapshot.
+    const [mehndi] = db.select().from(events).where(eq(events.name, "Mehndi")).all();
+    db.delete(events).where(eq(events.id, mehndi!.id)).run();
+
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    expect(applyRes.status).toBe(422);
+    expect(await applyRes.json()).toMatchObject({
+      error: "Unmatched event column",
+      column: "Mehndi",
+      sheet: "guests",
+    });
+  });
+
+  it("a guests-only upload works on a wedding with no events yet", async () => {
+    const { app } = buildApp();
+    // No seedBothSheets — the schedule is empty, so the hydrated event list is
+    // []. Mapping DB rows straight to ParsedEvent makes this a plain 200; the
+    // old export→reparse route would have hinged on the exporter still emitting
+    // a header row for zero events.
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      guestsCsv: [
+        "Family ID,Family Name,Guest First Name,Guest Last Name",
+        "1,Testfamily,Ada,Testfamily",
+      ].join("\n"),
+    });
+    expect(res.status).toBe(200);
+    const preview = (await res.json()) as { scope: string; plan: Record<string, unknown[]> };
+    expect(preview.scope).toBe("guests");
+    expect(preview.plan.familyCreates).toHaveLength(1);
+  });
+
+  it("hydration tolerates live event rows the upload parser would reject", async () => {
+    const { app, db } = buildApp();
+    await seedBothSheets(app);
+
+    // The editor and the direct event routes never run the upload guards, so the
+    // DB legitimately holds values `parseEventsCsv` would refuse: an address
+    // starting `-` trips the formula-injection scan. Hydrating a guests-only
+    // upload must not re-apply guards meant for untrusted files — otherwise this
+    // 422s and blames an events sheet the organiser never uploaded.
+    db.update(events).set({ address: "-12 Banksia Lane" }).where(eq(events.name, "Mehndi")).run();
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      guestsCsv: [
+        "Family ID,Family Name,Guest First Name,Guest Last Name,Mehndi,Reception",
+        "1,Testfamily,Ada,Testfamily,yes,yes",
+      ].join("\n"),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { scope: string }).toMatchObject({ scope: "guests" });
+  });
+
   it("reverts a single-sheet change from its (always full) before-image", async () => {
     const { app, db } = buildApp();
     await seedBothSheets(app);
@@ -348,6 +447,19 @@ describe("POST /changes/preview — parse errors locate the problem", () => {
     const preview = (await res.json()) as { plan: { eventCreates: unknown[] } };
     expect(preview.plan.eventCreates).toHaveLength(2);
     expect(db.select().from(events).all()).toHaveLength(0);
+  });
+
+  it("reports null coordinates for a whole-file failure (no Error.column bleed)", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, { eventsCsv: "" });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "Malformed spreadsheet",
+      reason: "empty events sheet",
+      row: null,
+      column: null,
+      sheet: "events",
+    });
   });
 
   it("apply reports the same located body as preview, not a bare error", async () => {

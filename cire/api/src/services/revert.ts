@@ -57,14 +57,18 @@ function reconcileToSnapshot(
 
     // A guests-only snapshot still needs an event list to resolve its attendance
     // columns; take it from live state, as the guests-only apply path does.
-    const events = yield* (
-      hasEvents ? parseEventsCsv(eventsCsv) : currentEventsAsParsed(weddingId)
-    ).pipe(
-      Effect.mapError(
-        (e) =>
-          new RevertParseError({ reason: `events parse failed: ${(e as { _tag: string })._tag}` }),
-      ),
-    );
+    // `currentEventsAsParsed` reads DB rows directly and cannot fail, so only the
+    // parse branch needs the error mapping.
+    const events = hasEvents
+      ? yield* parseEventsCsv(eventsCsv).pipe(
+          Effect.mapError(
+            (e) =>
+              new RevertParseError({
+                reason: `events parse failed: ${(e as { _tag: string })._tag}`,
+              }),
+          ),
+        )
+      : yield* currentEventsAsParsed(weddingId);
     const families = hasGuests
       ? yield* parseGuestsCsv(guestsCsv, events).pipe(
           Effect.mapError(
@@ -170,6 +174,16 @@ export function revertImport(
             and(
               eq(imports.weddingId, weddingId),
               eq(imports.status, "applied"),
+              // Only a SPREADSHEET row's slots hold CSV. An `editor` row stores a
+              // DesiredState JSON blob in the events slot and `""` in the guests
+              // slot, which the blank-half inference below would read as a
+              // schedule-only snapshot and feed to `parseEventsCsv`. It happens
+              // to 422 rather than reconcile (no cell normalises to `Event Name`)
+              // — but that is luck, not a type check, and a JSON blob that DID
+              // parse would wipe the schedule. This branch is reachable because
+              // `pruneBeforeImages` NULLs the before-image keys beyond the most
+              // recent 10 changes, pushing ordinary rows onto the legacy path.
+              eq(imports.kind, "import"),
               ne(imports.id, current.id),
               lt(imports.uploadedAt, current.uploadedAt),
             ),

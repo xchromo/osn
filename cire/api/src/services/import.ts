@@ -165,19 +165,32 @@ export function diffAgainstDb(
 
     // C1: the wedding's claim-code tier drives every NEW family code minted by
     // this import. Read once; default to `secure` if the row is somehow absent
-    // (defensive — `weddingId` is always a real, owned wedding here).
-    const [weddingRow] = yield* dbQuery(() =>
-      db
-        .select({ codeStyle: weddings.codeStyle })
-        .from(weddings)
-        .where(eq(weddings.id, weddingId))
-        .all(),
-    );
+    // (defensive — `weddingId` is always a real, owned wedding here). Skipped
+    // entirely when the guest half isn't managed: its only consumer is
+    // `generateFamilyCode` in the familyCreates loop, and that loop is provably
+    // empty under `scope: "events"` (`desiredFamilies` is `[]` by construction).
+    const [weddingRow] = manageGuests
+      ? yield* dbQuery(() =>
+          db
+            .select({ codeStyle: weddings.codeStyle })
+            .from(weddings)
+            .where(eq(weddings.id, weddingId))
+            .all(),
+        )
+      : [];
     const codeStyle: CodeStyle = weddingRow?.codeStyle ?? "secure";
 
     // ── Events ──────────────────────────────────────────────────────────────
+    // Projected to the two columns the diff reads (`id` for matching + the op
+    // lists, `name` for the normalised-name map). The guests-only branch below
+    // exists purely to build that name → id map, so dragging full event rows —
+    // descriptions, palettes, URLs — across the D1 wire to do it is pure waste.
     const existingEvents = yield* dbQuery(() =>
-      db.select().from(events).where(eq(events.weddingId, weddingId)).all(),
+      db
+        .select({ id: events.id, name: events.name })
+        .from(events)
+        .where(eq(events.weddingId, weddingId))
+        .all(),
     );
     const existingEventByNorm = new Map(existingEvents.map((e) => [normaliseName(e.name), e]));
     const existingEventById = new Map(existingEvents.map((e) => [e.id, e]));

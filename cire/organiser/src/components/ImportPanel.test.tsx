@@ -366,6 +366,52 @@ describe("ImportPanel — surfacing import failures", () => {
     expect(body).not.toMatch(/^Malformed spreadsheet$/m);
   });
 
+  it("formats an APPLY failure too, not just a preview failure", async () => {
+    // handleApply routes through the same formatter; only the preview call was
+    // ever exercised, so the apply-only statuses (402 capacity, 409 re-preview)
+    // had no test rendering their wording.
+    authFetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            importId: "chg_1",
+            changeId: "chg_1",
+            scope: "guests",
+            warnings: [],
+            plan: {
+              eventCreates: [],
+              eventUpdates: [],
+              eventRemoves: [],
+              familyCreates: [],
+              familyRemoves: [],
+              guestCreates: [],
+              guestUpdates: [],
+              guestRemoves: [],
+              eventLinkCreates: [],
+              eventLinkRemoves: [],
+              warnings: [],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "payment_required", limit: 100, current: 98 }), {
+          status: 402,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    render(() => <ImportPanel weddingId="wed_a" />);
+    choose(/guests\.csv/i, new File(["x"], "guests.csv", { type: "text/csv" }));
+    fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
+    await waitFor(() => expect(screen.getByText(/diff preview/i)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /apply import/i }));
+    await waitFor(() => expect(document.body.textContent).toMatch(/limit of 100 guests/i));
+    expect(document.body.textContent).not.toMatch(/payment_required/);
+  });
+
   it("names the offending column on a 422 missing-column failure", async () => {
     authFetchMock.mockResolvedValueOnce(
       new Response(

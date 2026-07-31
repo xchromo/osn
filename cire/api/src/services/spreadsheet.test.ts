@@ -155,7 +155,7 @@ describe("parseEventsCsv", () => {
       const error = await Effect.runPromise(Effect.flip(parseEventsCsv(csv)));
       expect(error).toBeInstanceOf(MalformedSpreadsheet);
       expect((error as MalformedSpreadsheet).reason).toBe("Start must be an ISO-8601 timestamp");
-      expect((error as MalformedSpreadsheet).row).toBe(2);
+      expect((error as MalformedSpreadsheet).atRow).toBe(2);
     });
   }
 
@@ -621,14 +621,59 @@ describe("parse errors carry their sheet", () => {
     expect(err.sheet).toBe("guests");
   });
 
+  it("preserves column + sheet through the UnmatchedEventColumn remap", async () => {
+    const events = await Effect.runPromise(
+      parseEventsCsv(
+        [EVENTS_HEADER, "Mehndi,2026-09-18T16:00:00+10:00,,Australia/Sydney,,,,,,"].join("\n"),
+      ),
+    );
+    const csv = [
+      "Family ID,Family Name,Guest First Name,Guest Last Name,Sangeet",
+      "1,Testfamily,Ada,Testfamily,yes",
+    ].join("\n");
+    const exit = await Effect.runPromiseExit(parseGuestsCsv(csv, events));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: UnmatchedEventColumn } }).cause.error;
+    // withSheet rebuilds the error by copying fields explicitly; a dropped field
+    // here would leave the organiser's message with no location at all.
+    expect(err.column).toBe("Sangeet");
+    expect(err.sheet).toBe("guests");
+  });
+
+  it("preserves row + column + snippet through the FormulaInjectionDetected remap", async () => {
+    const csv = [EVENTS_HEADER, "=SUM(A1),2026-09-18T16:00:00+10:00,,Australia/Sydney,,,,,,"].join(
+      "\n",
+    );
+    const exit = await Effect.runPromiseExit(parseEventsCsv(csv));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: FormulaInjectionDetected } }).cause.error;
+    expect(err.row).toBe(2);
+    expect(err.column).toBe(1);
+    expect(err.snippet).toContain("=SUM");
+    expect(err.sheet).toBe("events");
+  });
+
+  it("leaves the coordinates ABSENT on a whole-file failure (no Error.column bleed)", async () => {
+    // `atRow`/`atColumn` are optional. Were they named `row`/`column`, JSC would
+    // have pre-stamped its own numeric `column` on the Error instance and the
+    // 422 body would have reported the throw site's source column as the
+    // organiser's spreadsheet column.
+    const exit = await Effect.runPromiseExit(parseEventsCsv(""));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: MalformedSpreadsheet } }).cause.error;
+    expect(err.reason).toBe("empty events sheet");
+    expect(err.atRow).toBeUndefined();
+    expect(err.atColumn).toBeUndefined();
+  });
+
   it("keeps row + column coordinates alongside the sheet", async () => {
     const csv = [EVENTS_HEADER, "Mehndi,14/11/2026 15:00,,Australia/Sydney,,,,,,"].join("\n");
     const exit = await Effect.runPromiseExit(parseEventsCsv(csv));
     expect(exit._tag).toBe("Failure");
     const err = (exit as { cause: { error: MalformedSpreadsheet } }).cause.error;
     expect(err.reason).toBe("Start must be an ISO-8601 timestamp");
-    expect(err.row).toBe(2);
-    expect(err.column).toBe(2);
+    expect(err.atRow).toBe(2);
+    expect(err.atColumn).toBe(2);
     expect(err.sheet).toBe("events");
   });
 });

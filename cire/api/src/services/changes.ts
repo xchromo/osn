@@ -1,13 +1,13 @@
-import { imports } from "@cire/db";
-import { and, eq, or } from "drizzle-orm";
+import { events, imports } from "@cire/db";
+import { and, asc, eq, or } from "drizzle-orm";
 import { Effect, ParseResult, Schema } from "effect";
 
 import { DbService, dbQuery } from "../db";
 import { DesiredState } from "../schemas/import";
 import type { ChangeScope, ParsedEvent, ParsedFamily } from "../schemas/import";
+import { decodePalette, safeHttpUrl } from "./claim";
 import { parseEventsCsv, parseGuestsCsv } from "./spreadsheet";
 import type { SpreadsheetParseError } from "./spreadsheet";
-import { stateExportService } from "./state-export";
 
 /**
  * The general change pipeline (guest+event editor E4, [[guest-event-editor]]
@@ -114,18 +114,72 @@ export interface DecodedChange {
  *
  * A guests-only upload still needs the event list: the guest sheet's attendance
  * columns are matched by name against it, and the diff resolves those names to
- * event ids. Rather than hand-building `ParsedEvent`s from DB rows (a second
- * mapping to keep in lockstep with the parser), this runs the wedding's
- * full-fidelity round-trip export back through `parseEventsCsv` — the export →
- * import fixpoint is already tested (E1), so the events an organiser sees on the
- * Schedule tab are exactly the columns that will resolve.
+ * event ids.
+ *
+ * This maps DB rows STRAIGHT to `ParsedEvent`. The obvious-looking alternative —
+ * serialise through `state-export.ts` and re-parse with `parseEventsCsv`, reusing
+ * E1's tested export→import fixpoint — is wrong here, in two ways:
+ *
+ *  1. **Correctness.** `parseEventsCsv` applies the guards that exist to sanitise
+ *     an UNTRUSTED UPLOAD: the formula-injection scan (rejecting any cell
+ *     starting `=`, `+`, `-`, `@`) and the ISO-timestamp shape check. Our own
+ *     rows have never had to satisfy those — an event created in the editor can
+ *     legitimately have an address of `-12 Smith Street` or a dress code of
+ *     `- black tie`. Round-tripping through the parser would fail on that live
+ *     data and, because the error is stamped `sheet: "events"`, would blame a
+ *     file the organiser never uploaded and cannot fix from the upload form.
+ *  2. **Cost.** It spent a second D1 read of `events` plus an O(events × cells)
+ *     serialise / re-parse / re-validate pass, on a path whose consumers read
+ *     only `name` (`parseGuestsCsv`'s column matching) and `id`.
+ *
+ * The projection below is the full `ParsedEvent` shape rather than the two fields
+ * today's consumers touch, so the value stays an honest desired-state event and a
+ * future reader of `desiredState.events` isn't handed a half-built record.
  */
 export function currentEventsAsParsed(
   weddingId: string,
-): Effect.Effect<ParsedEvent[], SpreadsheetParseError, DbService> {
+): Effect.Effect<ParsedEvent[], never, DbService> {
   return Effect.gen(function* () {
-    const csv = yield* stateExportService.eventsCsv(weddingId, "full");
-    return yield* parseEventsCsv(csv);
+    const db = yield* DbService;
+    const rows = yield* dbQuery(() =>
+      db
+        .select({
+          id: events.id,
+          name: events.name,
+          startAt: events.startAt,
+          endAt: events.endAt,
+          timezone: events.timezone,
+          address: events.address,
+          dressCodeDescription: events.dressCodeDescription,
+          dressCodePalette: events.dressCodePalette,
+          pinterestUrl: events.pinterestUrl,
+          mapsUrl: events.mapsUrl,
+        })
+        .from(events)
+        .where(eq(events.weddingId, weddingId))
+        // Same ordering as the round-trip export, so `sortOrder` below is the
+        // wedding's real schedule order.
+        .orderBy(asc(events.sortOrder), asc(events.name))
+        .all(),
+    );
+
+    return rows.map((e, i) => ({
+      id: e.id,
+      name: e.name,
+      startAt: e.startAt,
+      endAt: e.endAt,
+      timezone: e.timezone,
+      // No `location` column exists — the venue text lives in `address`.
+      location: null,
+      address: e.address,
+      dressCodeDescription: e.dressCodeDescription,
+      dressCodePalette: decodePalette(e.dressCodePalette).palette ?? [],
+      // Same http(s) guard the export applies, so a legacy bad URL degrades to
+      // null instead of travelling on in a desired state.
+      pinterestUrl: safeHttpUrl(e.pinterestUrl),
+      mapsUrl: safeHttpUrl(e.mapsUrl),
+      sortOrder: i,
+    }));
   }).pipe(Effect.withSpan("cire.changes.currentEventsAsParsed"));
 }
 
@@ -161,16 +215,19 @@ export function decodeChangeBody(
     // A guests-only upload matches its attendance columns against the events
     // that already exist, so hydrate them; an events-only upload carries no
     // households at all.
-    const events =
+    // Named `desiredEvents`, not `events` — the `events` TABLE is imported at
+    // module scope for the hydration read above, and shadowing it here would be
+    // a trap for the next edit.
+    const desiredEvents =
       body.eventsCsv === undefined
         ? yield* currentEventsAsParsed(weddingId)
         : yield* parseEventsCsv(body.eventsCsv);
     const families =
-      body.guestsCsv === undefined ? [] : yield* parseGuestsCsv(body.guestsCsv, events);
+      body.guestsCsv === undefined ? [] : yield* parseGuestsCsv(body.guestsCsv, desiredEvents);
 
     return {
       desiredState: {
-        events: events as readonly ParsedEvent[],
+        events: desiredEvents as readonly ParsedEvent[],
         families: families as readonly ParsedFamily[],
       },
       // Provenance default unless the organiser flipped the toggle.

@@ -29,7 +29,7 @@ import {
  * body, so it MUST only ever carry STATIC string literals — NEVER interpolated
  * cell contents. Reflecting attacker-controlled spreadsheet data here would let
  * a hostile uploaded sheet inject arbitrary text into the API response. The
- * `row`/`column` NUMBERS are safe to surface (and are); the cell CONTENTS are
+ * `atRow`/`atColumn` NUMBERS are safe to surface (and are); the cell CONTENTS are
  * not. Keeping `reason` a closed union (not `string`) makes it a compile error
  * for a future contributor to pass an interpolated/dynamic string — the type is
  * the enforcement mechanism, so do NOT widen it back to `string`.
@@ -60,7 +60,7 @@ export type MalformedSpreadsheetReason =
  * Which uploaded sheet a parse error came from. Stamped by the parser itself
  * (each one knows which it is) and surfaced in the 422 body, because "Malformed
  * spreadsheet" with two files in flight doesn't tell an organiser which file to
- * go and fix. Like `row`/`column` this is structural metadata, not cell content,
+ * go and fix. Like the coordinates this is structural metadata, not cell content,
  * so it's safe to reflect.
  */
 export type SheetKind = "events" | "guests";
@@ -68,8 +68,24 @@ export type SheetKind = "events" | "guests";
 export class MalformedSpreadsheet extends Data.TaggedError("MalformedSpreadsheet")<{
   /** STATIC literal only — never interpolated cell contents. See {@link MalformedSpreadsheetReason}. */
   readonly reason: MalformedSpreadsheetReason;
-  readonly row?: number;
-  readonly column?: number;
+  /**
+   * 1-indexed coordinates, ABSENT for a whole-file failure.
+   *
+   * Named `atRow`/`atColumn`, not `row`/`column`, because these are OPTIONAL on
+   * an `Error` subclass. JavaScriptCore stamps its own `line`/`column`/
+   * `sourceURL`/`originalLine`/`originalColumn` onto every `Error` instance, so a
+   * plain `column?: number` that a construction site leaves unset does NOT read
+   * back as `undefined` — it reads back as the THROW SITE's source column, and
+   * `e.column ?? null` happily reflects it into the API body. (Verified: an
+   * empty-sheet 422 returned `column: 37`.) V8/workerd has no such own property,
+   * so production never saw it — but the tests run on Bun, and an organiser-facing
+   * "column 37" for a whole-file failure is a defect on any runtime. Renaming out
+   * of the collision removes the class rather than patching the one field.
+   * `FormulaInjectionDetected` keeps `row`/`column`: they are REQUIRED there, so
+   * the constructor always overwrites whatever the runtime stamped.
+   */
+  readonly atRow?: number;
+  readonly atColumn?: number;
   readonly sheet?: SheetKind;
 }> {}
 
@@ -109,8 +125,8 @@ function withSheet(sheet: SheetKind) {
       case "MalformedSpreadsheet":
         return new MalformedSpreadsheet({
           reason: e.reason,
-          row: e.row,
-          column: e.column,
+          atRow: e.atRow,
+          atColumn: e.atColumn,
           sheet,
         });
       case "FormulaInjectionDetected":
@@ -436,8 +452,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Event Name is required",
-            row: r + 1,
-            column: idxName + 1,
+            atRow: r + 1,
+            atColumn: idxName + 1,
           }),
         );
       }
@@ -445,8 +461,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Start is required",
-            row: r + 1,
-            column: idxStart + 1,
+            atRow: r + 1,
+            atColumn: idxStart + 1,
           }),
         );
       }
@@ -454,8 +470,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Timezone is required",
-            row: r + 1,
-            column: idxTz + 1,
+            atRow: r + 1,
+            atColumn: idxTz + 1,
           }),
         );
       }
@@ -463,8 +479,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Start must be an ISO-8601 timestamp",
-            row: r + 1,
-            column: idxStart + 1,
+            atRow: r + 1,
+            atColumn: idxStart + 1,
           }),
         );
       }
@@ -472,8 +488,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "End must be an ISO-8601 timestamp",
-            row: r + 1,
-            column: idxEnd + 1,
+            atRow: r + 1,
+            atColumn: idxEnd + 1,
           }),
         );
       }
@@ -483,8 +499,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Pinterest URL must be an http(s) URL",
-            row: r + 1,
-            column: idxPinterest + 1,
+            atRow: r + 1,
+            atColumn: idxPinterest + 1,
           }),
         );
       }
@@ -493,8 +509,8 @@ export function parseEventsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Maps URL must be an http(s) URL",
-            row: r + 1,
-            column: idxMaps + 1,
+            atRow: r + 1,
+            atColumn: idxMaps + 1,
           }),
         );
       }
@@ -657,8 +673,8 @@ export function parseGuestsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Family Name is required",
-            row: r + 1,
-            column: idxFamilyName + 1,
+            atRow: r + 1,
+            atColumn: idxFamilyName + 1,
           }),
         );
       }
@@ -666,8 +682,8 @@ export function parseGuestsCsv(
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Guest First Name is required",
-            row: r + 1,
-            column: idxFirst + 1,
+            atRow: r + 1,
+            atColumn: idxFirst + 1,
           }),
         );
       }

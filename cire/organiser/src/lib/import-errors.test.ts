@@ -83,6 +83,84 @@ describe("formatImportError — malformed spreadsheet", () => {
   });
 });
 
+describe("formatImportError — every reason arm resolves", () => {
+  // The module claims its switch is exhaustive against the server's closed
+  // `MalformedSpreadsheetReason` union. A per-reason case makes that testable —
+  // and the derived-label arms (Pinterest vs Maps, Start vs End) are exactly
+  // where a copy-paste slip yields a confidently wrong sentence.
+  const REASONS: [string, RegExp][] = [
+    ["too many rows", /5,000 rows/],
+    ["cell too large", /10,000 characters/],
+    ["unterminated quoted cell", /quote/i],
+    ["empty events sheet", /empty/i],
+    ["empty guests sheet", /empty/i],
+    ["Event Name is required", /Event Name/],
+    ["Start is required", /Start/],
+    ["Timezone is required", /Timezone/],
+    ["Start must be an ISO-8601 timestamp", /Start must look like/],
+    ["End must be an ISO-8601 timestamp", /End must look like/],
+    ["Pinterest URL must be an http(s) URL", /Pinterest URL/],
+    ["Maps URL must be an http(s) URL", /Maps URL/],
+    ["Family Name is required", /Family Name/],
+    ["Guest First Name is required", /Guest First Name/],
+  ];
+
+  it.each(REASONS)("renders a specific sentence for %s", (reason, expected) => {
+    const msg = formatImportError(422, {
+      error: "Malformed spreadsheet",
+      reason,
+      row: 3,
+      column: 4,
+      sheet: "events",
+    });
+    expect(msg).toMatch(expected);
+    expect(msg).not.toContain("undefined");
+    expect(msg).not.toContain("null");
+  });
+
+  it("does not confuse the Maps arm with the Pinterest arm", () => {
+    const maps = formatImportError(422, {
+      error: "Malformed spreadsheet",
+      reason: "Maps URL must be an http(s) URL",
+      sheet: "events",
+    });
+    expect(maps).toContain("Maps URL");
+    expect(maps).not.toContain("Pinterest");
+  });
+
+  it("does not confuse the End arm with the Start arm", () => {
+    const end = formatImportError(422, {
+      error: "Malformed spreadsheet",
+      reason: "End must be an ISO-8601 timestamp",
+      sheet: "events",
+    });
+    expect(end).toContain("End must look like");
+    expect(end).not.toMatch(/\bStart must look like/);
+  });
+
+  it("degrades gracefully when the API sent no sheet", () => {
+    const missing = formatImportError(422, { error: "Missing required column", column: "Start" });
+    expect(missing).toMatch(/your sheet/i);
+    expect(missing).not.toContain("undefined");
+
+    const capacity = formatImportError(402, { error: "payment_required" });
+    expect(capacity).toMatch(/guest limit/i);
+    expect(capacity).not.toContain("undefined");
+  });
+
+  it("ignores a sheet value that isn't one of the two literals", () => {
+    // The body is cast from res.json(), so `sheet` is unvalidated at runtime —
+    // indexing a record with it would return an inherited prototype key.
+    const msg = formatImportError(422, {
+      error: "Malformed spreadsheet",
+      reason: "empty events sheet",
+      sheet: "constructor" as unknown as "events",
+    });
+    expect(msg).toMatch(/empty/i);
+    expect(msg).not.toContain("function");
+  });
+});
+
 describe("formatImportError — column problems", () => {
   it("quotes the missing column and points at the template", () => {
     const msg = formatImportError(422, {
