@@ -363,8 +363,8 @@ The uuid suffix means a re-upload never collides and the superseded object is
 deleted independently (best-effort; an orphan is recoverable, a failed upload is
 not).
 
-> The `cire-assets` bucket must be created before first deploy:
-> `bunx wrangler r2 bucket create cire-assets`.
+> The `cire-assets` bucket was created 2026-06-15 and is live. Recreating the
+> account from scratch would need `bunx wrangler r2 bucket create cire-assets`.
 
 ## API surface
 
@@ -387,7 +387,8 @@ CSV-import `R2Bucket` is text-only and is **not** widened in place). Routes:
     submits every key). Empty/whitespace ⇒ `null`, which means "use the built-in
     default" for every field except `footerMessage`, where it means "render
     nothing".
-  - `PUT /invite/theme` → upsert the theme (fonts + per-section colours) **plus the
+  - `PUT /invite/theme` → upsert the theme (fonts + the five-seed colour scheme
+    + a per-section `tone`) **plus the
     two hero display options** (`heroImageStyle ∈ {blurred,regular}`,
     `heroTitleBackdrop ∈ {none,solid}` — both required, total body). A bad colour,
     unknown font, or unknown hero-display literal ⇒ 400 (whole body rejected,
@@ -594,8 +595,11 @@ resource (both override the build-time snapshot above).
 > payload now degrades to the default section colours rather than taking events
 > down — mirroring the organiser preview helper's `?? default` behaviour.
 
-`PUBLIC_WEDDING_SLUG` (env) selects which wedding's customisation the guest site
-renders (default `cire-wedding`, the bootstrap wedding slug).
+Which wedding's customisation the guest site renders is resolved **from the
+request path** (`/<slug>`) at render time — see the guest-rendering section
+above. There is no `PUBLIC_WEDDING_SLUG`: the build-time variable was removed
+when the invite route became path-routed SSR, so one deployment serves every
+wedding from its own link.
 
 ## Organiser UI
 
@@ -666,6 +670,81 @@ PR relies on, for a widget this codebase already hand-rolls elsewhere — see
   ALSO activates the section (same model `DesignPicker`'s arrows use for
   selection). `sectionTabRefs` (a `Map<string, HTMLButtonElement>`) is the
   imperative-focus mechanism, since Solid has no roving-tabindex primitive.
+
+**The tabs collapse into a menu on phones (2026-07-30).** Eight tabs cannot
+share a line below `@3xl/builder` (48rem), and the first cut let the row scroll
+horizontally: Closing and Message sat off the right edge with nothing to say so
+— the exact failure `ModuleSidebar` had already fixed for the module strip, on
+the surface where an organiser is least likely to go hunting. Below that
+threshold the tabs now collapse behind a **trigger naming the current section**
+— its label, its `n/8` position, and its Shown/Hidden dot, so the menu only has
+to be opened to MOVE, never to orient — which opens them as a **two-column
+grid**: all eight on screen at once (≈206px tall on a 390px phone, so nothing
+scrolls), 44px touch targets, absolutely positioned against the sticky bar so
+opening it overlays the form rather than shoving it down. From `@3xl/builder`
+up the trigger is `display: none` and the tabs are the static row they have
+always been — measured: at the crossover the eight pills plus the "Preview"
+button fit one line with room to spare.
+
+**One tablist, two presentations — not two tablists.** The narrow surface
+re-lays-out the SAME `role="tablist"` rather than rendering a second copy of the
+tabs inside a dialog (the shape `ModuleSidebar` uses, which is fine for a nav of
+plain buttons and wrong here): each panel's `aria-labelledby` points at
+`${id}-tab`, so a duplicate would give every panel two candidate labels and
+assistive tech two tabs widgets for one set of panels. Collapsed, the tablist is
+`display: none` — the panels' names still resolve, because accname follows
+`aria-labelledby` into hidden subtrees. The container-query swap needs no
+`ResizeObserver`; the only JS state is the open/closed signal, which is inert
+above the threshold since the wide row ignores it (`@3xl/builder:flex` beats
+both the `hidden` and `grid` toggles in the cascade — variants are emitted after
+base utilities).
+
+**Four dismiss paths, and one of them is a WCAG requirement.** Selecting a
+section closes the menu **and hands focus back to the trigger** (collapsing takes
+the focused tab to `display: none` and focus with it — a click with the menu
+already closed, i.e. the wide row, leaves focus exactly where it was); `Escape`
+closes and restores focus; an outside `pointerdown` closes it via a
+capture-phase listener that exists only while open; and **focus leaving the nav
+closes it** (`onFocusOut`, `relatedTarget` outside `sectionNav`). That last one
+is not tidiness — without it, tabbing forward instead of selecting walks focus
+into the first form control of the active section, which sits *behind* the
+opaque overlay the open menu paints across the top of that section, with Escape
+bound to the tabs and the trigger rather than to the field. WCAG 2.2 SC 2.4.11
+*Focus Not Obscured*, and the "reveal without advancing focus" exception does
+not apply (**SM-C-M1** in `[[security]]`).
+
+A fifth closer is not a dismissal at all: the `ResizeObserver` that already
+picks the preview layer also collapses the menu once the container crosses
+`SECTION_MENU_REM` (48rem), because the trigger is the signal's only other
+writer — left alone, a menu opened narrow stays "open" for the rest of the
+session after a rotate or resize, and `selectSection` then focuses a
+`display: none` trigger on every wide tab click (**SM-P-I1** in `[[perf]]`).
+
+**Arrow keys follow the geometry, not the DOM order.** `ArrowLeft`/`ArrowRight`
+step one, always. `ArrowDown`/`ArrowUp` are handled **only while the menu is
+open** — on the wide single-line row APG reserves them for the browser, and
+handling them there swallowed page scroll from a focused tab (**SM-C-L1**) — and
+open, they step by `SECTION_MENU_COLUMNS`, not by one: in a row-major two-column
+grid the next item is to the right and the one below is two along, so aliasing
+Down to Right would make the arrows disagree with what the organiser can see
+(**SM-C-L2**). Two columns are kept deliberately over a spatially-simpler single
+column, which at ≈396px would overflow the `max-h-[60vh]` cap on a landscape
+phone and re-introduce the very scrolling this replaced.
+
+`SECTION_MENU_COLUMNS` is **exported**, and a test asserts the tablist's class
+contains `grid-cols-${SECTION_MENU_COLUMNS}`. The class cannot be built from the
+constant — Tailwind extracts utilities by scanning source **text**, so
+`grid-cols-${…}` emits no CSS at all — so the literal and the constant are a
+hand-maintained pair, and the drift guard is the checkable half. Same treatment
+`auto-grid` / `page-frame` got.
+
+The trigger's accessible name carries the Shown/Hidden state as a clause
+("…, 3 of 8, hidden — empty. Choose a section") rather than leaving it to the
+dot. The dot is `aria-hidden`, and an `aria-label` overrides subtree content, so
+the `sr-only` span the tabs themselves use would be dropped here — without the
+clause the collapsed trigger tells a sighted organiser three things and a
+screen-reader one only two, which is exactly the claim the design rests on
+(**SM-C-L3**).
 
 **Sections stay MOUNTED — only visually hidden.** `SectionCard` (`fields.tsx`)
 takes a `hidden` prop and applies it as the native HTML `hidden` attribute on
@@ -848,7 +927,8 @@ selection and click no-op, and the server enforces the entitlement regardless.
 Per-section **"Reset section"** actions revert a card's saveable fields to
 defaults as a draft change (nothing saved until the save bar says so).
 
-Per-section colours use the popover accent/surface pickers (`ColorPicker.tsx`,
+The five scheme seeds use the popover pickers (`PaletteField.tsx` over
+`ColorPicker.tsx`,
 Kobalte ColorArea + hue slider + labelled hex field) each with a "Use default"
 clear (null ⇒ built-in token). The picker only emits a full `#rrggbb` (never
 partial input, and never mid-typing: the hex field commits only on a complete

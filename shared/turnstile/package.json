@@ -1,6 +1,6 @@
 {
   "name": "@shared/turnstile",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "type": "module",
   "exports": {
@@ -16,6 +16,6 @@
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   }
 }

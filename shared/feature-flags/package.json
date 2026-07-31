@@ -1,6 +1,6 @@
 {
   "name": "@shared/feature-flags",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "exports": {
@@ -12,11 +12,11 @@
     "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
-    "@growthbook/growthbook": "^1.6.0",
+    "@growthbook/growthbook": "^1.6.5",
     "@shared/observability": "workspace:*"
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   }
 }

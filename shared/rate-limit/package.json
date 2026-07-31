@@ -1,6 +1,6 @@
 {
   "name": "@shared/rate-limit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,6 +13,6 @@
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   }
 }
