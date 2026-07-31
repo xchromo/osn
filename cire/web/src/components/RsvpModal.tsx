@@ -16,6 +16,17 @@ interface RsvpModalProps {
    */
   preview?: boolean;
   /**
+   * The wedding's RSVP deadline has passed — the sheet becomes a read-only view
+   * of whatever this household already answered: every control is disabled and
+   * the submit button is gone, so there is nothing to send. The events section
+   * disables "Respond" too, so this normally can't be opened; it exists because
+   * the deadline can pass with the sheet ALREADY open, and because the server
+   * would refuse the write anyway (403 `rsvp_closed`).
+   */
+  closed?: boolean;
+  /** The deadline day in words, for the closed banner ("RSVPs closed on …"). */
+  closedOn?: string;
+  /**
    * "Details"-section tone map (`sectionVars(theme, "details")`) so the
    * RSVP sheet follows the events section it belongs to — see
    * AnimatedModal.themeVars.
@@ -97,9 +108,17 @@ export function RsvpModal(props: RsvpModalProps) {
     }));
   }
 
+  // Disable every control both while a submit is in flight and once the RSVP
+  // deadline has passed — the two reasons a guest can't change their answer.
+  const locked = () => loading() || (props.closed ?? false);
+
   async function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
     setError(null);
+
+    // Past the deadline there is no submit button to press; a form-level Enter
+    // could still fire this, and the server would refuse it anyway.
+    if (props.closed) return;
 
     const current = responses();
     const visible = eventMembers();
@@ -170,7 +189,15 @@ export function RsvpModal(props: RsvpModalProps) {
       if (res.status === 401) {
         setError("Your session expired. Please re-enter your code.");
       } else if (res.status === 403) {
-        setError("You're not authorised to RSVP for one of those guests.");
+        // The deadline can pass while this sheet is open, so a 403 here is as
+        // likely to be "too late" as "not your guest" — the body's code tells
+        // us which, and the two need very different copy.
+        const failure = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(
+          failure?.error === "rsvp_closed"
+            ? "RSVPs have closed for this wedding. Please contact the couple directly."
+            : "You're not authorised to RSVP for one of those guests.",
+        );
       } else if (res.status === 429) {
         setError("Too many requests. Please try again in a moment.");
       } else {
@@ -201,10 +228,24 @@ export function RsvpModal(props: RsvpModalProps) {
       <h3
         id={titleId}
         class="font-display text-text text-[1.6rem] font-light italic"
-        classList={{ "mb-6": !props.preview, "mb-3": props.preview }}
+        classList={{
+          "mb-6": !props.preview && !props.closed,
+          "mb-3": props.preview || props.closed,
+        }}
       >
         {props.event.name}
       </h3>
+
+      <Show when={props.closed}>
+        <p
+          class="border-border bg-surface-raised text-text-muted mb-6 rounded-sm border px-3.5 py-2.5 text-[0.74rem] leading-relaxed"
+          role="status"
+        >
+          {props.closedOn ? `RSVPs closed on ${props.closedOn}.` : "RSVPs have closed."} This is
+          your household&apos;s reply as it stands — please contact the couple directly if anything
+          needs to change.
+        </p>
+      </Show>
 
       <Show when={props.preview}>
         <p
@@ -243,7 +284,7 @@ export function RsvpModal(props: RsvpModalProps) {
                     }}
                     aria-pressed={responses()[guestId]?.attending === "attending"}
                     onClick={() => setAttending(guestId, "attending")}
-                    disabled={loading()}
+                    disabled={locked()}
                   >
                     Attending
                   </button>
@@ -258,7 +299,7 @@ export function RsvpModal(props: RsvpModalProps) {
                     }}
                     aria-pressed={responses()[guestId]?.attending === "declined"}
                     onClick={() => setAttending(guestId, "declined")}
-                    disabled={loading()}
+                    disabled={locked()}
                   >
                     Not attending
                   </button>
@@ -278,7 +319,7 @@ export function RsvpModal(props: RsvpModalProps) {
                       value={responses()[guestId]?.dietary ?? ""}
                       onInput={(e) => setDietary(guestId, e.currentTarget.value)}
                       maxLength={200}
-                      disabled={loading()}
+                      disabled={locked()}
                     />
                   </label>
 
@@ -292,7 +333,7 @@ export function RsvpModal(props: RsvpModalProps) {
                         class="accent-gold mt-0.5 h-4 w-4 shrink-0 cursor-pointer"
                         checked={responses()[guestId]?.dietaryConsent ?? false}
                         onChange={(e) => setDietaryConsent(guestId, e.currentTarget.checked)}
-                        disabled={loading()}
+                        disabled={locked()}
                       />
                       <span>
                         I agree to my dietary requirements above being stored and shared with the
@@ -333,15 +374,21 @@ export function RsvpModal(props: RsvpModalProps) {
             onClick={() => props.onClose()}
             disabled={loading()}
           >
-            Cancel
+            {/* Past the deadline there is nothing to cancel — the sheet is a
+                view, so its one button says so. */}
+            {props.closed ? "Close" : "Cancel"}
           </button>
-          <button
-            type="submit"
-            class="border-gold font-body text-gold hover:bg-gold hover:text-bg disabled:hover:text-gold flex-1 cursor-pointer rounded-sm border bg-transparent px-4 py-3 text-[0.82rem] tracking-[0.1em] uppercase transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-            disabled={loading()}
-          >
-            {loading() ? "Saving…" : "Save"}
-          </button>
+          {/* No submit button once RSVPs are closed: a disabled Save invites a
+              guest to keep clicking at a door that won't open. */}
+          <Show when={!props.closed}>
+            <button
+              type="submit"
+              class="border-gold font-body text-gold hover:bg-gold hover:text-bg disabled:hover:text-gold flex-1 cursor-pointer rounded-sm border bg-transparent px-4 py-3 text-[0.82rem] tracking-[0.1em] uppercase transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+              disabled={loading()}
+            >
+              {loading() ? "Saving…" : "Save"}
+            </button>
+          </Show>
         </div>
       </form>
     </AnimatedModal>

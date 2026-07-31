@@ -24,6 +24,13 @@ interface EventCardProps {
    * text-only column at every breakpoint).
    */
   orientation?: "norm" | "alt";
+  /**
+   * The wedding's RSVP deadline has passed. "Respond" becomes an inert, plainly
+   * labelled "RSVPs closed" rather than disappearing — a missing button reads
+   * as a broken invite, and the events-section notice above says when it shut.
+   * Event details stay open; only the answer is locked.
+   */
+  rsvpClosed?: boolean;
   onRespond: (event: EventSummary) => void;
   onDetails: (event: EventSummary) => void;
 }
@@ -74,10 +81,11 @@ export function EventCard(props: EventCardProps) {
               guest choose between them; now the choice is made for them. */}
           <div class="flex flex-wrap gap-3">
             <button
-              class="bg-gold font-body text-bg hover:bg-gold/85 min-h-11 flex-1 rounded-sm border border-transparent px-5 py-3 text-[0.82rem] tracking-[0.12em] uppercase transition-colors duration-200 sm:flex-none sm:py-2.5"
+              class="bg-gold font-body text-bg hover:bg-gold/85 disabled:hover:bg-gold min-h-11 flex-1 rounded-sm border border-transparent px-5 py-3 text-[0.82rem] tracking-[0.12em] uppercase transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none sm:py-2.5"
               onClick={() => props.onRespond(props.event)}
+              disabled={props.rsvpClosed}
             >
-              Respond
+              {props.rsvpClosed ? "RSVPs closed" : "Respond"}
             </button>
             <button
               class="border-border font-body text-text-muted hover:border-gold hover:text-gold min-h-11 flex-1 rounded-sm border bg-transparent px-5 py-3 text-[0.82rem] tracking-[0.12em] uppercase transition-colors duration-200 sm:flex-none sm:py-2.5"

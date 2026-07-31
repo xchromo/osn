@@ -136,6 +136,8 @@ describe("GET /api/organiser/weddings/:weddingId/settings", () => {
       guestCountEstimate: null,
       currency: "AUD",
       budgetTotalMinor: null,
+      rsvpDeadline: null,
+      rsvpDeadlineTimezone: null,
     });
   });
 
@@ -236,10 +238,73 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
       { guestCountEstimate: 2.5 },
       { budgetTotalMinor: -1 },
       { displayName: "   " },
+      { rsvpDeadline: "01/09/2027" },
+      { rsvpDeadline: "2027-02-31" },
+      // A zone the runtime can't resolve would silently degrade the deadline to
+      // UTC at read time — reject it at the boundary instead.
+      { rsvpDeadlineTimezone: "Mars/Olympus_Mons" },
+      { rsvpDeadlineTimezone: "GMT+11" },
     ]) {
       const res = await req(app, "PUT", SETTINGS_PATH, OWNER, bad);
       expect(res.status).toBe(400);
     }
+  });
+
+  it("saves an RSVP deadline with the organiser's zone", async () => {
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      wedding: { rsvpDeadline: string; rsvpDeadlineTimezone: string };
+    };
+    expect(body.wedding.rsvpDeadline).toBe("2027-02-20");
+    expect(body.wedding.rsvpDeadlineTimezone).toBe("Australia/Sydney");
+
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBe("2027-02-20");
+    expect(row.rsvpDeadlineTimezone).toBe("Australia/Sydney");
+  });
+
+  it("clearing the deadline date also clears its zone", async () => {
+    // The two columns are one fact — a zone left behind would re-show next to
+    // an empty date in the portal and read as a deadline that isn't there.
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { rsvpDeadline: null });
+    expect(res.status).toBe(200);
+
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBeNull();
+    expect(row.rsvpDeadlineTimezone).toBeNull();
+    const body = (await res.json()) as { wedding: Record<string, unknown> };
+    expect(body.wedding.rsvpDeadlineTimezone).toBeNull();
+  });
+
+  it("accepts a deadline with no zone (read back as UTC)", async () => {
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { rsvpDeadline: "2027-02-20" });
+    expect(res.status).toBe(200);
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBe("2027-02-20");
+    expect(row.rsvpDeadlineTimezone).toBeNull();
+  });
+
+  it("leaves the deadline alone when the patch omits it", async () => {
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    await req(app, "PUT", SETTINGS_PATH, OWNER, { guestCountEstimate: 80 });
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBe("2027-02-20");
+    expect(row.rsvpDeadlineTimezone).toBe("Australia/Sydney");
   });
 });
 

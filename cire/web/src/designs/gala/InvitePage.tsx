@@ -3,6 +3,7 @@ import { createEffect, createMemo, createResource, createSignal, Show, For } fro
 import { Toaster } from "solid-toast";
 
 import { createClaimCode } from "../../components/claim-code";
+import { createRsvpClosed } from "../../components/createRsvpClosed";
 import { DetailsModal } from "../../components/DetailsModal";
 import { EventCard } from "../../components/EventCard";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../components/invite-theme";
 import { InviteClosing } from "../../components/InviteClosing";
 import { PulseAccountLink } from "../../components/PulseAccountLink";
+import { deadlineNotice, formatDeadlineDay } from "../../components/rsvp-deadline";
 import { RsvpModal } from "../../components/RsvpModal";
 import { TurnstileWidget, turnstileEnabled } from "../../components/TurnstileWidget";
 import type { ClaimResult, EventSummary, RsvpSummary } from "../../components/types";
@@ -147,6 +149,14 @@ export default function InvitePage(props: InvitePageProps) {
   // default — same chain as classic, so an organiser edit made after the last
   // build reaches guests via the on-mount revalidation.
   const welcomeMessage = () => liveInvite().welcomeMessage ?? DEFAULT_WELCOME_MESSAGE;
+
+  // The RSVP deadline arrives with the claim (it is household-facing, like the
+  // events beside it). One verdict drives all three surfaces below — the notice
+  // under the heading, every card's Respond button, and the RSVP sheet — and it
+  // re-derives itself if the deadline passes while the invite is open.
+  const rsvpDeadline = () => claimResult()?.rsvpDeadline ?? null;
+  const rsvpClosed = createRsvpClosed(rsvpDeadline);
+  const rsvpNotice = () => deadlineNotice(rsvpDeadline(), rsvpClosed());
 
   let loginFormRef: HTMLDivElement;
   let welcomeRef: HTMLDivElement;
@@ -329,6 +339,19 @@ export default function InvitePage(props: InvitePageProps) {
                 <h2 class="font-display text-text mb-5 text-[calc(clamp(1.75rem,4vw,2.5rem)*var(--invite-heading-scale,1))] leading-[1.15] [font-weight:var(--invite-heading-weight,300)] [font-style:var(--invite-heading-style,normal)]">
                   {detailsHeading()}
                 </h2>
+                {/* The RSVP-by line. Sits above the cards because it governs all
+                    of them — a per-card repeat would be four copies of one fact. */}
+                <Show when={rsvpNotice()}>
+                  {(notice) => (
+                    <p
+                      class="font-body mb-5 text-[0.85rem]"
+                      classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
+                      role="status"
+                    >
+                      {notice()}
+                    </p>
+                  )}
+                </Show>
                 <hr class="border-border mb-10 h-0 w-full border-t" aria-hidden="true" />
                 <div class="flex flex-col gap-5">
                   <For each={data().events}>
@@ -341,6 +364,7 @@ export default function InvitePage(props: InvitePageProps) {
                           // text-left/image-right rhythm on every row, unlike
                           // classic's alternating orientation.
                           orientation="norm"
+                          rsvpClosed={rsvpClosed()}
                           onRespond={setRsvpEvent}
                           onDetails={setDetailsEvent}
                         />
@@ -399,6 +423,11 @@ export default function InvitePage(props: InvitePageProps) {
             apiUrl={props.apiUrl}
             // Host preview keeps the RSVP interactive but makes submit a no-op.
             preview={claimResult()!.preview}
+            // Past the deadline the sheet is a read-only view of the reply
+            // already on file — normally unreachable (Respond is disabled), but
+            // the deadline can pass with the sheet open.
+            closed={rsvpClosed()}
+            closedOn={rsvpDeadline() ? formatDeadlineDay(rsvpDeadline()!) : undefined}
             // The RSVP dialog is the events section's expanded surface — it
             // follows the "details" theme (the modal renders outside the themed
             // section wrapper, so the vars must be re-applied on its panel).

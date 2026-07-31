@@ -1,5 +1,5 @@
-import { render, cleanup } from "@solidjs/testing-library";
-import { describe, it, expect, afterEach } from "vitest";
+import { render, cleanup, fireEvent } from "@solidjs/testing-library";
+import { describe, it, expect, afterEach, vi } from "vitest";
 
 import { EventCard } from "./EventCard";
 import type { EventSummary } from "./types";
@@ -187,5 +187,38 @@ describe("EventCard", () => {
     expect(textCol.className).toContain("md:order-2");
     const img = container.querySelector("img") as HTMLImageElement;
     expect(img.className).toContain("md:order-1");
+  });
+
+  it("offers Respond while RSVPs are open", () => {
+    const { getByRole } = render(() => (
+      <EventCard event={baseEvent} onRespond={noop} onDetails={noop} />
+    ));
+    const respond = getByRole("button", { name: "Respond" }) as HTMLButtonElement;
+    expect(respond.disabled).toBe(false);
+  });
+
+  it("locks Respond once the RSVP deadline has passed", () => {
+    const onRespond = vi.fn();
+    const { getByRole, queryByRole } = render(() => (
+      <EventCard event={baseEvent} rsvpClosed onRespond={onRespond} onDetails={noop} />
+    ));
+
+    // Relabelled rather than removed — a vanished button reads as a broken
+    // invite; this says what happened.
+    expect(queryByRole("button", { name: "Respond" })).toBeNull();
+    const closed = getByRole("button", { name: "RSVPs closed" }) as HTMLButtonElement;
+    expect(closed.disabled).toBe(true);
+
+    fireEvent.click(closed);
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it("keeps Event Details reachable after the deadline (only the answer locks)", () => {
+    const onDetails = vi.fn();
+    const { getByRole } = render(() => (
+      <EventCard event={baseEvent} rsvpClosed onRespond={noop} onDetails={onDetails} />
+    ));
+    fireEvent.click(getByRole("button", { name: "Event Details" }));
+    expect(onDetails).toHaveBeenCalledWith(baseEvent);
   });
 });
