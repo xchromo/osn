@@ -56,25 +56,38 @@ export type MalformedSpreadsheetReason =
   | "Family Name is required"
   | "Guest First Name is required";
 
+/**
+ * Which uploaded sheet a parse error came from. Stamped by the parser itself
+ * (each one knows which it is) and surfaced in the 422 body, because "Malformed
+ * spreadsheet" with two files in flight doesn't tell an organiser which file to
+ * go and fix. Like `row`/`column` this is structural metadata, not cell content,
+ * so it's safe to reflect.
+ */
+export type SheetKind = "events" | "guests";
+
 export class MalformedSpreadsheet extends Data.TaggedError("MalformedSpreadsheet")<{
   /** STATIC literal only — never interpolated cell contents. See {@link MalformedSpreadsheetReason}. */
   readonly reason: MalformedSpreadsheetReason;
   readonly row?: number;
   readonly column?: number;
+  readonly sheet?: SheetKind;
 }> {}
 
 export class FormulaInjectionDetected extends Data.TaggedError("FormulaInjectionDetected")<{
   readonly row: number;
   readonly column: number;
   readonly snippet: string;
+  readonly sheet?: SheetKind;
 }> {}
 
 export class MissingRequiredColumn extends Data.TaggedError("MissingRequiredColumn")<{
   readonly column: string;
+  readonly sheet?: SheetKind;
 }> {}
 
 export class UnmatchedEventColumn extends Data.TaggedError("UnmatchedEventColumn")<{
   readonly column: string;
+  readonly sheet?: SheetKind;
 }> {}
 
 export type SpreadsheetParseError =
@@ -82,6 +95,38 @@ export type SpreadsheetParseError =
   | FormulaInjectionDetected
   | MissingRequiredColumn
   | UnmatchedEventColumn;
+
+/**
+ * Stamp `sheet` onto whichever parse error came out, applied once per parser via
+ * `Effect.mapError` so no individual construction site has to remember it.
+ * Fields are copied explicitly rather than spread — a `Data.TaggedError` is an
+ * `Error` subclass, so spreading would drag `stack`/`message` into the
+ * constructor args alongside the real fields.
+ */
+function withSheet(sheet: SheetKind) {
+  return (e: SpreadsheetParseError): SpreadsheetParseError => {
+    switch (e._tag) {
+      case "MalformedSpreadsheet":
+        return new MalformedSpreadsheet({
+          reason: e.reason,
+          row: e.row,
+          column: e.column,
+          sheet,
+        });
+      case "FormulaInjectionDetected":
+        return new FormulaInjectionDetected({
+          row: e.row,
+          column: e.column,
+          snippet: e.snippet,
+          sheet,
+        });
+      case "MissingRequiredColumn":
+        return new MissingRequiredColumn({ column: e.column, sheet });
+      case "UnmatchedEventColumn":
+        return new UnmatchedEventColumn({ column: e.column, sheet });
+    }
+  };
+}
 
 // ── Hand-rolled RFC 4180 CSV parser ──────────────────────────────────────────
 
@@ -91,6 +136,20 @@ export type SpreadsheetParseError =
  *  hits it (RT-P-I2). */
 export const MAX_ROWS = 5000;
 const MAX_CELL_LENGTH = 10_000;
+
+/**
+ * Strip a leading UTF-8 byte-order mark.
+ *
+ * Excel, Numbers and Google Sheets all write CSVs with a `U+FEFF` BOM. Left in,
+ * it becomes part of the FIRST header cell — `"﻿Event Name"` — which then
+ * matches nothing, and the organiser gets "Missing required column: Event Name"
+ * while staring at a sheet whose first column is plainly headed `Event Name`.
+ * The character is invisible in every editor they'd check with, so the error is
+ * unfalsifiable from their side. Drop it at the door instead.
+ */
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfe_ff ? content.slice(1) : content;
+}
 
 export type CsvParseResult =
   | { ok: true; rows: string[][] }
@@ -121,13 +180,14 @@ export function parseCsv(content: string): string[][] {
   let cell = "";
   let inQuotes = false;
   let i = 0;
-  const n = content.length;
+  const text = stripBom(content);
+  const n = text.length;
 
   while (i < n) {
-    const ch = content[i]!;
+    const ch = text[i]!;
     if (inQuotes) {
       if (ch === '"') {
-        if (i + 1 < n && content[i + 1] === '"') {
+        if (i + 1 < n && text[i + 1] === '"') {
           cell += '"';
           i += 2;
           continue;
@@ -158,7 +218,7 @@ export function parseCsv(content: string): string[][] {
       rows.push(row);
       row = [];
       cell = "";
-      i += content[i + 1] === "\n" ? 2 : 1;
+      i += text[i + 1] === "\n" ? 2 : 1;
       continue;
     }
     if (ch === "\n") {
@@ -201,14 +261,15 @@ export function parseCsvBounded(content: string): CsvParseResult {
   let cell = "";
   let inQuotes = false;
   let i = 0;
-  const n = content.length;
+  const text = stripBom(content);
+  const n = text.length;
 
   while (i < n) {
     if (cell.length > MAX_CELL_LENGTH) return cellTooLarge();
-    const ch = content[i]!;
+    const ch = text[i]!;
     if (inQuotes) {
       if (ch === '"') {
-        if (i + 1 < n && content[i + 1] === '"') {
+        if (i + 1 < n && text[i + 1] === '"') {
           cell += '"';
           i += 2;
           continue;
@@ -241,7 +302,7 @@ export function parseCsvBounded(content: string): CsvParseResult {
       if (rows.length > MAX_ROWS) return tooManyRows();
       row = [];
       cell = "";
-      i += content[i + 1] === "\n" ? 2 : 1;
+      i += text[i + 1] === "\n" ? 2 : 1;
       continue;
     }
     if (ch === "\n") {
@@ -462,6 +523,8 @@ export function parseEventsCsv(
 
     return out;
   }).pipe(
+    // Stamp the sheet once, here, so every rejection above says WHICH file to fix.
+    Effect.mapError(withSheet("events")),
     Effect.tapError((e) => Effect.sync(() => metricImportParseRejected(bucketParseReason(e._tag)))),
     Effect.withSpan("cire.import.parseEvents"),
   );
@@ -656,6 +719,7 @@ export function parseGuestsCsv(
 
     return families;
   }).pipe(
+    Effect.mapError(withSheet("guests")),
     Effect.tapError((e) => Effect.sync(() => metricImportParseRejected(bucketParseReason(e._tag)))),
     Effect.withSpan("cire.import.parseGuests"),
   );

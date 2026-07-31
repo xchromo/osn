@@ -278,6 +278,107 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
   });
 });
 
+// ── Parse-error reporting ───────────────────────────────────────────────────
+
+/**
+ * A 422 has to locate the problem: which sheet, which row, which column, and the
+ * specific reason. Preview used to omit `column`, and apply used to return only
+ * the top-level `error` — so the same bad file produced two different, equally
+ * unactionable bodies and the portal had nothing to render but "Malformed
+ * spreadsheet".
+ */
+describe("POST /changes/preview — parse errors locate the problem", () => {
+  it("reports reason + row + column + sheet for a bad timestamp", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: [
+        "Event Name,Start,End,Timezone,Location,Address,Dress Code Description,Dress Code Palette,Pinterest URL,Maps URL",
+        // What Excel leaves behind after it "helpfully" reformats the cell.
+        "Mehndi,18/09/2026 16:00,,Australia/Sydney,,,,,,",
+      ].join("\n"),
+    });
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "Malformed spreadsheet",
+      reason: "Start must be an ISO-8601 timestamp",
+      row: 2,
+      column: 2,
+      sheet: "events",
+    });
+  });
+
+  it("says WHICH sheet failed when both were uploaded", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: [
+        "Family ID,Family Name,Guest First Name,Guest Last Name,Mehndi,Reception",
+        "1,Testfamily,,Testfamily,yes,yes",
+      ].join("\n"),
+    });
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      reason: "Guest First Name is required",
+      sheet: "guests",
+      row: 2,
+    });
+  });
+
+  it("names the missing column and its sheet", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: ["Event Name,Start", "Mehndi,2026-09-18T16:00:00+10:00"].join("\n"),
+    });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      error: "Missing required column",
+      column: "Timezone",
+      sheet: "events",
+    });
+  });
+
+  it("accepts a sheet saved with a UTF-8 BOM (Excel's default)", async () => {
+    const { app, db } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: `﻿${EVENTS_CSV}`,
+    });
+    expect(res.status).toBe(200);
+    const preview = (await res.json()) as { plan: { eventCreates: unknown[] } };
+    expect(preview.plan.eventCreates).toHaveLength(2);
+    expect(db.select().from(events).all()).toHaveLength(0);
+  });
+
+  it("apply reports the same located body as preview, not a bare error", async () => {
+    const { app, db, r2 } = buildApp();
+
+    // Get a valid change row, then corrupt the stored sheet so the apply-time
+    // re-parse (not the preview) is what fails — the path that used to return
+    // `{error: "Malformed spreadsheet"}` and nothing else.
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, { eventsCsv: EVENTS_CSV });
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+    const [row] = db.select().from(imports).where(eq(imports.id, changeId)).all();
+    await r2.put(
+      row!.eventsR2Key,
+      [
+        "Event Name,Start,End,Timezone,Location,Address,Dress Code Description,Dress Code Palette,Pinterest URL,Maps URL",
+        "Mehndi,18/09/2026 16:00,,Australia/Sydney,,,,,,",
+      ].join("\n"),
+    );
+
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    expect(applyRes.status).toBe(422);
+    expect(await applyRes.json()).toEqual({
+      error: "Malformed spreadsheet",
+      reason: "Start must be an ISO-8601 timestamp",
+      row: 2,
+      column: 2,
+      sheet: "events",
+    });
+  });
+});
+
 // ── DesiredState front door through /changes ────────────────────────────────
 
 describe("POST /changes/preview + /apply — editor (DesiredState JSON) front door", () => {

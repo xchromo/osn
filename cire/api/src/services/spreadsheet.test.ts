@@ -560,6 +560,79 @@ describe("fidelity columns (E2 — honoured, not just ignored)", () => {
   });
 });
 
+/**
+ * Excel, Numbers and Google Sheets all write CSVs with a leading UTF-8 BOM. Left
+ * in the stream it becomes part of the FIRST header cell, which then matches
+ * nothing — and the organiser sees "Missing required column: Event Name" while
+ * looking at a sheet whose first column is headed exactly that. The character is
+ * invisible in every editor they'd check with, so the sheet has to be accepted.
+ */
+describe("UTF-8 BOM tolerance", () => {
+  const BOM = "\uFEFF";
+
+  it("accepts an events sheet saved with a BOM", async () => {
+    const csv = [EVENTS_HEADER, "Mehndi,2026-09-18T16:00:00+10:00,,Australia/Sydney,,,,,,"].join(
+      "\n",
+    );
+    const events = await Effect.runPromise(parseEventsCsv(BOM + csv));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.name).toBe("Mehndi");
+  });
+
+  it("accepts a guests sheet saved with a BOM", async () => {
+    const events = await Effect.runPromise(
+      parseEventsCsv(
+        [EVENTS_HEADER, "Mehndi,2026-09-18T16:00:00+10:00,,Australia/Sydney,,,,,,"].join("\n"),
+      ),
+    );
+    const csv = [
+      "Family ID,Family Name,Guest First Name,Guest Last Name,Mehndi",
+      "1,Testfamily,Ada,Testfamily,yes",
+    ].join("\n");
+    const families = await Effect.runPromise(parseGuestsCsv(BOM + csv, events));
+    expect(families).toHaveLength(1);
+    expect(families[0]!.familyName).toBe("Testfamily");
+  });
+
+  it("strips the BOM rather than folding it into the first cell", () => {
+    expect(parseCsv(BOM + "a,b\n1,2")).toEqual([
+      ["a", "b"],
+      ["1", "2"],
+    ]);
+  });
+});
+
+/**
+ * Every parse rejection says WHICH sheet it came from — with two files in one
+ * request, "Malformed spreadsheet" alone doesn't tell an organiser which to open.
+ */
+describe("parse errors carry their sheet", () => {
+  it("stamps sheet='events' on an events-sheet rejection", async () => {
+    const exit = await Effect.runPromiseExit(parseEventsCsv("Event Name,Start\nx,not-a-date"));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: MissingRequiredColumn } }).cause.error;
+    expect(err.sheet).toBe("events");
+  });
+
+  it("stamps sheet='guests' on a guests-sheet rejection", async () => {
+    const exit = await Effect.runPromiseExit(parseGuestsCsv("Family Name\nSmith", []));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: MissingRequiredColumn } }).cause.error;
+    expect(err.sheet).toBe("guests");
+  });
+
+  it("keeps row + column coordinates alongside the sheet", async () => {
+    const csv = [EVENTS_HEADER, "Mehndi,14/11/2026 15:00,,Australia/Sydney,,,,,,"].join("\n");
+    const exit = await Effect.runPromiseExit(parseEventsCsv(csv));
+    expect(exit._tag).toBe("Failure");
+    const err = (exit as { cause: { error: MalformedSpreadsheet } }).cause.error;
+    expect(err.reason).toBe("Start must be an ISO-8601 timestamp");
+    expect(err.row).toBe(2);
+    expect(err.column).toBe(2);
+    expect(err.sheet).toBe("events");
+  });
+});
+
 describe("formula-injection trim-resilience", () => {
   it("rejects ' =SUM(A1:A2)' (leading whitespace bypass) on the events sheet", async () => {
     const csv = [

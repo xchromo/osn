@@ -327,6 +327,60 @@ describe("ImportPanel — single-sheet uploads", () => {
   });
 });
 
+describe("ImportPanel — surfacing import failures", () => {
+  function choose(label: RegExp, file: File) {
+    const span = [...document.querySelectorAll("label > span")].find((s) =>
+      label.test(s.textContent ?? ""),
+    );
+    const input = span!.parentElement!.querySelector("input[type=file]")!;
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    fireEvent.change(input);
+  }
+
+  it("renders the row, column, sheet and fix hint from a 422 — not the bare error", async () => {
+    authFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: "Malformed spreadsheet",
+          reason: "Start must be an ISO-8601 timestamp",
+          row: 4,
+          column: 2,
+          sheet: "events",
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    render(() => <ImportPanel weddingId="wed_a" />);
+    choose(
+      /events\.csv/i,
+      new File(["Event Name,Start,Timezone\r\n"], "events_export.csv", { type: "text/csv" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
+
+    await waitFor(() => expect(document.body.textContent).toMatch(/row 4/i));
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("column 2");
+    expect(body).toContain("events sheet");
+    expect(body).toContain("2026-11-14T15:00+11:00");
+    // The old behaviour: the top-level error string and nothing else.
+    expect(body).not.toMatch(/^Malformed spreadsheet$/m);
+  });
+
+  it("names the offending column on a 422 missing-column failure", async () => {
+    authFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: "Missing required column", column: "Timezone", sheet: "events" }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    render(() => <ImportPanel weddingId="wed_a" />);
+    choose(/events\.csv/i, new File(["x"], "events.csv", { type: "text/csv" }));
+    fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
+
+    await waitFor(() => expect(document.body.textContent).toMatch(/"Timezone" column/i));
+  });
+});
+
 describe("ImportPanel — download templates", () => {
   it("downloads an events template whose first line is the exact parser header row", async () => {
     render(() => <ImportPanel weddingId="wed_a" />);

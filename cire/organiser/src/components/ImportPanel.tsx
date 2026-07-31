@@ -6,6 +6,8 @@ import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { downloadBlob, downloadCsv } from "../lib/download";
 import { invalidateEvents } from "../lib/events-store";
 import { invalidateGuests } from "../lib/guests-store";
+import { formatImportError } from "../lib/import-errors";
+import type { ImportErrorBody } from "../lib/import-errors";
 import {
   EVENT_REQUIRED_HEADERS,
   EVENT_OPTIONAL_HEADERS,
@@ -156,8 +158,10 @@ export default function ImportPanel(props: { weddingId: string }) {
         }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `Preview failed (${res.status})`);
+        // The API locates the bad cell for us (reason + row + column + which
+        // sheet); spend all of it, instead of showing the bare `error` string.
+        const body = (await res.json().catch(() => ({}))) as ImportErrorBody;
+        throw new Error(formatImportError(res.status, body));
       }
       setPreview((await res.json()) as PreviewResponse);
     } catch (err) {
@@ -180,8 +184,8 @@ export default function ImportPanel(props: { weddingId: string }) {
         body: JSON.stringify({ importId: p.importId }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `Apply failed (${res.status})`);
+        const body = (await res.json().catch(() => ({}))) as ImportErrorBody;
+        throw new Error(formatImportError(res.status, body));
       }
       const data = (await res.json()) as ApplyResponse;
       setApplied(data.summary);

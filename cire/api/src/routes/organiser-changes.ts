@@ -25,8 +25,72 @@ import { R2Service, fetchUpload, storeUpload } from "../services/r2-imports";
 import type { R2Bucket } from "../services/r2-imports";
 import { revertImport } from "../services/revert";
 import { parseEventsCsv, parseGuestsCsv } from "../services/spreadsheet";
+import type { SpreadsheetParseError } from "../services/spreadsheet";
 
 const ONE_MB = 1 * 1024 * 1024;
+
+/**
+ * The 422 body for a spreadsheet parse rejection, shared by preview and apply.
+ *
+ * Every locating detail the parser worked out — `reason`, 1-indexed
+ * `row`/`column`, and which `sheet` it came from — is carried through, because
+ * a bare `{error: "Malformed spreadsheet"}` tells an organiser nothing about
+ * which of two files, which row, or what to change. (Preview used to omit
+ * `column` and apply used to omit everything but `error`, so the same bad upload
+ * produced two different, equally unhelpful bodies.) `snippet` is deliberately
+ * NOT reflected: it is raw cell content from an untrusted upload, and the
+ * reason-lockdown contract in `services/spreadsheet.ts` keeps sheet data out of
+ * API responses.
+ */
+function parseErrorBody(e: SpreadsheetParseError): Record<string, unknown> {
+  const sheet = e.sheet ?? null;
+  switch (e._tag) {
+    case "MalformedSpreadsheet":
+      return {
+        error: "Malformed spreadsheet",
+        reason: e.reason,
+        row: e.row ?? null,
+        column: e.column ?? null,
+        sheet,
+      };
+    case "FormulaInjectionDetected":
+      return {
+        error: "Formula-injection guard tripped",
+        row: e.row,
+        column: e.column,
+        sheet,
+      };
+    case "MissingRequiredColumn":
+      return { error: "Missing required column", column: e.column, sheet };
+    case "UnmatchedEventColumn":
+      return { error: "Unmatched event column", column: e.column, sheet };
+  }
+}
+
+/**
+ * Catch every spreadsheet parse error onto the shared 422 body. One handler for
+ * both verbs, so preview and apply can't drift on what they report again.
+ */
+function catchParseErrors(set: { status?: number | string }) {
+  const handle = (e: SpreadsheetParseError) =>
+    Effect.gen(function* () {
+      if (e._tag === "FormulaInjectionDetected") {
+        yield* Effect.logWarning("formula injection rejected", {
+          row: e.row,
+          column: e.column,
+          sheet: e.sheet ?? null,
+        });
+      }
+      set.status = 422;
+      return parseErrorBody(e);
+    });
+  return {
+    MalformedSpreadsheet: handle,
+    FormulaInjectionDetected: handle,
+    MissingRequiredColumn: handle,
+    UnmatchedEventColumn: handle,
+  };
+}
 
 // Sentinel parse hook: stops Elysia from consuming the body so handlers can
 // parse it by hand — a malformed payload degrades to the schema's 400 instead
@@ -275,38 +339,7 @@ export const createOrganiserChangeRoutes = (
                     return { error: "Missing or invalid fields" };
                   }),
                 ),
-                Effect.catchTag("FormulaInjectionDetected", (e) =>
-                  Effect.gen(function* () {
-                    yield* Effect.logWarning(`formula injection rejected`, {
-                      row: e.row,
-                      column: e.column,
-                    });
-                    set.status = 422;
-                    return {
-                      error: "Formula-injection guard tripped",
-                      row: e.row,
-                      column: e.column,
-                    };
-                  }),
-                ),
-                Effect.catchTag("MissingRequiredColumn", (e) =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Missing required column", column: e.column };
-                  }),
-                ),
-                Effect.catchTag("UnmatchedEventColumn", (e) =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Unmatched event column", column: e.column };
-                  }),
-                ),
-                Effect.catchTag("MalformedSpreadsheet", (e) =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Malformed spreadsheet", reason: e.reason, row: e.row ?? null };
-                  }),
-                ),
+                Effect.catchTags(catchParseErrors(set)),
                 Effect.catchTag("R2Error", () =>
                   Effect.sync(() => {
                     set.status = 500;
@@ -416,30 +449,7 @@ export const createOrganiserChangeRoutes = (
                     return { error: "Missing or invalid fields" };
                   }),
                 ),
-                Effect.catchTag("FormulaInjectionDetected", () =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Formula-injection guard tripped" };
-                  }),
-                ),
-                Effect.catchTag("MissingRequiredColumn", (e) =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Missing required column", column: e.column };
-                  }),
-                ),
-                Effect.catchTag("UnmatchedEventColumn", (e) =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Unmatched event column", column: e.column };
-                  }),
-                ),
-                Effect.catchTag("MalformedSpreadsheet", () =>
-                  Effect.sync(() => {
-                    set.status = 422;
-                    return { error: "Malformed spreadsheet" };
-                  }),
-                ),
+                Effect.catchTags(catchParseErrors(set)),
                 Effect.catchTag("R2Error", () =>
                   Effect.sync(() => {
                     set.status = 500;
