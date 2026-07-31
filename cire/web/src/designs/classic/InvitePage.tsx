@@ -215,13 +215,17 @@ export default function InvitePage(props: InvitePageProps) {
               <h2 class="font-display text-text mb-5 text-[calc(clamp(2rem,5vw,3rem)*var(--invite-heading-scale,1))] leading-[1.15] [font-weight:var(--invite-heading-weight,300)] [font-style:var(--invite-heading-style,normal)]">
                 {detailsHeading()}
               </h2>
-              {/* The RSVP-by line. Sits above the cards because it governs all
-                  of them — a per-card repeat would be four copies of one fact. */}
+              {/* The RSVP-by line. One line governs every card — a per-card
+                  repeat would be four copies of one fact — so it sits directly
+                  on top of the list rather than in the centred header block:
+                  left-aligned with the cards it applies to, and held tight to
+                  them (`mb-3` against the heading's `mb-5` above) so it reads as
+                  their label rather than as a third line of section header. */}
               <Show when={rsvpNotice()}>
                 {(notice) => (
                   <p
                     id={RSVP_NOTICE_ID}
-                    class="font-body mb-6 text-[0.85rem]"
+                    class="font-body mb-3 text-left text-[0.85rem]"
                     classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
                     role="status"
                   >

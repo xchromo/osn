@@ -707,6 +707,23 @@ describe("InvitePage", () => {
       expect((getByRole("button", { name: "Respond" }) as HTMLButtonElement).disabled).toBe(false);
     });
 
+    it("sits directly on top of the event cards, not in the centred header", async () => {
+      await claimWithDeadline({
+        date: "2999-09-01",
+        timezone: "Australia/Sydney",
+        closesAt: "2999-09-01T13:59:59.999Z",
+        closed: false,
+      });
+
+      const notice = document.getElementById("rsvp-deadline-notice")!;
+      // Its next sibling IS the card list — nothing may come between them, so
+      // the line always reads as the list's label rather than a third line of
+      // section header.
+      expect(notice.nextElementSibling?.querySelector("[data-event-card]")).not.toBeNull();
+      // Left-aligned with the cards, against the header block's `text-center`.
+      expect(notice.className).toContain("text-left");
+    });
+
     it("locks every card and states the date once the deadline has passed", async () => {
       const { getByText, getByRole } = await claimWithDeadline({
         date: "2020-09-01",

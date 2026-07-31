@@ -618,6 +618,22 @@ describe("gala InvitePage", () => {
       expect(responds.every((b) => !b.disabled)).toBe(true);
     });
 
+    it("sits below the header rule, directly on top of the event cards", async () => {
+      await claimWithDeadline({
+        date: "2999-09-01",
+        timezone: "Australia/Sydney",
+        closesAt: "2999-09-01T13:59:59.999Z",
+        closed: false,
+      });
+
+      const notice = document.getElementById("rsvp-deadline-notice")!;
+      // The rule closes the section header; the line belongs to the cards under
+      // it, not to the heading above — so it comes AFTER the rule…
+      expect(notice.previousElementSibling?.tagName).toBe("HR");
+      // …and nothing sits between it and the card list.
+      expect(notice.nextElementSibling?.querySelector("[data-event-card]")).not.toBeNull();
+    });
+
     it("locks every card and states the date once the deadline has passed", async () => {
       const { getByText, getAllByRole } = await claimWithDeadline({
         date: "2020-09-01",
