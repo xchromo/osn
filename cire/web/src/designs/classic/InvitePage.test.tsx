@@ -717,7 +717,14 @@ describe("InvitePage", () => {
 
       expect(getByText("RSVPs closed on Tuesday 1 September 2020.")).toBeTruthy();
       const respond = getByRole("button", { name: "RSVPs closed" }) as HTMLButtonElement;
-      expect(respond.disabled).toBe(true);
+      // `aria-disabled`, not the native attribute — see C-M2 in EventCard. The
+      // button stays focusable and points at the notice, which is where the
+      // date actually is.
+      expect(respond.getAttribute("aria-disabled")).toBe("true");
+      expect(respond.getAttribute("aria-describedby")).toBe("rsvp-deadline-notice");
+      expect(document.getElementById("rsvp-deadline-notice")?.textContent).toContain(
+        "RSVPs closed on Tuesday 1 September 2020.",
+      );
     });
 
     it("renders no notice and no lock when the wedding has no deadline", async () => {

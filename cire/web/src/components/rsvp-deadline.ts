@@ -10,6 +10,16 @@ import type { RsvpDeadline } from "./types";
  * can sit on a claimed invite for hours and the payload was computed once.
  */
 
+/**
+ * DOM id of the events-section deadline notice. Shared by both design packs so
+ * each card's closed Respond button can point `aria-describedby` at it and
+ * announce WHEN RSVPs shut, not just that they did (C-M2). Exactly one notice
+ * renders per page, so a fixed id is safe — and keeping it here stops the two
+ * packs and `EventCard` drifting onto three different strings, which would fail
+ * silently (a dangling `aria-describedby` is simply ignored).
+ */
+export const RSVP_NOTICE_ID = "rsvp-deadline-notice";
+
 /** Has the deadline passed? `null` (no deadline) is never closed. */
 export function isRsvpClosed(deadline: RsvpDeadline | null | undefined, now: Date): boolean {
   if (!deadline) return false;
@@ -27,21 +37,39 @@ export function isRsvpClosed(deadline: RsvpDeadline | null | undefined, now: Dat
  * OWN zone, so a guest in another country sees the date the couple wrote, not
  * the one their own clock would roll it to.
  */
-export function formatDeadlineDay(deadline: RsvpDeadline): string {
-  const at = Date.parse(`${deadline.date}T12:00:00Z`);
-  if (Number.isNaN(at)) return deadline.date;
+/**
+ * Day formatters keyed by zone. Constructing one is the expensive part (~75µs)
+ * while `format` on an existing instance is cheap, and this is called from a
+ * reactive scope plus the modal's `closedOn` prop (P-I3). Only successful
+ * lookups are cached, so an unknown zone costs a throwaway construction and
+ * stores nothing; the keys that land come from the API payload and are already
+ * validated, so the map is bounded by the real IANA set.
+ */
+const dayFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dayFormatter(timezone: string): Intl.DateTimeFormat | null {
+  const cached = dayFormatters.get(timezone);
+  if (cached) return cached;
   try {
-    return new Intl.DateTimeFormat("en-AU", {
-      timeZone: deadline.timezone,
+    const formatter = new Intl.DateTimeFormat("en-AU", {
+      timeZone: timezone,
       weekday: "long",
       day: "numeric",
       month: "long",
       year: "numeric",
-    }).format(new Date(at));
+    });
+    dayFormatters.set(timezone, formatter);
+    return formatter;
   } catch {
-    // An unknown zone (a payload from a newer/other API) still renders a date.
-    return deadline.date;
+    return null;
   }
+}
+
+export function formatDeadlineDay(deadline: RsvpDeadline): string {
+  const at = Date.parse(`${deadline.date}T12:00:00Z`);
+  if (Number.isNaN(at)) return deadline.date;
+  // An unknown zone (a payload from a newer/other API) still renders a date.
+  return dayFormatter(deadline.timezone)?.format(new Date(at)) ?? deadline.date;
 }
 
 /**

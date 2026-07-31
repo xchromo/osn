@@ -85,9 +85,20 @@ export const createRsvpRoutes = (db: Db, { turnstileVerifier = null }: RsvpRoute
                 .all(),
             );
 
+            // Fail CLOSED on a missing row (S-L1). Both gates below read this
+            // result, so an optional-chained `family?.…` would make a zero-row
+            // join answer "allow" to each of them — the host-preview write ban
+            // and the deadline would both vanish. The FK cascade means a family
+            // can't outlive its wedding today, but a deny decision must not
+            // depend on that staying true.
+            if (!family) {
+              set.status = 403;
+              return { error: "Unauthorized" };
+            }
+
             // The host preview family is read-only — its code unlocks every
             // event for the organiser, but it must never write real RSVP data.
-            if (family?.kind === "host") {
+            if (family.kind === "host") {
               set.status = 403;
               yield* Effect.sync(() => metricRsvpBlocked("preview"));
               return { error: "Preview sessions cannot submit RSVPs" };
@@ -100,7 +111,7 @@ export const createRsvpRoutes = (db: Db, { turnstileVerifier = null }: RsvpRoute
             // deliberately NOT gated — a phone/paper RSVP arriving after the
             // date is exactly the case they need to enter. A wedding with no
             // deadline set never closes.
-            if (isRsvpClosed(family?.rsvpDeadline, family?.rsvpDeadlineTimezone, new Date())) {
+            if (isRsvpClosed(family.rsvpDeadline, family.rsvpDeadlineTimezone, new Date())) {
               set.status = 403;
               yield* Effect.sync(() => metricRsvpBlocked("deadline"));
               // A machine-readable code, not prose: the guest site maps it to

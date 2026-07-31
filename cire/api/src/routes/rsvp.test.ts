@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { BOOTSTRAP_WEDDING_ID, guests, rsvps, weddings } from "@cire/db";
 import { events as eventsData } from "@cire/db/seed";
 import { createRateLimiter } from "@shared/rate-limit";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { createApp } from "../app";
@@ -508,6 +508,48 @@ describe("POST /api/rsvp — RSVP deadline", () => {
         // proving the stored zone, not just the date, drives the verdict.
         const open = yield* withDeadline("2999-01-01", "Australia/Sydney", rsvpOnce(cookie));
         expect(open.status).toBe(200);
+      }),
+    ),
+  );
+
+  it(
+    "fails CLOSED when the family's wedding row is missing (S-L1)",
+    eff(
+      Effect.gen(function* () {
+        // Both gates on this route read the joined row, so a zero-row result
+        // must not answer "allow" to either of them. The FK cascade makes this
+        // unreachable in practice — which is exactly why the branch needs a
+        // test that reaches it deliberately: the guard exists so the deny
+        // decision doesn't depend on FK enforcement staying switched on.
+        const cookie = yield* claimAndCookie("TESTONE-IVY-AA11");
+
+        // Orphan the family by dropping its wedding with FKs off, so the
+        // family + session survive but the join finds nothing.
+        yield* Effect.sync(() => {
+          db.run(sql`PRAGMA foreign_keys = OFF`);
+          db.delete(weddings).where(eq(weddings.id, BOOTSTRAP_WEDDING_ID)).run();
+        });
+
+        try {
+          const res = yield* rsvpOnce(cookie);
+          expect(res.status).toBe(403);
+          const data = yield* Effect.promise(() => res.json<{ error: string }>());
+          expect(data.error).toBe("Unauthorized");
+        } finally {
+          // Restore the wedding row (and FK enforcement) for the rest of the
+          // suite — the whole file shares one in-memory db.
+          db.insert(weddings)
+            .values({
+              id: BOOTSTRAP_WEDDING_ID,
+              slug: "cire-wedding",
+              displayName: "Cire Wedding",
+              ownerOsnProfileId: "usr_dev_bootstrap_owner",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .run();
+          db.run(sql`PRAGMA foreign_keys = ON`);
+        }
       }),
     ),
   );

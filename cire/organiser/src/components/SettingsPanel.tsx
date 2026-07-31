@@ -35,22 +35,32 @@ function browserTimeZone(): string {
   }
 }
 
+/** Zone-name formatters, cached by zone (P-I3). Construction is the expensive
+ *  part; only successful lookups are stored, so an unresolvable zone costs a
+ *  throwaway construction and can't grow the map. */
+const zoneNameFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneNameFormatter(zone: string): Intl.DateTimeFormat | null {
+  const cached = zoneNameFormatters.get(zone);
+  if (cached) return cached;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-AU", { timeZone: zone, timeZoneName: "short" });
+    zoneNameFormatters.set(zone, formatter);
+    return formatter;
+  } catch {
+    return null;
+  }
+}
+
 /** "Australia/Sydney" → "Australia/Sydney (AEST)" where the runtime can name
  *  the abbreviation, so the hint says something an organiser recognises. */
 function describeTimeZone(zone: string, on: string | null): string {
   const at = on ? new Date(`${on}T12:00:00Z`) : new Date();
   if (Number.isNaN(at.getTime())) return zone;
-  try {
-    const short = new Intl.DateTimeFormat("en-AU", {
-      timeZone: zone,
-      timeZoneName: "short",
-    })
-      .formatToParts(at)
-      .find((p) => p.type === "timeZoneName")?.value;
-    return short && short !== zone ? `${zone} (${short})` : zone;
-  } catch {
-    return zone;
-  }
+  const short = zoneNameFormatter(zone)
+    ?.formatToParts(at)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return short && short !== zone ? `${zone} (${short})` : zone;
 }
 
 const labelClass = "font-body text-text-muted text-[0.72rem] tracking-[0.1em] uppercase";

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 
 import {
+  canonicalTimeZone,
   DEFAULT_RSVP_DEADLINE_TIMEZONE,
   isRsvpClosed,
   isValidTimeZone,
@@ -18,6 +19,38 @@ describe("isValidTimeZone", () => {
   it("rejects anything the runtime cannot resolve", () => {
     for (const zone of ["", "Mars/Olympus_Mons", "GMT+11", "not a zone"]) {
       expect(isValidTimeZone(zone)).toBe(false);
+    }
+  });
+
+  it("rejects fixed-offset zones that Intl would otherwise accept (S-L2)", () => {
+    // These all construct an `Intl.DateTimeFormat` happily. An offset zone
+    // never applies DST, so a deadline stored as one drifts an hour against the
+    // organiser's real zone across a transition.
+    for (const zone of ["+05:30", "-14:00", "+00:00"]) {
+      expect(isValidTimeZone(zone)).toBe(false);
+    }
+  });
+});
+
+describe("canonicalTimeZone", () => {
+  it("collapses casing and aliases to one spelling", () => {
+    expect(canonicalTimeZone("AUSTRALIA/sydney")).toBe("Australia/Sydney");
+    expect(canonicalTimeZone("utc")).toBe("UTC");
+    expect(canonicalTimeZone("Australia/Sydney")).toBe("Australia/Sydney");
+  });
+
+  it("returns null for offsets and for anything unresolvable", () => {
+    for (const zone of ["+05:30", "-14:00", "Mars/Olympus_Mons", "GMT+11", ""]) {
+      expect(canonicalTimeZone(zone)).toBeNull();
+    }
+  });
+
+  it("never returns a value that differs from its own canonical form", () => {
+    // The property the settings column relies on: canonicalising twice is the
+    // same as canonicalising once, so a stored value is already settled.
+    for (const zone of ["AUSTRALIA/sydney", "utc", "Asia/Kolkata"]) {
+      const once = canonicalTimeZone(zone)!;
+      expect(canonicalTimeZone(once)).toBe(once);
     }
   });
 });

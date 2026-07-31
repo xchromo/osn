@@ -14,7 +14,7 @@ import {
 } from "../../components/invite-theme";
 import { InviteClosing } from "../../components/InviteClosing";
 import { PulseAccountLink } from "../../components/PulseAccountLink";
-import { deadlineNotice, formatDeadlineDay } from "../../components/rsvp-deadline";
+import { deadlineNotice, formatDeadlineDay, RSVP_NOTICE_ID } from "../../components/rsvp-deadline";
 import { RsvpModal } from "../../components/RsvpModal";
 import { TurnstileWidget, turnstileEnabled } from "../../components/TurnstileWidget";
 import type { ClaimResult, EventSummary, RsvpSummary } from "../../components/types";
@@ -154,9 +154,12 @@ export default function InvitePage(props: InvitePageProps) {
   // events beside it). One verdict drives all three surfaces below — the notice
   // under the heading, every card's Respond button, and the RSVP sheet — and it
   // re-derives itself if the deadline passes while the invite is open.
-  const rsvpDeadline = () => claimResult()?.rsvpDeadline ?? null;
+  // Memoised, not a plain accessor (P-I2) — see the note in classic's
+  // InvitePage: the post-save `setClaimResult` spread keeps `rsvpDeadline` at
+  // the same object reference, so `===` equality stops the propagation dead.
+  const rsvpDeadline = createMemo(() => claimResult()?.rsvpDeadline ?? null);
   const rsvpClosed = createRsvpClosed(rsvpDeadline);
-  const rsvpNotice = () => deadlineNotice(rsvpDeadline(), rsvpClosed());
+  const rsvpNotice = createMemo(() => deadlineNotice(rsvpDeadline(), rsvpClosed()));
 
   let loginFormRef: HTMLDivElement;
   let welcomeRef: HTMLDivElement;
@@ -344,6 +347,7 @@ export default function InvitePage(props: InvitePageProps) {
                 <Show when={rsvpNotice()}>
                   {(notice) => (
                     <p
+                      id={RSVP_NOTICE_ID}
                       class="font-body mb-5 text-[0.85rem]"
                       classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
                       role="status"
@@ -365,6 +369,7 @@ export default function InvitePage(props: InvitePageProps) {
                           // classic's alternating orientation.
                           orientation="norm"
                           rsvpClosed={rsvpClosed()}
+                          rsvpClosedNoticeId={RSVP_NOTICE_ID}
                           onRespond={setRsvpEvent}
                           onDetails={setDetailsEvent}
                         />

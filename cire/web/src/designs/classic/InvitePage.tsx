@@ -14,7 +14,7 @@ import {
 import { InviteClosing } from "../../components/InviteClosing";
 import { LoginSection } from "../../components/LoginSection";
 import { PulseAccountLink } from "../../components/PulseAccountLink";
-import { deadlineNotice, formatDeadlineDay } from "../../components/rsvp-deadline";
+import { deadlineNotice, formatDeadlineDay, RSVP_NOTICE_ID } from "../../components/rsvp-deadline";
 import { RsvpModal } from "../../components/RsvpModal";
 import type { ClaimResult, EventSummary, RsvpSummary } from "../../components/types";
 
@@ -148,9 +148,15 @@ export default function InvitePage(props: InvitePageProps) {
   // events beside it). One verdict drives all three surfaces below — the notice
   // under the heading, every card's Respond button, and the RSVP sheet — and it
   // re-derives itself if the deadline passes while the invite is open.
-  const rsvpDeadline = () => claimResult()?.rsvpDeadline ?? null;
+  // Memoised, not a plain accessor (P-I2): `setClaimResult({ ...current, rsvps })`
+  // after every RSVP save changes the signal while the spread keeps
+  // `rsvpDeadline` at the SAME object reference, so a plain accessor would
+  // re-run the whole chain each save — re-scheduling createRsvpClosed's timer
+  // and rebuilding date formatters for an unchanged value. The memo's default
+  // `===` equality stops that at the memo, notifying once (null → the object).
+  const rsvpDeadline = createMemo(() => claimResult()?.rsvpDeadline ?? null);
   const rsvpClosed = createRsvpClosed(rsvpDeadline);
-  const rsvpNotice = () => deadlineNotice(rsvpDeadline(), rsvpClosed());
+  const rsvpNotice = createMemo(() => deadlineNotice(rsvpDeadline(), rsvpClosed()));
 
   let loginFormRef: HTMLDivElement;
   let welcomeRef: HTMLDivElement;
@@ -214,6 +220,7 @@ export default function InvitePage(props: InvitePageProps) {
               <Show when={rsvpNotice()}>
                 {(notice) => (
                   <p
+                    id={RSVP_NOTICE_ID}
                     class="font-body mb-6 text-[0.85rem]"
                     classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
                     role="status"
@@ -235,6 +242,7 @@ export default function InvitePage(props: InvitePageProps) {
                         // event has no image.
                         orientation={index() % 2 === 0 ? "norm" : "alt"}
                         rsvpClosed={rsvpClosed()}
+                        rsvpClosedNoticeId={RSVP_NOTICE_ID}
                         onRespond={setRsvpEvent}
                         onDetails={setDetailsEvent}
                       />

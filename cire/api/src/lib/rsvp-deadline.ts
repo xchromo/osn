@@ -26,16 +26,74 @@ export const DEFAULT_RSVP_DEADLINE_TIMEZONE = "UTC";
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Is this a zone the runtime's ICU data actually knows? `Intl.DateTimeFormat`
- * throws `RangeError` on an unknown identifier, which is the only portable
- * check (`Intl.supportedValuesOf` is not available everywhere we run).
+ * Canonical form of an IANA zone identifier, or `null` if this runtime's ICU
+ * data can't resolve it. `Intl` accepts more than the settings schema means by
+ * "IANA identifier" — `"+05:30"`, `"utc"` and `"AUSTRALIA/sydney"` all construct
+ * — so a bare try/catch would let three problems through (S-L2):
+ *  - a FIXED-OFFSET zone never applies DST, so a deadline stored as `"+05:30"`
+ *    silently drifts an hour against the organiser's real zone across a
+ *    transition;
+ *  - the same zone could be stored under many spellings, so equal deadlines
+ *    wouldn't compare equal;
+ *  - and only canonical values ever reaching the hot path is what keeps
+ *    `offsetFormatter`'s cache bounded (see below).
+ * Resolving through `resolvedOptions()` collapses the aliases and casing;
+ * rejecting a leading `+`/`-` drops the offset forms.
+ *
+ * Deliberately NOT cached: it takes organiser-supplied strings at the settings
+ * boundary, and caching by INPUT would let case variants of one real zone grow
+ * the map without bound. It runs on a rare, owner-gated write, not a hot path.
  */
-export function isValidTimeZone(timezone: string): boolean {
+export function canonicalTimeZone(timezone: string): string | null {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-    return true;
+    const resolved = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+    }).resolvedOptions().timeZone;
+    return /^[+-]/.test(resolved) ? null : resolved;
   } catch {
-    return false;
+    return null;
+  }
+}
+
+/** Does this runtime resolve `timezone` to a real (non-offset) IANA zone? */
+export function isValidTimeZone(timezone: string): boolean {
+  return canonicalTimeZone(timezone) !== null;
+}
+
+/**
+ * Offset formatters, keyed by zone. Construction is the expensive half of ICU
+ * date handling (~75µs) while `formatToParts` on an existing formatter is
+ * cheap, and this module runs on the two busiest guest endpoints — every claim
+ * and every RSVP submit — so building one per call burned ~14× the CPU the work
+ * needs, against a 10ms Workers budget (P-W1).
+ *
+ * ONLY SUCCESSFUL LOOKUPS ARE CACHED, which is what bounds the map: a miss
+ * costs a throwaway construction and stores nothing, so junk input can't grow
+ * it, and the keys that do land are the ~600 real IANA identifiers. Formatters
+ * are stateless with respect to the instant (`formatToParts` takes the date as
+ * an argument), so one instance is safely shared across calls and across both
+ * DST-resolution passes.
+ */
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function offsetFormatter(timezone: string): Intl.DateTimeFormat | null {
+  const cached = offsetFormatters.get(timezone);
+  if (cached) return cached;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    offsetFormatters.set(timezone, formatter);
+    return formatter;
+  } catch {
+    return null;
   }
 }
 
@@ -44,17 +102,8 @@ export function isValidTimeZone(timezone: string): boolean {
  * Derived by formatting the instant into the zone and reading the wall-clock
  * fields back, which is the only offset source available without a tz library.
  */
-function zoneOffsetMs(instant: number, timezone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(instant));
+function zoneOffsetMs(instant: number, formatter: Intl.DateTimeFormat): number {
+  const parts = formatter.formatToParts(new Date(instant));
 
   const field = (type: Intl.DateTimeFormatPartTypes): number => {
     const part = parts.find((p) => p.type === type);
@@ -95,9 +144,31 @@ function zoneOffsetMs(instant: number, timezone: string): number {
  * on the last millisecond of a day, which no RSVP deadline cares about.
  */
 export function rsvpDeadlineEndsAt(date: string, timezone: string): number {
+  // Resolve the formatter ONCE and reuse it across both passes. A zone the
+  // runtime can't resolve degrades to UTC here rather than throwing, matching
+  // `resolveRsvpDeadline`'s fail-open stance (UTC is always resolvable, so the
+  // second lookup cannot be null).
+  const formatter = offsetFormatter(timezone) ?? offsetFormatter(DEFAULT_RSVP_DEADLINE_TIMEZONE)!;
   const asUtc = Date.parse(`${date}T23:59:59.999Z`);
-  const firstPass = asUtc - zoneOffsetMs(asUtc, timezone);
-  return asUtc - zoneOffsetMs(firstPass, timezone);
+  const firstPass = asUtc - zoneOffsetMs(asUtc, formatter);
+  return asUtc - zoneOffsetMs(firstPass, formatter);
+}
+
+/**
+ * Is this a real calendar date in `YYYY-MM-DD`? The pattern alone admits
+ * impossible days (2026-02-31), so round-trip through `Date` and require the
+ * same day back — engine-lenient parses that silently roll over are rejected.
+ */
+function isCalendarDate(date: string): boolean {
+  if (!ISO_DATE.test(date)) return false;
+  const parsed = Date.parse(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === date;
+}
+
+/** The zone to measure a stored deadline in — the stored one when this runtime
+ *  knows it, UTC otherwise (fail open; see `resolveRsvpDeadline`). */
+function effectiveZone(timezone: string | null | undefined): string {
+  return timezone && offsetFormatter(timezone) !== null ? timezone : DEFAULT_RSVP_DEADLINE_TIMEZONE;
 }
 
 /** A wedding's deadline, resolved to one instant and one open/closed answer. */
@@ -128,11 +199,9 @@ export function resolveRsvpDeadline(
   timezone: string | null | undefined,
   now: Date,
 ): ResolvedRsvpDeadline | null {
-  if (!date || !ISO_DATE.test(date)) return null;
-  const parsed = Date.parse(`${date}T00:00:00Z`);
-  if (Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 10) !== date) return null;
+  if (!date || !isCalendarDate(date)) return null;
 
-  const zone = timezone && isValidTimeZone(timezone) ? timezone : DEFAULT_RSVP_DEADLINE_TIMEZONE;
+  const zone = effectiveZone(timezone);
   const endsAt = rsvpDeadlineEndsAt(date, zone);
 
   return {
@@ -143,11 +212,20 @@ export function resolveRsvpDeadline(
   };
 }
 
-/** Convenience predicate for the write gates: are RSVPs closed right now? */
+/**
+ * The write gates' predicate: are RSVPs closed right now?
+ *
+ * Computes the instant directly instead of going through
+ * `resolveRsvpDeadline`, whose `closesAt` string this caller never reads — a
+ * `Date` allocation and an ISO serialisation per RSVP submit, for nothing
+ * (P-I1). Both still route through the same `rsvpDeadlineEndsAt`, so the
+ * server's 403 and the claim payload's `closesAt` cannot drift apart.
+ */
 export function isRsvpClosed(
   date: string | null | undefined,
   timezone: string | null | undefined,
   now: Date,
 ): boolean {
-  return resolveRsvpDeadline(date, timezone, now)?.closed ?? false;
+  if (!date || !isCalendarDate(date)) return false;
+  return now.getTime() > rsvpDeadlineEndsAt(date, effectiveZone(timezone));
 }

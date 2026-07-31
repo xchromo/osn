@@ -207,10 +207,50 @@ describe("EventCard", () => {
     // invite; this says what happened.
     expect(queryByRole("button", { name: "Respond" })).toBeNull();
     const closed = getByRole("button", { name: "RSVPs closed" }) as HTMLButtonElement;
-    expect(closed.disabled).toBe(true);
+    expect(closed.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(closed);
     expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it("keeps the closed button focusable and described by the notice (C-M2)", () => {
+    const { getByRole } = render(() => (
+      <EventCard
+        event={baseEvent}
+        rsvpClosed
+        rsvpClosedNoticeId="rsvp-deadline-notice"
+        onRespond={noop}
+        onDetails={noop}
+      />
+    ));
+    const closed = getByRole("button", { name: "RSVPs closed" }) as HTMLButtonElement;
+
+    // The native attribute would take it out of the tab order, making the one
+    // per-card explanation of why the action is gone unreachable by keyboard —
+    // and would drop focus to <body> if the deadline passed while it was
+    // focused. `aria-disabled` says the same thing and stays reachable.
+    expect(closed.hasAttribute("disabled")).toBe(false);
+    expect(closed.getAttribute("aria-disabled")).toBe("true");
+    expect(closed.getAttribute("aria-describedby")).toBe("rsvp-deadline-notice");
+
+    closed.focus();
+    expect(document.activeElement).toBe(closed);
+  });
+
+  it("carries no aria-disabled or describedby while RSVPs are open", () => {
+    const { getByRole } = render(() => (
+      <EventCard
+        event={baseEvent}
+        rsvpClosedNoticeId="rsvp-deadline-notice"
+        onRespond={noop}
+        onDetails={noop}
+      />
+    ));
+    const respond = getByRole("button", { name: "Respond" });
+    expect(respond.hasAttribute("aria-disabled")).toBe(false);
+    // A describedby pointing at a notice that isn't rendered would be a
+    // dangling reference; the open state must not set one.
+    expect(respond.hasAttribute("aria-describedby")).toBe(false);
   });
 
   it("keeps Event Details reachable after the deadline (only the answer locks)", () => {

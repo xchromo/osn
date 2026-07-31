@@ -629,7 +629,14 @@ describe("gala InvitePage", () => {
       expect(getByText("RSVPs closed on Tuesday 1 September 2020.")).toBeTruthy();
       const closed = getAllByRole("button", { name: "RSVPs closed" }) as HTMLButtonElement[];
       expect(closed.length).toBeGreaterThan(0);
-      expect(closed.every((b) => b.disabled)).toBe(true);
+      // `aria-disabled`, not the native attribute — see C-M2 in EventCard.
+      expect(closed.every((b) => b.getAttribute("aria-disabled") === "true")).toBe(true);
+      // Each closed button points at the section notice, which is the only
+      // place the DATE is stated.
+      expect(
+        closed.every((b) => b.getAttribute("aria-describedby") === "rsvp-deadline-notice"),
+      ).toBe(true);
+      expect(document.getElementById("rsvp-deadline-notice")).not.toBeNull();
     });
 
     it("renders no notice and no lock when the wedding has no deadline", async () => {

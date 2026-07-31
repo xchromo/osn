@@ -1,4 +1,5 @@
 import { render, cleanup, fireEvent, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
 import { RsvpModal } from "./RsvpModal";
@@ -631,6 +632,62 @@ describe("RsvpModal", () => {
 
     await waitFor(() => expect(fetchSpy).not.toHaveBeenCalled());
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("rescues focus into the sheet when the deadline passes with Save focused (C-L2)", async () => {
+    // The deadline can flip on a live timer while this sheet is open, and that
+    // unmounts the submit button. If focus was ON it, focus would revert to
+    // <body> — outside an `aria-modal` dialog, with no keyboard way back in.
+    const [closed, setClosed] = createSignal(false);
+    render(() => (
+      <RsvpModal
+        event={event}
+        members={[priya]}
+        existingRsvps={[
+          { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+        ]}
+        apiUrl="https://api.test"
+        closed={closed()}
+        onClose={() => {}}
+      />
+    ));
+
+    const save = document.querySelector("button[type='submit']") as HTMLButtonElement;
+    save.focus();
+    expect(document.activeElement).toBe(save);
+
+    setClosed(true);
+
+    await waitFor(() => expect(document.querySelector("button[type='submit']")).toBeNull());
+    // Focus landed on the sheet's dismiss button, not on <body>.
+    expect(document.activeElement).not.toBe(document.body);
+    expect((document.activeElement as HTMLElement).textContent).toContain("Close");
+  });
+
+  it("leaves focus alone when it was never inside the sheet", async () => {
+    // The rescue must not YANK focus from wherever the guest actually is —
+    // only recover it when the element being destroyed held it.
+    const [closed, setClosed] = createSignal(false);
+    const outside = document.createElement("button");
+    outside.textContent = "elsewhere";
+    document.body.append(outside);
+
+    render(() => (
+      <RsvpModal
+        event={event}
+        members={[priya]}
+        apiUrl="https://api.test"
+        closed={closed()}
+        onClose={() => {}}
+      />
+    ));
+
+    outside.focus();
+    setClosed(true);
+
+    await waitFor(() => expect(document.querySelector("button[type='submit']")).toBeNull());
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
 
   it("still shows the closed banner when the deadline day is unknown", () => {

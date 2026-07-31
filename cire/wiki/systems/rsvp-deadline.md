@@ -49,6 +49,12 @@ Everything — the guest write gate, the claim payload, the guest banner — goe
 
 Offsets come from `Intl.DateTimeFormat` (no tz library on a Worker): format the instant into the zone, read the wall-clock fields back, and subtract. It runs **two passes** — the first offset is sampled at the UTC-interpreted instant, which is up to a day away from the real one and so can land on the wrong side of a DST transition; re-sampling at the corrected instant settles it. That is what makes "the end of 5 April in Sydney" resolve at `+10` (the day *ends* on AEST) rather than the `+11` in force when it began.
 
+Formatters are **cached per zone** and reused across both passes (P-W1). Construction is the expensive half of ICU date handling (~226 µs/call vs ~16 µs cached) and this runs on every claim and every RSVP submit, against a 10 ms Workers CPU budget. Only *successful* lookups are cached, which is what bounds the map: a miss stores nothing, so junk input can't grow it, and canonicalisation on write (below) means only canonical identifiers ever reach it.
+
+### Zones are canonicalised on write
+
+`Intl` accepts more than "IANA identifier" — `"+05:30"`, `"utc"` and `"AUSTRALIA/sydney"` all construct. Storing those verbatim would mean a fixed-offset deadline that never applies DST (drifting an hour across a transition) and one zone spelled several ways in the column, so `canonicalTimeZone` resolves through `resolvedOptions().timeZone` and rejects anything whose resolved form is an offset (S-L2). It is deliberately **not** cached — it takes organiser-supplied strings, and caching by input would let case variants of one real zone grow a map without bound. It runs on a rare owner-gated write, never on a hot path.
+
 ### Failing open
 
 Both degradations fail **open**, never closed:
@@ -68,7 +74,7 @@ Locking guests out of an invite because of a data problem is the worse failure. 
 | `PUT …/guests/:guestId/rsvps/:eventId` (organiser-recorded) | **No** | A phone/paper reply arriving after the date is exactly the case the deadline creates. The organiser set the date; they can answer for it. |
 | Host-preview family | Already 403 | Preview sessions never write real RSVP data, deadline or not. |
 
-Enforcement lives on the **write**, not only in the UI: a stale tab, or anything talking to the API directly, must not be able to slip a late reply in. The route reads the deadline in the same join it already makes for the family's `kind`, so the gate costs no extra round-trip.
+Enforcement lives on the **write**, not only in the UI: a stale tab, or anything talking to the API directly, must not be able to slip a late reply in. The route reads the deadline in the same join it already makes for the family's `kind`, so the gate costs no extra round-trip — and **fails closed on a zero-row join** (S-L1), since both gates read that one result and optional chaining would have made a missing row answer "allow" to each of them.
 
 `cire.rsvp.blocked{reason}` counts refusals — `deadline` or `preview`.
 
@@ -92,8 +98,8 @@ Both `closesAt` and `closed` are sent because a guest can sit on a claimed invit
 One verdict drives three surfaces, in both the `classic` and `gala` designs:
 
 1. **A line under the events heading** — "Kindly respond by Tuesday 1 September 2026." while open; "RSVPs closed on …" once shut. Above the cards, because it governs all of them.
-2. **Each card's Respond button** — disabled and relabelled "RSVPs closed". Relabelled rather than removed: a vanished button reads as a broken invite. *Event Details stays open* — only the answer locks.
-3. **The RSVP sheet** — read-only: every control disabled, no submit button at all, the dismiss button says "Close". Normally unreachable (Respond is disabled), but reachable if the deadline passes with the sheet already open.
+2. **Each card's Respond button** — relabelled "RSVPs closed" and marked `aria-disabled`. Relabelled rather than removed: a vanished button reads as a broken invite. **`aria-disabled`, not the native `disabled`** (C-M2): the native attribute takes the control out of the tab order, which would make the one per-card explanation of why the action is gone unreachable by keyboard, and would drop focus to `<body>` if the deadline passed while it was focused. The click handler enforces it, and `aria-describedby` points at the notice above via the shared `RSVP_NOTICE_ID` — the notice is the only place the *date* appears. Losing the native attribute also loses WCAG 1.4.3's inactive-component exemption, so the closed state reuses the **outlined** treatment already shipped beside it rather than dimming the filled button. *Event Details stays open* — only the answer locks.
+3. **The RSVP sheet** — read-only: every control disabled, no submit button at all, the dismiss button says "Close". Normally unreachable (Respond can't be activated), but reachable if the deadline passes with the sheet already open — in which case unmounting the submit button would strand focus outside an `aria-modal` dialog, so a focus rescue moves it to the dismiss button *when nothing else holds it* (C-L2).
 
 The dates render in the **wedding's** zone, so a guest abroad sees the date the couple wrote, not the one their own clock rolls it to.
 

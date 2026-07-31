@@ -1,4 +1,12 @@
-import { createMemo, createSignal, createUniqueId, onCleanup, Show, For } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  onCleanup,
+  Show,
+  For,
+} from "solid-js";
 
 import { AnimatedModal } from "./AnimatedModal";
 import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
@@ -111,6 +119,27 @@ export function RsvpModal(props: RsvpModalProps) {
   // Disable every control both while a submit is in flight and once the RSVP
   // deadline has passed — the two reasons a guest can't change their answer.
   const locked = () => loading() || (props.closed ?? false);
+
+  // C-L2: the deadline can pass with this sheet open, and closing it unmounts
+  // the submit button. If focus was ON that button, the browser drops focus to
+  // `<body>` — outside an `aria-modal` dialog, with no keyboard way back in.
+  //
+  // The rescue detects the LOSS rather than trying to pre-empt it: this effect
+  // runs after the DOM update, by which point a destroyed focus has already
+  // reverted to `<body>`, so "activeElement is body/null" is precisely the
+  // condition worth fixing. Focus resting on any real element means the guest
+  // is somewhere deliberate and we leave them there. The closed banner is
+  // `role="status"`, so the change itself is announced either way.
+  let dismissRef: HTMLButtonElement | undefined;
+  let wasClosed = props.closed ?? false;
+  createEffect(() => {
+    const nowClosed = props.closed ?? false;
+    const justClosed = nowClosed && !wasClosed;
+    wasClosed = nowClosed;
+    if (!justClosed || !dismissRef) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) dismissRef.focus();
+  });
 
   async function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -371,6 +400,7 @@ export function RsvpModal(props: RsvpModalProps) {
           <button
             type="button"
             class="border-border font-body text-text-muted hover:border-gold-dim hover:text-text flex-1 cursor-pointer rounded-sm border bg-transparent px-4 py-3 text-[0.82rem] tracking-[0.1em] uppercase transition-colors duration-200 disabled:opacity-40"
+            ref={dismissRef}
             onClick={() => props.onClose()}
             disabled={loading()}
           >

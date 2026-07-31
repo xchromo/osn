@@ -244,6 +244,10 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
       // UTC at read time — reject it at the boundary instead.
       { rsvpDeadlineTimezone: "Mars/Olympus_Mons" },
       { rsvpDeadlineTimezone: "GMT+11" },
+      // Fixed-offset zones construct fine in `Intl` but never apply DST, so a
+      // deadline stored as one drifts across a transition (S-L2).
+      { rsvpDeadlineTimezone: "+05:30" },
+      { rsvpDeadlineTimezone: "-14:00" },
     ]) {
       const res = await req(app, "PUT", SETTINGS_PATH, OWNER, bad);
       expect(res.status).toBe(400);
@@ -284,6 +288,21 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect(row.rsvpDeadlineTimezone).toBeNull();
     const body = (await res.json()) as { wedding: Record<string, unknown> };
     expect(body.wedding.rsvpDeadlineTimezone).toBeNull();
+  });
+
+  it("canonicalises the stored zone rather than storing it verbatim (S-L2)", async () => {
+    // One zone must have one spelling in the column, or equal deadlines don't
+    // compare equal and the value stops matching its documented type.
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "AUSTRALIA/sydney",
+    });
+    expect(res.status).toBe(200);
+
+    expect(getWedding(db).rsvpDeadlineTimezone).toBe("Australia/Sydney");
+    const body = (await res.json()) as { wedding: { rsvpDeadlineTimezone: string } };
+    expect(body.wedding.rsvpDeadlineTimezone).toBe("Australia/Sydney");
   });
 
   it("refuses to store a zone against a wedding with no deadline date", async () => {

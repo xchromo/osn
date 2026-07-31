@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { isValidTimeZone } from "../lib/rsvp-deadline";
+import { canonicalTimeZone } from "../lib/rsvp-deadline";
 import { MAX_DISPLAY_NAME } from "../services/weddings";
 
 /** Trim then require non-empty — same idiom as `CreateWeddingBody.displayName`. */
@@ -39,12 +39,25 @@ const Currency = Schema.String.pipe(Schema.pattern(/^[A-Z]{3}$/));
  * IANA time-zone identifier (`Australia/Sydney`), validated against the
  * runtime's own ICU data rather than a pattern — a zone this Worker can't
  * resolve would silently degrade the RSVP deadline to UTC at read time, and a
- * deadline the organiser can't predict is worse than none. Bounded to keep an
- * arbitrary blob out of the column; ICU's longest identifier is well under it.
+ * deadline the organiser can't predict is worse than none.
+ *
+ * CANONICALISED, not merely accepted (S-L2). `Intl` also constructs for
+ * `"+05:30"`, `"utc"` and `"AUSTRALIA/sydney"`; storing those verbatim would
+ * mean a fixed-offset deadline that never applies DST (drifting an hour across
+ * a transition) and one zone spelled several ways in the column. The
+ * `maxLength` runs FIRST and Effect Schema short-circuits on it, so an
+ * oversized blob never reaches the ICU lookup.
  */
 const TimeZone = Schema.String.pipe(
   Schema.maxLength(64),
-  Schema.filter((s) => isValidTimeZone(s), { message: () => "not a known time zone" }),
+  Schema.filter((s) => canonicalTimeZone(s) !== null, { message: () => "not a known time zone" }),
+  Schema.transform(Schema.String, {
+    strict: true,
+    // The filter above already rejected anything unresolvable, so the fallback
+    // is unreachable — it exists only to keep this total.
+    decode: (s) => canonicalTimeZone(s) ?? s,
+    encode: (s) => s,
+  }),
 );
 
 const GuestCountEstimate = Schema.Number.pipe(Schema.int(), Schema.between(1, 10_000));
