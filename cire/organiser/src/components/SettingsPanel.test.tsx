@@ -291,4 +291,45 @@ describe("SettingsPanel", () => {
     // values sitting in the disabled inputs.
     expect(Object.keys(body).toSorted()).toEqual(["rsvpDeadline", "rsvpDeadlineTimezone"]);
   });
+
+  it("lets an editor co-host clear a deadline that already exists", async () => {
+    // The common real case: a co-host chasing replies MOVES or lifts a date the
+    // owner already set, which is a different render branch (the "invite locks"
+    // hint, not the "leave this empty" fallback) and a different save.
+    authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
+    render(() => <SettingsPanel weddingId="wed_1" canManage={false} canEditRsvpDeadline />);
+    await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
+
+    // Seeded and live, not the static read-only rendering a viewer gets.
+    const trigger = screen.getByRole("button", { name: /20 February 2027/ });
+    fireEvent.click(trigger);
+    await waitFor(() => expect(screen.getByRole("grid")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Clear date" }));
+
+    authFetchMock.mockResolvedValueOnce(json({ wedding: EMPTY_PROFILE }));
+    fireEvent.click(screen.getByText("Save RSVP-by date"));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    const [, init] = authFetchMock.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toEqual({ rsvpDeadline: null, rsvpDeadlineTimezone: null });
+  });
+
+  it("blames permission, not the fields, when a save is refused", async () => {
+    // A co-host whose role changed since the tab loaded gets 403
+    // owner_only_fields / read_only_role. "Check the fields and try again"
+    // would send them hunting for a validation error that isn't there.
+    authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
+    render(() => <SettingsPanel weddingId="wed_1" canManage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
+
+    authFetchMock.mockResolvedValueOnce(
+      json({ error: "owner_only_fields", fields: ["displayName"] }, 403),
+    );
+    fireEvent.click(screen.getByText("Save settings"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(String(toastError.mock.calls[0]?.[0])).toMatch(/permission/i);
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
 });

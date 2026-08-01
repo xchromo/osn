@@ -96,27 +96,48 @@ export const weddingSettingsService = {
         }),
       };
 
+      // Write ONLY the columns the patch names (S-L1). Setting all seven from
+      // the row read a moment earlier made every save a read-modify-write over
+      // the whole profile — which was self-inflicted while the owner was the
+      // only writer, but the RSVP deadline is now editable by an `editor`
+      // co-host too. A deadline-only patch that rewrote `displayName` and
+      // `currency` with stale values could revert an owner's concurrent edit to
+      // a field the co-host is explicitly not allowed to touch. A narrow UPDATE
+      // makes that physically impossible, so the route's field gate holds at
+      // the storage layer and not only in the handler.
+      const changes: Partial<typeof weddings.$inferInsert> = {
+        ...(patch.displayName !== undefined && { displayName: patch.displayName }),
+        ...(patch.weddingDate !== undefined && { weddingDate: patch.weddingDate }),
+        ...(patch.guestCountEstimate !== undefined && {
+          guestCountEstimate: patch.guestCountEstimate,
+        }),
+        ...(patch.currency !== undefined && { currency: patch.currency }),
+        ...(patch.budgetTotalMinor !== undefined && { budgetTotalMinor: patch.budgetTotalMinor }),
+        ...(patch.rsvpDeadline !== undefined && { rsvpDeadline: patch.rsvpDeadline }),
+        ...(patch.rsvpDeadlineTimezone !== undefined && {
+          rsvpDeadlineTimezone: patch.rsvpDeadlineTimezone,
+        }),
+      };
+
       // The deadline's two columns are ONE fact. A zone without a date is inert
       // but misleading (the portal would re-show it next to an empty date), so
-      // clearing the date clears the zone in the same write — the pair can never
-      // half-exist, whichever order a client sends them in.
-      if (next.rsvpDeadline === null) next.rsvpDeadlineTimezone = null;
+      // a write that leaves no date clears the zone in the same statement — the
+      // pair can never half-exist, whichever order a client sends them in. Only
+      // a patch that TOUCHES the pair can trip this, so an unrelated save still
+      // writes nothing but its own columns.
+      const touchesDeadline =
+        patch.rsvpDeadline !== undefined || patch.rsvpDeadlineTimezone !== undefined;
+      if (touchesDeadline && next.rsvpDeadline === null) {
+        next.rsvpDeadlineTimezone = null;
+        changes.rsvpDeadlineTimezone = null;
+      }
 
       yield* Effect.tryPromise({
         try: () =>
           Promise.resolve(
             db
               .update(weddings)
-              .set({
-                displayName: next.displayName,
-                weddingDate: next.weddingDate,
-                guestCountEstimate: next.guestCountEstimate,
-                currency: next.currency,
-                budgetTotalMinor: next.budgetTotalMinor,
-                rsvpDeadline: next.rsvpDeadline,
-                rsvpDeadlineTimezone: next.rsvpDeadlineTimezone,
-                updatedAt: new Date(),
-              })
+              .set({ ...changes, updatedAt: new Date() })
               .where(eq(weddings.id, weddingId))
               .run(),
           ),

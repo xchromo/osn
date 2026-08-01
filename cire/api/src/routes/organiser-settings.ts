@@ -81,6 +81,16 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
               // sent it, so a co-host debugging a typo isn't told "forbidden".
               const ownerOnly = weddingIsOwner ? [] : ownerOnlySettingsIn(patch);
               if (ownerOnly.length > 0) {
+                // The portal never sends this body — a co-host's save carries
+                // the deadline pair alone — so every occurrence is a stale tab
+                // or a hand-crafted call, which is exactly the shape of a
+                // co-host probing owner-only fields. Log the field NAMES (a
+                // closed set from the schema, never caller-controlled text);
+                // the caller's id stays out of it, per the redaction rules.
+                yield* Effect.logWarning("settings owner-only fields refused", {
+                  weddingId,
+                  fields: ownerOnly,
+                });
                 set.status = 403;
                 return { error: "owner_only_fields", fields: ownerOnly };
               }

@@ -219,7 +219,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
       });
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) {
-        toast.error("Could not save the settings. Please check the fields and try again.");
+        // A 403 means the server disagrees with this tab about the caller's
+        // role — a co-host whose access changed since the page loaded, or one
+        // whose form reached past the RSVP-by date. Telling them to "check the
+        // fields" would send them hunting for a validation error that isn't
+        // there, so permission failures say so.
+        toast.error(
+          res.status === 403
+            ? "You don't have permission to change these settings. Reload the page to see your current access."
+            : "Could not save the settings. Please check the fields and try again.",
+        );
         return;
       }
       const body = (await res.json()) as { wedding: WeddingProfile };

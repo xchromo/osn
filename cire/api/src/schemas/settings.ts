@@ -107,18 +107,32 @@ export type UpdateSettingsBody = Schema.Schema.Type<typeof UpdateSettingsBody>;
  * ever be written beside its date — so admitting one without the other would
  * leave a co-host able to set a deadline they can't put a zone on.
  */
-const EDITOR_WRITABLE_SETTINGS = new Set<keyof UpdateSettingsBody>([
-  "rsvpDeadline",
-  "rsvpDeadlineTimezone",
-]);
+const EDITOR_WRITABLE_SETTINGS = new Set<string>(["rsvpDeadline", "rsvpDeadlineTimezone"]);
 
 /**
  * The owner-only keys a patch actually carries — empty for a patch an editor
- * co-host may apply as-is. Keys whose value decoded to `undefined` are ignored:
- * PATCH semantics mean "absent", not "clear", so they change nothing and must
- * not trip the gate.
+ * co-host may apply as-is. Keys whose value is `undefined` are ignored: PATCH
+ * semantics mean "absent", not "clear", so they change nothing and must not
+ * trip the gate. An explicit `null` IS a write (it clears the column) and does
+ * trip it.
+ *
+ * Iterates the STRUCT'S OWN FIELD LIST and reads each key off the patch,
+ * rather than walking the patch's own enumerable keys (S-M1). Two reasons, one
+ * structural and one about drift:
+ *
+ *  1. `weddingSettingsService.update` decides what to write with
+ *     `patch.displayName !== undefined`, which resolves through the prototype
+ *     chain. A checker using `Object.entries` would see only OWN keys, so the
+ *     gate and the writer could disagree about what the patch contains — and a
+ *     gate that disagrees with its writer is advisory. There is no
+ *     prototype-pollution sink in this codebase today; this makes the
+ *     agreement structural rather than dependent on that staying true.
+ *  2. Deriving the key list from `UpdateSettingsBody.fields` means a field
+ *     added to the struct is owner-only the moment it exists — the list cannot
+ *     drift out of step with the schema, because it *is* the schema.
  */
 export const ownerOnlySettingsIn = (patch: UpdateSettingsBody): string[] =>
-  Object.entries(patch)
-    .filter(([key, value]) => value !== undefined && !EDITOR_WRITABLE_SETTINGS.has(key as never))
-    .map(([key]) => key);
+  Object.keys(UpdateSettingsBody.fields).filter(
+    (key) =>
+      !EDITOR_WRITABLE_SETTINGS.has(key) && (patch as Record<string, unknown>)[key] !== undefined,
+  );

@@ -181,6 +181,19 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect(getWedding(db).rsvpDeadline).toBeNull();
   });
 
+  it("refuses a co-host CLEARING an owner-only field", async () => {
+    // Clearing is the destructive half of a write, and it is the case a
+    // plausible refactor breaks: a truthiness check in the allow-list would
+    // still pass every other test here while letting a co-host wipe the
+    // wedding date, guest estimate and budget.
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, { weddingDate: "2027-03-20" });
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, { weddingDate: null });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { fields: string[] }).fields).toEqual(["weddingDate"]);
+    expect(getWedding(db).weddingDate).toBe("2027-03-20");
+  });
+
   it("lets an EDITOR co-host set the RSVP deadline", async () => {
     const { app, db } = buildApp();
     const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, {
@@ -207,6 +220,30 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     const row = getWedding(db);
     expect(row.rsvpDeadline).toBeNull();
     expect(row.rsvpDeadlineTimezone).toBeNull();
+  });
+
+  it("writes only the columns the patch names, so a co-host can't clobber owner fields", async () => {
+    // S-L1: the save used to read the row and write all seven columns back. A
+    // co-host's deadline patch would then rewrite displayName/currency/budget
+    // with whatever it read a moment earlier, reverting an owner's concurrent
+    // edit to fields the gate exists to protect. Simulated here by moving an
+    // owner-only column BETWEEN the co-host's read and their write.
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, { displayName: "Aisha & Ben" });
+
+    // The owner renames while the co-host's tab still shows the old name...
+    await req(app, "PUT", SETTINGS_PATH, OWNER, { displayName: "Aisha & Benjamin" });
+    // ...and the co-host saves the deadline.
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    expect(res.status).toBe(200);
+
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBe("2027-02-20");
+    // The rename survives — the co-host's UPDATE never named displayName.
+    expect(row.displayName).toBe("Aisha & Benjamin");
   });
 
   it("400s a co-host's malformed deadline before the privilege check", async () => {
