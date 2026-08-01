@@ -124,6 +124,10 @@ Shape is checked **before** privilege, so a co-host who typos a date is told the
 
 The allow-list (`ownerOnlySettingsIn`, `cire/api/src/schemas/settings.ts`) is **derived from the request schema's own field list** rather than from the incoming object's keys. Two properties fall out: a field added to `UpdateSettingsBody` is owner-only from the moment it exists (the list can't drift, because it *is* the schema), and the check reads each key the same way the writer does — `patch[key]`, through the prototype chain — so gate and writer can never disagree about what a patch contains (S-M1).
 
+**A deadline can never be set in the past** — by anyone, owner included. `weddingSettingsService.update` refuses a write that would leave the deadline already closed with 400 `rsvp_deadline_in_past` (S-L3). A backdated date locks the invite for every guest the instant it lands, and a guest turned away is told only that RSVPs closed, never that the date moved under them. The check runs on the **resulting pair**, not on the patch — either half decides the instant, and moving the zone alone can shift an open deadline by up to ~26 hours — and it asks `isRsvpClosed`, so it cannot disagree with the guest write gate about when a day ends. Three things it deliberately still allows: **today** (the deadline is inclusive, so it closes at the end of that day — this is what "stop taking replies" actually means), a deadline that lapsed naturally staying put while other fields are edited, and clearing a lapsed deadline to reopen RSVPs. The portal mirrors the rule against the organiser's own calendar so the mistake never round-trips.
+
+Every settings write records its author in `weddings.updated_by_osn_profile_id` (migration 0056). The panel has two principal classes now, so a change to a guest-facing lock has to be attributable: an owner who finds RSVPs closed can establish whether they did it themselves (S-L2). A refused non-owner patch is logged and counted on `cire.wedding.settings.owner_only_refused`.
+
 The write is **narrow**: `weddingSettingsService.update` names only the columns the patch carries. The old full-row read-modify-write was harmless while the owner was the single writer, but with two principals on one row a co-host's deadline save would rewrite `displayName` and `currency` from a value read moments earlier, reverting an owner's concurrent edit to a field the gate exists to protect (S-L1). A deadline-only patch now emits a deadline-only `UPDATE`, so the field gate holds at the storage layer too. The pairing rule below still fires — but only for a patch that touches the pair, so an unrelated save writes nothing but its own columns.
 
 Both deadline keys travel together on that list. Admitting the date without the zone would leave a co-host able to set a deadline they can't say the zone of — and the zone is what makes "the end of that day" mean anything.
@@ -140,7 +144,7 @@ It is the only field on that panel guests feel, which is why its hint says so ex
 
 | Concern | File |
 |---|---|
-| Columns | `cire/db/src/schema.ts` (`weddings`), migration `0055_rsvp_deadline.sql` |
+| Columns | `cire/db/src/schema.ts` (`weddings`), migrations `0055_rsvp_deadline.sql` + `0056_settings_attribution.sql` |
 | Date → instant | `cire/api/src/lib/rsvp-deadline.ts` |
 | Write gate | `cire/api/src/routes/rsvp.ts` |
 | Guest payload | `cire/api/src/services/claim.ts`, `cire/api/src/schemas/claim.ts` |

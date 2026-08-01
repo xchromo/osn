@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { DbService, dbQuery } from "../db";
+import { isRsvpClosed } from "../lib/rsvp-deadline";
 import { metricWeddingSettingsSaved } from "../metrics";
 import type { UpdateSettingsBody } from "../schemas/settings";
 
@@ -34,6 +35,20 @@ export class WeddingNotFound extends Data.TaggedError("WeddingNotFound")<{
 export class SettingsWriteError extends Data.TaggedError("SettingsWriteError")<{
   readonly reason: string;
   readonly cause?: unknown;
+}> {}
+
+/**
+ * The patch would leave the wedding with an RSVP deadline that has ALREADY
+ * closed (S-L3). Rejected for every caller, owner included: a backdated
+ * deadline locks the invite for every guest the instant it lands, and a guest
+ * turned away is told only that RSVPs closed — never that the date moved under
+ * them. "Today" is always still available (the deadline is inclusive, so it
+ * closes at the end of that day in its own zone), which is what an organiser
+ * who wants to stop taking replies actually needs.
+ */
+export class RsvpDeadlineInPast extends Data.TaggedError("RsvpDeadlineInPast")<{
+  readonly date: string;
+  readonly timezone: string | null;
 }> {}
 
 const PROFILE_COLUMNS = {
@@ -76,7 +91,14 @@ export const weddingSettingsService = {
   update(
     weddingId: string,
     patch: UpdateSettingsBody,
-  ): Effect.Effect<WeddingProfile, WeddingNotFound | SettingsWriteError, DbService> {
+    /** OSN profile making the write — recorded on the row so a guest-facing
+     *  change has an author (migration 0056). */
+    updatedByOsnProfileId: string,
+  ): Effect.Effect<
+    WeddingProfile,
+    WeddingNotFound | SettingsWriteError | RsvpDeadlineInPast,
+    DbService
+  > {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const current = yield* weddingSettingsService.get(weddingId);
@@ -132,12 +154,38 @@ export const weddingSettingsService = {
         changes.rsvpDeadlineTimezone = null;
       }
 
+      // A write may not MOVE the deadline into the past (S-L3). Checked on the
+      // RESULTING pair rather than on the patch, because either half decides
+      // the instant — shifting the zone alone can move an open deadline by up
+      // to ~26 hours — and via `isRsvpClosed`, the single place a date becomes
+      // a moment, so this can't disagree with the guest write gate about when a
+      // day ends.
+      //
+      // Only a patch that CHANGES the pair is judged. A deadline that lapsed
+      // naturally is a normal state to be sitting in, and the portal's owner
+      // form re-sends the whole profile on every save — judging the value
+      // rather than the change would lock such a wedding out of its own
+      // Settings panel entirely. Clearing a lapsed deadline stays allowed too
+      // (a null date isn't closed), which is how RSVPs reopen.
+      const movesDeadline =
+        next.rsvpDeadline !== current.rsvpDeadline ||
+        next.rsvpDeadlineTimezone !== current.rsvpDeadlineTimezone;
+      if (touchesDeadline && movesDeadline && next.rsvpDeadline !== null) {
+        const closed = isRsvpClosed(next.rsvpDeadline, next.rsvpDeadlineTimezone, new Date());
+        if (closed) {
+          return yield* new RsvpDeadlineInPast({
+            date: next.rsvpDeadline,
+            timezone: next.rsvpDeadlineTimezone,
+          });
+        }
+      }
+
       yield* Effect.tryPromise({
         try: () =>
           Promise.resolve(
             db
               .update(weddings)
-              .set({ ...changes, updatedAt: new Date() })
+              .set({ ...changes, updatedByOsnProfileId, updatedAt: new Date() })
               .where(eq(weddings.id, weddingId))
               .run(),
           ),

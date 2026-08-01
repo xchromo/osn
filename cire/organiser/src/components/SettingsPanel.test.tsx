@@ -315,6 +315,49 @@ describe("SettingsPanel", () => {
     expect(body).toEqual({ rsvpDeadline: null, rsvpDeadlineTimezone: null });
   });
 
+  it("refuses to move the RSVP-by date into the past, without a request", async () => {
+    // A backdated deadline locks the invite for every guest the moment it
+    // saves, so the server refuses it (400 rsvp_deadline_in_past) — mirrored
+    // here so the mistake never round-trips.
+    authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
+    render(() => <SettingsPanel weddingId="wed_1" canManage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /20 February 2027/ }));
+    await waitFor(() => expect(screen.getByRole("grid")).toBeTruthy());
+    // Walk back to a month that is unambiguously in the past and pick a day.
+    const back = screen.getByRole("button", { name: /previous month/i });
+    for (let i = 0; i < 14; i++) fireEvent.click(back);
+    fireEvent.click(screen.getAllByRole("gridcell")[15]!);
+
+    fireEvent.click(screen.getByText("Save settings"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(String(toastError.mock.calls[0]?.[0])).toMatch(/past/i);
+    // Only the initial GET — the save never left the page.
+    expect(authFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a wedding whose deadline already lapsed, untouched", async () => {
+    // Judging the value rather than the change would lock such a wedding out
+    // of its own Settings panel: the owner's form re-sends the pair every time.
+    authFetchMock.mockResolvedValueOnce(
+      json({ wedding: { ...PROFILE, rsvpDeadline: "2020-01-01" } }),
+    );
+    render(() => <SettingsPanel weddingId="wed_1" canManage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
+
+    authFetchMock.mockResolvedValueOnce(
+      json({ wedding: { ...PROFILE, rsvpDeadline: "2020-01-01" } }),
+    );
+    fireEvent.click(screen.getByText("Save settings"));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    const [, init] = authFetchMock.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.rsvpDeadline).toBe("2020-01-01");
+  });
+
   it("blames permission, not the fields, when a save is refused", async () => {
     // A co-host whose role changed since the tab loaded gets 403
     // owner_only_fields / read_only_role. "Check the fields and try again"

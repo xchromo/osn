@@ -3,6 +3,7 @@ import { Elysia } from "elysia";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
+import { metricSettingsOwnerOnlyRefused } from "../metrics";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
 import { weddingEditor } from "../middleware/wedding-editor";
@@ -68,8 +69,8 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
     .group("/weddings/:weddingId", (group) =>
       group.use(weddingEditor(db)).put(
         "/settings",
-        async ({ weddingId, weddingIsOwner, request, set }) => {
-          if (!weddingId) {
+        async ({ weddingId, weddingIsOwner, osnProfileId, request, set }) => {
+          if (!weddingId || !osnProfileId) {
             set.status = 500;
             return { error: "Internal error" };
           }
@@ -91,10 +92,11 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                   weddingId,
                   fields: ownerOnly,
                 });
+                metricSettingsOwnerOnlyRefused();
                 set.status = 403;
                 return { error: "owner_only_fields", fields: ownerOnly };
               }
-              const wedding = yield* weddingSettingsService.update(weddingId, patch);
+              const wedding = yield* weddingSettingsService.update(weddingId, patch, osnProfileId);
               return { wedding };
             }).pipe(
               Effect.provideService(DbService, db),
@@ -108,6 +110,16 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                   Effect.sync(() => {
                     set.status = 404;
                     return { error: "wedding_not_found" };
+                  }),
+                // A backdated deadline would lock the invite for every guest the
+                // moment it landed, and a guest turned away is never told the
+                // date moved. Refused for every caller, owner included — "today"
+                // stays available, since the deadline closes at the END of its
+                // day (S-L3).
+                RsvpDeadlineInPast: () =>
+                  Effect.sync(() => {
+                    set.status = 400;
+                    return { error: "rsvp_deadline_in_past" };
                   }),
                 SettingsWriteError: () =>
                   Effect.sync(() => {

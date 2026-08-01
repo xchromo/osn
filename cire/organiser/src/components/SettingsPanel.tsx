@@ -112,6 +112,11 @@ export default function SettingsPanel(props: SettingsPanelProps) {
   // unrelated field from another country can't quietly move the deadline.
   const [rsvpDeadline, setRsvpDeadline] = createSignal("");
   const [rsvpDeadlineTimezone, setRsvpDeadlineTimezone] = createSignal<string | null>(null);
+  // The deadline as the server last gave it to us. A date that lapsed while
+  // nobody touched it is a normal state to be sitting in, so the past-date
+  // guard below judges the CHANGE, not the value — otherwise a wedding whose
+  // RSVP date has passed could never save this panel again.
+  const [seededRsvpDeadline, setSeededRsvpDeadline] = createSignal("");
 
   const [saving, setSaving] = createSignal(false);
 
@@ -131,6 +136,7 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     setGuestCount(profile.guestCountEstimate === null ? "" : String(profile.guestCountEstimate));
     setCurrency(profile.currency);
     setRsvpDeadline(profile.rsvpDeadline ?? "");
+    setSeededRsvpDeadline(profile.rsvpDeadline ?? "");
     setRsvpDeadlineTimezone(profile.rsvpDeadlineTimezone);
   }
 
@@ -169,9 +175,37 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     };
   }
 
+  /** Today as `YYYY-MM-DD` in the organiser's own zone — the same calendar the
+   *  DatePicker draws, so "not before today" means what they see. */
+  function todayIso(): string {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  /** A date the server would refuse (400 `rsvp_deadline_in_past`)? A backdated
+   *  deadline locks the invite for every guest the moment it saves, so the
+   *  server rejects MOVING one into the past for everyone — mirrored here so
+   *  the mistake never round-trips. Today is fine (the deadline closes at the
+   *  END of its day), and so is a deadline that lapsed while nobody touched it
+   *  — otherwise a wedding whose date has passed could never save this panel
+   *  again. */
+  function deadlineMovedIntoPast(): boolean {
+    const picked = rsvpDeadline();
+    if (picked === "" || picked === seededRsvpDeadline()) return false;
+    return picked < todayIso();
+  }
+
   /** Parse the form into the PUT body, or return a human error. Mirrors the
    *  server's validation so the common mistakes never round-trip. */
   function buildBody(): { body: Record<string, unknown> } | { error: string } {
+    if (deadlineMovedIntoPast()) {
+      return {
+        error:
+          "The RSVP-by date can't be moved into the past — guests would be locked out at once.",
+      };
+    }
+
     // An editor co-host may write ONLY the deadline: the server 403s a patch
     // that reaches past it, so the body must carry nothing else — not even the
     // unchanged values sitting in the disabled fields.

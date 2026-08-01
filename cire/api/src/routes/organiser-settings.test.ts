@@ -246,6 +246,103 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect(row.displayName).toBe("Aisha & Benjamin");
   });
 
+  describe("a deadline may not be set in the past (S-L3)", () => {
+    // A backdated deadline locks the invite for every guest the moment it
+    // lands, and a guest turned away is told only that RSVPs closed — never
+    // that the date moved. Refused for EVERY caller, owner included.
+    it("400s a backdated deadline from the owner", async () => {
+      const { app, db } = buildApp();
+      const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+        rsvpDeadline: "1970-01-01",
+        rsvpDeadlineTimezone: "Australia/Sydney",
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("rsvp_deadline_in_past");
+      expect(getWedding(db).rsvpDeadline).toBeNull();
+    });
+
+    it("400s a backdated deadline from a co-host", async () => {
+      const { app } = buildApp();
+      const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, { rsvpDeadline: "1970-01-01" });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("rsvp_deadline_in_past");
+    });
+
+    it("accepts TODAY — the deadline closes at the END of its day", async () => {
+      // The organiser who wants to stop taking replies needs this, and it is
+      // the boundary the rule must not eat. Computed in the stored zone so the
+      // test doesn't drift with the runner's own clock.
+      const { app, db } = buildApp();
+      const today = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Australia/Sydney",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+        rsvpDeadline: today,
+        rsvpDeadlineTimezone: "Australia/Sydney",
+      });
+      expect(res.status).toBe(200);
+      expect(getWedding(db).rsvpDeadline).toBe(today);
+    });
+
+    it("leaves an already-past deadline alone when the patch doesn't name it", async () => {
+      // A wedding whose deadline lapsed naturally must stay editable — the rule
+      // is about the write, not about the row's current state.
+      const { app, db } = buildApp();
+      db.update(weddings)
+        .set({ rsvpDeadline: "1999-01-01", rsvpDeadlineTimezone: "Australia/Sydney" })
+        .where(eq(weddings.id, BOOTSTRAP_WEDDING_ID))
+        .run();
+      const res = await req(app, "PUT", SETTINGS_PATH, OWNER, { guestCountEstimate: 80 });
+      expect(res.status).toBe(200);
+      expect(getWedding(db).rsvpDeadline).toBe("1999-01-01");
+    });
+
+    it("lets a save re-send an unchanged lapsed deadline", async () => {
+      // The owner's form re-sends the whole profile on every save, so judging
+      // the VALUE rather than the change would lock a wedding whose date has
+      // passed out of its own Settings panel entirely.
+      const { app, db } = buildApp();
+      db.update(weddings)
+        .set({ rsvpDeadline: "1999-01-01", rsvpDeadlineTimezone: "Australia/Sydney" })
+        .where(eq(weddings.id, BOOTSTRAP_WEDDING_ID))
+        .run();
+      const res = await req(app, "PUT", SETTINGS_PATH, OWNER, {
+        displayName: "Aisha & Ben",
+        rsvpDeadline: "1999-01-01",
+        rsvpDeadlineTimezone: "Australia/Sydney",
+      });
+      expect(res.status).toBe(200);
+      expect(getWedding(db).displayName).toBe("Aisha & Ben");
+    });
+
+    it("still lets a lapsed deadline be CLEARED", async () => {
+      const { app, db } = buildApp();
+      db.update(weddings)
+        .set({ rsvpDeadline: "1999-01-01", rsvpDeadlineTimezone: "Australia/Sydney" })
+        .where(eq(weddings.id, BOOTSTRAP_WEDDING_ID))
+        .run();
+      const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, { rsvpDeadline: null });
+      expect(res.status).toBe(200);
+      const row = getWedding(db);
+      expect(row.rsvpDeadline).toBeNull();
+      expect(row.rsvpDeadlineTimezone).toBeNull();
+    });
+  });
+
+  it("records who made the write (migration 0056)", async () => {
+    // Two principal classes can now move a guest-facing control, so an owner
+    // who finds RSVPs closed must be able to establish who did it.
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, { guestCountEstimate: 80 });
+    expect(getWedding(db).updatedByOsnProfileId).toBe(OWNER);
+
+    await req(app, "PUT", SETTINGS_PATH, CO_HOST, { rsvpDeadline: "2027-02-20" });
+    expect(getWedding(db).updatedByOsnProfileId).toBe(CO_HOST);
+  });
+
   it("400s a co-host's malformed deadline before the privilege check", async () => {
     // Shape first: a co-host with a typo is told the date is wrong, not that
     // they lack permission for a field they're allowed to write.
