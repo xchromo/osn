@@ -108,25 +108,28 @@ describe("InviteClosing", () => {
       expect(img.getAttribute("alt")).toBe("");
     });
 
-    it("spans the full width at a fixed band height, cover-fitted", () => {
+    it("spans the full width and keeps an uncropped image's own proportions", () => {
       const { container } = render(() => <InviteClosing apiUrl={API} imageUrl={IMG} />);
       const img = (closing(container) as HTMLElement).querySelector("img") as HTMLImageElement;
 
       // Edge to edge: full width, no centred max-width box, no rounding.
       expect(img.className).toContain("w-full");
-      expect(img.className).toContain("h-[clamp(16rem,45vw,32rem)]");
-      expect(img.className).toContain("object-cover");
       expect(img.className).not.toContain("mx-auto");
-      // The band's height is fixed, NOT the image's own aspect — an
-      // aspect-driven full-bleed box would be as tall as the viewport is wide.
+      expect(img.className).not.toContain("rounded");
+      // Nothing was cropped, so nothing is cut: natural aspect via h-auto, no
+      // imposed `aspect-ratio` — only the screen-height cap can ever clip it.
+      expect(img.className).toContain("h-auto");
+      expect(img.className).toContain("max-h-[85dvh]");
+      expect(img.className).toContain("object-cover");
       expect(img.style.getPropertyValue("aspect-ratio")).toBe("");
     });
 
-    it("renders a cropped image as a full-bleed focal-point background layer", () => {
+    it("publishes the crop the organiser framed — exact region, exact shape", () => {
       const { container } = render(() => (
         <InviteClosing
           apiUrl={API}
           imageUrl={IMG}
+          // 2:1 pixel aspect — (0.5·1000) / (0.5·500) = 2.
           imageCrop={{ x: 0.1, y: 0.1, w: 0.5, h: 0.5, natW: 1000, natH: 500 }}
         />
       ));
@@ -137,15 +140,15 @@ describe("InviteClosing", () => {
       const layer = section.querySelector("[aria-hidden='true']") as HTMLElement;
       expect(layer).toBeTruthy();
       expect(layer.style.getPropertyValue("background-image")).toContain(`${API}${IMG}`);
-      // The crop is a FOCAL POINT over a cover fit (the hero's treatment), not
-      // an exact frame: the band's shape is the viewport's, not the crop's, so
-      // an exact fit would letterbox. Centre of {0.1,0.1,0.5,0.5} = (35%, 35%).
-      expect(layer.style.getPropertyValue("background-size")).toBe("cover");
-      expect(layer.style.getPropertyValue("background-position")).toBe("35% 35%");
-      expect(layer.style.getPropertyValue("aspect-ratio")).toBe("");
-      // Same band as the <img> path — the two can't drift.
-      expect(layer.className).toContain("h-[clamp(16rem,45vw,32rem)]");
+      // The EXACT framed region, not a focal-point cover: single-value
+      // background-size (uniform scale, 100/0.5 = 200%) with the box at the
+      // crop's own pixel aspect. A cover fit here would show more than what the
+      // organiser framed, and the crop editor would be lying to them.
+      expect(layer.style.getPropertyValue("background-size")).toBe("200%");
+      expect(layer.style.getPropertyValue("aspect-ratio")).toBe("2 / 1");
+      // Full-bleed, and capped only by the screen height.
       expect(layer.className).toContain("w-full");
+      expect(layer.className).toContain("max-h-[85dvh]");
     });
 
     it("asks for the hero width, the one a full-bleed band actually needs", () => {
@@ -164,17 +167,19 @@ describe("InviteClosing", () => {
       expect(layer.style.getPropertyValue("background-image")).toContain("variant=hero");
     });
 
-    it("renders a legacy crop with no source dims as a focal point too", () => {
+    it("falls back to the editor's 16:9 frame for a legacy crop with no dims", () => {
       const { container } = render(() => (
         <InviteClosing apiUrl={API} imageUrl={IMG} imageCrop={{ x: 0, y: 0, w: 0.5, h: 0.5 }} />
       ));
       const layer = (closing(container) as HTMLElement).querySelector(
         "[aria-hidden='true']",
       ) as HTMLElement;
-      // Focal-point cover needs no captured dims — the pre-dims crops keep
-      // framing the band rather than falling back to a fixed shape.
-      expect(layer.style.getPropertyValue("background-size")).toBe("cover");
-      expect(layer.style.getPropertyValue("background-position")).toBe("25% 25%");
+      // True aspect needs the captured source dims; without them the box takes
+      // the shape the closing slot's crop editor opens on (`CROP_ASPECT.footer`),
+      // so the fallback matches what the organiser was shown.
+      // The CSSOM normalises a bare ratio to `<w> / <h>`; compare against the
+      // computed 16∶9 rather than retyping its decimal expansion.
+      expect(layer.style.getPropertyValue("aspect-ratio")).toBe(`${16 / 9} / 1`);
     });
   });
 

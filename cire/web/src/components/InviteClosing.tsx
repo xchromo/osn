@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
 
-import { heroCropBackgroundStyle, type ImageCrop } from "./image-crop";
+import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from "./image-crop";
 import { isFooterEmpty } from "./invite-emptiness";
 import { buildSrcSet, variantSrc } from "./invite-images";
 
@@ -33,15 +33,23 @@ import { buildSrcSet, variantSrc } from "./invite-images";
  * note (when there is one) reading below it on the section surface. It was a
  * small centred square before; a photograph is what couples reach for here, and
  * a 200px thumbnail made the sign-off read like a stray avatar rather than the
- * page's closing image. Consequences of full-bleed, all shared with the hero:
- *   - the band is a FIXED responsive height, not the image's own aspect — an
- *     edge-to-edge box at the source's ratio would be ~1600px tall on a desktop
- *     for a square upload;
- *   - so the image is COVER-fitted, and a saved crop is a FOCAL POINT
- *     (`heroCropBackgroundStyle`) rather than an exact frame — same treatment
- *     the hero backdrop gives the organiser's rectangle, for the same reason;
- *   - the section's horizontal padding moved off the `<section>` onto the note's
- *     own block, since the band has to reach past it.
+ * page's closing image. The section's horizontal padding therefore moved off the
+ * `<section>` onto the note's own block — the band has to reach past it.
+ *
+ * THE CROP DECIDES THE SHAPE. Full width, and then the HEIGHT follows what the
+ * organiser framed: the box takes the crop's true pixel aspect and renders the
+ * cropped region exactly (`cropBackgroundStyle`, the story photo's technique),
+ * so an organiser who crops a 3∶1 panorama gets a 3∶1 panorama and one who crops
+ * a 4∶3 scene gets a 4∶3 scene. This is deliberately NOT the hero backdrop's
+ * treatment, which pins a fixed viewport-shaped box and uses the crop as a mere
+ * focal point: the hero's box is dictated by the screen it fills, while this
+ * band has no shape of its own to defend, so the crop editor can be honest —
+ * what you frame is what publishes, and the builder's preview shows it.
+ *
+ * With no crop saved, the image keeps its NATURAL aspect (`h-auto`) — nothing
+ * is chosen, so nothing is cut. `max-h-[85dvh]` is the one bound over both
+ * paths: a portrait crop is still a portrait band, it just can't grow taller
+ * than the screen it interrupts (past that it cover-crops, centred).
  *
  * SURFACE — it deliberately has NO tone setting of its own. It paints whatever
  * the organiser chose for the "Code Entry & Welcome" section (`themeVars`,
@@ -57,17 +65,26 @@ import { buildSrcSet, variantSrc } from "./invite-images";
  */
 
 /**
- * The closing hero band's height, shared by the plain `<img>` and the cropped
- * background layer so the two paths can never disagree. A literal Tailwind class
+ * The band's box, shared by the plain `<img>` and the cropped background layer
+ * so the two paths can never disagree: full-bleed width, height from the crop
+ * (or the source's own ratio), bounded by the screen. A literal Tailwind class
  * (the scanner reads source text — a computed class emits no CSS at all), held
  * in one const rather than typed twice.
  *
- * Height, not aspect-ratio: the band is full-bleed, so an aspect-driven box
- * would be as tall as the viewport is wide. `clamp` gives ~256px on a phone and
- * ~512px from a laptop up — a closing image with presence, that still leaves the
- * note and the site footer in view.
+ * The cap exists for one case: a tall crop on a wide screen. A 4∶5 portrait at
+ * 1440px wide wants 1800px of band, which would bury the note and the footer
+ * below several screens of image. `dvh`, not `vh`, so a phone's collapsing URL
+ * bar doesn't leave it measured against a viewport that isn't there.
  */
-const BAND_CLASS = "block h-[clamp(16rem,45vw,32rem)] w-full";
+const BAND_CLASS = "block max-h-[85dvh] w-full object-cover";
+
+/**
+ * The band's shape when a crop carries no captured source dims (a legacy
+ * rectangle saved before the editor recorded them). 16∶9 — the wide frame the
+ * closing slot's crop editor now opens on (`CROP_ASPECT.footer`), so the
+ * fallback matches what an organiser would have been shown.
+ */
+const LEGACY_CROP_ASPECT = 16 / 9;
 
 export interface InviteClosingProps {
   /** The couple's closing note. Blank/whitespace-only ⇒ no note. */
@@ -101,17 +118,21 @@ export function InviteClosing(props: InviteClosingProps) {
 
   const imageSrc = () => (props.imageUrl ? `${props.apiUrl}${props.imageUrl}` : null);
 
-  // A saved crop paints a background layer instead of the `<img>` — and, because
-  // the band is a fixed viewport-width shape rather than the crop's own aspect,
-  // it is rendered as a FOCAL POINT (cover, centred on the crop's middle), the
-  // same treatment the hero backdrop gives its rectangle. An exact-fit render
-  // here would letterbox or shear whenever the crop's ratio differed from the
-  // band's. Backgrounds can't carry a `srcset`, so we name one bounded variant:
-  // `hero` (1600w), the width a full-bleed band actually needs.
+  // A saved crop paints a background layer instead of the `<img>`, rendering the
+  // framed region EXACTLY: uniform scale, and the box below takes the crop's own
+  // aspect, so the region fills it with no distortion and no bars. Backgrounds
+  // can't carry a `srcset`, so we name one bounded variant: `hero` (1600w), the
+  // width a full-bleed band actually needs — the old tightness-based thumb/card
+  // pick was sized for a 200px box and would be visibly soft across a viewport.
   const cropStyle = () => {
     const url = imageSrc();
-    return url ? heroCropBackgroundStyle(variantSrc(url, "hero"), props.imageCrop) : null;
+    return url ? cropBackgroundStyle(variantSrc(url, "hero"), props.imageCrop) : null;
   };
+
+  // The band's height, expressed as the crop's true pixel aspect (from its
+  // captured source dims). This is the whole "what you crop is what publishes"
+  // contract in one line.
+  const bandAspect = () => String(cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT));
 
   return (
     <Show when={show()}>
@@ -151,7 +172,10 @@ export function InviteClosing(props: InviteClosingProps) {
                   alt=""
                   loading="lazy"
                   decoding="async"
-                  class={`${BAND_CLASS} object-cover`}
+                  // No `aspect-ratio`: with `h-auto` the image keeps its own
+                  // proportions, so an organiser who never opened the crop
+                  // editor gets their whole picture, uncut, edge to edge.
+                  class={`${BAND_CLASS} h-auto`}
                 />
               }
             >
@@ -159,10 +183,12 @@ export function InviteClosing(props: InviteClosingProps) {
                 <div
                   aria-hidden="true"
                   // The cropped variant paints a background layer, so the box
-                  // owns its size (an empty div has no intrinsic dimensions) —
-                  // the same band height the <img> path uses.
-                  class={BAND_CLASS}
-                  style={style()}
+                  // owns its size (an empty div has no intrinsic dimensions):
+                  // full width at the CROP's aspect, which is what makes the
+                  // published band the shape the organiser framed. `overflow`
+                  // matters only when the cap above clips a tall crop.
+                  class={`${BAND_CLASS} overflow-hidden`}
+                  style={{ ...style(), "aspect-ratio": bandAspect() }}
                 />
               )}
             </Show>

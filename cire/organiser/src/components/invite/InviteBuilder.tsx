@@ -789,6 +789,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
     shown: footerShown(),
     message: draft.footerMessage,
     imageUrl: d().footer?.imageUrl ?? null,
+    imageCrop: d().footer?.imageCrop ?? null,
   });
 
   return (
@@ -1328,6 +1329,7 @@ export default function InviteBuilder(props: InviteBuilderProps) {
                         tokens={previewTokens()}
                         surface={toneSurface("welcome")}
                         imageUrl={d().footer?.imageUrl ?? null}
+                        imageCrop={d().footer?.imageCrop ?? null}
                         body={
                           draft.footerMessage.trim().length > 0
                             ? sampleCopy(draft.footerMessage, "")

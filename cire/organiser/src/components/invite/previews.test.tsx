@@ -102,6 +102,32 @@ describe("SectionSample", () => {
     expect((img.parentElement as HTMLElement).className).not.toContain("p-4");
   });
 
+  it("previews the CROP the organiser saved, at the shape it will publish", () => {
+    const { container } = render(() => (
+      <SectionSample
+        {...props}
+        imageUrl="/api/invite/anita-ben/image/footer?v=7"
+        // 2:1 pixel aspect — (0.5·1000) / (0.5·500) = 2.
+        imageCrop={{ x: 0.1, y: 0.1, w: 0.5, h: 0.5, natW: 1000, natH: 500 }}
+      />
+    ));
+    const band = container.querySelector("[role='img']") as HTMLElement;
+
+    // The crop replaces the plain <img>, exactly as it does on the guest page.
+    expect(container.querySelector("img")).toBeNull();
+    expect(band.style.getPropertyValue("background-image")).toContain(
+      "https://api.test/api/invite/anita-ben/image/footer?v=7&variant=card",
+    );
+    // The same exact-region render and the same crop-driven shape the invite
+    // uses — this sample is the organiser's answer to "what will my closing
+    // image look like", so a focal-point approximation here would mislead.
+    // happy-dom keeps the fixed-point form the helper emits (100/0.5).
+    expect(band.style.getPropertyValue("background-size")).toBe("200.0000%");
+    expect(band.style.getPropertyValue("aspect-ratio")).toBe("2 / 1");
+    expect(band.className).toContain("w-full");
+    expect((band.parentElement as HTMLElement).className).not.toContain("p-4");
+  });
+
   it("keeps the heading free of a hardcoded weight or slant", () => {
     render(() => <SectionSample {...props} />);
     const heading = screen.getByText(props.heading);

@@ -19,8 +19,16 @@ import { headingSizeCss, typographyVar } from "@cire/theme";
 import { createSignal, Show } from "solid-js";
 
 import { apiUrl } from "../../lib/api";
-import { cropBackgroundStyle, type ImageCrop } from "../../lib/image-crop";
+import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from "../../lib/image-crop";
 import { DEFAULTS } from "./model";
+
+/**
+ * The closing band's shape when a crop carries no captured source dims (a
+ * legacy rectangle). Mirrors `LEGACY_CROP_ASPECT` in the guest site's
+ * `InviteClosing.tsx` — the closing slot's editor frame — so the preview and
+ * the invite fall back to the same shape.
+ */
+const LEGACY_CROP_ASPECT = 16 / 9;
 
 // The guest hero's base gradient and title panel, expressed in the SAME derived
 // tokens the guest site uses — so the preview cannot drift from the real hero
@@ -235,15 +243,26 @@ export function SectionSample(props: {
   /**
    * Optional image (today only the closing section's). It renders EDGE TO EDGE
    * across the top of the sample, mirroring the guest invite, where the closing
-   * image is a full-bleed hero band above the note — a centred thumbnail here
-   * would understate what the organiser is about to publish.
+   * image is a full-bleed band above the note — a centred thumbnail here would
+   * understate what the organiser is about to publish.
    */
   imageUrl?: string | null;
+  /**
+   * The saved crop for that image. Rendered with the guest site's exact-region
+   * technique at the crop's own aspect, because on the guest page the crop
+   * DECIDES the band's shape — so this sample is the answer to "what will my
+   * closing image look like", and it has to be the real answer.
+   */
+  imageCrop?: ImageCrop | null;
   body: string;
   /** Optional mini event card (the events section's preview). */
   card?: { name: string; meta: string };
   class?: string;
 }) {
+  const imageCropStyle = () => {
+    const url = previewVariantSrc(props.imageUrl ?? null);
+    return url ? cropBackgroundStyle(url, props.imageCrop) : null;
+  };
   return (
     // The body weight + style ride the section wrapper alongside the body face
     // and cascade to every line inside it — eyebrow, body copy and the event
@@ -261,12 +280,37 @@ export function SectionSample(props: {
       style={{ "background-color": props.surface, "font-family": "var(--font-body)" }}
       class={`flex flex-col [font-weight:var(--invite-body-weight,400)] [font-style:var(--invite-body-style,normal)] ${props.class ?? ""}`}
     >
-      {/* The closing hero band: full width, fixed height, cover-fitted — the
-          guest render in miniature. It sits OUTSIDE the padded content block
-          below, which is what lets it reach the sample's edges. */}
+      {/* The closing band: full width, at the shape the guest page will publish
+          — the saved crop's own aspect (its exact region, same background
+          technique as the invite), or the image's natural proportions when
+          nothing is cropped. It sits OUTSIDE the padded content block below,
+          which is what lets it reach the sample's edges. The `max-h` mirrors
+          the guest cap, scaled to this small frame: a portrait crop reads as a
+          tall band here too, it just can't swallow the whole sample. */}
       <Show when={props.imageUrl}>
         {(url) => (
-          <img src={previewVariantSrc(url())!} alt="" class="h-12 w-full shrink-0 object-cover" />
+          <Show
+            when={imageCropStyle()}
+            fallback={
+              <img
+                src={previewVariantSrc(url())!}
+                alt=""
+                class="max-h-24 w-full shrink-0 object-cover"
+              />
+            }
+          >
+            {(style) => (
+              <div
+                role="img"
+                aria-label="Closing image"
+                class="max-h-24 w-full shrink-0 overflow-hidden"
+                style={{
+                  ...style(),
+                  "aspect-ratio": String(cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT)),
+                }}
+              />
+            )}
+          </Show>
         )}
       </Show>
       <div class="flex flex-1 flex-col items-center justify-center gap-1.5 p-4 text-center">

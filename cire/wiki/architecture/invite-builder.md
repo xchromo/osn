@@ -46,23 +46,42 @@ image above it). Note and image are INDEPENDENT: either alone renders.
 **The image is a closing hero — full-bleed, edge to edge** (2026-07-31). It
 shipped as a small centred square sized for a monogram or signature; couples
 reach for a photograph here, and at 200px the sign-off read like a stray avatar
-rather than the invite's closing image. It now mirrors the hero at the top of
-the page, and inherits the hero's three consequences:
+rather than the invite's closing image. It now spans the viewport:
 
 | | Before | Now |
 |---|---|---|
 | Box | `w-[min(200px,45vw)]`, centred, rounded | `w-full`, viewport edge to edge, square corners |
-| Height | the crop's own pixel aspect (`cropAspectRatio`, square fallback) | fixed `clamp(16rem,45vw,32rem)` — an aspect-driven full-bleed box would be as tall as the viewport is wide |
-| Crop | exact frame (`cropBackgroundStyle`) | FOCAL POINT over a cover fit (`heroCropBackgroundStyle`) — the band's shape is the viewport's, not the crop's, so an exact fit would letterbox |
+| Height | the crop's pixel aspect, **square** fallback | the crop's pixel aspect (**16∶9** fallback), or the source's natural ratio when uncropped; `max-h-[85dvh]` |
+| Crop | exact region (`cropBackgroundStyle`) | unchanged — still the exact region |
 | Variants | `thumb` 320w / `card` 800w, `sizes="200px"` | `card` 800w / `hero` 1600w, `sizes="100vw"` |
+
+**The crop decides the shape, and that is the point.** The band takes the crop's
+own aspect, so a 3∶1 panorama publishes as a 3∶1 panorama and a 4∶3 scene as a
+4∶3 scene — the organiser frames what guests get. This is deliberately NOT the
+hero backdrop's treatment, which pins a viewport-shaped box and demotes the crop
+to a focal point (`heroCropBackgroundStyle`): the hero's box is dictated by the
+screen it fills, while this band has no shape of its own to defend. A fixed band
+height was tried first and rejected for exactly that reason — it silently
+overrode the framing an organiser had just chosen. With no crop saved the image
+keeps its natural aspect (nothing chosen ⇒ nothing cut). The one bound is
+`max-h-[85dvh]`: a 4∶5 portrait at 1440px wide would otherwise want 1800px of
+band and bury the note under several screens of image.
+
+That contract is only honest if the builder shows it, so `SectionSample` — the
+markup behind BOTH the inline per-section preview and the composed `PreviewPane`
+— renders the band edge-to-edge and **crop-aware**, using the same exact-region
+technique at the same crop-driven aspect (`imageCrop` threaded through
+`PreviewPaneProps["closing"]` and the builder's inline preview). `ImageField`'s
+WYSIWYG thumbnail already showed the exact rectangle, so all three surfaces now
+agree with the invite.
 
 Two knock-ons: the section's horizontal padding moved off the `<section>` onto
 the note's own block (the band has to reach past it), and `CROP_ASPECT.footer`
-went 1∶1 → 16∶9 so the editor opens on the shape that actually gets published.
-The organiser's `SectionSample` mirrors the band edge-to-edge too — a framed
-thumbnail there would understate what saving publishes. `contain-intrinsic-size:
-auto 24rem` joined the section's `content-visibility: auto`, since a skipped
-band now collapses ~500px of scroll height rather than 200.
+went 1∶1 → 16∶9 so the editor opens on the shape most couples want here — the
+same value `LEGACY_CROP_ASPECT` falls back to in both packages when a saved crop
+carries no captured source dims. `contain-intrinsic-size: auto 24rem` joined the
+section's `content-visibility: auto`, since a skipped band now collapses a
+screen-height of scroll rather than 200px.
 
 **It is behind the claim gate — enforced at the API, not in the render tree.**
 The first cut gated it only with `<Show when={claimResult()}>`, which controls
