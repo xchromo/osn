@@ -50,8 +50,18 @@ const SRC = join(import.meta.dirname, "..");
  */
 const METAL = /text-gold(?:-dim)?(?![-\w])/g;
 
+/**
+ * The metal reached WITHOUT the named utility. Both spellings are ordinary in
+ * this codebase and both were proved to slip past a utility-only scan:
+ * `text-[var(--color-gold)]` (a Tailwind arbitrary value) and
+ * `style={{ color: "var(--color-gold)" }}` (the JSX style-object form that
+ * `PaletteField` already uses). The negative lookahead spares `--color-gold-ink`
+ * and `--color-gold-dim` is caught by the base alternative.
+ */
+const METAL_VAR = /(?:text-\[|color:\s*["']?)var\(--color-gold(?!-ink)/g;
+
 /** Text colour set from raw CSS rather than a utility (the `.astro` layouts). */
-const CSS_TEXT_COLOUR = /(?<![-\w])color:\s*var\(--color-gold[^)]*\)/g;
+const CSS_TEXT_COLOUR = /(?<![-\w])color:\s*["']?var\(--color-gold[^)]*\)/g;
 
 /**
  * Comments, stripped before matching.
@@ -69,7 +79,24 @@ const CSS_TEXT_COLOUR = /(?<![-\w])color:\s*var\(--color-gold[^)]*\)/g;
  * string (a URL) can't swallow real code and hide an offender.
  */
 function stripComments(source: string): string {
-  return source.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/^\s*\/\/[^\n]*$/gm, "");
+  return (
+    source
+      // JSX comment containers, and block comments that START a line. Anchored
+      // rather than matched anywhere, because `/*` inside a string literal — a
+      // CSP source list, a path glob, a URL — would otherwise open a fake
+      // comment and swallow real code up to the next `*/`, hiding an offender.
+      // Proved with a `"img-src https://cdn.example.com/*"` sandwich: the
+      // unanchored version passed while a `text-gold` element sat between.
+      // `[ \t]*`, not `\s*`: allowing a NEWLINE between `{` and `/*` makes an
+      // ordinary `interface Props {` followed by a JSDoc line look like a JSX
+      // comment opener, and the non-greedy body then runs to the first `*/}`
+      // anywhere below — which swallowed all of `NotFoundDocument.astro`
+      // between its frontmatter and its consent comment, allow-listed metal
+      // included. A JSX comment container never has a line break there.
+      .replaceAll(/\{[ \t]*\/\*[\s\S]*?\*\/[ \t]*\}/g, "")
+      .replaceAll(/^[ \t]*\/\*[\s\S]*?\*\//gm, "")
+      .replaceAll(/^\s*\/\/[^\n]*$/gm, "")
+  );
 }
 
 function sourceFiles(dir: string): string[] {
@@ -80,7 +107,10 @@ function sourceFiles(dir: string): string[] {
       out.push(...sourceFiles(path));
       continue;
     }
-    if (/\.(tsx|astro)$/.test(entry) && !entry.includes(".test.")) out.push(path);
+    // `.ts` too: a plain module exporting a class-name string literal is a
+    // valid Tailwind source (the scanner reads source as text), and there are
+    // ~58 such files here the utility scan would otherwise never open.
+    if (/\.(tsx|ts|astro)$/.test(entry) && !entry.includes(".test.")) out.push(path);
   }
   return out;
 }
@@ -94,7 +124,10 @@ function metalUsage(): { file: string; metal: number }[] {
   return sourceFiles(SRC)
     .map((path) => ({
       file: relative(path),
-      metal: (stripComments(readFileSync(path, "utf8")).match(METAL) ?? []).length,
+      metal: (() => {
+        const source = stripComments(readFileSync(path, "utf8"));
+        return (source.match(METAL) ?? []).length + (source.match(METAL_VAR) ?? []).length;
+      })(),
     }))
     .filter((entry) => entry.metal > 0)
     .toSorted((a, b) => (a.file < b.file ? -1 : 1));

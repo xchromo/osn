@@ -539,7 +539,12 @@ export function paletteAdjustments(
  * card copy a guest actually reads. Verified against the render sites:
  *
  *   - `--color-surface` — the modal shell (`AnimatedModal`) and the RSVP
- *     sheet's sticky footer. Everything on it is already enforced.
+ *     sheet's sticky footer. This used to say "everything on it is already
+ *     enforced"; that stopped being true when the RSVP sheet's eyebrow, notice,
+ *     answer buttons, privacy link and Save button moved onto
+ *     `--color-gold-ink`. The prose walk below runs `[card, raised, ground]`,
+ *     so only the LAST surface is guaranteed on exit — a later step can push a
+ *     colour back off `card`. Both prose tokens therefore have a pair here.
  *   - `--color-surface-raised` — every `EventCard` and the RSVP sheet's notice
  *     block. Carries the card title (`--color-text`), the venue and description
  *     (`--color-text-muted`), and the date line (`--color-gold-ink`).
@@ -599,6 +604,28 @@ const RESIDUAL_PAIRS: {
     bg: "--color-surface-raised",
     min: WCAG_UI_MIN,
     message: "Buttons and rules are hard to see on event cards.",
+  },
+  {
+    // The pair the first cut of this table missed. The walk is sequential and
+    // ends on `ground`, so `card` is the surface a later step can undo — and
+    // unlike the straddling case below, this fires on ordinary COHERENT schemes
+    // (all three surfaces on one side of the midpoint). A brute-force sweep put
+    // it at roughly 1 in 100 random schemes, silent, with the RSVP sheet
+    // shipping under 4.5:1 while the builder reported the palette as fine.
+    id: "gilt-ink-on-surface",
+    fg: "--color-gold-ink",
+    bg: "--color-surface",
+    min: WCAG_TEXT_MIN,
+    message: "Text in the RSVP sheet and pop-ups is hard to read.",
+  },
+  {
+    // Muted is walked in the same order and has the same gap on `card`, which
+    // carries the sheet's closed-RSVP notice and its dismiss button.
+    id: "muted-on-surface",
+    fg: "--color-text-muted",
+    bg: "--color-surface",
+    min: WCAG_TEXT_MIN,
+    message: "Secondary text in the RSVP sheet and pop-ups is hard to read.",
   },
   {
     // `--color-gold-ink` IS walked against all three surfaces, so this can only

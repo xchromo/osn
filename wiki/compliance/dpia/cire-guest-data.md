@@ -77,6 +77,17 @@ final sign-off now turns only on the residual retention gaps (C-H1) below.
   proportionate (dietary needs vary widely) but carries the risk that
   guests volunteer more than needed (e.g. naming a medical condition). The
   form copy should ask only for dietary requirements, not reasons.
+- **Who can widen the recipient set (2026-08-01).** Adding a co-host moved from
+  owner-only to `weddingEditor()`, so an `editor` can seat another OSN account —
+  and every seat, at any role, reads this field plus the household claim codes.
+  Assessed as acceptable: `editor` is the ceiling anyone can grant (no seat
+  outranks its creator), removal and demotion stay owner-only, seats are capped
+  per wedding below the list's read ceiling so the owner's view can never
+  silently truncate, and each row records who created it. **Residual:** a new
+  seat is live immediately with no notification to the owner, so "the owner can
+  always revoke it" depends on them noticing. Tracked as `S-M2` in
+  `[[cire/wiki/todo/security]]`; the mitigation is an owner notification on a
+  seat created by someone else.
 - **Granularity (2026-08-01).** The field is stored per **(guest, event)** — a
   guest answers once per event they are invited to — and `GET …/rsvps.csv` now
   discloses it that way, one dietary column per event. It previously collapsed

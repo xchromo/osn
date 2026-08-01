@@ -12,7 +12,7 @@ import {
 } from "../metrics";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
-import { rateLimitMiddleware } from "../middleware/rate-limit";
+import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
 import { weddingEditor } from "../middleware/wedding-editor";
 import { weddingMember } from "../middleware/wedding-member";
 import { weddingOwner } from "../middleware/wedding-owner";
@@ -55,17 +55,23 @@ export const createOrganiserHostsReadRoutes = (
             // returns an empty map, so a missing/unreachable ARC bridge simply
             // leaves the profile id as the on-screen fallback (no 500). The
             // `Effect.tryPromise` catch is a belt-and-braces guard for the same.
-            Effect.flatMap((hosts) =>
+            Effect.flatMap(({ hosts, total }) =>
               Effect.gen(function* () {
                 const displays = resolveOsnProfileDisplays
                   ? yield* Effect.tryPromise({
-                      try: () => resolveOsnProfileDisplays(hosts.map((h) => h.osnProfileId)),
+                      // Resolve the ADDERS' handles too, so the panel can name
+                      // who created each seat rather than printing a profile id.
+                      try: () =>
+                        resolveOsnProfileDisplays([
+                          ...new Set(hosts.flatMap((h) => [h.osnProfileId, h.addedByOsnProfileId])),
+                        ]),
                       catch: () => null,
                     }).pipe(Effect.orElseSucceed(() => null))
                   : null;
                 return {
                   hosts: hosts.map((h) => {
                     const display = displays?.get(h.osnProfileId);
+                    const addedBy = displays?.get(h.addedByOsnProfileId);
                     return {
                       osnProfileId: h.osnProfileId,
                       // Handle is the display value; profileId stays as the
@@ -74,8 +80,15 @@ export const createOrganiserHostsReadRoutes = (
                       ...(display?.displayName ? { displayName: display.displayName } : {}),
                       role: h.role,
                       createdAt: h.createdAt.getTime(),
+                      // Attribution: `POST /hosts` is open to editors, so a seat
+                      // the owner didn't create is a thing they need to be able
+                      // to see. Same handle-then-id fallback as above.
+                      addedByOsnProfileId: h.addedByOsnProfileId,
+                      ...(addedBy ? { addedByHandle: addedBy.handle } : {}),
                     };
                   }),
+                  // True row count, so a truncated list can never look complete.
+                  total,
                 };
               }),
             ),
@@ -128,7 +141,7 @@ export const createOrganiserHostsWriteRoutes = (
     .group("/weddings/:weddingId", (group) =>
       group
         .use(weddingEditor(db))
-        .use(rateLimitMiddleware(limiter))
+        .use(rateLimitMiddlewareByUser(limiter))
         .post(
           "/hosts",
           async ({ request, weddingId, osnProfileId, weddingOwnerOsnProfileId, set }) => {
@@ -202,14 +215,15 @@ export const createOrganiserHostsWriteRoutes = (
                     }),
                   HostConflict: (err) =>
                     Effect.sync(() => {
-                      if (err.reason === "owner_is_host") {
-                        metricHostAdded("owner_is_host");
-                        set.status = 409;
-                        return { error: "owner_is_host" };
-                      }
-                      metricHostAdded("already_host");
+                      // Every refusal is a 409 naming its reason, so the portal
+                      // can say which of the three happened. `host_cap_reached`
+                      // is the newest: it exists because an unbounded add lets
+                      // an editor create seats past the list ceiling, i.e. seats
+                      // the owner can neither see nor DELETE — which would break
+                      // the reversibility this route's design rests on.
+                      metricHostAdded(err.reason);
                       set.status = 409;
-                      return { error: "already_host" };
+                      return { error: err.reason };
                     }),
                   OsnHandleLookupError: (err) =>
                     Effect.logError("osn handle lookup failed", { reason: err.reason }).pipe(
@@ -248,7 +262,7 @@ export const createOrganiserHostsWriteRoutes = (
     .group("/weddings/:weddingId", (group) =>
       group
         .use(weddingOwner(db))
-        .use(rateLimitMiddleware(limiter))
+        .use(rateLimitMiddlewareByUser(limiter))
         // Flip a co-host between editor and viewer. Owner-only, unlike the add
         // above — demoting an editor to viewer is a subtractive act, and the
         // asymmetry in this file's header is what keeps an editor from using

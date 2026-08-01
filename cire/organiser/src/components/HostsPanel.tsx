@@ -16,6 +16,11 @@ interface HostRow {
   handle?: string;
   role: HostRole;
   createdAt: number;
+  /** Who created this seat. Absent on the add response (it is by definition the
+   *  caller) and on a mid-deploy payload from an older API. */
+  addedByOsnProfileId?: string;
+  /** The adder's handle when the batch lookup resolved it. */
+  addedByHandle?: string;
 }
 
 const ROLE_OPTIONS: { value: HostRole; label: string; hint: string }[] = [
@@ -82,6 +87,9 @@ export default function HostsPanel(props: HostsPanelProps) {
   const [addError, setAddError] = createSignal<string | null>(null);
   // Profile id of the host whose role change is in flight (disables its button).
   const [roleBusyId, setRoleBusyId] = createSignal<string | null>(null);
+  // True row count from the API; compared against what we rendered.
+  const [total, setTotal] = createSignal(0);
+  const truncated = () => total() > hosts().length;
 
   // --- Handle autocomplete state ---------------------------------------------
   const [suggestions, setSuggestions] = createSignal<HandleSuggestion[]>([]);
@@ -193,8 +201,12 @@ export default function HostsPanel(props: HostsPanelProps) {
       const res = await authFetch(endpoint());
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) throw new Error("Failed to load");
-      const body = (await res.json()) as { hosts: HostRow[] };
+      const body = (await res.json()) as { hosts: HostRow[]; total?: number };
       setHosts(body.hosts);
+      // `total` > the rows we got means the API truncated. Surfaced rather than
+      // ignored: an owner shown a partial list has no way to know that someone
+      // who can read their guests' data is missing from it.
+      setTotal(body.total ?? body.hosts.length);
     } catch (err) {
       if (isAuthExpired(err)) return redirectToLogin();
       setError("Could not load hosts. Is the API running?");
@@ -474,6 +486,18 @@ export default function HostsPanel(props: HostsPanelProps) {
       </Show>
 
       <Show when={!loading() && !error()}>
+        {/* Never let a truncated list look complete: a seat that isn't shown is
+            a seat the owner can't remove, and every seat can read the household
+            claim codes and the dietary export. */}
+        <Show when={truncated()}>
+          <p
+            role="alert"
+            class="border-error/20 bg-error/5 text-error rounded-sm border p-4 text-[0.88rem]"
+          >
+            Showing {hosts().length} of {total()} co-hosts. Contact support — some seats on this
+            wedding aren&apos;t listed here and can&apos;t be removed from this screen.
+          </p>
+        </Show>
         <Show
           when={hosts().length > 0}
           fallback={
@@ -510,6 +534,24 @@ export default function HostsPanel(props: HostsPanelProps) {
                     >
                       {host.role === "viewer" ? "Viewer" : "Editor"}
                     </span>
+                    {/* Who seated them. Shown only to the owner, and only when
+                        it wasn't the owner's own doing — an editor can create
+                        seats now, so a seat the owner didn't create is the thing
+                        worth surfacing. Absent on older API payloads. */}
+                    <Show
+                      when={
+                        props.canManage &&
+                        host.addedByOsnProfileId &&
+                        host.addedByOsnProfileId !== host.osnProfileId &&
+                        (host.addedByHandle ?? host.addedByOsnProfileId)
+                      }
+                    >
+                      {(addedBy) => (
+                        <span class="font-body text-text-muted text-[0.68rem] tracking-[0.06em]">
+                          added by {host.addedByHandle ? `@${host.addedByHandle}` : addedBy()}
+                        </span>
+                      )}
+                    </Show>
                   </span>
                   <Show when={props.canManage}>
                     <span class="flex items-center gap-3">

@@ -373,8 +373,10 @@ describe("residual contrast warnings", () => {
     );
     expect(warnings.map((w) => w.id).toSorted()).toEqual([
       "gilt-ink-on-raised",
+      "gilt-ink-on-surface",
       "gilt-on-raised",
       "muted-on-raised",
+      "muted-on-surface",
       "text-on-raised",
     ]);
     // Each carries the measured ratio and the bar it missed, so the notice can
@@ -386,6 +388,63 @@ describe("residual contrast warnings", () => {
     const gilt = warnings.find((w) => w.id === "gilt-on-raised")!;
     expect(gilt.required).toBe(WCAG_UI_MIN);
     expect(warnings.find((w) => w.id === "text-on-raised")!.required).toBe(WCAG_TEXT_MIN);
+  });
+
+  test("warns when a COHERENT scheme leaves prose gold short on the card surface", () => {
+    // The gap the first cut of `RESIDUAL_PAIRS` missed. The prose walk runs
+    // `[card, raised, ground]`, so only `ground` is guaranteed on exit — a
+    // later step can push the colour back off `card`. Unlike the straddling
+    // case, this fires on an ordinary scheme with all three surfaces on the
+    // same side of the lightness midpoint, which is why it needed its own pair
+    // rather than being covered by the straddle argument.
+    const seeds = { ground: "#831de1", card: "#d72920", ink: "#07649a", gilt: "#98d0c2" };
+    const tokens = derivePalette(seeds);
+
+    // Coherent: every surface sits on one side of the midpoint.
+    const lightness = (["--color-bg", "--color-surface", "--color-surface-raised"] as const).map(
+      (t) => parseColor(tokens[t]!)!.l,
+    );
+    expect(new Set(lightness.map((l) => l < 0.5)).size).toBe(1);
+
+    // Prose gold really is short on the card surface…
+    expect(contrastRatio(tokens["--color-gold-ink"]!, tokens["--color-surface"]!)).toBeLessThan(
+      WCAG_TEXT_MIN,
+    );
+    // …and the organiser is now told, rather than shown a clean palette while
+    // the RSVP sheet ships under AA.
+    const warning = paletteContrastWarnings(tokens).find((w) => w.id === "gilt-ink-on-surface");
+    expect(warning?.required).toBe(WCAG_TEXT_MIN);
+    expect(warning?.ratio).toBeLessThan(WCAG_TEXT_MIN);
+  });
+
+  test("every residual pair has a scheme that triggers it", () => {
+    // Coverage guard for the table itself. `muted-on-ground` lost both of its
+    // assertions when this branch rewrote the two tests that happened to
+    // mention it, leaving an entry nothing pinned — after which deleting it, or
+    // changing its bar or message, would go unnoticed. Asserting the FULL id
+    // set on a scheme that fires everything keeps every pair covered as the
+    // table grows, instead of relying on which ids a neighbouring test happens
+    // to name.
+    const all = paletteContrastWarnings(
+      derivePalette({
+        ground: "#8a57ac",
+        card: "#b13f6c",
+        ink: "#59c366",
+        gilt: "#179033",
+        bloom: "#07cc84",
+      }),
+    ).map((w) => w.id);
+    expect(all.toSorted()).toEqual(
+      [
+        "text-on-raised",
+        "muted-on-raised",
+        "muted-on-ground",
+        "muted-on-surface",
+        "gilt-on-raised",
+        "gilt-ink-on-raised",
+        "gilt-ink-on-surface",
+      ].toSorted(),
+    );
   });
 
   test("measures each pair against the surface its message names", () => {
