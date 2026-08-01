@@ -546,6 +546,13 @@ describe("native glass plugin-event wiring (N7)", () => {
     render(() => <ExploreMap events={[heatEvent]} />);
     await waitFor(() => expect(glassHandlers.hourChanged).toBeTruthy());
 
+    // The `hour` signal is seeded from the wall clock, so on a machine whose
+    // current hour already equals one of the two hours asserted below, that
+    // assignment is not a change and no redraw happens. Park the hour six
+    // hours off the event first; both measured hours are then real changes
+    // whatever time the suite runs at.
+    glassHandlers.hourChanged({ hour: (eventHour + 6) % 24 } as never);
+
     gradientCalls.length = 0;
     glassHandlers.hourChanged({ hour: eventHour } as never);
     const nearRadius = gradientCalls.at(-1);

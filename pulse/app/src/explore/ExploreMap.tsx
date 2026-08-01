@@ -443,11 +443,20 @@ export function ExploreMap(props: {
   // webview's own point space at the standard device-width viewport scale,
   // so no unit conversion happens here. Rejects on desktop/browser, where
   // the CSS `backdrop-filter` fallback stays in charge.
+  // Rects of the last push that was actually sent, so a scroll that ends up
+  // reporting the same geometry — the sticky pane's rect stops changing once
+  // it is stuck — costs no IPC. A rAF-throttled scroll handler otherwise
+  // fires one round-trip per frame for the whole scroll.
+  let lastPushed = "";
+
   const pushGlassPanels = () => {
     if (!scrubberRef || !zoomRef) return;
     const s = scrubberRef.getBoundingClientRect();
     const z = zoomRef.getBoundingClientRect();
     if (s.height > 0) setScrubberHeight(s.height);
+    const key = `${s.left},${s.top},${s.width},${s.height}|${z.left},${z.top},${z.width},${z.height}`;
+    if (key === lastPushed) return;
+    lastPushed = key;
     const panels: GlassPanel[] = [
       {
         id: "time-scrubber",
