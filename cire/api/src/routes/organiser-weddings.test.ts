@@ -996,7 +996,10 @@ describe("GET /api/organiser/weddings/:weddingId/rsvps.csv", () => {
     const body = await res.text();
     const header = body.split("\r\n")[0]!;
     expect(header).toContain("Family Code");
-    expect(header).toContain("Dietary Requirements");
+    // Dietary is a column PER EVENT now, not one aggregate column that could
+    // only ever show one of a guest's per-event answers.
+    expect(header).not.toContain("Dietary Requirements");
+    expect(header).toContain(" Dietary");
     expect(body).toContain("Attending");
     expect(body).toContain("Gluten free");
   });
