@@ -242,13 +242,53 @@ describe("SettingsPanel", () => {
     expect(screen.queryByText(/total budget/i)).not.toBeInTheDocument();
   });
 
-  it("renders read-only for a co-host", async () => {
+  it("renders read-only for a viewer co-host", async () => {
     authFetchMock.mockResolvedValueOnce(json({ wedding: PROFILE }));
     render(() => <SettingsPanel weddingId="wed_1" canManage={false} />);
     await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
 
     expect(screen.queryByText("Save settings")).toBeNull();
+    expect(screen.queryByText("Save RSVP-by date")).toBeNull();
     expect(screen.getByText(/Only the wedding.s owner can change these settings/)).toBeTruthy();
     expect((screen.getByDisplayValue("Aisha & Ben") as HTMLInputElement).disabled).toBe(true);
+    // The RSVP-by date is a static value, not the DatePicker's popover trigger.
+    expect(screen.queryByRole("button", { name: /RSVP by/ })).toBeNull();
+  });
+
+  it("lets an editor co-host change the RSVP-by date and nothing else", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ wedding: EMPTY_PROFILE }));
+    render(() => <SettingsPanel weddingId="wed_1" canManage={false} canEditRsvpDeadline />);
+    await waitFor(() => expect(screen.getByDisplayValue("Aisha & Ben")).toBeTruthy());
+
+    // The rest of the profile stays owner-only.
+    expect((screen.getByDisplayValue("Aisha & Ben") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/RSVP-by date is yours to set/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /RSVP by, no date set/ }));
+    await waitFor(() => expect(screen.getByRole("grid")).toBeTruthy());
+    const today = new Date();
+    const todayLabel = new Intl.DateTimeFormat("en-AU", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(today);
+    fireEvent.click(screen.getByRole("gridcell", { name: todayLabel }));
+
+    authFetchMock.mockResolvedValueOnce(json({ wedding: EMPTY_PROFILE }));
+    fireEvent.click(screen.getByText("Save RSVP-by date"));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    const [, init] = authFetchMock.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    expect(body.rsvpDeadline).toBe(
+      `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`,
+    );
+    expect(body.rsvpDeadlineTimezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    // The server 403s a non-owner patch that carries an owner-only field, so
+    // the co-host's body must be the deadline pair alone — not the untouched
+    // values sitting in the disabled inputs.
+    expect(Object.keys(body).toSorted()).toEqual(["rsvpDeadline", "rsvpDeadlineTimezone"]);
   });
 });

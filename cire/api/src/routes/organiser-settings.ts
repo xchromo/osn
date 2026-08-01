@@ -5,10 +5,10 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { weddingEditor } from "../middleware/wedding-editor";
 import { weddingMember } from "../middleware/wedding-member";
-import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
-import { UpdateSettingsBody } from "../schemas/settings";
+import { ownerOnlySettingsIn, UpdateSettingsBody } from "../schemas/settings";
 import { weddingSettingsService } from "../services/wedding-settings";
 
 // Sentinel parse hook — same idiom as the other organiser POST/PUT routes: the
@@ -20,8 +20,15 @@ const manualParse = { parse: () => ({}) };
  * /api/organiser/weddings/:weddingId. Siblings by authorisation level,
  * mirroring the organiser-weddings factory:
  *  - GET /settings — weddingMember() (any role incl. viewer; read-only).
- *  - PUT /settings — weddingOwner() (wedding identity + money are owner-only
- *    in the roles matrix — see platform-plan §3.5).
+ *  - PUT /settings — weddingEditor(), then a FIELD-level owner check: wedding
+ *    identity + money stay owner-only in the roles matrix (platform-plan §3.5),
+ *    but the RSVP deadline is editable by an `editor` co-host. The gate can't
+ *    express that on its own, so the route splits it: the middleware decides
+ *    who may reach the handler at all (a `viewer` still gets its 403
+ *    `read_only_role`), and the handler rejects a non-owner patch that reaches
+ *    past the deadline with 403 `owner_only_fields`. Rejected, never silently
+ *    dropped — a save that reports success while discarding half the form is
+ *    the worse failure.
  *
  * There is no separate event "location config" here: an event's place is its
  * free-text `address` (the sole location source the guest map renders). The
@@ -59,9 +66,9 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
       }),
     )
     .group("/weddings/:weddingId", (group) =>
-      group.use(weddingOwner(db)).put(
+      group.use(weddingEditor(db)).put(
         "/settings",
-        async ({ weddingId, request, set }) => {
+        async ({ weddingId, weddingIsOwner, request, set }) => {
           if (!weddingId) {
             set.status = 500;
             return { error: "Internal error" };
@@ -70,6 +77,13 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           return runCire(
             Effect.gen(function* () {
               const patch = yield* Schema.decodeUnknown(UpdateSettingsBody)(raw);
+              // Shape first, then privilege: a malformed body is a 400 whoever
+              // sent it, so a co-host debugging a typo isn't told "forbidden".
+              const ownerOnly = weddingIsOwner ? [] : ownerOnlySettingsIn(patch);
+              if (ownerOnly.length > 0) {
+                set.status = 403;
+                return { error: "owner_only_fields", fields: ownerOnly };
+              }
               const wedding = yield* weddingSettingsService.update(weddingId, patch);
               return { wedding };
             }).pipe(

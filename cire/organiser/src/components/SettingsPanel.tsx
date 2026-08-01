@@ -70,9 +70,13 @@ const hintClass = "font-body text-text-muted text-[0.75rem] leading-snug";
 
 interface SettingsPanelProps {
   weddingId: string;
-  /** Owner of this wedding? Settings writes are owner-only — co-hosts see the
-   *  profile read-only. */
+  /** Owner of this wedding? The profile fields are owner-only — co-hosts see
+   *  them read-only. */
   canManage: boolean;
+  /** Editor co-host (or owner)? The RSVP-by date is the one field here an
+   *  editor may change — chasing replies is exactly their job — so it stays
+   *  live while the rest of the form is read-only. Viewers get nothing. */
+  canEditRsvpDeadline?: boolean;
   /** Reports a saved name/slug up so the header + wedding list stay current
    *  without a refetch. */
   onWeddingUpdated?: (patch: { displayName: string; slug: string }) => void;
@@ -111,7 +115,14 @@ export default function SettingsPanel(props: SettingsPanelProps) {
 
   const [saving, setSaving] = createSignal(false);
 
+  // Two read-only levels: the owner-only profile fields, and the RSVP-by date
+  // an editor co-host may move as well. A viewer has neither, so the form
+  // renders exactly as it always did for them.
   const readOnly = () => !props.canManage;
+  const rsvpReadOnly = () => !props.canManage && !props.canEditRsvpDeadline;
+  // The deadline is the last field to go read-only, so anyone who can still
+  // edit it has something to save.
+  const canSave = () => !rsvpReadOnly();
 
   function seed(profile: WeddingProfile) {
     setDisplayName(profile.displayName);
@@ -148,9 +159,24 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     }
   });
 
+  /** The RSVP-by half of the body — the whole patch for an editor co-host, and
+   *  part of the owner's. Sending the zone as null alongside a cleared date
+   *  keeps the two ends in step (the server pairs them too). */
+  function rsvpDeadlineFields(): Record<string, unknown> {
+    return {
+      rsvpDeadline: rsvpDeadline() || null,
+      rsvpDeadlineTimezone: rsvpDeadline() ? rsvpDeadlineTimezone() : null,
+    };
+  }
+
   /** Parse the form into the PUT body, or return a human error. Mirrors the
    *  server's validation so the common mistakes never round-trip. */
   function buildBody(): { body: Record<string, unknown> } | { error: string } {
+    // An editor co-host may write ONLY the deadline: the server 403s a patch
+    // that reaches past it, so the body must carry nothing else — not even the
+    // unchanged values sitting in the disabled fields.
+    if (readOnly()) return { body: rsvpDeadlineFields() };
+
     const name = displayName().trim();
     if (!name) return { error: "Give the wedding a name." };
 
@@ -171,17 +197,14 @@ export default function SettingsPanel(props: SettingsPanelProps) {
         weddingDate: weddingDate() || null,
         guestCountEstimate: guestNum,
         currency: curr,
-        rsvpDeadline: rsvpDeadline() || null,
-        // Paired with the date on the server too (clearing one clears both);
-        // sending null here just keeps the two ends in step.
-        rsvpDeadlineTimezone: rsvpDeadline() ? rsvpDeadlineTimezone() : null,
+        ...rsvpDeadlineFields(),
       },
     };
   }
 
   async function save(e: Event) {
     e.preventDefault();
-    if (saving() || readOnly()) return;
+    if (saving() || !canSave()) return;
     const built = buildBody();
     if ("error" in built) {
       toast.error(built.error);
@@ -238,7 +261,10 @@ export default function SettingsPanel(props: SettingsPanelProps) {
             constraint math is float-buggy in some DOM engines anyway. */}
         <form class="flex flex-col gap-5" noValidate onSubmit={save}>
           <Show when={readOnly()}>
-            <p class={hintClass}>Only the wedding&apos;s owner can change these settings.</p>
+            <p class={hintClass}>
+              Only the wedding&apos;s owner can change these settings.
+              <Show when={!rsvpReadOnly()}> The RSVP-by date is yours to set as a co-host.</Show>
+            </p>
           </Show>
 
           {/* Fields flow into as many ≥17rem columns as fit — a date input or a
@@ -293,13 +319,13 @@ export default function SettingsPanel(props: SettingsPanelProps) {
                 label="RSVP by"
                 value={rsvpDeadline() || null}
                 onChange={changeRsvpDeadline}
-                readOnly={readOnly()}
+                readOnly={rsvpReadOnly()}
                 disabled={saving()}
               />
               <Show
                 when={rsvpDeadline()}
                 fallback={
-                  <Show when={!readOnly()}>
+                  <Show when={!rsvpReadOnly()}>
                     <span class={hintClass}>
                       Leave this empty to keep RSVPs open — guests can reply, and change their
                       reply, right up to the day.
@@ -348,13 +374,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
             </label>
           </div>
 
-          <Show when={!readOnly()}>
+          <Show when={canSave()}>
             <button
               type="submit"
               disabled={saving()}
               class="border-gold bg-gold font-body text-bg hover:bg-gold-dim self-start rounded-sm border px-4 py-2 text-[0.82rem] tracking-[0.1em] uppercase transition disabled:opacity-40"
             >
-              {saving() ? "Saving…" : "Save settings"}
+              {/* A co-host's save writes the deadline and nothing else, so the
+                  label says which — "Save settings" beside five disabled fields
+                  reads as a button that will overwrite them. */}
+              {saving() ? "Saving…" : readOnly() ? "Save RSVP-by date" : "Save settings"}
             </button>
           </Show>
         </form>

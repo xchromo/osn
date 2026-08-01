@@ -154,9 +154,81 @@ describe("PUT /api/organiser/weddings/:weddingId/settings", () => {
     expect((await req(app, "PUT", SETTINGS_PATH, undefined, {})).status).toBe(401);
   });
 
-  it("returns 403 for a co-host (settings are owner-only)", async () => {
+  it("returns 403 for a co-host writing an owner-only field", async () => {
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, { displayName: "Renamed" });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; fields: string[] };
+    expect(body.error).toBe("owner_only_fields");
+    expect(body.fields).toEqual(["displayName"]);
+    // Refused whole, not partially applied.
+    expect(getWedding(db).displayName).toBe("Cire Wedding");
+  });
+
+  it("names every owner-only field a co-host reached for", async () => {
+    // The portal sends the deadline alone, so a body like this is a stale tab
+    // or a hand-crafted call — worth an error that says exactly what was wrong.
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, {
+      displayName: "Renamed",
+      guestCountEstimate: 40,
+      rsvpDeadline: "2027-02-20",
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { fields: string[] };
+    expect(body.fields.toSorted()).toEqual(["displayName", "guestCountEstimate"]);
+    // The permitted half of a rejected patch is not applied either.
+    expect(getWedding(db).rsvpDeadline).toBeNull();
+  });
+
+  it("lets an EDITOR co-host set the RSVP deadline", async () => {
+    const { app, db } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    expect(res.status).toBe(200);
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBe("2027-02-20");
+    expect(row.rsvpDeadlineTimezone).toBe("Australia/Sydney");
+  });
+
+  it("lets an EDITOR co-host clear the deadline (zone goes with it)", async () => {
+    const { app, db } = buildApp();
+    await req(app, "PUT", SETTINGS_PATH, OWNER, {
+      rsvpDeadline: "2027-02-20",
+      rsvpDeadlineTimezone: "Australia/Sydney",
+    });
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, {
+      rsvpDeadline: null,
+      rsvpDeadlineTimezone: null,
+    });
+    expect(res.status).toBe(200);
+    const row = getWedding(db);
+    expect(row.rsvpDeadline).toBeNull();
+    expect(row.rsvpDeadlineTimezone).toBeNull();
+  });
+
+  it("400s a co-host's malformed deadline before the privilege check", async () => {
+    // Shape first: a co-host with a typo is told the date is wrong, not that
+    // they lack permission for a field they're allowed to write.
     const { app } = buildApp();
-    expect((await req(app, "PUT", SETTINGS_PATH, CO_HOST, {})).status).toBe(403);
+    const res = await req(app, "PUT", SETTINGS_PATH, CO_HOST, { rsvpDeadline: "2027-02-31" });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 403 read_only_role for a VIEWER co-host", async () => {
+    const { app } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, VIEWER, { rsvpDeadline: "2027-02-20" });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("read_only_role");
+  });
+
+  it("returns 403 for a non-member", async () => {
+    const { app } = buildApp();
+    const res = await req(app, "PUT", SETTINGS_PATH, STRANGER, { rsvpDeadline: "2027-02-20" });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("forbidden");
   });
 
   it("returns 404 for an unknown wedding", async () => {

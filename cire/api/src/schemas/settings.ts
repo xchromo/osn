@@ -94,3 +94,31 @@ export const UpdateSettingsBody = Schema.Struct({
   rsvpDeadlineTimezone: Schema.optional(Schema.NullOr(TimeZone)),
 });
 export type UpdateSettingsBody = Schema.Schema.Type<typeof UpdateSettingsBody>;
+
+/**
+ * The settings an EDITOR co-host may write. Everything else on this body is
+ * wedding identity or money — owner-only in the roles matrix (see the root
+ * wiki's `[[wiki/systems/cire-auth]]`).
+ *
+ * The RSVP deadline is the exception because it is the one field here that
+ * *runs the wedding* rather than describing it: a co-host chasing replies is
+ * exactly the person who needs to move the date, and getting it wrong costs an
+ * owner nothing they can't undo. The two keys travel together — a zone can only
+ * ever be written beside its date — so admitting one without the other would
+ * leave a co-host able to set a deadline they can't put a zone on.
+ */
+const EDITOR_WRITABLE_SETTINGS = new Set<keyof UpdateSettingsBody>([
+  "rsvpDeadline",
+  "rsvpDeadlineTimezone",
+]);
+
+/**
+ * The owner-only keys a patch actually carries — empty for a patch an editor
+ * co-host may apply as-is. Keys whose value decoded to `undefined` are ignored:
+ * PATCH semantics mean "absent", not "clear", so they change nothing and must
+ * not trip the gate.
+ */
+export const ownerOnlySettingsIn = (patch: UpdateSettingsBody): string[] =>
+  Object.entries(patch)
+    .filter(([key, value]) => value !== undefined && !EDITOR_WRITABLE_SETTINGS.has(key as never))
+    .map(([key]) => key);
