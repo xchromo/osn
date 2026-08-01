@@ -199,25 +199,56 @@ describe("contrast is enforced, not advised", () => {
   });
 
   test("rescues a gold that clears the UI floor and fails as text (WCAG 1.4.3)", () => {
-    // The live report this token was added for: a taupe gilt on a cream page
-    // measured 3.35:1 behind the RSVP-by line — over the 3:1 the metal is held
-    // to, under the 4.5:1 that 0.85rem prose needs, so nothing moved it and
-    // the notice shipped failing AA.
-    const v = derivePalette({
-      ground: "#d6cfc2",
-      card: "#e4ded3",
-      ink: "#2b2721",
-      gilt: "#756c59",
-    });
-    const metal = contrastRatio(v["--color-gold"]!, v["--color-bg"]!)!;
-    expect(metal).toBeGreaterThanOrEqual(WCAG_UI_MIN);
-    expect(metal).toBeLessThan(WCAG_TEXT_MIN);
-    // The organiser's metal is untouched — their rules and buttons keep the
-    // colour they chose — and only the prose token moves.
-    expect(v["--color-gold"]).toBe(formatOklch(parseColor("#756c59") as never));
-    expect(contrastRatio(v["--color-gold-ink"]!, v["--color-bg"]!)).toBeGreaterThanOrEqual(
-      WCAG_TEXT_MIN,
-    );
+    // The five seeds off the live wedding this token was added for, verbatim.
+    // The organiser picked gilt `#938976`; enforcement darkened it to `#756C59`
+    // to clear 3:1 on their ground (the builder said so — "Adjusted so buttons
+    // and rules stay visible") and stopped there, which is what put the RSVP-by
+    // line at 3.35:1 on the card and the event-card date beside it. Over the
+    // floor, under the 4.5:1 that prose needs, so nothing moved it further.
+    const FIELD = {
+      ground: "#CEC6B6",
+      card: "#D6CFC2",
+      ink: "#242218",
+      gilt: "#938976",
+      bloom: "#C7D1D5",
+    };
+    const v = derivePalette(FIELD);
+    const surfaces = ["--color-bg", "--color-surface", "--color-surface-raised"] as const;
+
+    // The metal is a UI colour and stays one: it clears the floor on every
+    // surface and clears the text bar on none. Asserting BOTH halves is what
+    // stops a future "just enforce gilt at 4.5" from passing this test — that
+    // fix would bleach every rule and button on the invite.
+    for (const bg of surfaces) {
+      const metal = contrastRatio(v["--color-gold"]!, v[bg]!)!;
+      expect({ bg, ok: metal >= WCAG_UI_MIN && metal < WCAG_TEXT_MIN }).toEqual({ bg, ok: true });
+      // …and the prose gold clears the text bar on that same surface.
+      expect(contrastRatio(v["--color-gold-ink"]!, v[bg]!), bg).toBeGreaterThanOrEqual(
+        WCAG_TEXT_MIN,
+      );
+      // The other two things on their event card: the title and the venue line.
+      expect(contrastRatio(v["--color-text"]!, v[bg]!), bg).toBeGreaterThanOrEqual(WCAG_TEXT_MIN);
+      expect(contrastRatio(v["--color-text-muted"]!, v[bg]!), bg).toBeGreaterThanOrEqual(
+        WCAG_TEXT_MIN,
+      );
+    }
+
+    // The 3.35:1 axe reported, reproduced: the notice sits on a `card`-toned
+    // section, so `--color-surface` is the backdrop it measured. One decimal,
+    // not two — axe reads the colours the browser painted, i.e. the derived
+    // oklch quantised to 8-bit sRGB (#756C59 on #D6CFC2, exactly 3.35), while
+    // this measures the full-precision values behind them. The 0.013 gap is
+    // that rounding and nothing else.
+    expect(contrastRatio(v["--color-gold"]!, v["--color-surface"]!)).toBeCloseTo(3.35, 1);
+    // Their metal still paints the #756C59 the screenshot shows — this fix
+    // moves the prose token and leaves the metal where it was. Compared as a
+    // ratio against the hex (the round-trip idiom at the top of this file):
+    // the derived value carries more precision than 8-bit sRGB can hold, so
+    // it is the same COLOUR without being the same string.
+    expect(contrastRatio(v["--color-gold"]!, "#756C59")).toBeCloseTo(1, 2);
+    // And the prose gold is a genuinely different, darker colour.
+    expect(v["--color-gold-ink"]).not.toBe(v["--color-gold"]);
+    expect(parseColor(v["--color-gold-ink"]!)!.l).toBeLessThan(parseColor(v["--color-gold"]!)!.l);
     expect(paletteContrastWarnings(v)).toEqual([]);
   });
 

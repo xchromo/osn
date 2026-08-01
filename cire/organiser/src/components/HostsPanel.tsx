@@ -49,16 +49,27 @@ const optionId = (i: number) => `host-handle-option-${i}`;
 
 interface HostsPanelProps {
   weddingId: string;
-  /** True when the signed-in organiser owns this wedding. Owners can add/remove
-   *  co-hosts; co-hosts see the list read-only. */
+  /** True when the signed-in organiser owns this wedding. Owners can change a
+   *  co-host's role and remove one — the subtractive half of host management. */
   canManage: boolean;
+  /** True for the owner OR an `editor` co-host — mirrors the API's
+   *  `weddingEditor()` gate on `POST /hosts`. Adding is the additive half, and
+   *  it is deliberately open wider than removal so the owner isn't the single
+   *  person who has to bring everyone on board. */
+  canAdd: boolean;
 }
 
 /**
- * Hosts section of a wedding's dashboard. Lists the wedding's co-hosts and — for
- * the owner — lets them add another organiser by OSN handle or remove one. A
- * co-host gets access to this wedding's dashboard; only the owner manages the
- * list.
+ * Hosts section of a wedding's dashboard. Lists the wedding's co-hosts; the
+ * owner or an editor can add another organiser by OSN handle, and the owner
+ * alone can change a role or remove someone.
+ *
+ * The two flags are separate because the API's two gates are separate, and the
+ * split is additive-versus-subtractive: an editor can grow the team (their
+ * ceiling is `editor` — there is no seat above their own to grant), but only
+ * the owner can shrink or demote it, so every addition stays reversible by the
+ * one person who can't be removed. Offering a button here that the API would
+ * 403 is the failure this mirroring avoids.
  */
 export default function HostsPanel(props: HostsPanelProps) {
   const { authFetch } = useAuth();
@@ -301,12 +312,14 @@ export default function HostsPanel(props: HostsPanelProps) {
         title="Share this wedding's dashboard"
         description={
           props.canManage
-            ? "Invite a partner or planner to help. Add them by their OSN handle — editors can change everything here, viewers can only look around, and only you, the owner, manage who hosts it."
-            : "These co-hosts help run this wedding — editors can make changes, viewers can only look around. The owner manages who's on this list."
+            ? "Invite a partner or planner to help. Add them by their OSN handle — editors can change everything here and bring in more helpers, viewers can only look around, and only you, the owner, can change a role or remove someone."
+            : props.canAdd
+              ? "Invite a partner or planner to help — add them by their OSN handle. Editors can change everything here, viewers can only look around. Changing a role or removing someone is the owner's call."
+              : "These co-hosts help run this wedding — editors can make changes, viewers can only look around. Ask the owner for editor access to add someone."
         }
       />
 
-      <Show when={props.canManage}>
+      <Show when={props.canAdd}>
         <form class="flex flex-col gap-3" onSubmit={add}>
           <div class="flex flex-col gap-1.5">
             <label
@@ -466,7 +479,7 @@ export default function HostsPanel(props: HostsPanelProps) {
           fallback={
             <p class="border-border bg-surface/30 text-text-muted rounded-sm border p-6 text-[0.88rem]">
               No co-hosts yet.{" "}
-              {props.canManage
+              {props.canAdd
                 ? "Add one above to share this wedding."
                 : "Only the owner manages this wedding for now."}
             </p>
