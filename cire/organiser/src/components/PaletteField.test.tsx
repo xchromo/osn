@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { headingSizeCss, PALETTE_PRESETS, typographyVar } from "@cire/theme";
+import { derivePalette, headingSizeCss, PALETTE_PRESETS, typographyVar } from "@cire/theme";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -180,5 +180,30 @@ describe("PaletteField", () => {
     // The measured ratio and the bar it missed, so the warning is checkable
     // rather than a bare verdict.
     expect(notice.textContent).toMatch(/\d+(\.\d+)?:1, needs 3:1/);
+  });
+
+  it("warns off the SHARED token map when the parent supplies one", async () => {
+    // The production path. `InviteBuilder` always passes `tokens` (it derives
+    // once per drag frame and shares the result, P-W1), so the internal
+    // derivation the tests above exercise is the path that never runs in the
+    // app — a warning wired only to `internalTokens` would be permanently
+    // silent for every real organiser with the suite green.
+    const shared = derivePalette({
+      ground: "#101010",
+      card: "#f2f2f2",
+      ink: "#eeeeee",
+      gilt: "#d4af37",
+      bloom: "#c0392b",
+    });
+    render(() => (
+      // Seeds deliberately left EMPTY: the only way this can warn is by reading
+      // the shared map, so the assertion cannot pass through the internal path.
+      <PaletteField value={EMPTY} onChange={() => {}} tokens={shared} adjustments={[]} />
+    ));
+
+    const heading = await waitFor(() => screen.getByText("Some colours are hard to read"));
+    expect(heading.parentElement!.textContent).toContain(
+      "Buttons, links and rules are hard to see on event cards.",
+    );
   });
 });
