@@ -197,12 +197,16 @@ describe("contrast is enforced, not advised", () => {
 });
 
 /**
- * Enforcement runs each token against ONE backdrop, so the surfaces it leaves
- * out — `raised` under modals, `ground` under muted text, `card` under gold and
- * bloom — are where a finished palette can still be illegible. Those are warned
- * about instead. The pair of mechanisms only works if the warning is quiet for
- * every scheme an organiser is likely to have, and loud for the ones that
- * genuinely fail.
+ * Enforcement runs each token against ONE backdrop, and the surface it never
+ * walks is `raised` — the one every `EventCard` sits on, carrying the card
+ * title, the venue and description, and the date. Together with muted text on
+ * `ground`, that is where a finished palette can still be illegible, so those
+ * pairs are warned about instead.
+ *
+ * The pair of mechanisms only works if the warning is quiet for every scheme an
+ * organiser is likely to have and loud for the ones that genuinely fail — hence
+ * the preset sweep below, and the directional test pinning each pair to the
+ * surface its message names (the first cut had `card` and `raised` crossed).
  */
 describe("residual contrast warnings", () => {
   test("every curated preset is clean", () => {
