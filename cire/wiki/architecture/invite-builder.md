@@ -5,7 +5,7 @@ related:
   - "[[index]]"
   - "[[monorepo-structure]]"
   - "[[invite-templates]]"
-last-reviewed: 2026-07-31
+last-reviewed: 2026-08-01
 ---
 
 # Invite Builder
@@ -324,7 +324,7 @@ deliberately no "sit on the accent" tone — that needs the text tokens to flip
 too, and a half-flipped section is the unreadable output the derivation exists to
 prevent.
 
-### Contrast is enforced, not advised
+### Contrast is enforced first, and warned about where it can't be
 
 `derivePalette` moves a derived text or accent token's lightness until it clears
 WCAG on the surface it actually sits on (4.5:1 for text, 3:1 for UI + focus), and
@@ -334,6 +334,26 @@ which is what the old `ContrastAdvisory` did. Derivation is direction-aware — 
 pushes surfaces AWAY from `ground` — so one function produces a coherent dark
 invite and a coherent light one with no `isDark` flag threaded through
 components.
+
+Enforcement runs each token against **one** backdrop, though — ink against card
+and ground, muted against card, gilt and bloom against ground — because a token
+nudged to clear every surface it might ever touch gets dragged to an extreme by
+the hardest pair and stops looking like the organiser's colour. The surfaces
+left out of that walk are real: modals sit on `raised`, section body copy is
+muted-on-ground, and every event card puts gold rules and bloom markers on
+`card`. `paletteContrastWarnings(tokens)` measures exactly those four pairs on
+the **derived** token map (never on the seeds, so the ratio quoted is the one a
+guest gets) and the builder shows them under the scheme editor with the measured
+ratio and the bar each missed.
+
+So the two notices answer different questions and neither stands in for the
+other: `paletteAdjustments` says _what we changed for you_,
+`paletteContrastWarnings` says _what we couldn't_. Both can be true at once — a
+white page with a white card has its `ink` rescued AND still leaves modal text
+just under 4.5:1 on `raised`. All five curated presets are clean, which is what
+makes a non-empty warning worth reading. It warns rather than blocks: the fix
+(usually moving `card` back toward `ground`) is a design decision the builder
+cannot make for the organiser.
 
 Two failures worth remembering, both caught only by screenshotting a light
 scheme (regression-tested in `cire/theme/src/palette.test.ts`):
@@ -1003,12 +1023,25 @@ defaults as a draft change (nothing saved until the save bar says so).
 The five scheme seeds use the popover pickers (`PaletteField.tsx` over
 `ColorPicker.tsx`,
 Kobalte ColorArea + hue slider + labelled hex field) each with a "Use default"
-clear (null ⇒ built-in token). The picker only emits a full `#rrggbb` (never
-partial input, and never mid-typing: the hex field commits only on a complete
-6-digit value — 3/4-digit shorthand would otherwise parse and hijack the
-colour after three keystrokes — while shorthand still commits on blur via
-Kobalte's normalisation), so the UI can never submit a colour the server
-allow-list would reject.
+clear (null ⇒ built-in token). The picker only emits a full `#rrggbb` — never
+partial input, and never mid-typing — so the UI can never submit a colour the
+server allow-list would reject.
+
+**The hex field is a plain `<input>`, deliberately not Kobalte's `ColorField`.**
+Nothing shorter than six digits is ever a decision: en route to `#d4af37` the
+partial `#d4a` is valid 3-digit shorthand, and committing it expands to
+`#DD44AA` and yanks the swatch, preview and trigger to a colour nobody chose.
+Guarding our own commit path is not enough — `ColorField` runs its **own** blur
+handler that parses whatever is in the field and writes the expansion back, and
+because Kobalte composes handlers with `composeEventHandlers` (which calls every
+handler unconditionally, ignoring `preventDefault`) that handler cannot be
+pre-empted from outside. It fired whenever focus left the field: clicking the
+area, the next picker, or anywhere outside the popover. Owning the input means
+owning the rule — `onHexBlur` re-prints a committed hex in canonical form and
+restores the last committed colour for anything incomplete, so leaving a
+half-typed entry never invents a colour. The cost is that 3-digit shorthand no
+longer expands; that is the deliberate trade, since every full hex passes
+through its own three-digit prefix on the way in.
 
 **Hero phone crop (migration `0046`).** The hero is the one full-bleed image
 rendered at both wide-desktop and tall-phone aspects, so a single rectangle

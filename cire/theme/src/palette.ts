@@ -473,3 +473,102 @@ export function paletteAdjustments(
 
   return out;
 }
+
+// ── Residual contrast warnings ────────────────────────────────────────────────
+
+/**
+ * The token pairs that {@link derivePalette} does NOT enforce, and therefore
+ * the only places a finished palette can still come out illegible.
+ *
+ * Enforcement runs each text and accent token against ONE backdrop — ink
+ * against card and ground, muted against card, gilt and bloom against ground —
+ * because a token nudged to clear every surface it might ever touch gets pushed
+ * to an extreme by the hardest pair and the palette stops looking like the
+ * organiser's. The surfaces left out of that walk are real, though: modals sit
+ * on `raised`, section body copy is muted-on-ground, and every event card puts
+ * gold rules and bloom markers on `card`. A scheme with a strongly contrasting
+ * card is exactly where those go wrong.
+ *
+ * So: enforce the pairs that can be enforced without distorting the design,
+ * and WARN about the remainder rather than shipping them silently. Measured on
+ * the derived tokens, not on the seeds, so the ratio quoted is the one a guest
+ * actually gets.
+ */
+const RESIDUAL_PAIRS: {
+  id: string;
+  fg: string;
+  bg: string;
+  min: number;
+  message: string;
+}[] = [
+  {
+    id: "text-on-raised",
+    fg: "--color-text",
+    bg: "--color-surface-raised",
+    min: WCAG_TEXT_MIN,
+    message: "Text inside pop-ups and raised panels is hard to read.",
+  },
+  {
+    id: "muted-on-ground",
+    fg: "--color-text-muted",
+    bg: "--color-bg",
+    min: WCAG_UI_MIN,
+    message: "Secondary text — dates, times, captions — is hard to read on the page.",
+  },
+  {
+    id: "gilt-on-card",
+    fg: "--color-gold",
+    bg: "--color-surface",
+    min: WCAG_UI_MIN,
+    message: "Buttons, links and rules are hard to see on event cards.",
+  },
+  {
+    id: "bloom-on-card",
+    fg: "--color-bloom",
+    bg: "--color-surface",
+    min: WCAG_UI_MIN,
+    message: "Accent markers are hard to see on event cards.",
+  },
+];
+
+/**
+ * One legibility problem the derived palette still has, in the builder's own
+ * words plus the numbers behind it.
+ */
+export interface PaletteContrastWarning {
+  /** Stable identifier for the pair — keys the list, and pins tests. */
+  id: string;
+  /** What a guest experiences, phrased for an organiser, not a token name. */
+  message: string;
+  /** The measured WCAG 2.x ratio, to two decimals. */
+  ratio: number;
+  /** The ratio the pair needed to clear (4.5 for text, 3 for everything else). */
+  required: number;
+}
+
+/**
+ * The legibility warnings a derived palette still carries — empty for a scheme
+ * that works, which is what makes a non-empty list worth reading.
+ *
+ * Takes the DERIVED token map rather than the seeds: the builder already holds
+ * one (it derives once per drag frame and shares it), and measuring the same
+ * map the invite is painted from means this can never report a pair the render
+ * doesn't actually have.
+ */
+export function paletteContrastWarnings(tokens: Record<string, string>): PaletteContrastWarning[] {
+  const out: PaletteContrastWarning[] = [];
+  for (const pair of RESIDUAL_PAIRS) {
+    const fg = parseColor(tokens[pair.fg] ?? "");
+    const bg = parseColor(tokens[pair.bg] ?? "");
+    if (!fg || !bg) continue;
+    const ratio = contrastOklch(fg, bg);
+    if (ratio >= pair.min) continue;
+    out.push({
+      id: pair.id,
+      message: pair.message,
+      ratio: Math.round(ratio * 100) / 100,
+      required: pair.min,
+    });
+  }
+  return out;
+}

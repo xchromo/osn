@@ -5,6 +5,7 @@ import {
   PALETTE_PRESET_KEYS,
   PALETTE_PRESETS,
   type PaletteAdjustment,
+  paletteContrastWarnings,
   type PalettePresetKey,
   type PaletteSeeds,
   paletteAdjustments,
@@ -89,6 +90,10 @@ export default function PaletteField(props: {
     props.adjustments ? undefined : paletteAdjustments(seeds()),
   );
   const adjusted = () => props.adjustments ?? internalAdjusted()!;
+  // The legibility problems the derivation could NOT fix for them. Read off the
+  // shared token map, so this costs four contrast ratios per change rather than
+  // a second derivation, and can only ever report what the invite really paints.
+  const warnings = createMemo(() => paletteContrastWarnings(tokens()));
 
   /** Pick a preset: adopt its five colours wholesale, dropping earlier nudges. */
   const choosePreset = (key: PalettePresetKey) => props.onChange({ preset: key, seeds: {} });
@@ -254,6 +259,36 @@ export default function PaletteField(props: {
           . Your invite keeps the colours you picked; these were shifted just enough for the text to
           stay legible.
         </p>
+      </Show>
+
+      {/* …and the pairs derivation deliberately leaves alone, which are the only
+          ones that can still reach a guest illegible. A warning rather than a
+          block: the organiser's colours are theirs, and the fix (usually moving
+          the card colour back toward the page) is a design decision, not one the
+          builder can make for them. */}
+      <Show when={warnings().length > 0}>
+        <div
+          role="status"
+          class="border-error/40 bg-error/5 text-text flex flex-col gap-1 rounded-sm border px-3 py-2 text-[0.78rem] leading-relaxed"
+        >
+          <span class="font-body text-text tracking-[0.04em]">Some colours are hard to read</span>
+          <ul class="text-text-muted flex flex-col gap-0.5">
+            <For each={warnings()}>
+              {(warning) => (
+                <li>
+                  {warning.message}{" "}
+                  <span class="tabular-nums">
+                    ({warning.ratio}:1, needs {warning.required}:1)
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+          <span class="text-text-muted">
+            Guests can still read the rest of the invite — try moving your card colour closer to the
+            page, or picking a lighter or darker accent.
+          </span>
+        </div>
       </Show>
     </div>
   );

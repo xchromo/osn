@@ -137,4 +137,48 @@ describe("PaletteField", () => {
     const notice = await waitFor(() => screen.getByText(/Adjusted to stay readable/));
     expect(notice.textContent).toContain("ink");
   });
+
+  /**
+   * The other half of the contrast story. `derivePalette` enforces each token
+   * against one backdrop; the surfaces it leaves out (modals on `raised`, gold
+   * and bloom on `card`, muted text on `ground`) can still come out illegible,
+   * and the builder has to say so rather than ship it quietly. It warns instead
+   * of blocking — the colours are the organiser's, and the fix is a design
+   * decision the builder cannot make for them.
+   */
+  it("says nothing about contrast for a curated preset", () => {
+    render(() => <PaletteField value={{ preset: "chapel", seeds: {} }} onChange={() => {}} />);
+    expect(screen.queryByText(/hard to read/)).toBeNull();
+  });
+
+  it("warns, with the numbers, when a pick lands somewhere the derivation cannot fix", async () => {
+    // A near-white card on a near-black page: gilt was enforced against the
+    // PAGE, so it clears there and then sits on the card at under 2:1 — which
+    // is every button, link and rule on an event card.
+    render(() => (
+      <PaletteField
+        value={{
+          preset: null,
+          seeds: {
+            ground: "#101010",
+            card: "#f2f2f2",
+            ink: "#eeeeee",
+            gilt: "#d4af37",
+            bloom: "#c0392b",
+          },
+        }}
+        onChange={() => {}}
+      />
+    ));
+
+    const heading = await waitFor(() => screen.getByText("Some colours are hard to read"));
+    const notice = heading.parentElement!;
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent).toContain(
+      "Buttons, links and rules are hard to see on event cards.",
+    );
+    // The measured ratio and the bar it missed, so the warning is checkable
+    // rather than a bare verdict.
+    expect(notice.textContent).toMatch(/\d+(\.\d+)?:1, needs 3:1/);
+  });
 });

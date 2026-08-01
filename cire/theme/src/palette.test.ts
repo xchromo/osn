@@ -13,6 +13,7 @@ import {
   PALETTE_PRESET_KEYS,
   PALETTE_PRESETS,
   paletteAdjustments,
+  paletteContrastWarnings,
   parseColor,
   resolveSeeds,
   type PaletteSeeds,
@@ -192,6 +193,90 @@ describe("contrast is enforced, not advised", () => {
       bloom: "#fdfdfd",
     });
     expect(reports.map((r) => r.token).toSorted()).toEqual(["bloom", "gilt", "ink"]);
+  });
+});
+
+/**
+ * Enforcement runs each token against ONE backdrop, so the surfaces it leaves
+ * out — `raised` under modals, `ground` under muted text, `card` under gold and
+ * bloom — are where a finished palette can still be illegible. Those are warned
+ * about instead. The pair of mechanisms only works if the warning is quiet for
+ * every scheme an organiser is likely to have, and loud for the ones that
+ * genuinely fail.
+ */
+describe("residual contrast warnings", () => {
+  test("every curated preset is clean", () => {
+    for (const key of PALETTE_PRESET_KEYS) {
+      expect({
+        key,
+        warnings: paletteContrastWarnings(derivePalette(PALETTE_PRESETS[key])),
+      }).toEqual({ key, warnings: [] });
+    }
+  });
+
+  test("a rescued scheme that came out legible raises nothing extra", () => {
+    // Near-identical mid-greys: `paletteAdjustments` reports moving `ink`, and
+    // the derived result clears every pair. The two notices answer different
+    // questions, so a scheme the rescue fully handled must not be warned about
+    // as well.
+    const seeds = { ground: "#999999", card: "#999999", ink: "#888888" };
+    expect(paletteAdjustments(seeds).map((a) => a.token)).toContain("ink");
+    expect(paletteContrastWarnings(derivePalette(seeds))).toEqual([]);
+  });
+
+  test("a rescue that leaves a residual is still warned about", () => {
+    // White page, white card: `ink` is darkened until it clears 4.5:1 on white,
+    // which lands it just under that bar against `raised` — the surface a step
+    // beyond the card, and the one every modal sits on. The rescue happened AND
+    // a real problem survived it; both notices are true at once, which is why
+    // neither is allowed to stand in for the other.
+    const warnings = paletteContrastWarnings(
+      derivePalette({
+        ground: "#ffffff",
+        card: "#ffffff",
+        ink: "#fafafa",
+        gilt: "#fefefe",
+        bloom: "#fdfdfd",
+      }),
+    );
+    expect(warnings.map((w) => w.id)).toEqual(["text-on-raised"]);
+    expect(warnings[0]!.ratio).toBeLessThan(WCAG_TEXT_MIN);
+  });
+
+  test("names the pairs a near-white card on a black page breaks", () => {
+    // The canonical failure: `gilt` clears the near-black page it was enforced
+    // against and then sits on a near-white card at under 2:1, which is the
+    // colour of every button, link and rule on an event card.
+    const warnings = paletteContrastWarnings(
+      derivePalette({
+        ground: "#101010",
+        card: "#f2f2f2",
+        ink: "#eeeeee",
+        gilt: "#d4af37",
+        bloom: "#c0392b",
+      }),
+    );
+    expect(warnings.map((w) => w.id).toSorted()).toEqual([
+      "gilt-on-card",
+      "muted-on-ground",
+      "text-on-raised",
+    ]);
+    // Each carries the measured ratio and the bar it missed, so the notice can
+    // show the organiser the numbers rather than a bare "this is bad".
+    for (const warning of warnings) {
+      expect(warning.ratio).toBeLessThan(warning.required);
+      expect(warning.message.length).toBeGreaterThan(0);
+    }
+    const gilt = warnings.find((w) => w.id === "gilt-on-card")!;
+    expect(gilt.required).toBe(WCAG_UI_MIN);
+    expect(warnings.find((w) => w.id === "text-on-raised")!.required).toBe(WCAG_TEXT_MIN);
+  });
+
+  test("an unparseable or missing token is skipped, not reported as a failure", () => {
+    // The map is always machine-built, but a warning invented from a token that
+    // isn't there would be worse than a missing one.
+    expect(paletteContrastWarnings({})).toEqual([]);
+    expect(paletteContrastWarnings({ "--color-text": "not-a-colour" })).toEqual([]);
   });
 });
 
