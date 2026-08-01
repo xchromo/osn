@@ -350,13 +350,20 @@ export default function InvitePage(props: InvitePageProps) {
                     to the heading above. Held tight to them (`mb-3`) so it reads
                     as their label. Centred on the column — it speaks for the
                     whole list, so it takes the column's axis rather than the
-                    left edge the cards' own copy runs along. */}
+                    left edge the cards' own copy runs along.
+
+                    `text-gold-ink`, not `text-gold` — see the same line in the
+                    `classic` pack: the metal token is held to the 3:1 UI floor,
+                    which is the wrong bar for a 0.85rem sentence. */}
                 <Show when={rsvpNotice()}>
                   {(notice) => (
                     <p
                       id={RSVP_NOTICE_ID}
                       class="font-body mb-3 text-center text-[0.85rem]"
-                      classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
+                      classList={{
+                        "text-text-muted": rsvpClosed(),
+                        "text-gold-ink": !rsvpClosed(),
+                      }}
                       role="status"
                     >
                       {notice()}

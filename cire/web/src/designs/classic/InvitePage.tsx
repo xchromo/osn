@@ -222,13 +222,21 @@ export default function InvitePage(props: InvitePageProps) {
                   above) so it reads as their label rather than as a third line
                   of section header. Centred: it speaks for the whole list, so it
                   sits on the section's own axis rather than picking out the
-                  first card. */}
+                  first card.
+
+                  `text-gold-ink`, not `text-gold`: at 0.85rem this is a
+                  sentence, and WCAG 1.4.3 asks 4.5:1 of normal-size text, while
+                  the metal token is deliberately held to the 3:1 UI floor so a
+                  genuinely gold gold survives. A live invite shipped this line
+                  at 3.35:1 on a taupe-on-cream scheme — over the floor, under
+                  the bar, so nothing moved it. The prose token is the same hue
+                  walked to 4.5:1 against all three section surfaces. */}
               <Show when={rsvpNotice()}>
                 {(notice) => (
                   <p
                     id={RSVP_NOTICE_ID}
                     class="font-body mb-3 text-center text-[0.85rem]"
-                    classList={{ "text-text-muted": rsvpClosed(), "text-gold": !rsvpClosed() }}
+                    classList={{ "text-text-muted": rsvpClosed(), "text-gold-ink": !rsvpClosed() }}
                     role="status"
                   >
                     {notice()}

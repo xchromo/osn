@@ -20,6 +20,11 @@
   --color-text-muted: oklch(94.62% 0.0111 89.72 / 0.5);
   --color-gold: oklch(74.99% 0.0854 82.08);
   --color-gold-dim: oklch(74.99% 0.0854 82.08 / 0.35);
+  /* Gold that is READ, not seen: the RSVP-by line and the event-card date are
+     normal-size text, so they need 4.5:1 where a rule or a button needs 3:1.
+     On this scheme the metal already clears 4.5 on every surface, so the two
+     are the same colour; on a paler one they part company. */
+  --color-gold-ink: oklch(74.99% 0.0854 82.08);
   /* The festive counter-colour — timeline dots, ornament, ambient accents. */
   --color-bloom: oklch(70.5% 0.1123 24.5);
   --color-bloom-dim: oklch(70.5% 0.1123 24.5 / 0.3);

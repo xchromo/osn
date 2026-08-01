@@ -122,6 +122,13 @@ describe("contrast is enforced, not advised", () => {
     ["--color-text", "--color-bg"],
     ["--color-text", "--color-surface"],
     ["--color-text", "--color-surface-raised"],
+    // Gold-as-prose (the RSVP-by line, the event-card date) sits inside a
+    // section whose tone the organiser picks, so all three surfaces are live
+    // backdrops and all three are held to the TEXT minimum — unlike the metal
+    // `--color-gold` below, which is UI and keeps the 3:1 floor.
+    ["--color-gold-ink", "--color-bg"],
+    ["--color-gold-ink", "--color-surface"],
+    ["--color-gold-ink", "--color-surface-raised"],
   ] as const;
   const uiPairs = [
     ["--color-text-muted", "--color-surface"],
@@ -183,6 +190,37 @@ describe("contrast is enforced, not advised", () => {
     );
   });
 
+  test("gold-as-prose leaves the metal alone when the metal is already legible", () => {
+    // Evergreen's gilt clears 4.5:1 on all three surfaces, so the two tokens
+    // must be the same colour — the split exists to rescue pale schemes, not
+    // to put a second gold on every invite.
+    const v = derivePalette(PALETTE_PRESETS.evergreen);
+    expect(v["--color-gold-ink"]).toBe(v["--color-gold"]);
+  });
+
+  test("rescues a gold that clears the UI floor and fails as text (WCAG 1.4.3)", () => {
+    // The live report this token was added for: a taupe gilt on a cream page
+    // measured 3.35:1 behind the RSVP-by line — over the 3:1 the metal is held
+    // to, under the 4.5:1 that 0.85rem prose needs, so nothing moved it and
+    // the notice shipped failing AA.
+    const v = derivePalette({
+      ground: "#d6cfc2",
+      card: "#e4ded3",
+      ink: "#2b2721",
+      gilt: "#756c59",
+    });
+    const metal = contrastRatio(v["--color-gold"]!, v["--color-bg"]!)!;
+    expect(metal).toBeGreaterThanOrEqual(WCAG_UI_MIN);
+    expect(metal).toBeLessThan(WCAG_TEXT_MIN);
+    // The organiser's metal is untouched — their rules and buttons keep the
+    // colour they chose — and only the prose token moves.
+    expect(v["--color-gold"]).toBe(formatOklch(parseColor("#756c59") as never));
+    expect(contrastRatio(v["--color-gold-ink"]!, v["--color-bg"]!)).toBeGreaterThanOrEqual(
+      WCAG_TEXT_MIN,
+    );
+    expect(paletteContrastWarnings(v)).toEqual([]);
+  });
+
   test("reports which seeds it had to move, and stays quiet when it moved none", () => {
     expect(paletteAdjustments(PALETTE_PRESETS.evergreen)).toEqual([]);
     const reports = paletteAdjustments({
@@ -197,11 +235,15 @@ describe("contrast is enforced, not advised", () => {
 });
 
 /**
- * Enforcement runs each token against ONE backdrop, and the surface it never
- * walks is `raised` — the one every `EventCard` sits on, carrying the card
- * title, the venue and description, and the date. Together with muted text on
- * `ground`, that is where a finished palette can still be illegible, so those
- * pairs are warned about instead.
+ * Two tokens are still enforced against a single backdrop — `ink` (card, then
+ * ground) and the metal `gilt` (ground) — and the surface neither walks is
+ * `raised`, the one every `EventCard` sits on. The two prose tokens,
+ * `--color-text-muted` and `--color-gold-ink`, ARE walked against all three;
+ * they can still come out short when a scheme straddles the lightness midpoint
+ * (a near-black page under near-white cards), because the step that rescues
+ * such a token on one surface pushes it the wrong way for the other. Those are
+ * the places a finished palette can still be illegible, so they are warned
+ * about instead.
  *
  * The pair of mechanisms only works if the warning is quiet for every scheme an
  * organiser is likely to have and loud for the ones that genuinely fail — hence
@@ -219,16 +261,16 @@ describe("residual contrast warnings", () => {
   });
 
   test("the two notices describe different things, neither derivable from the other", () => {
-    // Near-identical mid-greys. `paletteAdjustments` names the seeds it MOVED
-    // (ink, gilt, bloom); `paletteContrastWarnings` names what survived the
-    // move (muted, on both surfaces it lands on). The two lists are disjoint
-    // here, which is the point: a caller cannot infer either from the other, so
-    // the builder has to show both.
-    const seeds = { ground: "#999999", card: "#999999", ink: "#888888" };
+    // A straddling scheme — near-black page, near-white cards. The seed-level
+    // report names what it MOVED (ink, bloom); the warning names what survived
+    // the move, which is a different set on different surfaces. The two lists
+    // are disjoint here, which is the point: a caller cannot infer either from
+    // the other, so the builder has to show both.
+    const seeds = { ground: "#101010", card: "#f2f2f2", ink: "#eeeeee", bloom: "#111111" };
     const moved = paletteAdjustments(seeds).map((a) => a.token);
     const survived = paletteContrastWarnings(derivePalette(seeds)).map((w) => w.id);
     expect(moved).toContain("ink");
-    expect(survived).toEqual(["muted-on-raised", "muted-on-ground"]);
+    expect(survived).toContain("text-on-raised");
     // Nothing in the warning list is merely a restatement of an adjustment.
     for (const token of moved) expect(survived.some((id) => id.startsWith(token))).toBe(false);
   });
@@ -237,7 +279,10 @@ describe("residual contrast warnings", () => {
     // White page, white card: `ink` is darkened until it clears 4.5:1 on white,
     // which lands it just under that bar against `raised` — the surface a step
     // beyond the card, and the one every event card sits on. The rescue
-    // happened AND real problems survived it, so both notices are true at once.
+    // happened AND a real problem survived it, so both notices are true at
+    // once. The prose tokens are NOT among the survivors: every surface here
+    // sits on the same side of the midpoint, which is the case their
+    // three-surface walk settles.
     const warnings = paletteContrastWarnings(
       derivePalette({
         ground: "#ffffff",
@@ -247,34 +292,45 @@ describe("residual contrast warnings", () => {
         bloom: "#fdfdfd",
       }),
     );
-    expect(warnings.map((w) => w.id)).toEqual([
-      "text-on-raised",
-      "muted-on-raised",
-      "muted-on-ground",
-      "gilt-on-raised",
-    ]);
+    expect(warnings.map((w) => w.id)).toEqual(["text-on-raised", "gilt-on-raised"]);
     for (const warning of warnings) expect(warning.ratio).toBeLessThan(warning.required);
     expect(warnings.find((w) => w.id === "text-on-raised")!.ratio).toBeLessThan(WCAG_TEXT_MIN);
   });
 
   test("holds secondary text to the TEXT minimum, not the UI floor", () => {
     // Every `--color-text-muted` site on the guest invite is small text (0.74 –
-    // 0.92rem), so WCAG AA asks 4.5:1 — but `derivePalette` only holds muted to
-    // the 3:1 UI floor against `card`. That gap is precisely what this warning
-    // exists to surface, and printing "needs 3:1" beside a text pair would
-    // state the wrong requirement to the organiser as fact (C-L2).
-    for (const id of ["muted-on-raised", "muted-on-ground"]) {
-      const pair = paletteContrastWarnings(
-        derivePalette({ ground: "#999999", card: "#999999", ink: "#888888" }),
-      ).find((w) => w.id === id)!;
-      expect(pair.required).toBe(WCAG_TEXT_MIN);
-    }
+    // 0.92rem), so WCAG AA asks 4.5:1. `derivePalette` used to hold muted to
+    // the 3:1 UI floor against `card` alone while this table asked 4.5 of it —
+    // a bar stated in the warning and not applied in the derivation (C-L2), so
+    // a guest could read a 4.36:1 caption on a palette nothing had flagged as
+    // broken. The derivation now walks it against all three surfaces at 4.5,
+    // and where a straddling scheme still leaves a residue the pair says 4.5.
+    const straddle = derivePalette({ ground: "#101010", card: "#f2f2f2", ink: "#eeeeee" });
+    expect(
+      paletteContrastWarnings(straddle).find((w) => w.id === "muted-on-raised")!.required,
+    ).toBe(WCAG_TEXT_MIN);
+    // The case from the field: a cream page whose muted grey measured 4.36:1
+    // behind the closed "RSVPs closed on …" line. Enforced now, so silent.
+    const cream = derivePalette({
+      ground: "#d6cfc2",
+      card: "#e4ded3",
+      ink: "#2b2721",
+      gilt: "#756c59",
+    });
+    expect(
+      contrastRatio(cream["--color-text-muted"]!, cream["--color-bg"]!),
+    ).toBeGreaterThanOrEqual(WCAG_TEXT_MIN);
+    expect(paletteContrastWarnings(cream)).toEqual([]);
   });
 
   test("names the pairs a near-white card on a black page breaks", () => {
     // The canonical failure: `gilt` clears the near-black page it was enforced
-    // against and then sits on a near-white card at under 2:1, which is the
-    // colour of the date on every event card.
+    // against and then sits on a near-white card at under 2:1 — the colour of
+    // the card's outlined buttons and hairlines. `--color-gold-ink` is walked
+    // against all three surfaces and still lands here, because this scheme
+    // STRADDLES the lightness midpoint: the step that rescues it on the black
+    // page pushes it the wrong way for the white card. That residue is exactly
+    // what the pair exists to say out loud.
     const warnings = paletteContrastWarnings(
       derivePalette({
         ground: "#101010",
@@ -285,8 +341,9 @@ describe("residual contrast warnings", () => {
       }),
     );
     expect(warnings.map((w) => w.id).toSorted()).toEqual([
+      "gilt-ink-on-raised",
       "gilt-on-raised",
-      "muted-on-ground",
+      "muted-on-raised",
       "text-on-raised",
     ]);
     // Each carries the measured ratio and the bar it missed, so the notice can
