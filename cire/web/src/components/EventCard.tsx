@@ -82,7 +82,7 @@ export function EventCard(props: EventCardProps) {
           <h3 class="font-display text-text mb-2 text-2xl font-normal">{props.event.name}</h3>
           {/* A date, set as a date — not as an uppercase micro-label. One of
               these per card was the page's largest source of eyebrow noise.
-              `text-gold-ink`, not `text-gold`: at 0.92rem this is normal-size
+              `text-gold-ink`, not `text-gold-ink`: at 0.92rem this is normal-size
               text (4.5:1), while the metal token is only held to the 3:1 UI
               floor — which shipped this line at 3.58:1 on `chapel` and 3.91:1
               on `garden` (C-M2). */}
@@ -121,7 +121,7 @@ export function EventCard(props: EventCardProps) {
               {props.rsvpClosed ? "RSVPs closed" : "Respond"}
             </button>
             <button
-              class="border-border font-body text-text-muted hover:border-gold hover:text-gold min-h-11 flex-1 rounded-sm border bg-transparent px-5 py-3 text-[0.82rem] tracking-[0.12em] uppercase transition-colors duration-200 sm:flex-none sm:py-2.5"
+              class="border-border font-body text-text-muted hover:border-gold hover:text-gold-ink min-h-11 flex-1 rounded-sm border bg-transparent px-5 py-3 text-[0.82rem] tracking-[0.12em] uppercase transition-colors duration-200 sm:flex-none sm:py-2.5"
               onClick={() => props.onDetails(props.event)}
             >
               Event Details

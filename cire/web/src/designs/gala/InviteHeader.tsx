@@ -398,7 +398,7 @@ export default function InviteHeader(props: InviteHeaderProps) {
               }}
             </Show>
             <div class="md:col-span-12 md:self-center group-data-[has-image=true]/story:md:col-span-6 group-data-[has-image=true]/story:md:col-start-7">
-              <p class="font-body text-gold mb-3 text-[0.72rem] tracking-[0.2em] uppercase">
+              <p class="font-body text-gold-ink mb-3 text-[0.72rem] tracking-[0.2em] uppercase">
                 {story()?.eyebrow ?? "Our Story"}
               </p>
               <h2 class="font-display text-text mb-5 text-[calc(clamp(2rem,5vw,3rem)*var(--invite-heading-scale,1))] leading-[1.15] [font-weight:var(--invite-heading-weight,300)] [font-style:var(--invite-heading-style,normal)]">
