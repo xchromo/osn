@@ -18,6 +18,15 @@ export type NativeTab = {
 type TabSelected = { id: string };
 
 /**
+ * Bumped by every install and every teardown. Both are async, and the router
+ * can order them faster than the IPC round-trip completes — a navigation
+ * straight to `/welcome` can start a teardown while the install for the
+ * previous route is still in flight. Whoever bumped last wins; an older call
+ * that lands afterwards keeps its hands off the shared state.
+ */
+let generation = 0;
+
+/**
  * Installs or replaces the native tab bar, and returns whether it took.
  *
  * There is no platform sniffing here on purpose: the plugin itself reports
@@ -31,6 +40,7 @@ export async function installNativeTabBar(
 ): Promise<boolean> {
   if (!isTauri()) return false;
 
+  const mine = ++generation;
   const channel = new Channel<TabSelected>();
   channel.onmessage = (message) => onSelect(message.id);
 
@@ -40,9 +50,13 @@ export async function installNativeTabBar(
       onSelect: channel,
     });
   } catch {
-    setNativeTabBarActive(false);
+    if (mine === generation) setNativeTabBarActive(false);
     return false;
   }
+
+  // A teardown, or a newer install, overtook this one. Its result is the
+  // current truth; claiming the bar is up here would strand it on screen.
+  if (mine !== generation) return false;
 
   setNativeTabBarActive(true);
   return true;
@@ -60,7 +74,12 @@ export async function setSelectedNativeTab(id: string): Promise<void> {
 
 /** Removes the bar and gives the webview its full height back. */
 export async function clearNativeTabs(): Promise<void> {
-  if (!nativeTabBarActive()) return;
+  // Gated on the platform, not on `nativeTabBarActive()`: an install may
+  // still be in flight, and it would put up a bar we have already decided to
+  // take down. Bumping the generation is what cancels it.
+  if (!isTauri()) return;
+
+  generation++;
   setNativeTabBarActive(false);
   try {
     await invoke("plugin:pulse-tabbar|set_tabs", {

@@ -115,9 +115,31 @@ describe("clearNativeTabs", () => {
     expect((args as { options: { tabs: unknown[] } }).options.tabs).toEqual([]);
   });
 
-  it("is a no-op when there was never a bar", async () => {
+  it("does not reach for the IPC outside a Tauri webview", async () => {
     const { clearNativeTabs } = await freshModule();
+    isTauri.mockReturnValue(false);
+
     await clearNativeTabs();
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("cancels an install still in flight rather than letting it land", async () => {
+    const { installNativeTabBar, clearNativeTabs, nativeTabBarActive } = await freshModule();
+
+    // The router can reach `/welcome` before the install for the previous
+    // route has come back. The stale install must not put a bar on screen.
+    let settle!: () => void;
+    invoke.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    const install = installNativeTabBar(TABS, "home", () => {});
+
+    await clearNativeTabs();
+    settle();
+
+    expect(await install).toBe(false);
+    expect(nativeTabBarActive()).toBe(false);
   });
 });
