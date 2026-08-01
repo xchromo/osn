@@ -33,7 +33,26 @@ The list is capped at five items: a sixth would make UIKit collapse the
 overflow into a "More" tab, which has no route of its own and would break the
 two-way sync.
 
-**Not yet verified.** The rotation acceptance test needs `tauri ios dev` on a
-simulator. It has not been run — the Rust and Swift both compile for
-`aarch64-apple-ios`, and the TypeScript side is covered by unit tests, but no
-device or simulator has displayed this bar yet.
+## Verification
+
+Run on an iPhone 17 Pro simulator (iOS 26.4) under `tauri ios dev`, rotated
+portrait → landscape-left → portrait, with a screenshot at each stop.
+
+**Verified.** The bar installs and draws. It stays pinned to the bottom edge
+and horizontally centred in both orientations, unclipped, with its glyph and
+label intact, and it survives rotation in both directions without any manual
+re-layout. Page content reflows to the new width around it — header, hero
+copy and the whole filter-pill row — with nothing cut off. iOS 26 draws
+`UITabBar` as a floating capsule rather than a full-width bar; that is the
+system's own rendering of a bar whose view is still constrained
+leading-to-trailing, and it is what Liquid Glass looks like here. Only one
+item shows in these shots because the session is signed out and
+`NativeTabBar` filters the list down to `home` — see `src/lib/tabs.ts`.
+
+**Not verified on device: the `contentInset` behaviour under a real scroll.**
+The event list never loaded in the simulator (an unrelated data-path problem,
+not this change), so the only thing near the bar was a centred empty-state
+string. The inset arithmetic is covered by unit tests and by inspection —
+`safeAreaInsetsDidChange` → `invalidateIntrinsicContentSize` → `layoutSubviews`
+re-drives it on every rotation — but no populated, scrolling list has been
+seen clearing the bar.
