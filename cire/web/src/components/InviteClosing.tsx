@@ -47,9 +47,22 @@ import { buildSrcSet, variantSrc } from "./invite-images";
  * what you frame is what publishes, and the builder's preview shows it.
  *
  * With no crop saved, the image keeps its NATURAL aspect (`h-auto`) — nothing
- * is chosen, so nothing is cut. `max-h-[85dvh]` is the one bound over both
- * paths: a portrait crop is still a portrait band, it just can't grow taller
- * than the screen it interrupts (past that it cover-crops, centred).
+ * is chosen, so nothing is cut.
+ *
+ * THE HEIGHT BOUND, and why it bounds the WIDTH. A band may not grow taller
+ * than {@link BAND_MAX_HEIGHT}: a 4∶5 portrait at 1440px wide wants 1800px of
+ * band, which buries the note and the footer under screens of image. On the
+ * cropped path that bound is applied to the box's WIDTH
+ * (`min(100%, max-height × aspect)`, centred) rather than as a `max-height`
+ * clip. A clip would silently break the promise above — measured in Chromium, a
+ * top-anchored tall crop clipped by `max-height` renders only its TOP strip,
+ * because the background layer is positioned at the crop's own offset and has
+ * no idea the box got shorter. Bounding the width instead means an extreme
+ * portrait crop stops being edge-to-edge (it becomes a centred column at the
+ * widest size that fits a screen) but is still shown WHOLE and exact — losing
+ * the full bleed on a rare shape beats cutting the framing on it. The plain
+ * `<img>` path keeps a `max-h` + `object-cover`, which genuinely does crop
+ * centred, and applies only to an image nobody framed.
  *
  * SURFACE — it deliberately has NO tone setting of its own. It paints whatever
  * the organiser chose for the "Code Entry & Welcome" section (`themeVars`,
@@ -65,18 +78,34 @@ import { buildSrcSet, variantSrc } from "./invite-images";
  */
 
 /**
- * The band's box, shared by the plain `<img>` and the cropped background layer
- * so the two paths can never disagree: full-bleed width, height from the crop
- * (or the source's own ratio), bounded by the screen. A literal Tailwind class
- * (the scanner reads source text — a computed class emits no CSS at all), held
- * in one const rather than typed twice.
+ * The tallest a closing band may be. `dvh`, not `vh`, so a phone's collapsing
+ * URL bar doesn't leave it measured against a viewport that isn't there.
  *
- * The cap exists for one case: a tall crop on a wide screen. A 4∶5 portrait at
- * 1440px wide wants 1800px of band, which would bury the note and the footer
- * below several screens of image. `dvh`, not `vh`, so a phone's collapsing URL
- * bar doesn't leave it measured against a viewport that isn't there.
+ * Exported for the drift guard in the tests: it appears BOTH as a literal
+ * inside {@link BAND_IMG_CLASS} (Tailwind's scanner reads source text — a
+ * computed class emits no CSS at all) and as this value in the cropped path's
+ * width `calc`, so the two have to be asserted equal rather than trusted.
  */
-const BAND_CLASS = "block max-h-[85dvh] w-full object-cover";
+export const BAND_MAX_HEIGHT = "85dvh";
+
+/**
+ * The uncropped band: full-bleed, the source's own proportions (`h-auto`),
+ * bounded by the screen. `object-cover` bites only when that bound does, and
+ * crops centred — acceptable for an image the organiser never framed.
+ */
+export const BAND_IMG_CLASS = "block h-auto max-h-[85dvh] w-full object-cover";
+
+/**
+ * The widest a CROPPED band may be, so the screen-height bound never becomes a
+ * `max-height` clip: paired with `width: 100%` this is `min(100%, cap × aspect)`
+ * — full-bleed at any ordinary landscape shape, a centred column only when the
+ * band would otherwise outgrow the screen. Written as a `max-width` rather than
+ * a literal `min()` because `min()` is the one form the test tier's CSS parser
+ * discards, and a contract nothing can assert is a contract that rots.
+ */
+export function bandMaxWidth(aspect: number): string {
+  return `calc(${BAND_MAX_HEIGHT} * ${aspect})`;
+}
 
 /**
  * The band's shape when a crop carries no captured source dims (a legacy
@@ -132,7 +161,16 @@ export function InviteClosing(props: InviteClosingProps) {
   // The band's height, expressed as the crop's true pixel aspect (from its
   // captured source dims). This is the whole "what you crop is what publishes"
   // contract in one line.
-  const bandAspect = () => String(cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT));
+  const bandAspect = () => cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT);
+
+  // While the section is skipped by `content-visibility`, this is the height the
+  // browser reserves for it. The band is exactly `100vw` wide at the crop's
+  // aspect, so its height is a closed-form expression rather than a guess; the
+  // `+ 24rem` covers the note block's padding. A flat placeholder under-reserved
+  // a full-bleed band by 2–3×, which moves the scrollbar under the guest at the
+  // moment they scroll into it. `auto` means only the first pass pays even this.
+  const intrinsicSize = () =>
+    imageSrc() ? `auto calc(100vw / ${bandAspect()} + 24rem)` : "auto 24rem";
 
   return (
     <Show when={show()}>
@@ -141,13 +179,17 @@ export function InviteClosing(props: InviteClosingProps) {
         // No horizontal padding of its own — the band reaches the viewport edge,
         // and the note below carries its own. `content-visibility: auto` defers
         // layout/paint (and the crop path's background fetch) until this
-        // off-screen section approaches the viewport; the intrinsic-size hint
-        // keeps a skipped band from collapsing the scroll height to nothing,
-        // which now matters more than it did at 200px.
-        class="text-center [contain-intrinsic-size:auto_24rem] [content-visibility:auto]"
+        // off-screen section approaches the viewport; the intrinsic size above
+        // is what the browser reserves while it does, and now that the band is
+        // full-bleed a wrong reserve is a scroll jump rather than a rounding.
+        class="text-center [content-visibility:auto]"
         // Paints the welcome section's surface; the text tokens below resolve
         // from the root palette, which already carries the organiser's scheme.
-        style={{ ...props.themeVars, "background-color": "var(--invite-section-bg)" }}
+        style={{
+          ...props.themeVars,
+          "background-color": "var(--invite-section-bg)",
+          "contain-intrinsic-size": intrinsicSize(),
+        }}
       >
         <Show when={imageSrc()}>
           {(url) => (
@@ -172,10 +214,15 @@ export function InviteClosing(props: InviteClosingProps) {
                   alt=""
                   loading="lazy"
                   decoding="async"
-                  // No `aspect-ratio`: with `h-auto` the image keeps its own
-                  // proportions, so an organiser who never opened the crop
-                  // editor gets their whole picture, uncut, edge to edge.
-                  class={`${BAND_CLASS} h-auto`}
+                  class={BAND_IMG_CLASS}
+                  // `aspect-ratio: auto <ratio>` — the FALLBACK form: the
+                  // browser reserves a 16∶9 box until the bytes arrive, then
+                  // the image's own ratio wins, so "nothing was cropped ⇒
+                  // nothing is cut" survives the fix. Without it this box is
+                  // 0px tall until a lazy, content-visibility-deferred image
+                  // decodes, and the note plus the whole site footer jump down
+                  // by up to a screen height — CLS on the one page that sells.
+                  style={{ "aspect-ratio": `auto ${LEGACY_CROP_ASPECT}` }}
                 />
               }
             >
@@ -184,11 +231,15 @@ export function InviteClosing(props: InviteClosingProps) {
                   aria-hidden="true"
                   // The cropped variant paints a background layer, so the box
                   // owns its size (an empty div has no intrinsic dimensions):
-                  // full width at the CROP's aspect, which is what makes the
-                  // published band the shape the organiser framed. `overflow`
-                  // matters only when the cap above clips a tall crop.
-                  class={`${BAND_CLASS} overflow-hidden`}
-                  style={{ ...style(), "aspect-ratio": bandAspect() }}
+                  // the CROP's aspect, at the full width the screen-height bound
+                  // allows. Never a `max-height` clip — that would cut the
+                  // framing this whole path exists to honour.
+                  class="mx-auto block w-full"
+                  style={{
+                    ...style(),
+                    "aspect-ratio": String(bandAspect()),
+                    "max-width": bandMaxWidth(bandAspect()),
+                  }}
                 />
               )}
             </Show>

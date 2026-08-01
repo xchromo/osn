@@ -16,7 +16,7 @@
  */
 
 import { headingSizeCss, typographyVar } from "@cire/theme";
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { apiUrl } from "../../lib/api";
 import { cropAspectRatio, cropBackgroundStyle, type ImageCrop } from "../../lib/image-crop";
@@ -26,9 +26,20 @@ import { DEFAULTS } from "./model";
  * The closing band's shape when a crop carries no captured source dims (a
  * legacy rectangle). Mirrors `LEGACY_CROP_ASPECT` in the guest site's
  * `InviteClosing.tsx` — the closing slot's editor frame — so the preview and
- * the invite fall back to the same shape.
+ * the invite fall back to the same shape. Exported for the drift guard in the
+ * tests, which pins it to `CROP_ASPECT.footer`: hand-kept copies across two
+ * packages are only safe if something fails when they diverge.
  */
-const LEGACY_CROP_ASPECT = 16 / 9;
+export const LEGACY_CROP_ASPECT = 16 / 9;
+
+/**
+ * The tallest a closing band may be IN THIS PREVIEW — the guest site's
+ * `BAND_MAX_HEIGHT` (85dvh) scaled to the sample frame. It bounds the band's
+ * WIDTH (`min(100%, cap × aspect)`), never clipping its height, so a tall crop
+ * previews whole exactly as it publishes. Kept equal to the `max-h-24` on the
+ * uncropped path, which has to be a Tailwind literal.
+ */
+const BAND_MAX_HEIGHT = "6rem";
 
 // The guest hero's base gradient and title panel, expressed in the SAME derived
 // tokens the guest site uses — so the preview cannot drift from the real hero
@@ -259,10 +270,16 @@ export function SectionSample(props: {
   card?: { name: string; meta: string };
   class?: string;
 }) {
-  const imageCropStyle = () => {
+  // Memoised on the image + crop alone: the props object this sample receives is
+  // rebuilt by the builder on every keystroke in the closing note, and without
+  // this the URL string-building and the four `toFixed(4)` calls re-run per
+  // character. Cheap either way, but the recompute rate should follow crop saves
+  // and uploads, not typing.
+  const imageCropStyle = createMemo(() => {
     const url = previewVariantSrc(props.imageUrl ?? null);
     return url ? cropBackgroundStyle(url, props.imageCrop) : null;
-  };
+  });
+  const bandAspect = createMemo(() => cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT));
   return (
     // The body weight + style ride the section wrapper alongside the body face
     // and cascade to every line inside it — eyebrow, body copy and the event
@@ -284,9 +301,14 @@ export function SectionSample(props: {
           — the saved crop's own aspect (its exact region, same background
           technique as the invite), or the image's natural proportions when
           nothing is cropped. It sits OUTSIDE the padded content block below,
-          which is what lets it reach the sample's edges. The `max-h` mirrors
-          the guest cap, scaled to this small frame: a portrait crop reads as a
-          tall band here too, it just can't swallow the whole sample. */}
+          which is what lets it reach the sample's edges.
+
+          `BAND_MAX_HEIGHT` mirrors the guest cap, scaled to this small frame,
+          and — like the invite — a tall crop gives up WIDTH rather than being
+          clipped (`min(100%, cap × aspect)`, centred). Clipping here would be
+          worse than on the guest page: this frame is short, so the cap fires
+          often, and a preview that trims the organiser's framing is a preview
+          that lies about the one thing it is for. */}
       <Show when={props.imageUrl}>
         {(url) => (
           <Show
@@ -294,19 +316,32 @@ export function SectionSample(props: {
             fallback={
               <img
                 src={previewVariantSrc(url())!}
-                alt=""
-                class="max-h-24 w-full shrink-0 object-cover"
+                // Named, not `alt=""`, and matching the crop path's label below:
+                // whether a non-sighted organiser is told their closing image
+                // exists must not depend on whether a crop happens to be saved
+                // (C-L1). "artwork", not "image" — a name that repeats the role
+                // AT tools already announce is the `img-redundant-alt` lint.
+                // The GUEST band stays decorative on both paths; this is a
+                // preview, where "the band is populated" is the point.
+                alt="Closing section artwork"
+                class="mx-auto block max-h-24 w-full shrink-0 object-cover"
               />
             }
           >
             {(style) => (
               <div
                 role="img"
-                aria-label="Closing image"
-                class="max-h-24 w-full shrink-0 overflow-hidden"
+                aria-label="Closing section artwork"
+                class="mx-auto block w-full shrink-0"
                 style={{
                   ...style(),
-                  "aspect-ratio": String(cropAspectRatio(props.imageCrop, LEGACY_CROP_ASPECT)),
+                  "aspect-ratio": String(bandAspect()),
+                  // `width: 100%` + this cap is `min(100%, cap × aspect)`, the
+                  // guest band's rule — a tall crop narrows rather than being
+                  // clipped, so the preview shows it whole exactly as it
+                  // publishes. (`min()` itself is written this way because the
+                  // test tier's CSS parser discards it.)
+                  "max-width": `calc(${BAND_MAX_HEIGHT} * ${bandAspect()})`,
                 }}
               />
             )}
@@ -390,6 +425,10 @@ export function SectionPreview(props: {
   eyebrow?: string;
   heading?: string;
   imageUrl?: string | null;
+  /** Forwarded to `SectionSample` — without it this wrapper silently shows the
+   *  UNCROPPED image while the composed pane shows the crop, i.e. the inline
+   *  preview goes back to lying about what publishes. */
+  imageCrop?: ImageCrop | null;
   body: string;
   card?: { name: string; meta: string };
 }) {
@@ -406,6 +445,7 @@ export function SectionPreview(props: {
           eyebrow={props.eyebrow}
           heading={props.heading}
           imageUrl={props.imageUrl}
+          imageCrop={props.imageCrop}
           body={props.body}
           card={props.card}
           class="min-h-28"

@@ -51,7 +51,7 @@ rather than the invite's closing image. It now spans the viewport:
 | | Before | Now |
 |---|---|---|
 | Box | `w-[min(200px,45vw)]`, centred, rounded | `w-full`, viewport edge to edge, square corners |
-| Height | the crop's pixel aspect, **square** fallback | the crop's pixel aspect (**16∶9** fallback), or the source's natural ratio when uncropped; `max-h-[85dvh]` |
+| Height | the crop's pixel aspect, **square** fallback | the crop's pixel aspect (**16∶9** fallback), or the source's natural ratio when uncropped; bounded at `85dvh` |
 | Crop | exact region (`cropBackgroundStyle`) | unchanged — still the exact region |
 | Variants | `thumb` 320w / `card` 800w, `sizes="200px"` | `card` 800w / `hero` 1600w, `sizes="100vw"` |
 
@@ -63,9 +63,31 @@ to a focal point (`heroCropBackgroundStyle`): the hero's box is dictated by the
 screen it fills, while this band has no shape of its own to defend. A fixed band
 height was tried first and rejected for exactly that reason — it silently
 overrode the framing an organiser had just chosen. With no crop saved the image
-keeps its natural aspect (nothing chosen ⇒ nothing cut). The one bound is
-`max-h-[85dvh]`: a 4∶5 portrait at 1440px wide would otherwise want 1800px of
-band and bury the note under several screens of image.
+keeps its natural aspect (nothing chosen ⇒ nothing cut).
+
+The one bound is `85dvh` — a 4∶5 portrait at 1440px wide would otherwise want
+1800px of band and bury the note under several screens of image — and on the
+cropped path it is applied to the box's **width** (`width: 100%` plus
+`max-width: 85dvh × aspect`, i.e. `min(100%, cap × aspect)`, centred), never as
+a `max-height` clip. Measured in Chromium: a `max-height`-clipped band shows a
+top-anchored crop's TOP STRIP ONLY, because the background layer sits at the
+crop's own offset and has no idea the box got shorter — silently cutting the
+framing this whole path exists to honour. Bounding the width instead means an
+extreme portrait crop stops being edge-to-edge (it becomes a centred column at
+the widest size that fits a screen) but is still shown WHOLE and exact. A wide
+crop is unaffected: a 2∶1 band still measures 1440×720 on a laptop, 390×195 on
+a phone. The uncropped `<img>` keeps `max-h` + `object-cover`, which genuinely
+does crop centred, and applies only to an image nobody framed.
+
+Two properties exist purely to keep the band from moving the page under the
+guest, both of which the 200px square didn't need. The `<img>` carries
+`aspect-ratio: auto 16/9` — the *fallback* form, so a box is reserved before a
+lazy, `content-visibility`-deferred image decodes, and the source's own ratio
+still wins afterwards; without it the note and the site footer jumped down by up
+to a screen height on decode. And `contain-intrinsic-size` is computed
+(`auto calc(100vw / aspect + 24rem)`) rather than a flat guess, because the band
+is exactly `100vw` wide at a known aspect — a placeholder 2–3× short of the
+rendered height moves the scrollbar at the moment the guest scrolls in.
 
 That contract is only honest if the builder shows it, so `SectionSample` — the
 markup behind BOTH the inline per-section preview and the composed `PreviewPane`
@@ -73,15 +95,26 @@ markup behind BOTH the inline per-section preview and the composed `PreviewPane`
 technique at the same crop-driven aspect (`imageCrop` threaded through
 `PreviewPaneProps["closing"]` and the builder's inline preview). `ImageField`'s
 WYSIWYG thumbnail already showed the exact rectangle, so all three surfaces now
-agree with the invite.
+agree with the invite — including the width bound, which matters more in the
+preview than on the guest page because that frame is short, so the cap fires far
+more often. **The wiring is a silent-degradation seam:** `SectionSample` falls
+through to the uncropped `<img>` when no crop reaches it and still renders
+something plausible, so a dropped prop reinstates the old lie with a green
+suite. It happened once during review — `SectionPreview` (the inline wrapper)
+didn't forward `imageCrop`, so the inline preview showed the uncropped image
+while the composed pane showed the crop. Both paths are now pinned by builder
+tests that drive real draft state rather than passing the prop directly.
 
 Two knock-ons: the section's horizontal padding moved off the `<section>` onto
 the note's own block (the band has to reach past it), and `CROP_ASPECT.footer`
 went 1∶1 → 16∶9 so the editor opens on the shape most couples want here — the
 same value `LEGACY_CROP_ASPECT` falls back to in both packages when a saved crop
-carries no captured source dims. `contain-intrinsic-size: auto 24rem` joined the
-section's `content-visibility: auto`, since a skipped band now collapses a
-screen-height of scroll rather than 200px.
+carries no captured source dims (three hand-kept copies; the two inside
+`@cire/organiser` are pinned to each other by a drift guard, the cross-package
+pair by convention). `cropAspectRatio` also gained a `[0.05, 20]` clamp in both
+mirrors: `natW`/`natH` are validated only as positive and finite, and a ratio
+that stringifies to exponential notation is a value CSS drops outright, which
+would render the band as a zero-height box (`[[security]]` S-L1).
 
 **It is behind the claim gate — enforced at the API, not in the render tree.**
 The first cut gated it only with `<Show when={claimResult()}>`, which controls

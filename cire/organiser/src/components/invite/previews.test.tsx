@@ -3,8 +3,9 @@ import { headingSizeCss, typographyVar } from "@cire/theme";
 import { cleanup, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CROP_ASPECT } from "../../lib/image-crop";
 import { captureDeclaredStyles } from "../../test-support/declared-style";
-import { HeroSample, SectionSample } from "./previews";
+import { HeroSample, LEGACY_CROP_ASPECT, SectionSample } from "./previews";
 
 /**
  * The two shared preview samples. Every preview layer in the builder is built
@@ -99,6 +100,10 @@ describe("SectionSample", () => {
     expect(img.className).toContain("w-full");
     expect(img.className).toContain("object-cover");
     expect(img.className).not.toContain("w-10");
+    // The frame-scaled twin of the guest cap: without it a tall closing image
+    // swallows the whole preview card and pushes the note out of view.
+    expect(img.className).toContain("max-h-24");
+    expect(img.className).toContain("shrink-0");
     expect((img.parentElement as HTMLElement).className).not.toContain("p-4");
   });
 
@@ -126,6 +131,85 @@ describe("SectionSample", () => {
     expect(band.style.getPropertyValue("aspect-ratio")).toBe("2 / 1");
     expect(band.className).toContain("w-full");
     expect((band.parentElement as HTMLElement).className).not.toContain("p-4");
+  });
+
+  it("bounds a tall preview crop by width, so the framing is never clipped", () => {
+    const { container } = render(() => (
+      <SectionSample
+        {...props}
+        imageUrl="/api/invite/anita-ben/image/footer?v=7"
+        // 0.8 — portrait, the case the bound exists for. This frame is short, so
+        // the cap fires far more often here than on the guest page.
+        imageCrop={{ x: 0, y: 0, w: 0.4, h: 0.5, natW: 1000, natH: 1000 }}
+      />
+    ));
+    const band = container.querySelector("[role='img']") as HTMLElement;
+
+    // `width: 100%` + `max-width: cap × aspect` is the guest band's rule. A
+    // `max-height` clip would trim the organiser's framing in the one surface
+    // whose entire job is showing them that framing.
+    expect(band.className).toContain("w-full");
+    expect(band.style.getPropertyValue("max-width")).toMatch(/^calc\(.*rem.*\)$/);
+    expect(band.style.getPropertyValue("max-height")).toBe("");
+  });
+
+  it("previews a legacy dims-less crop at the same shape the invite falls back to", () => {
+    const { container } = render(() => (
+      <SectionSample
+        {...props}
+        imageUrl="/api/invite/anita-ben/image/footer?v=7"
+        imageCrop={{ x: 0, y: 0, w: 0.5, h: 0.5 }}
+      />
+    ));
+    const band = container.querySelector("[role='img']") as HTMLElement;
+    // happy-dom normalises a bare ratio to `<w> / <h>`.
+    expect(band.style.getPropertyValue("aspect-ratio")).toBe(`${16 / 9} / 1`);
+  });
+
+  it("keeps the closing band's fallback shape in step with the crop editor", () => {
+    // Three hand-kept copies of this number: `CROP_ASPECT.footer` (the editor
+    // frame), this package's `LEGACY_CROP_ASPECT` (the preview) and the guest
+    // site's (the invite). The cross-package pair can only be hand-diffed, but
+    // the two in THIS package must fail loudly rather than drift — a divergence
+    // publishes one shape and previews another, the exact bug the closing band
+    // was reworked to remove.
+    expect(LEGACY_CROP_ASPECT).toBe(CROP_ASPECT.footer);
+  });
+
+  it("names the closing image identically whether or not a crop is saved", () => {
+    // Same image, same slot: whether a non-sighted organiser is told the band
+    // exists must not hinge on an unrelated setting (C-L1).
+    const cropped = render(() => (
+      <SectionSample
+        {...props}
+        imageUrl="/api/invite/anita-ben/image/footer?v=7"
+        imageCrop={{ x: 0.1, y: 0.1, w: 0.5, h: 0.5, natW: 1000, natH: 500 }}
+      />
+    ));
+    expect(
+      (cropped.container.querySelector("[role='img']") as HTMLElement).getAttribute("aria-label"),
+    ).toBe("Closing section artwork");
+    cleanup();
+
+    const plain = render(() => (
+      <SectionSample {...props} imageUrl="/api/invite/anita-ben/image/footer?v=7" />
+    ));
+    expect((plain.container.querySelector("img") as HTMLElement).getAttribute("alt")).toBe(
+      "Closing section artwork",
+    );
+  });
+
+  it("keeps the sample's padding on the content block, not on the band", () => {
+    // The negative assertions above ("the band's parent has no p-4") pass just
+    // as happily if the content block lost its classes altogether — which would
+    // un-pad and un-centre EVERY preview surface in the builder with the whole
+    // suite green, since the other specs locate by text and read inline styles.
+    const { container } = render(() => <SectionSample {...props} />);
+    const content = screen.getByText(props.body).parentElement as HTMLElement;
+    expect(content.className).toContain("p-4");
+    expect(content.className).toContain("text-center");
+    expect(content.className).toContain("items-center");
+    expect((container.firstElementChild as HTMLElement).className).not.toContain("p-4");
   });
 
   it("keeps the heading free of a hardcoded weight or slant", () => {
