@@ -224,7 +224,7 @@ export default function InvitePage(props: InvitePageProps) {
                   sits on the section's own axis rather than picking out the
                   first card.
 
-                  `text-gold-ink`, not `text-gold-ink`: at 0.85rem this is a
+                  `text-gold-ink`, not `text-gold`: at 0.85rem this is a
                   sentence, and WCAG 1.4.3 asks 4.5:1 of normal-size text, while
                   the metal token is deliberately held to the 3:1 UI floor so a
                   genuinely gold gold survives. A live invite shipped this line

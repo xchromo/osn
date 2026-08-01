@@ -312,7 +312,23 @@ export default function InviteHeader(props: InviteHeaderProps) {
                   // classic's stacked-centered treatment with an editorial divider.
                   <div class="flex flex-col items-start gap-3">
                     <hr class="border-border h-0 w-16 border-t" aria-hidden="true" />
-                    <p class="font-body text-gold-dim max-w-full text-left text-[0.8rem] tracking-[0.25em] break-words uppercase">
+                    {/* `text-gold-ink`, not `text-gold-dim`. The dim token is the metal at
+                    0.35 alpha, and an alpha-modified colour has no enforceable
+                    ratio — `contrastOklch` ignores alpha by design, since a
+                    translucent colour over an unknown backdrop has none. Composited,
+                    it measures 2.05:1 on the BUILT-IN scheme, where the undimmed
+                    metal clears 8:1; a paler organiser palette can only be worse.
+                    At 0.8rem this is normal-size text asking 4.5:1.
+
+                    It was first deferred as "unfixable at the token level — the
+                    backdrop is an uploaded photo". That is wrong whenever the hero
+                    image is absent (it is optional, see the `<Show>` above), which
+                    leaves the scrim over `--invite-hero-grad-*` — all derived
+                    tokens a palette-level fix reaches. Over a photo the prose gold
+                    is still strictly better, and the scrim tracks the page's own
+                    lightness, so it darkens a dark scheme and veils a light one in
+                    the direction this token needs. */}
+                    <p class="font-body text-gold-ink max-w-full text-left text-[0.8rem] tracking-[0.25em] break-words uppercase">
                       {subtitle()}
                     </p>
                   </div>

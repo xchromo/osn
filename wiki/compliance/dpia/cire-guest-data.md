@@ -10,7 +10,7 @@ related:
   - "[[subprocessors]]"
   - "[[cire]]"
   - "[[cire-auth]]"
-last-reviewed: 2026-07-22
+last-reviewed: 2026-08-01
 ---
 
 # DPIA — Cire guest data
@@ -77,6 +77,15 @@ final sign-off now turns only on the residual retention gaps (C-H1) below.
   proportionate (dietary needs vary widely) but carries the risk that
   guests volunteer more than needed (e.g. naming a medical condition). The
   form copy should ask only for dietary requirements, not reasons.
+- **Granularity (2026-08-01).** The field is stored per **(guest, event)** — a
+  guest answers once per event they are invited to — and `GET …/rsvps.csv` now
+  discloses it that way, one dietary column per event. It previously collapsed
+  to a single column holding the first non-empty note per guest, which
+  *under-reported* the data held rather than minimising it: the other events'
+  answers stayed in the database and simply never appeared in the export. The
+  per-event shape is the honest disclosure and is the more minimised one at the
+  point of use — each event's caterer reads that event's requirement rather than
+  a cell that silently mixed two events' answers.
 - **Lawful basis.** Art. 6(1)(a) consent for the dietary field; the
   special-category condition is **Art. 9(2)(a) explicit consent** —
   **now captured at the RSVP form via an explicit opt-in checkbox + a stored

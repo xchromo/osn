@@ -352,7 +352,7 @@ export default function InvitePage(props: InvitePageProps) {
                     whole list, so it takes the column's axis rather than the
                     left edge the cards' own copy runs along.
 
-                    `text-gold-ink`, not `text-gold-ink` — see the same line in the
+                    `text-gold-ink`, not `text-gold` — see the same line in the
                     `classic` pack: the metal token is held to the 3:1 UI floor,
                     which is the wrong bar for a 0.85rem sentence. */}
                 <Show when={rsvpNotice()}>

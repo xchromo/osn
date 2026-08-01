@@ -397,6 +397,12 @@ describe("rsvp-export CSV serialisation", () => {
         expect(header.length).toBe(4 + data.events.length * 2 + 1);
         // Every data row is the same width as the header — an off-by-one in the
         // interleave would shift every column after the first event.
+        //
+        // Splitting on "," is only a valid way to count columns while no cell
+        // needs RFC 4180 quoting, so assert that precondition rather than
+        // relying on it: a seed family name of "Smith, Jr." would otherwise make
+        // this fail for a reason that has nothing to do with the interleave.
+        expect(csv).not.toContain('"');
         for (const line of csv.split("\r\n").slice(1)) {
           expect(line.split(",").length).toBe(header.length);
         }
