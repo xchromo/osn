@@ -169,6 +169,45 @@ describe("ColorPicker", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("says so when it discards an incomplete entry", async () => {
+    // Snapping the field back is visible to anyone watching it and invisible to
+    // everyone else (C-L3). A discard must be perceivable programmatically too,
+    // or a screen-reader user leaves the field believing their colour applied.
+    const onChange = vi.fn();
+    render(() => <ColorPicker label="Accent" value="#d4af37" onChange={onChange} />);
+
+    fireEvent.click(screen.getByLabelText("Accent colour"));
+    const hex = await waitFor(() => screen.getByLabelText("Hex") as HTMLInputElement);
+    fireEvent.input(hex, { target: { value: "#1a2" } });
+    expect(hex.getAttribute("aria-invalid")).toBeNull();
+
+    fireEvent.blur(hex);
+    const note = await waitFor(() => screen.getByText(/Needs 6 digits/));
+    // Named as the field's description, so it is read with the input rather
+    // than stranded as loose text beside it.
+    expect(hex.getAttribute("aria-invalid")).toBe("true");
+    expect(hex.getAttribute("aria-describedby")).toBe(note.id);
+    expect(note.textContent).toContain("#D4AF37");
+
+    // Typing again clears it — it describes an edit already moved on from.
+    fireEvent.input(hex, { target: { value: "#1a22" } });
+    await waitFor(() => expect(screen.queryByText(/Needs 6 digits/)).toBeNull());
+    expect(hex.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("stays silent when a complete entry is committed and then left", async () => {
+    const [value, setValue] = createSignal<string | null>("#d4af37");
+    render(() => <ColorPicker label="Accent" value={value()} onChange={setValue} />);
+
+    fireEvent.click(screen.getByLabelText("Accent colour"));
+    const hex = await waitFor(() => screen.getByLabelText("Hex") as HTMLInputElement);
+    fireEvent.input(hex, { target: { value: "#11aa22" } });
+    fireEvent.blur(hex);
+
+    expect(screen.queryByText(/Needs 6 digits/)).toBeNull();
+    expect(hex.getAttribute("aria-invalid")).toBeNull();
+  });
+
   it("refuses a keystroke that cannot belong to a hex code", async () => {
     const onChange = vi.fn();
     render(() => <ColorPicker label="Accent" value="#d4af37" onChange={onChange} />);

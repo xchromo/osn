@@ -129,6 +129,9 @@ export default function ColorPicker(props: {
   const [hexText, setHexText] = createSignal(toHex(color()));
   // Ties the "Hex" label to its input — the job `ColorField` used to do.
   const hexId = createUniqueId();
+  const hexNoteId = createUniqueId();
+  // The colour kept when an incomplete entry was discarded on blur, else null.
+  const [discarded, setDiscarded] = createSignal<string | null>(null);
 
   // Re-seed when the parent value changes externally (theme load, "Use default",
   // a sibling reset). Compare hex so an internal commit that already matches
@@ -161,6 +164,9 @@ export default function ColorPicker(props: {
       return;
     }
     setHexText(raw);
+    // Typing again clears a previous discard notice — it describes an edit the
+    // organiser has now moved on from.
+    setDiscarded(null);
     if (!COMPLETE_HEX.test(raw)) return;
     const parsed = tryParse(raw.startsWith("#") ? raw : `#${raw}`);
     if (parsed) {
@@ -180,8 +186,17 @@ export default function ColorPicker(props: {
    * is the deliberate trade: shorthand is a convenience, whereas every full hex
    * passes through its own three-digit prefix on the way in, so expanding on
    * blur silently rewrites the far more common case.
+   *
+   * A discard SAYS SO (C-L3). Snapping the field back is visible to anyone
+   * watching it and invisible to everyone else, so a discarded entry also sets
+   * `aria-invalid` and posts a line naming what was kept — otherwise a screen
+   * reader user leaves the field believing the colour they typed was applied.
    */
-  const onHexBlur = () => setHexText(toHex(color()));
+  const onHexBlur = () => {
+    const kept = toHex(color());
+    setDiscarded(COMPLETE_HEX.test(hexText()) ? null : kept);
+    setHexText(kept);
+  };
 
   // The swatch/trigger always reflect the persisted value (default gold if null).
   const display = () => resolveColor(props.value, props.fallback);
@@ -260,12 +275,25 @@ export default function ColorPicker(props: {
                   value={hexText()}
                   onInput={(e) => onHexInput(e.currentTarget)}
                   onBlur={onHexBlur}
+                  aria-invalid={discarded() ? true : undefined}
+                  aria-describedby={discarded() ? hexNoteId : undefined}
                   autocomplete="off"
                   autocorrect="off"
                   spellcheck={false}
                   placeholder="#RRGGBB"
                   class="border-border bg-bg font-body text-text focus:border-gold rounded-sm border px-2.5 py-1.5 text-[0.82rem] tabular-nums outline-none"
                 />
+                <Show when={discarded()}>
+                  {(kept) => (
+                    <span
+                      id={hexNoteId}
+                      role="status"
+                      class="font-body text-text-muted text-[0.7rem]"
+                    >
+                      Needs 6 digits — kept {kept()}
+                    </span>
+                  )}
+                </Show>
               </div>
 
               <Show when={props.value}>

@@ -214,22 +214,26 @@ describe("residual contrast warnings", () => {
     }
   });
 
-  test("a rescued scheme that came out legible raises nothing extra", () => {
-    // Near-identical mid-greys: `paletteAdjustments` reports moving `ink`, and
-    // the derived result clears every pair. The two notices answer different
-    // questions, so a scheme the rescue fully handled must not be warned about
-    // as well.
+  test("the two notices describe different things, neither derivable from the other", () => {
+    // Near-identical mid-greys. `paletteAdjustments` names the seeds it MOVED
+    // (ink, gilt, bloom); `paletteContrastWarnings` names what survived the
+    // move (muted, on both surfaces it lands on). The two lists are disjoint
+    // here, which is the point: a caller cannot infer either from the other, so
+    // the builder has to show both.
     const seeds = { ground: "#999999", card: "#999999", ink: "#888888" };
-    expect(paletteAdjustments(seeds).map((a) => a.token)).toContain("ink");
-    expect(paletteContrastWarnings(derivePalette(seeds))).toEqual([]);
+    const moved = paletteAdjustments(seeds).map((a) => a.token);
+    const survived = paletteContrastWarnings(derivePalette(seeds)).map((w) => w.id);
+    expect(moved).toContain("ink");
+    expect(survived).toEqual(["muted-on-raised", "muted-on-ground"]);
+    // Nothing in the warning list is merely a restatement of an adjustment.
+    for (const token of moved) expect(survived.some((id) => id.startsWith(token))).toBe(false);
   });
 
   test("a rescue that leaves a residual is still warned about", () => {
     // White page, white card: `ink` is darkened until it clears 4.5:1 on white,
     // which lands it just under that bar against `raised` — the surface a step
-    // beyond the card, and the one every modal sits on. The rescue happened AND
-    // a real problem survived it; both notices are true at once, which is why
-    // neither is allowed to stand in for the other.
+    // beyond the card, and the one every event card sits on. The rescue
+    // happened AND real problems survived it, so both notices are true at once.
     const warnings = paletteContrastWarnings(
       derivePalette({
         ground: "#ffffff",
@@ -239,14 +243,34 @@ describe("residual contrast warnings", () => {
         bloom: "#fdfdfd",
       }),
     );
-    expect(warnings.map((w) => w.id)).toEqual(["text-on-raised"]);
-    expect(warnings[0]!.ratio).toBeLessThan(WCAG_TEXT_MIN);
+    expect(warnings.map((w) => w.id)).toEqual([
+      "text-on-raised",
+      "muted-on-raised",
+      "muted-on-ground",
+      "gilt-on-raised",
+    ]);
+    for (const warning of warnings) expect(warning.ratio).toBeLessThan(warning.required);
+    expect(warnings.find((w) => w.id === "text-on-raised")!.ratio).toBeLessThan(WCAG_TEXT_MIN);
+  });
+
+  test("holds secondary text to the TEXT minimum, not the UI floor", () => {
+    // Every `--color-text-muted` site on the guest invite is small text (0.74 –
+    // 0.92rem), so WCAG AA asks 4.5:1 — but `derivePalette` only holds muted to
+    // the 3:1 UI floor against `card`. That gap is precisely what this warning
+    // exists to surface, and printing "needs 3:1" beside a text pair would
+    // state the wrong requirement to the organiser as fact (C-L2).
+    for (const id of ["muted-on-raised", "muted-on-ground"]) {
+      const pair = paletteContrastWarnings(
+        derivePalette({ ground: "#999999", card: "#999999", ink: "#888888" }),
+      ).find((w) => w.id === id)!;
+      expect(pair.required).toBe(WCAG_TEXT_MIN);
+    }
   });
 
   test("names the pairs a near-white card on a black page breaks", () => {
     // The canonical failure: `gilt` clears the near-black page it was enforced
     // against and then sits on a near-white card at under 2:1, which is the
-    // colour of every button, link and rule on an event card.
+    // colour of the date on every event card.
     const warnings = paletteContrastWarnings(
       derivePalette({
         ground: "#101010",
@@ -257,7 +281,7 @@ describe("residual contrast warnings", () => {
       }),
     );
     expect(warnings.map((w) => w.id).toSorted()).toEqual([
-      "gilt-on-card",
+      "gilt-on-raised",
       "muted-on-ground",
       "text-on-raised",
     ]);
@@ -267,9 +291,55 @@ describe("residual contrast warnings", () => {
       expect(warning.ratio).toBeLessThan(warning.required);
       expect(warning.message.length).toBeGreaterThan(0);
     }
-    const gilt = warnings.find((w) => w.id === "gilt-on-card")!;
+    const gilt = warnings.find((w) => w.id === "gilt-on-raised")!;
     expect(gilt.required).toBe(WCAG_UI_MIN);
     expect(warnings.find((w) => w.id === "text-on-raised")!.required).toBe(WCAG_TEXT_MIN);
+  });
+
+  test("measures each pair against the surface its message names", () => {
+    // The first cut of this table had the two surfaces crossed — it measured
+    // `--color-surface` while its copy said "event cards", and `raised` while
+    // saying "pop-ups". It is the other way round on the guest site
+    // (`EventCard` is `bg-surface-raised`, `AnimatedModal` is `bg-surface`), so
+    // the warning could sit silent on the card copy a guest actually reads.
+    // Pin the direction: a palette broken ONLY on `raised` must still warn.
+    const raisedOnly = derivePalette({
+      ground: "#101010",
+      card: "#f2f2f2",
+      ink: "#eeeeee",
+      gilt: "#d4af37",
+      bloom: "#c0392b",
+    });
+    const ids = paletteContrastWarnings(raisedOnly).map((w) => w.id);
+    expect(ids).toContain("gilt-on-raised");
+    // Gold on the MODAL surface is a different, better ratio here — proof the
+    // reported failure is the raised one and not `--color-surface` mislabelled.
+    const onCard = contrastRatio(raisedOnly["--color-gold"]!, raisedOnly["--color-surface"]!)!;
+    const onRaised = contrastRatio(
+      raisedOnly["--color-gold"]!,
+      raisedOnly["--color-surface-raised"]!,
+    )!;
+    expect(onCard).not.toBeCloseTo(onRaised, 2);
+    const reported = paletteContrastWarnings(raisedOnly).find((w) => w.id === "gilt-on-raised")!;
+    expect(reported.ratio).toBeCloseTo(onRaised, 1);
+  });
+
+  test("says nothing about bloom, which the guest site paints nowhere", () => {
+    // `--color-bloom` is a defined token with no render site in `cire/web`, so
+    // a warning about it would be about a colour no guest can see. Deliberate
+    // omission, not an oversight — this fails if a bloom pair is added without
+    // the guest site gaining one.
+    const invisibleBloom = derivePalette({
+      ground: "#101010",
+      card: "#101010",
+      ink: "#eeeeee",
+      gilt: "#d4af37",
+      // Near-identical to the page: any bloom pair would fire on this.
+      bloom: "#141414",
+    });
+    expect(paletteContrastWarnings(invisibleBloom).every((w) => !w.id.includes("bloom"))).toBe(
+      true,
+    );
   });
 
   test("an unparseable or missing token is skipped, not reported as a failure", () => {

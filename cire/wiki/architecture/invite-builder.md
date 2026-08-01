@@ -336,15 +336,50 @@ invite and a coherent light one with no `isDark` flag threaded through
 components.
 
 Enforcement runs each token against **one** backdrop, though — ink against card
-and ground, muted against card, gilt and bloom against ground — because a token
-nudged to clear every surface it might ever touch gets dragged to an extreme by
-the hardest pair and stops looking like the organiser's colour. The surfaces
-left out of that walk are real: modals sit on `raised`, section body copy is
-muted-on-ground, and every event card puts gold rules and bloom markers on
-`card`. `paletteContrastWarnings(tokens)` measures exactly those four pairs on
-the **derived** token map (never on the seeds, so the ratio quoted is the one a
-guest gets) and the builder shows them under the scheme editor with the measured
-ratio and the bar each missed.
+and ground, muted against card, gilt against ground — because a token nudged to
+clear every surface it might ever touch gets dragged to an extreme by the
+hardest pair and stops looking like the organiser's colour. The surface left out
+of that walk entirely is **`raised`**, which is derived as `card ± 0.05`
+lightness, so a pair can clear against `card` and miss against `raised` by a
+hair. `paletteContrastWarnings(tokens)` measures the residue on the **derived**
+token map (never on the seeds, so the ratio quoted is the one a guest gets) and
+the builder shows it under the scheme editor with the measured ratio and the bar
+each pair missed.
+
+**Each pair names the surface it measures**, and getting that wrong is the easy
+mistake — the first cut had it crossed in both directions (measuring
+`--color-surface` while the copy said "event cards", measuring `raised` while
+saying "pop-ups"). On the guest site it is the other way round:
+
+| Token | Where it is actually painted |
+|---|---|
+| `--color-surface` | the modal shell (`AnimatedModal`) and the RSVP sheet's sticky footer — everything on it is already enforced |
+| `--color-surface-raised` | every `EventCard` and the RSVP sheet's notice block — carries the card title (`--color-text`), venue + description (`--color-text-muted`) and the date (`--color-gold`) |
+| `--color-bg` | section backgrounds — muted section copy, the RSVP-by line |
+
+Two deliberate calls in that table. **Muted text is held to 4.5:1, not the 3:1
+UI floor the derivation uses**, because every `--color-text-muted` site on the
+invite is small text (0.74–0.92rem) and printing "needs 3:1" beside a text pair
+would state the wrong requirement to the organiser as fact. All five presets
+clear 4.5 there, so it costs no false alarms. **`gilt-on-raised` is held to 3:1
+even though its most prominent job is the event-card date** (0.92rem, i.e.
+normal text at 4.5:1) — at 4.5 the curated `chapel` (3.58:1) and `garden`
+(3.91:1) presets would warn out of the box, and a warning that fires on our own
+shipped schemes teaches organisers to ignore it. That preset gap is real and
+filed in `[[security]]`; the 3:1 bar still catches what this check exists for.
+**`--color-bloom` has no pair at all** — it is a defined token with no render
+site anywhere in `cire/web`, so a warning about it would concern a colour no
+guest can see.
+
+The warning panel is a **permanently-mounted** `role="status"` with its contents
+conditional, not a `<Show>` wrapping the region: a live region inserted together
+with its content announces unreliably, and this one's trigger is a pointer drag,
+so wrapping it would mount/unmount the region and reflow the sidebar at frame
+rate. Rows use `<Index>`, not `<For>` — `For` reconciles by item reference and
+`paletteContrastWarnings` allocates fresh objects from a token map whose
+identity changes every frame, so every row would be torn down and rebuilt per
+pointermove. The ratios themselves are `aria-hidden`, since `role="status"` is
+implicitly atomic and the numbers are the one part that moves continuously.
 
 So the two notices answer different questions and neither stands in for the
 other: `paletteAdjustments` says _what we changed for you_,

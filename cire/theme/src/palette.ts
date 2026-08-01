@@ -481,18 +481,31 @@ export function paletteAdjustments(
  * the only places a finished palette can still come out illegible.
  *
  * Enforcement runs each text and accent token against ONE backdrop — ink
- * against card and ground, muted against card, gilt and bloom against ground —
- * because a token nudged to clear every surface it might ever touch gets pushed
- * to an extreme by the hardest pair and the palette stops looking like the
- * organiser's. The surfaces left out of that walk are real, though: modals sit
- * on `raised`, section body copy is muted-on-ground, and every event card puts
- * gold rules and bloom markers on `card`. A scheme with a strongly contrasting
- * card is exactly where those go wrong.
+ * against card and ground, muted against card, gilt against ground — because a
+ * token nudged to clear every surface it might ever touch gets pushed to an
+ * extreme by the hardest pair and the palette stops looking like the
+ * organiser's. `raised` is left out of that walk entirely, and it is derived as
+ * `card` ± 0.05 lightness, so a pair can clear against `card` and miss against
+ * `raised` by a hair.
  *
- * So: enforce the pairs that can be enforced without distorting the design,
- * and WARN about the remainder rather than shipping them silently. Measured on
- * the derived tokens, not on the seeds, so the ratio quoted is the one a guest
- * actually gets.
+ * **Each entry names the surface it MEASURES.** The first cut of this table got
+ * that wrong in both directions — it measured `--color-surface` while its copy
+ * said "event cards", and measured `raised` while saying "pop-ups". It is the
+ * other way round on the guest site, so the warning could stay silent on the
+ * card copy a guest actually reads. Verified against the render sites:
+ *
+ *   - `--color-surface` — the modal shell (`AnimatedModal`) and the RSVP
+ *     sheet's sticky footer. Everything on it is already enforced.
+ *   - `--color-surface-raised` — every `EventCard` and the RSVP sheet's notice
+ *     block. Carries the card title (`--color-text`), the venue and description
+ *     (`--color-text-muted`), and the date line (`--color-gold`). None of those
+ *     three pairs is enforced; all three are below.
+ *   - `--color-bg` — section backgrounds, carrying muted section copy and the
+ *     RSVP-by line.
+ *
+ * `--color-bloom` has no entry because it is currently painted NOWHERE on the
+ * guest site — it is a defined token with no render site, so a warning about it
+ * would be about a colour no guest can see. Add a pair here when it gains one.
  */
 const RESIDUAL_PAIRS: {
   id: string;
@@ -506,28 +519,36 @@ const RESIDUAL_PAIRS: {
     fg: "--color-text",
     bg: "--color-surface-raised",
     min: WCAG_TEXT_MIN,
-    message: "Text inside pop-ups and raised panels is hard to read.",
+    message: "Event titles are hard to read on the cards they sit on.",
+  },
+  {
+    id: "muted-on-raised",
+    fg: "--color-text-muted",
+    bg: "--color-surface-raised",
+    min: WCAG_TEXT_MIN,
+    message: "Venue and description text is hard to read on event cards.",
   },
   {
     id: "muted-on-ground",
     fg: "--color-text-muted",
     bg: "--color-bg",
-    min: WCAG_UI_MIN,
-    message: "Secondary text — dates, times, captions — is hard to read on the page.",
+    min: WCAG_TEXT_MIN,
+    message: "Secondary text — captions and notes — is hard to read on the page.",
   },
   {
-    id: "gilt-on-card",
+    // Held to the UI floor, NOT the text minimum, even though the token's most
+    // prominent job on `raised` is the event-card date (0.92rem — normal-size
+    // text, which WCAG AA puts at 4.5:1). At 4.5 two CURATED presets would warn
+    // out of the box (chapel 3.58:1, garden 3.91:1), and a warning that fires
+    // on our own shipped schemes teaches organisers to ignore it. The preset
+    // gap is real and filed separately; this bar still catches the failure this
+    // check exists for — gilt enforced against a near-black page and then
+    // landing on a near-white card at under 2:1.
+    id: "gilt-on-raised",
     fg: "--color-gold",
-    bg: "--color-surface",
+    bg: "--color-surface-raised",
     min: WCAG_UI_MIN,
-    message: "Buttons, links and rules are hard to see on event cards.",
-  },
-  {
-    id: "bloom-on-card",
-    fg: "--color-bloom",
-    bg: "--color-surface",
-    min: WCAG_UI_MIN,
-    message: "Accent markers are hard to see on event cards.",
+    message: "Dates, buttons and rules are hard to see on event cards.",
   },
 ];
 
