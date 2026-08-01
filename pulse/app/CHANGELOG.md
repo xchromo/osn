@@ -1,5 +1,29 @@
 # @osn/pulse
 
+## 0.17.0
+
+### Minor Changes
+
+- 019899f: Add the `pulse-bridge` Tauri mobile plugin: `UIImpactFeedbackGenerator` haptics and iOS safe-area insets pushed into `--safe-area-inset-*` CSS custom properties.
+
+## 0.16.20
+
+### Patch Changes
+
+- 9768d00: Make the Hosting tab in the explore nav an explicit disabled state instead of a tab that points nowhere.
+
+## 0.16.19
+
+### Patch Changes
+
+- 34281dc: Raise the iOS deployment target from 14.0 to 17.0 across the generated Xcode project, `project.yml` and the Podfile.
+
+## 0.16.18
+
+### Patch Changes
+
+- bc453cc: Drop the `greet` command left over from the Tauri template.
+
 ## 0.16.17
 
 ### Patch Changes
