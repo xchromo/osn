@@ -15,11 +15,15 @@ say why each person is being suggested.
   keystroke means one abort to cancel, one rate-limit budget to reason about,
   and no torn state where the people half of a result set is newer than the
   organisation half. People match on handle and display name, two-phase by
-  design: the left-anchored
-  `handle LIKE 'q%'` pass rides `users_handle_idx` and answers the common
-  keystroke, and the unanchored `%q%` pass over handle + display name runs only
-  when that under-fills the page, so the table scan is the exception rather
-  than every keystroke. Queries are normalised (trim, strip `@`, lowercase) and
+  design: pass 1 is an index **seek** over a half-open handle range, and the
+  unanchored `%q%` pass over handle + display name runs only when that
+  under-fills the page *and* the query is at least three characters. The range
+  is deliberate — `handle LIKE 'q%'` does **not** use the index, because
+  SQLite's LIKE-prefix optimisation needs a collation matching LIKE's case
+  sensitivity and both handle indexes are BINARY with `case_sensitive_like`
+  off, so it plans as `SCAN … USING INDEX`. The two forms are exactly
+  equivalent here (handles are lowercase and `^[a-z0-9_]+$`), so this is a pure
+  planner win. Queries are normalised (trim, strip `@`, lowercase) and
   LIKE-escaped so an underscore in a handle matches literally; anything under
   two characters returns an empty list rather than a 4xx. Self, tombstoned
   accounts and profiles blocked in either direction are excluded. Each result
@@ -32,9 +36,13 @@ say why each person is being suggested.
 - `@osn/api`: organisation results follow the same two-phase shape and share
   the ranking function, but carry no exclusions — organisations are public, and
   the caller's own are *more* relevant in a search box, so they come back
-  flagged `isMember: true` and render a badge instead of a CTA. Results include
-  `id` because the detail route is keyed by it; a result you can't open would
-  be useless.
+  flagged `isMember: true` and render a badge instead of a CTA. Results are
+  addressed by **handle**, not the internal `org_*` id: `GET
+  /organisations/:handle` resolves by handle and the public `orgProjection`
+  omits the id. Chasing that down also turned up a pre-existing bug —
+  `OrganisationsPage` linked `/organisations/${org.id}` against that same
+  id-less projection, so every organisation row navigated to
+  `/organisations/undefined`. Fixed in passing.
 - `@osn/api`: `suggestConnections` gains organisation co-members as a second
   signal, so an account with no connections yet has something to act on — FOF
   alone returns nothing until the first connection is accepted. Suggestions now
@@ -67,5 +75,11 @@ say why each person is being suggested.
   so the tab bar doesn't show two magnifiers. Both surfaces share one
   `createSearchController` (debounce, abort, optimistic status), so a row's
   state flips locally on success rather than refetching and reordering the list
-  under the cursor. Discover is now suggestions-only, its cards rendering the
+  under the cursor — and a failed request renders an error instead of spinning
+  forever, since Solid's `resource.latest` rethrows in the error state unless
+  the error is read first. The two surfaces run different ARIA patterns on
+  purpose: the rail is a combobox whose options carry no operable descendants
+  (a listbox option is flattened to its accessible name, so a nested button is
+  unreachable to assistive tech), while the page is a plain list with real
+  buttons. Discover is now suggestions-only, its cards rendering the
   reason line ("3 mutual connections" / "Also in Acme Inc").

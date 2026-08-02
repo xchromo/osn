@@ -132,9 +132,18 @@ The user-facing sibling of the ARC-gated `/graph/internal/profile-search`. The t
 
 - **Normalisation** — trim, strip a leading `@`, lowercase. `users.handle` is stored lowercase, so `@Alice` and `alice` are the same search. LIKE wildcards (`%`, `_`) in the typed query are escaped so an underscore in a handle matches literally.
 - **Minimum length 2** — shorter queries return an empty list, never a 4xx. Same friction social apps put on @-mention autocomplete: it stops one keystroke walking the handle namespace.
-- **Two phases** — the left-anchored `handle LIKE 'q%'` pass rides the `users_handle_idx` B-tree and answers the common case. Only when it under-fills the page does the unanchored `%q%` pass over handle + display name run, so the table scan is the exception rather than every keystroke.
+- **Two phases** — pass 1 is an index **seek** over a half-open handle range (`handle >= 'ab' AND handle < 'ac'`); pass 2 is the unanchored `%q%` match over handle + display name.
+- **Why a range and not `LIKE 'q%'`** — because `LIKE` does not use the index. SQLite's LIKE-prefix optimisation needs the indexed column's collation to match LIKE's case sensitivity; `case_sensitive_like` is off by default (D1 runs stock defaults) and both `users_handle_idx` and the implicit unique index on `organisations.handle` are BINARY, so the planner degrades to a full traversal. Measured with `EXPLAIN QUERY PLAN`:
+
+  ```
+  handle LIKE 'ab%' ESCAPE '\'      ->  SCAN users USING INDEX users_handle_idx     (full)
+  handle >= 'ab' AND handle < 'ac'  ->  SEARCH users USING INDEX users_handle_idx   (seek)
+  ```
+
+  The two are exactly equivalent here — handles are stored lowercase and constrained to `^[a-z0-9_]+$`, and the query is lowercased — so this is a pure planner win, no semantic change. A query containing anything outside that character set can't prefix a handle at all and skips pass 1 entirely (`handlePrefixRange` returns `null`).
+- **Pass 2 is gated twice** — it runs only when pass 1 under-fills the page *and* the query is ≥ 3 characters (`MIN_INFIX_QUERY_LENGTH`). No index can serve a leading wildcard, so this is a genuine full scan; a two-character infix is simultaneously the cheapest query to abuse and the least selective, so the scan is reserved for real "I typed part of a surname" recovery. Prefix matching still works from 2 characters.
 - **Ranking** — exact handle, handle prefix, display-name prefix, handle infix, then display-name infix; handle breaks ties.
-- **Exclusions** — self, tombstoned accounts (`accounts.deleted_at IS NULL` join), and anyone blocked in either direction. Blocks are filtered in application code over an over-fetched candidate set rather than bound into a SQL `NOT IN`, which would risk SQLite's 999-variable ceiling.
+- **Exclusions** — self, tombstoned accounts (`accounts.deleted_at IS NULL` join), and anyone blocked in either direction. The block check is a **bounded probe against the candidate ids**, not a wholesale read of the caller's blocks: an unbounded read scales with how many people the caller has blocked rather than with anything the request needs, and both `blocks_blocker_idx` and `blocks_blocked_idx` serve the probe. Filtering still happens in application code (over an over-fetched candidate set) so the page stays full.
 - **Connection state** — each result carries the caller's own state with it (`none` / `pending_sent` / `pending_received` / `connected`), batched in one query for the whole page, so the UI renders Connect / Accept / Requested / Connected without a request per row. This is the same fact `GET /graph/connections/:handle` already reports per handle — no new disclosure, just fewer round trips.
 - **No mutual counts.** Deliberate: suggestions describe profiles already adjacent to the caller's graph, but search takes an *arbitrary* handle, and answering "how many mutuals" for arbitrary handles is a graph-inference oracle (cf. S-L4).
 
@@ -145,7 +154,7 @@ Same two-phase shape — anchored `handle LIKE 'q%'`, then an unanchored pass ov
 Differences from people search, all deliberate:
 
 - **No exclusions.** Organisations are public entities whose handles share a namespace with user handles, and the caller's *own* organisations are more relevant in a search box, not less — they come back flagged `isMember: true` so the row renders a badge instead of a CTA.
-- **Returns `id`.** The organisation detail route is keyed by id (`/organisations/:id`), so a result without one would be unopenable. This is wider than the public `orgProjection`, which omits `id` — see the open item in `wiki/TODO.md`.
+- **Addressed by handle, never by `org_*` id.** `GET /organisations/:handle` resolves by handle (`getOrganisationByHandle`) and the public `orgProjection` deliberately omits the id, so returning one would both widen that surface and hand the client a key nothing accepts. (Finding this is what surfaced a **pre-existing bug**: `OrganisationsPage` linked `/organisations/${org.id}` against a projection with no `id`, so every organisation row navigated to `/organisations/undefined` → 404. Fixed to link by handle in the same change.)
 
 ### Budget
 

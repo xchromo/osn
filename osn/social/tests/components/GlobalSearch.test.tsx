@@ -137,7 +137,7 @@ describe("<GlobalSearch />", () => {
       results([person("alice", "pending_received", "Alice A")], [org("acme", "Acme Inc", true)]),
     );
     renderSearch();
-    await type("a" + "li");
+    await type("ali");
 
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
     const [personOption, orgOption] = screen.getAllByRole("option");
