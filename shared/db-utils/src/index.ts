@@ -179,6 +179,7 @@ export {
   joinTokens,
   likeContains,
   normaliseHandleQuery,
+  tokenContentLength,
   tokeniseQuery,
   tokensPrefixName,
 } from "./search";

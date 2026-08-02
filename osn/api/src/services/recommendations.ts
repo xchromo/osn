@@ -12,6 +12,7 @@ import {
   joinTokens,
   likeContains,
   normaliseHandleQuery,
+  tokenContentLength,
   tokeniseQuery,
   tokensPrefixName,
 } from "@shared/db-utils/search";
@@ -79,22 +80,45 @@ const MAX_ORG_COMEMBER_ROWS = 2_000;
 export const MIN_SEARCH_QUERY_LENGTH = 1;
 
 /**
- * Minimum query length before either pass that reads *beyond* the caller's own
- * edges is allowed to run, so a single keystroke can't walk the handle
- * namespace — mirrors `MIN_SEARCH_PREFIX` on the internal co-host autocomplete
- * endpoint.
+ * Minimum length of the **handle prefix being sought** before the pass that
+ * reads beyond the caller's own edges may run, so a single keystroke can't walk
+ * the handle namespace — mirrors `MIN_SEARCH_PREFIX` on the internal co-host
+ * autocomplete endpoint.
+ *
+ * Measured against `handleQuery`, the string actually bound into the range, and
+ * never against the raw phrase. The two differ whenever the query contains a
+ * separator, and measuring the phrase is a bypass: `"a."` is two characters of
+ * phrase carrying a one-character prefix, so a phrase-length gate would open a
+ * one-character seek over every handle beginning `a`.
  */
 const MIN_GLOBAL_QUERY_LENGTH = 2;
 
 /**
- * Minimum query length before the unanchored `%q%` pass is allowed to run. It
- * is a full table scan (no index can serve a leading wildcard), and a two-char
- * infix is simultaneously the cheapest query to abuse and the least selective —
- * so the scan is reserved for queries long enough to be a real "I typed part of
- * a surname" recovery. Prefix matching still works from
- * `MIN_GLOBAL_QUERY_LENGTH`.
+ * Minimum length of the **longest token** before the unanchored `%token%` pass
+ * may run. It is a full table scan (no index can serve a leading wildcard), and
+ * a two-char infix is simultaneously the cheapest query to abuse and the least
+ * selective — so the scan is reserved for queries carrying a term long enough
+ * to be a real "I typed part of a surname" recovery. Prefix matching still
+ * works from `MIN_GLOBAL_QUERY_LENGTH`.
+ *
+ * The longest token rather than the total, because the patterns are ANDed and a
+ * conjunction is only as selective as its most selective conjunct. `"a b c"`
+ * totals three characters but is three near-matchless scans; `"j smith"` totals
+ * six and carries one genuine term. The first must not run, the second must.
  */
 const MIN_INFIX_QUERY_LENGTH = 3;
+
+/**
+ * Cap on how many tokens a query contributes to the SQL it builds.
+ *
+ * Each token becomes its own ANDed pair of `LIKE` predicates, so the per-row
+ * cost of the full-scan pass is linear in the token count. `q` is bounded at 64
+ * characters at the HTTP boundary, which admits 32 single-character tokens —
+ * and because such a conjunction matches nothing, `LIMIT` never short-circuits
+ * the scan, so the whole table is walked with 64 pattern evaluations per row.
+ * Four tokens spells "maria del carmen rodriguez"; six is slack on top.
+ */
+const MAX_QUERY_TOKENS = 6;
 
 /**
  * Rows the caller's-edges pass may return. Bounded like every other fan-out in
@@ -186,12 +210,40 @@ interface ParsedQuery {
   readonly tokens: string[];
   /** Tokens rejoined handle-style: `"john smith"` -> `"johnsmith"`. */
   readonly handleQuery: string;
+  /**
+   * How much the caller actually typed: the summed length of the tokens,
+   * whitespace excluded. **No length gate keys on `phrase.length`** — a gate
+   * that counts separators is walked past by typing one, and `"a b"` would read
+   * as three characters while carrying two.
+   */
+  readonly contentLength: number;
+  /**
+   * Length of the longest token — the selectivity of the whole query, because
+   * an `AND` of `LIKE` patterns is only as selective as its most selective
+   * conjunct. This is what the infix scan gates on: `"a b c"` carries three
+   * characters but no term worth scanning for, while `"j smith"` carries a real
+   * one and should run.
+   */
+  readonly longestToken: number;
 }
 
 function parseQuery(raw: string): ParsedQuery {
   const phrase = normaliseHandleQuery(raw);
-  const tokens = tokeniseQuery(phrase);
-  return { phrase, tokens, handleQuery: joinTokens(tokens) };
+  const allTokens = tokeniseQuery(phrase);
+  // Cap the token count before anything builds SQL from it. `q` is bounded at
+  // 64 characters, which admits 32 single-character tokens — and every token
+  // becomes its own ANDed pair of `LIKE` predicates, so an unbounded count
+  // multiplies the per-row cost of the full-scan pass by up to 32x on a query
+  // whose conjunction cannot match, meaning `LIMIT` never short-circuits it.
+  // Real queries are names: four tokens covers "maria del carmen rodriguez".
+  const tokens = allTokens.slice(0, MAX_QUERY_TOKENS);
+  return {
+    phrase,
+    tokens,
+    handleQuery: joinTokens(tokens),
+    contentLength: tokenContentLength(tokens),
+    longestToken: tokens.reduce((longest, t) => Math.max(longest, t.length), 0),
+  };
 }
 
 /**
@@ -621,7 +673,7 @@ export function createRecommendationService() {
       // Below the minimum we return an empty list rather than an error — a
       // single keystroke shouldn't be a 4xx, and the empty result is what keeps
       // the enumeration surface small.
-      if (query.phrase.length < MIN_SEARCH_QUERY_LENGTH || query.tokens.length === 0) return [];
+      if (query.contentLength < MIN_SEARCH_QUERY_LENGTH) return [];
 
       const overfetch = safeLimit * SEARCH_OVERFETCH_FACTOR;
       const containsQuery = containsAllTokens(query.tokens, users.handle, users.displayName);
@@ -678,7 +730,7 @@ export function createRecommendationService() {
         });
 
       const range = handlePrefixRange(query.handleQuery);
-      const runGlobal = query.phrase.length >= MIN_GLOBAL_QUERY_LENGTH;
+      const runGlobal = query.handleQuery.length >= MIN_GLOBAL_QUERY_LENGTH;
       const matched = new Map<string, ProfileRow>();
 
       // Passes 0 and 1 are independent — concurrent on D1, sequential on
@@ -701,7 +753,7 @@ export function createRecommendationService() {
 
       // Pass 2 — the full scan. Gated on the page not being full AND on a query
       // long enough to be worth scanning for.
-      if (matched.size < safeLimit && query.phrase.length >= MIN_INFIX_QUERY_LENGTH) {
+      if (matched.size < safeLimit && query.longestToken >= MIN_INFIX_QUERY_LENGTH) {
         for (const row of yield* selectGlobal(containsQuery, overfetch)) {
           matched.set(row.id, row);
         }
@@ -856,7 +908,7 @@ export function createRecommendationService() {
       const safeLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 5, 1), 20);
 
       const query = parseQuery(rawQuery);
-      if (query.phrase.length < MIN_SEARCH_QUERY_LENGTH || query.tokens.length === 0) return [];
+      if (query.contentLength < MIN_SEARCH_QUERY_LENGTH) return [];
 
       const overfetch = safeLimit * SEARCH_OVERFETCH_FACTOR;
       const containsQuery = containsAllTokens(
@@ -883,7 +935,7 @@ export function createRecommendationService() {
         });
 
       const range = handlePrefixRange(query.handleQuery);
-      const runGlobal = query.phrase.length >= MIN_GLOBAL_QUERY_LENGTH;
+      const runGlobal = query.handleQuery.length >= MIN_GLOBAL_QUERY_LENGTH;
       const matches = new Map<
         string,
         { id: string; handle: string; name: string; avatarUrl: string | null }
@@ -923,7 +975,7 @@ export function createRecommendationService() {
 
       for (const row of [...memberRows, ...prefixRows]) matches.set(row.id, row);
 
-      if (matches.size < safeLimit && query.phrase.length >= MIN_INFIX_QUERY_LENGTH) {
+      if (matches.size < safeLimit && query.longestToken >= MIN_INFIX_QUERY_LENGTH) {
         for (const row of yield* selectMatching(containsQuery, overfetch)) {
           matches.set(row.id, row);
         }

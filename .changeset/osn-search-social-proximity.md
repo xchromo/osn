@@ -38,9 +38,28 @@ score the whole candidate set before slicing.
   organisations) now run concurrently, so the request has one fewer sequential
   database step than before despite the added signal.
 
-`@shared/db-utils/search` gains `tokeniseQuery`, `joinTokens` and
-`tokensPrefixName`. The tokeniser deliberately does not split on `_`, which is a
-legal handle character — splitting there would match `@joxsmith` for a typed
-`@jo_smith` and undo the literal-underscore matching `escapeLike` provides.
+`@shared/db-utils/search` gains `tokeniseQuery`, `joinTokens`,
+`tokenContentLength` and `tokensPrefixName`. The tokeniser keeps every LIKE
+metacharacter (`%`, `_`, `\`) inside the token, because `escapeLike` can only
+neutralise a character that survives tokenisation — treating `%` as a separator
+would turn `"a%b"` into `a` + `b` and convert the one wildcard the escape exists
+to defuse back into a wildcard. Ordinary punctuation still splits, so
+`"Smith, John"` tokenises the way a person reads it.
+
+Two findings from the pre-merge security review, both introduced and fixed on
+this branch:
+
+- **S-M1** — the length gates compared the raw phrase, while the SQL they gate
+  is built from the tokens. Since tokenisation drops separators, `"a."` reached
+  a one-character global handle seek and `"a a"` a one-character global infix
+  scan, bypassing the scope rule the 1-character floor depends on. The prefix
+  pass now gates on the handle prefix actually bound into the range, and the
+  infix pass on the longest token — an `AND` of `LIKE` patterns is only as
+  selective as its most selective conjunct.
+- **S-M2** — token count was unbounded. `q`'s 64-character cap admits 32
+  single-character tokens, each emitting its own ANDed pair of `LIKE`
+  predicates: 64 evaluations per scanned row on a conjunction that matches
+  nothing, so `LIMIT` never short-circuits the scan. Capped at
+  `MAX_QUERY_TOKENS = 6`.
 
 No change to the response shape of either search surface.

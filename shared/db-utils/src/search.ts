@@ -23,19 +23,38 @@
 const HANDLE_CHARS = /^[a-z0-9_]+$/;
 
 /**
- * Token separator for both queries and the names they are matched against.
- * Anything that is not a letter, a digit or an underscore splits — so
- * `"Smith-Jones"`, `"O'Brien"` and `"Acme  Inc."` all tokenise the way a person
- * reading them would. Unicode-aware (`\p{L}`), because display names are not
- * ASCII.
+ * Query token separator: anything that is not a letter, a digit, or a `LIKE`
+ * metacharacter.
  *
- * The underscore is the exception, and it is not a stylistic one: `_` is a
- * legal handle character (`^[a-z0-9_]+$`). Splitting on it would turn a typed
- * `@jo_smith` into the two tokens `jo` and `smith`, which then match `@joxsmith`
- * as readily as the handle actually typed — quietly undoing the literal-`_`
- * matching that {@link escapeLike} exists to provide.
+ * The metacharacter exemption is the whole subtlety. A query token becomes a
+ * `LIKE` pattern, and {@link escapeLike} exists to make a typed `%`, `_` or `\`
+ * match itself — but it can only escape characters that survive tokenisation.
+ * Treating them as separators turns `"a%b"` into `a` + `b`, which matches any
+ * row containing both letters, silently converting the one wildcard the escape
+ * was written to neutralise back into a wildcard. So `%`, `_` and `\` stay
+ * inside the token and reach `escapeLike`.
+ *
+ * Ordinary punctuation splits, because it is not a metacharacter: dropping it
+ * cannot widen a pattern into a wildcard, and `"Smith, John"` has to tokenise
+ * the way a person reading it would. It does still make the token shorter than
+ * the string it came from — which is exactly why every length gate must be
+ * computed from the tokens (see {@link tokenContentLength}) and never from the
+ * raw query.
  */
-const TOKEN_SEPARATOR = /[^\p{L}\p{N}_]+/u;
+const QUERY_SEPARATOR = /[^\p{L}\p{N}_%\\]+/u;
+
+/**
+ * Word separator for comparing a query against a display name — anything that
+ * is not a letter, a digit or an underscore. Applied to *both* sides in
+ * {@link tokensPrefixName}, so `"Smith-Jones"`, `"O'Brien"` and `"Acme  Inc."`
+ * all break the way a person reading them would. Unicode-aware (`\p{L}`),
+ * because display names are not ASCII.
+ *
+ * Underscore is excluded from the separator set because it is a legal handle
+ * character (`^[a-z0-9_]+$`), so `jo_smith` reads as one word here just as it
+ * does in a handle.
+ */
+const WORD_SEPARATOR = /[^\p{L}\p{N}_]+/u;
 
 /**
  * Normalises a user-typed query the way handle storage expects: trims, strips
@@ -121,10 +140,26 @@ export function handlePrefixRange(query: string): { lower: string; upper: string
  * does every token appear (order-free matching), and does every token *start* a
  * name token (the prefix match a typeahead is really doing).
  *
+ * Tokens split on whitespace and ordinary punctuation, but keep any `LIKE`
+ * metacharacter — see {@link QUERY_SEPARATOR} for why that exemption matters.
+ *
  * @see {@link joinTokens} for the handle-shaped rejoin of the same tokens.
  */
 export function tokeniseQuery(query: string): string[] {
-  return query.split(TOKEN_SEPARATOR).filter((token) => token.length > 0);
+  return query.split(QUERY_SEPARATOR).filter((token) => token.length > 0);
+}
+
+/**
+ * Total length of the query's token content — the query with its whitespace
+ * removed.
+ *
+ * This, not the raw string length, is what a minimum-length gate should compare
+ * against. `"a b"` is a three-character string carrying two characters of
+ * signal, and a gate that cannot tell the difference can be walked straight
+ * past by typing a space.
+ */
+export function tokenContentLength(tokens: string[]): number {
+  return tokens.reduce((total, token) => total + token.length, 0);
 }
 
 /**
@@ -154,7 +189,18 @@ export function joinTokens(tokens: string[]): string {
  */
 export function tokensPrefixName(text: string | null | undefined, tokens: string[]): boolean {
   if (!text || tokens.length === 0) return false;
-  const nameTokens = tokeniseQuery(text.toLowerCase());
-  if (nameTokens.length === 0) return false;
-  return tokens.every((token) => nameTokens.some((nameToken) => nameToken.startsWith(token)));
+  const splitWords = (value: string) =>
+    value
+      .toLowerCase()
+      .split(WORD_SEPARATOR)
+      .filter((word) => word.length > 0);
+  const nameWords = splitWords(text);
+  if (nameWords.length === 0) return false;
+  // Both sides split on the same word separator, so a query token carrying
+  // punctuation (`"smith-jones"`) is compared word-for-word against a name
+  // carrying the same (`"Smith-Jones"`). Splitting only the name would leave
+  // the query token unmatchable against either half.
+  const queryWords = tokens.flatMap(splitWords);
+  if (queryWords.length === 0) return false;
+  return queryWords.every((word) => nameWords.some((nameWord) => nameWord.startsWith(word)));
 }

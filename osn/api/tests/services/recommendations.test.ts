@@ -356,6 +356,98 @@ describe("searchProfiles", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  it.effect("a separator cannot buy length past the global gates", () =>
+    Effect.gen(function* () {
+      // The gates are the enumeration control, so what they FORBID has to be
+      // asserted, not just what they allow. Each of these is a query whose
+      // string is long enough to pass a naive `phrase.length` check while
+      // carrying one character of actual signal — which is why the gates read
+      // the tokens instead (`handleQuery` for the prefix seek, longest token
+      // for the infix scan).
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "bob", "Bobby Tables");
+
+      // "b." / "b!" / "b-" would be a one-character handle seek; "b b" would be
+      // a one-character infix scan. None may reach a non-connection.
+      for (const q of ["b.", "b!", "b-", "b b", "b_"]) {
+        expect(yield* recs.searchProfiles(alice.id, q)).toEqual([]);
+      }
+
+      // The honest two- and three-character queries still work — including the
+      // separated form, which is not a bypass: "b o" rejoins to the handle
+      // prefix "bo", and the caller really did type two characters. That
+      // rejoin is the same mechanism that resolves "john smith" to @johnsmith.
+      expect((yield* recs.searchProfiles(alice.id, "bo")).map((r) => r.handle)).toEqual(["bob"]);
+      expect((yield* recs.searchProfiles(alice.id, "b o")).map((r) => r.handle)).toEqual(["bob"]);
+      expect((yield* recs.searchProfiles(alice.id, "obb")).map((r) => r.handle)).toEqual(["bob"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("a short token alongside a real one still scans", () =>
+    Effect.gen(function* () {
+      // The infix gate reads the LONGEST token, not the total and not the
+      // shortest: an AND of LIKE patterns is only as selective as its most
+      // selective conjunct. "j smith" carries a real term and must run, where
+      // "j s" carries none and must not.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("j@e.com", "zzz", "John Smith");
+
+      expect((yield* recs.searchProfiles(alice.id, "j smith")).map((r) => r.handle)).toEqual([
+        "zzz",
+      ]);
+      expect(yield* recs.searchProfiles(alice.id, "j s")).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("treats a typed % literally rather than as a wildcard", () =>
+    Effect.gen(function* () {
+      // `escapeLike` can only neutralise a metacharacter that survives
+      // tokenisation. If `%` were a separator, "a%e" would become `%a%` AND
+      // `%e%` and match @alice — the exact widening the escape exists to stop.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "bob", "100% Cotton");
+
+      expect(yield* recs.searchProfiles(alice.id, "a%e")).toEqual([]);
+      expect((yield* recs.searchProfiles(alice.id, "100%")).map((r) => r.handle)).toEqual(["bob"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("ranks pending edges between connections and organisation co-members", () =>
+    Effect.gen(function* () {
+      // Covers all four proximity constants and the tie-break in one ordering.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const connected = yield* auth.registerProfile("c@e.com", "zeta_a");
+      const pending = yield* auth.registerProfile("p@e.com", "zeta_b");
+      const colleague = yield* auth.registerProfile("o@e.com", "zeta_c");
+      yield* auth.registerProfile("s@e.com", "zeta_d");
+
+      yield* connect(alice.id, connected.id);
+      yield* graph.sendConnectionRequest(pending.id, alice.id);
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.addMember(org.id, alice.id, colleague.id, "member");
+
+      const result = yield* recs.searchProfiles(alice.id, "zeta");
+      expect(result.map((r) => r.handle)).toEqual(["zeta_a", "zeta_b", "zeta_c", "zeta_d"]);
+      expect(result[1]!.connectionStatus).toBe("pending_received");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("ranks a name-token prefix above a name that merely contains the tokens", () =>
+    Effect.gen(function* () {
+      // lexicalScore's all-tokens-contained fallback: a row the multi-token
+      // scan retrieved but which matched neither as a phrase nor as a token
+      // prefix must still score above zero, and below a real token prefix.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "yyy", "Blacksmith Johnson");
+      yield* auth.registerProfile("j@e.com", "zzz", "John Smith");
+
+      expect((yield* recs.searchProfiles(alice.id, "smith john")).map((r) => r.handle)).toEqual([
+        "zzz",
+        "yyy",
+      ]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("matches on a handle prefix and excludes the caller", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
@@ -708,8 +800,21 @@ describe("searchOrganisations", () => {
       expect((yield* recs.searchOrganisations(alice.id, "a")).map((o) => o.handle)).toEqual([
         "acme",
       ]);
-      expect(yield* recs.searchOrganisations(bob.id, "ac")).not.toEqual([]);
+      // Two characters reaches the global index, so bob finds alice's org.
+      expect((yield* recs.searchOrganisations(bob.id, "ac")).map((o) => o.handle)).toEqual([
+        "acme",
+      ]);
       expect(yield* recs.searchOrganisations(alice.id, "")).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("a one-character query from a caller with no memberships returns []", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      yield* orgs.createOrganisation(bob.id, "acme", "Acme Inc");
+
+      expect(yield* recs.searchOrganisations(alice.id, "a")).toEqual([]);
     }).pipe(Effect.provide(createTestLayer())),
   );
 

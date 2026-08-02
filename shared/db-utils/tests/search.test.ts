@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
 
+// The barrel re-exports the same helpers for consumers that already pull the
+// drizzle/effect graph. Imported here under an alias so a dropped or misspelt
+// re-export fails a test rather than only failing whoever tries it next.
+import * as barrel from "../src";
 import {
   escapeLike,
   handlePrefixRange,
   joinTokens,
   likeContains,
   normaliseHandleQuery,
+  tokenContentLength,
   tokeniseQuery,
   tokensPrefixName,
 } from "../src/search";
@@ -119,6 +124,23 @@ describe("tokeniseQuery", () => {
     expect(tokeniseQuery("acme inc.")).toEqual(["acme", "inc"]);
   });
 
+  it("keeps every LIKE metacharacter, because escapeLike must still see them", () => {
+    // A separator swallows the character before `escapeLike` can neutralise it,
+    // which turns the one wildcard the escape exists to defuse back into a
+    // wildcard: `"a%b"` splitting to `a` + `b` matches any row with both
+    // letters. `%`, `_` and `\` therefore stay inside the token.
+    expect(tokeniseQuery("a%b")).toEqual(["a%b"]);
+    expect(tokeniseQuery("a\\b")).toEqual(["a\\b"]);
+    expect(likeContains(tokeniseQuery("a%b")[0]!)).toBe("%a\\%b%");
+  });
+
+  it("splits on ordinary punctuation, which is not a metacharacter", () => {
+    // Safe to drop: it cannot widen a pattern into a wildcard. It does shorten
+    // the token, which is why gates read `tokenContentLength`, not the query.
+    expect(tokeniseQuery("smith, john")).toEqual(["smith", "john"]);
+    expect(tokeniseQuery("a.b")).toEqual(["a", "b"]);
+  });
+
   it("keeps underscores, because handles contain them", () => {
     // Splitting here would turn a typed `@jo_smith` into `jo` + `smith`, which
     // then matches `@joxsmith` just as well — quietly undoing the literal-`_`
@@ -135,6 +157,18 @@ describe("tokeniseQuery", () => {
     expect(tokeniseQuery("")).toEqual([]);
     expect(tokeniseQuery("   ")).toEqual([]);
     expect(tokeniseQuery("!!!")).toEqual([]);
+  });
+});
+
+describe("tokenContentLength", () => {
+  it("counts what was typed, not what was typed into", () => {
+    // The measurement every length gate keys on. A gate reading the raw string
+    // is walked past by typing a separator: `"a b"` is three characters of
+    // string carrying two of signal, and `"a."` two carrying one.
+    expect(tokenContentLength(tokeniseQuery("a b"))).toBe(2);
+    expect(tokenContentLength(tokeniseQuery("a."))).toBe(1);
+    expect(tokenContentLength(tokeniseQuery("john smith"))).toBe(9);
+    expect(tokenContentLength([])).toBe(0);
   });
 });
 
@@ -180,10 +214,36 @@ describe("tokensPrefixName", () => {
     expect(tokensPrefixName("O'Brien", ["brien"])).toBe(true);
   });
 
+  it("matches a duplicated token against the same word", () => {
+    // Documented looseness: tokens match independently and may share a target
+    // word, so a typo-repeat still matches rather than mysteriously failing.
+    expect(tokensPrefixName("Jo", ["jo", "jo"])).toBe(true);
+  });
+
+  it("splits punctuation on both sides, not just the name", () => {
+    // Splitting only the name would leave a query token carrying punctuation
+    // unmatchable against either half of the name it came from.
+    expect(tokensPrefixName("Smith-Jones", ["smith-jones"])).toBe(true);
+    expect(tokensPrefixName("O'Brien", ["o'bri"])).toBe(true);
+  });
+
   it("is false for an absent name or an empty token list", () => {
     expect(tokensPrefixName(null, ["rob"])).toBe(false);
     expect(tokensPrefixName(undefined, ["rob"])).toBe(false);
     expect(tokensPrefixName("Roberta Smith", [])).toBe(false);
     expect(tokensPrefixName("!!!", ["rob"])).toBe(false);
+  });
+});
+
+describe("barrel re-exports", () => {
+  it("exposes the same search helpers as the subpath entry", () => {
+    expect(barrel.normaliseHandleQuery).toBe(normaliseHandleQuery);
+    expect(barrel.escapeLike).toBe(escapeLike);
+    expect(barrel.likeContains).toBe(likeContains);
+    expect(barrel.handlePrefixRange).toBe(handlePrefixRange);
+    expect(barrel.tokeniseQuery).toBe(tokeniseQuery);
+    expect(barrel.joinTokens).toBe(joinTokens);
+    expect(barrel.tokenContentLength).toBe(tokenContentLength);
+    expect(barrel.tokensPrefixName).toBe(tokensPrefixName);
   });
 });
