@@ -9,7 +9,7 @@ import {
   SortableProvider,
   useDragDropContext,
 } from "@thisbeyond/solid-dnd";
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { toast } from "solid-toast";
 
@@ -195,6 +195,19 @@ export default function EventsEditor(props: { weddingId: string }) {
       if (isAuthExpired(err)) return redirectToLogin();
       setLoadError("Could not load the schedule. Is the API running?");
     }
+  });
+
+  // The second layer the comment above promises, and it is not decoration here:
+  // a deleted event cascades to its attendance links and RSVPs, so losing an
+  // unsaved schedule draft to a tab close is the same silent loss the guest
+  // editor's guard exists to prevent. Registered ONLY while dirty — a
+  // permanently-attached listener makes the page bfcache-ineligible in
+  // Firefox/Safari even with a clean draft.
+  createEffect(() => {
+    if (!store.dirty()) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    onCleanup(() => window.removeEventListener("beforeunload", onBeforeUnload));
   });
 
   /** Field errors indexed by the offending event's draft key, for the drawer. */

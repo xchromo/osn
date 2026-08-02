@@ -42,6 +42,25 @@ export class ImportError extends Data.TaggedError("ImportError")<{
   readonly cause?: unknown;
 }> {}
 
+/**
+ * An id-authoritative desired state (the editor front door — see
+ * {@link DiffOptions.matchByName}) named a row that no longer exists.
+ *
+ * Only the editor can raise this, and when it does the draft is provably stale:
+ * it carries ids it can only have got from a load, so an id that resolves to
+ * nothing means someone else deleted that row since. Refusing is the whole point
+ * — with name fallback off, a dangling row is not "unmatched", it is a REMOVE
+ * plus a CREATE: the RSVPs attached to it are deleted, and a household comes back
+ * with a fresh row carrying the claim code the draft still remembers, resurrecting
+ * an invite a co-host may have deliberately revoked. `baseRevision` catches the
+ * same race between preview and apply; this catches it between load and preview,
+ * which nothing else does.
+ */
+export class StaleDesiredState extends Data.TaggedError("StaleDesiredState")<{
+  /** How many desired rows named a row that is gone (never the ids themselves). */
+  readonly unresolved: number;
+}> {}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function normaliseName(s: string): string {
@@ -169,7 +188,7 @@ export function diffAgainstDb(
   parsedFamilies: readonly ParsedFamily[],
   weddingId: string,
   options: DiffOptions = {},
-): Effect.Effect<ImportPlan, never, DbService> {
+): Effect.Effect<ImportPlan, StaleDesiredState, DbService> {
   return Effect.gen(function* () {
     const db = yield* DbService;
     // Default: manage only import-created rows (leave hand-added rows intact).
@@ -179,6 +198,14 @@ export function diffAgainstDb(
     // Default: an id-less row may still match by name (the CSV import's only
     // matching rule). The editor front door turns this off — see DiffOptions.
     const matchByName = options.matchByName ?? true;
+    /**
+     * Desired rows that named an id resolving to nothing. Only meaningful on the
+     * id-authoritative path: a CSV's dangling id is expected (it falls through to
+     * name matching by design), but the editor's is proof the draft is stale, and
+     * with no name fallback the row would reconcile as a destructive remove+create
+     * rather than an update. Counted here, refused below — see {@link StaleDesiredState}.
+     */
+    let unresolvedIds = 0;
     const manageEvents = scope !== "guests";
     const manageGuests = scope !== "events";
 
@@ -233,9 +260,9 @@ export function diffAgainstDb(
         // existing row is claimed at most once — two desired events resolving to
         // the same row would emit two updates for it and, worse, leave the second
         // one's identity unrepresented.
-        const candidate =
-          (parsed.id !== undefined ? existingEventById.get(parsed.id) : undefined) ??
-          (matchByName ? existingEventByNorm.get(norm) : undefined);
+        const byId = parsed.id !== undefined ? existingEventById.get(parsed.id) : undefined;
+        if (parsed.id !== undefined && !byId) unresolvedIds += 1;
+        const candidate = byId ?? (matchByName ? existingEventByNorm.get(norm) : undefined);
         const existing = candidate && !matchedEventIds.has(candidate.id) ? candidate : undefined;
         if (existing) {
           eventUpdates.push({ id: existing.id, event: parsed });
@@ -312,9 +339,9 @@ export function diffAgainstDb(
       // Same claim-once rule as events: without it, two desired households that
       // resolve to ONE existing row both reconcile against that row's guest list
       // in turn, and the second pass removes every guest the first pass matched.
-      const candidate =
-        (parsed.id !== undefined ? existingFamilyById.get(parsed.id) : undefined) ??
-        (matchByName ? existingFamilyByNorm.get(norm) : undefined);
+      const byId = parsed.id !== undefined ? existingFamilyById.get(parsed.id) : undefined;
+      if (parsed.id !== undefined && !byId) unresolvedIds += 1;
+      const candidate = byId ?? (matchByName ? existingFamilyByNorm.get(norm) : undefined);
       const existing = candidate && !matchedFamilyIds.has(candidate.id) ? candidate : undefined;
       if (existing) {
         familyIdByParsedIndex[i] = existing.id;
@@ -446,7 +473,12 @@ export function diffAgainstDb(
       parsedFamily.guests.forEach((parsedGuest, i) => {
         if (parsedGuest.id === undefined) return;
         const candidate = existingGuestById.get(parsedGuest.id);
-        if (!candidate || candidate.familyId !== familyId) return;
+        // Gone, or in someone else's household (the editor has no move-guest
+        // affordance, so a cross-family id is as stale as a missing one).
+        if (!candidate || candidate.familyId !== familyId) {
+          unresolvedIds += 1;
+          return;
+        }
         if (matchedGuestIds.has(candidate.id)) return;
         matched[i] = candidate;
         matchedById[i] = true;
@@ -531,6 +563,17 @@ export function diffAgainstDb(
       }
     }
 
+    // ── Stale-draft refusal (id-authoritative front doors only) ──────────────
+    // Every id in the desired state has now been looked up. On the editor path a
+    // miss means the draft was built against state that no longer exists, and
+    // because that path has no name fallback the miss would reconcile as a
+    // destructive remove+create rather than an update — see StaleDesiredState.
+    // Refused BEFORE the link/RSVP/entitlement reads below: nothing downstream
+    // can make the plan safe, so they would be work spent on a plan we discard.
+    if (!matchByName && unresolvedIds > 0) {
+      return yield* Effect.fail(new StaleDesiredState({ unresolved: unresolvedIds }));
+    }
+
     // ── Event links ─────────────────────────────────────────────────────────
     // Wedding-scoped via guests → families — guest_events carries no wedding_id,
     // so without this join a second wedding's links read as removals.
@@ -580,8 +623,57 @@ export function diffAgainstDb(
       }
     }
 
-    // ── Warnings: removed/renamed guests with non-pending RSVPs ─────────────
     const warnings: string[] = [];
+
+    // ── Claim-code collisions on a CARRIED publicId ──────────────────────────
+    // A create may carry its own code (the full-fidelity `Family Code` column, so
+    // an export→re-import keeps invites working). Nothing checked that the code
+    // was still free, and `families.public_id` is globally unique — so a code
+    // belonging to a live household made the INSERT fail mid-apply. That failure
+    // is the worst-placed one in the pipeline: applyImport commits in ≤50-statement
+    // chunks and stamps the before-image keys in the LAST batch, so a middle-chunk
+    // constraint violation leaves the wedding half-written, the change row still
+    // `preview`, and no before-image to revert to. Resolved here instead, where
+    // the organiser sees it in the preview: a taken code is dropped for a freshly
+    // minted one (a household with no working code is not an option — the code IS
+    // the invite), and the swap is called out as a warning. Codes freed by this
+    // same plan's removals stay reusable, which is what makes an export→delete→
+    // re-import round trip keep its codes.
+    const carriedCodes = familyCreates
+      .map((f, i) => ({ i, publicId: f.publicId }))
+      .filter((f) => desiredFamilies.some((d) => d.publicId === f.publicId));
+    if (carriedCodes.length > 0) {
+      const taken = yield* dbQuery(() =>
+        db
+          .select({ id: families.id, publicId: families.publicId })
+          .from(families)
+          .where(
+            inArray(
+              families.publicId,
+              carriedCodes.map((c) => c.publicId),
+            ),
+          )
+          .all(),
+      );
+      // Wedding-scope is deliberately NOT applied: the unique index is global, so
+      // another wedding's live code collides just as hard as this one's.
+      const liveCodes = new Set(
+        taken.filter((t) => !removedFamilyIds.has(t.id)).map((t) => t.publicId),
+      );
+      for (const c of carriedCodes) {
+        if (!liveCodes.has(c.publicId)) continue;
+        const create = familyCreates[c.i]!;
+        familyCreates[c.i] = {
+          ...create,
+          publicId: generateFamilyCode(create.familyName, codeStyle),
+        };
+        warnings.push(
+          `Household "${create.familyName}" asked for an invite code that is already in use, so a new code was minted for it.`,
+        );
+      }
+    }
+
+    // ── Warnings: removed/renamed guests with non-pending RSVPs ─────────────
     const guestsBeingLost = guestRemoves.map((g) => ({ id: g.id, firstName: g.firstName }));
 
     if (guestsBeingLost.length > 0) {

@@ -366,6 +366,74 @@ describe("GuestsEditor", () => {
     expect(screen.queryByRole("button", { name: /Save changes/i })).toBeNull();
   });
 
+  it("registers beforeunload only while the draft is dirty", async () => {
+    primeLoad();
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    render(() => <GuestsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByDisplayValue("Ada")).toBeTruthy());
+
+    const beforeUnloadAdds = () => add.mock.calls.filter((c) => c[0] === "beforeunload").length;
+    // Clean draft ⇒ no listener. Registering unconditionally is the obvious
+    // "simplification" and it makes the page bfcache-ineligible in Firefox/Safari.
+    expect(beforeUnloadAdds()).toBe(0);
+
+    fireEvent.input(screen.getByDisplayValue("Ada"), { target: { value: "Adaeze" } });
+    await waitFor(() => expect(beforeUnloadAdds()).toBe(1));
+
+    // …and it comes off again once the draft is clean (undo back to baseline).
+    fireEvent.click(screen.getByRole("button", { name: /^Undo$/i }));
+    await waitFor(() => expect(remove.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true));
+    add.mockRestore();
+    remove.mockRestore();
+  });
+
+  it("keeps the preview modal open on a failed apply and says why", async () => {
+    primeLoad();
+    render(() => <GuestsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByDisplayValue("Ada")).toBeTruthy());
+    fireEvent.input(screen.getByDisplayValue("Ada"), { target: { value: "Adaeze" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Save changes/i })).toBeTruthy());
+
+    authFetchMock.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.endsWith("/changes/preview")) {
+        return Promise.resolve(
+          json({
+            changeId: "chg_1",
+            baseRevision: "genesis",
+            warnings: [],
+            plan: {
+              eventCreates: [],
+              eventUpdates: [],
+              eventRemoves: [],
+              familyCreates: [],
+              familyRemoves: [],
+              guestCreates: [],
+              guestUpdates: [{}],
+              guestRemoves: [],
+              eventLinkCreates: [],
+              eventLinkRemoves: [],
+              warnings: [],
+            },
+          }),
+        );
+      }
+      if (u.endsWith("/changes/apply"))
+        return Promise.resolve(json({ error: "Apply failed" }, 500));
+      return Promise.resolve(json({}));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
+
+    // A retryable failure leaves the modal up — and the error has to render
+    // INSIDE it, because the sticky bar it would otherwise appear in sits behind
+    // this modal's overlay ("nothing happened at all", from the organiser's side).
+    await waitFor(() => expect(screen.getByRole("dialog").textContent).toMatch(/Apply failed/i));
+  });
+
   it("guards in-app navigation while the draft is dirty", async () => {
     primeLoad();
     render(() => <GuestsEditor weddingId="wed_a" />);
@@ -427,5 +495,8 @@ describe("GuestsEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
 
     await waitFor(() => expect(screen.getByText(/changed elsewhere/i)).toBeTruthy());
+    // A 409 means the previewed diff is stale, so the modal is dismissed —
+    // re-confirming it could only 409 again.
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -7,7 +7,7 @@ import {
   weddingInviteCustomisations,
   weddings,
 } from "@cire/db";
-import { eq, and, asc, inArray, ne, isNull } from "drizzle-orm";
+import { eq, and, asc, count, inArray, ne, isNull } from "drizzle-orm";
 import { Effect, Data } from "effect";
 
 import { DbService, dbQuery } from "../db";
@@ -472,7 +472,12 @@ export const claimService = {
     return Effect.gen(function* () {
       const db = yield* DbService;
 
-      // LEFT JOIN, so a household with no guests still yields exactly one row.
+      // LEFT JOIN so a guest-less household still yields a row, GROUP BY so that
+      // is the ONLY row it yields. Counting in SQL rather than fanning the join
+      // out one row per guest and summing in JS keeps this read's cost a function
+      // of HOUSEHOLDS — what a household-shaped read should scale on — instead of
+      // guests; `guests_family_id_sort_idx` serves the aggregate without
+      // materialising the guest rows.
       const rows = yield* dbQuery(() =>
         db
           .select({
@@ -482,7 +487,7 @@ export const claimService = {
             codeSharedAt: families.codeSharedAt,
             firstOpenedAt: families.firstOpenedAt,
             deactivatedAt: families.deactivatedAt,
-            guestId: guests.id,
+            guestCount: count(guests.id),
           })
           .from(families)
           .leftJoin(guests, eq(guests.familyId, families.id))
@@ -490,31 +495,24 @@ export const claimService = {
           // is not part of the organiser's roster and must never round-trip
           // through a draft save.
           .where(and(eq(families.weddingId, weddingId), ne(families.kind, "host")))
+          .groupBy(families.id)
+          // Creation order, so the editor appends a code-only household where the
+          // organiser made it rather than somewhere arbitrary.
           .orderBy(asc(families.createdAt))
           .all(),
       );
 
-      const byFamily = new Map<
-        string,
-        { -readonly [K in keyof OrganiserHouseholdRow]: OrganiserHouseholdRow[K] }
-      >();
-      for (const row of rows) {
-        let entry = byFamily.get(row.familyId);
-        if (!entry) {
-          entry = {
-            familyId: row.familyId,
-            publicId: row.publicId,
-            familyName: row.familyName,
-            guestCount: 0,
-            codeSharedAt: row.codeSharedAt === null ? null : row.codeSharedAt.getTime(),
-            firstOpenedAt: row.firstOpenedAt === null ? null : row.firstOpenedAt.getTime(),
-            deactivatedAt: row.deactivatedAt === null ? null : row.deactivatedAt.getTime(),
-          };
-          byFamily.set(row.familyId, entry);
-        }
-        if (row.guestId !== null) entry.guestCount += 1;
-      }
-      return Array.from(byFamily.values());
+      return rows.map((row) => ({
+        familyId: row.familyId,
+        publicId: row.publicId,
+        familyName: row.familyName,
+        guestCount: row.guestCount,
+        // Same epoch-ms encoding as the guest read: Drizzle decodes these
+        // `timestamp`-mode columns to `Date`, and the wire shape is a number.
+        codeSharedAt: row.codeSharedAt === null ? null : row.codeSharedAt.getTime(),
+        firstOpenedAt: row.firstOpenedAt === null ? null : row.firstOpenedAt.getTime(),
+        deactivatedAt: row.deactivatedAt === null ? null : row.deactivatedAt.getTime(),
+      }));
     }).pipe(Effect.withSpan("cire.claim.getAllHouseholds"));
   },
 };

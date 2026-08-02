@@ -30,9 +30,22 @@ that applies successfully and silently does nothing.
 - `@cire/api`: an existing household/event is claimed by at most one desired row.
   Two desired households resolving to one existing row used to reconcile against
   its guest list twice, the second pass removing what the first had matched.
+- `@cire/api`: a stale editor draft is refused rather than applied. `baseRevision`
+  guards preview→apply, but the draft is built at load, and with name matching off
+  a row whose id a co-host deleted in between would reconcile as a remove plus a
+  create — dropping that row's RSVPs and returning a household under the claim
+  code the draft still carried. An id that resolves to nothing now fails the diff
+  and both verbs answer 409 `stale_draft`. A spreadsheet is unaffected: a dangling
+  id there means the sheet carries no ids, and name matching is the design.
+- `@cire/api`: a carried claim code that is already taken is replaced with a
+  freshly minted one (with a preview warning) instead of failing the INSERT
+  mid-apply — `applyImport` commits in chunks and stamps the before-image last, so
+  that failure left a half-written wedding with nothing to revert to.
 - `@cire/api`: new `GET /api/organiser/weddings/:weddingId/households`
   (`weddingMember()`) — the household-shaped roster read. `/guests` is
-  guest-shaped, so a household holding no guests produces no rows there.
+  guest-shaped, so a household holding no guests produces no rows there. It counts
+  guests in SQL rather than returning one row per guest, and both roster reads are
+  now `Cache-Control: no-store` (they carry claim codes) and log their failures.
 - `@cire/organiser`: the guest + schedule editors load that read, so a household
   with no guests (added but not yet filled, or emptied by an earlier save) is
   carried in the draft as an empty card instead of being absent from it — absence
@@ -47,3 +60,9 @@ that applies successfully and silently does nothing.
   longer throws an unsaved draft away without asking. An apply error now also
   renders inside the preview modal (the sticky bar it used to render in sits
   behind the modal overlay), and a 409 dismisses the stale preview.
+- `@cire/organiser`: every roster cache carries a per-wedding generation that an
+  invalidation bumps, so a fetch already in flight discards its rows instead of
+  caching them — dropping the cache entry alone left the fetch's own callback free
+  to write pre-mutation rows into a fresh entry, which is the deleted row coming
+  back. The import-apply and revert paths invalidate households alongside events
+  and guests; the three are one consistency unit.

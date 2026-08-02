@@ -520,6 +520,31 @@ describe("createGuestEventDraft — deletions reach the wire", () => {
   });
 });
 
+describe("createGuestEventDraft — discard after a save", () => {
+  /** `commit()` adopts the saved draft as the new baseline. If it ever stopped
+   *  doing so, "discard" after a successful save would rewind to the PRE-save
+   *  state — resurrecting every row the organiser just deleted, in the UI, with
+   *  `dirty()` reporting false. Same silent resurrection this store exists to
+   *  prevent, one layer up, and the fingerprint-only dirty check can't see it. */
+  it("discards back to the COMMITTED state, not the loaded one", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      store.removeGuest(store.draft.families[0]!.guests[1]!.key);
+      store.commit(); // as handleApply does after a successful save
+      expect(store.dirty()).toBe(false);
+
+      store.addGuest(store.draft.families[0]!.key);
+      expect(store.dirty()).toBe(true);
+      store.discard();
+
+      // Back to one guest — the save stands, the post-save edit is gone.
+      expect(store.draft.families[0]!.guests.map((g) => g.firstName)).toEqual(["Ada"]);
+      expect(store.dirty()).toBe(false);
+      dispose();
+    });
+  });
+});
+
 describe("createGuestEventDraft — guest-less households", () => {
   /** A household holding no guests can't be described by the guest rows, so the
    *  editor loads it separately. Dropping it from the draft would read as a

@@ -374,6 +374,27 @@ export const createOrganiserChangeRoutes = (
                   }),
                 ),
                 Effect.catchTags(catchParseErrors(set)),
+                Effect.catchTag("StaleDesiredState", (e) =>
+                  Effect.gen(function* () {
+                    // The draft named rows that no longer exist, so it was built
+                    // against state someone else has since changed. Same 409 the
+                    // baseRevision guard returns, for the same reason and with the
+                    // same remedy — reload and redo the edit — except this race
+                    // opened between LOAD and preview, which baseRevision (captured
+                    // at preview) cannot see. Refusing beats applying: with no name
+                    // fallback those rows reconcile as remove+create, dropping RSVPs
+                    // and re-minting a claim code the organiser never asked to touch.
+                    yield* Effect.logWarning("change refused: stale desired state", {
+                      changeKind: "editor",
+                      unresolved: e.unresolved,
+                    });
+                    set.status = 409;
+                    return {
+                      error: "State changed — reload the editor",
+                      reason: "stale_draft",
+                    };
+                  }),
+                ),
                 Effect.catchTag("R2Error", () =>
                   Effect.sync(() => {
                     set.status = 500;
@@ -459,9 +480,17 @@ export const createOrganiserChangeRoutes = (
                   {
                     removeManual: stored.removeManual ?? false,
                     scope,
-                    // A pre-`matchByName` row falls back to the change's `kind`:
-                    // an editor save is id-authoritative, a spreadsheet is not.
-                    matchByName: stored.matchByName ?? row.kind !== "editor",
+                    // Decoded, not asserted — same rule as `scope` above, and it
+                    // matters more here: `??` only guards nullish, so a corrupt
+                    // falsy-but-present value (`0`, `""`) would sail through and
+                    // turn an IMPORT re-diff id-authoritative, making every id-less
+                    // sheet row a create and every existing row a removal. A row
+                    // written before this field existed falls back to the change's
+                    // `kind`: an editor save is id-authoritative, a sheet is not.
+                    matchByName: Option.getOrElse(
+                      Schema.decodeUnknownOption(Schema.Boolean)(stored.matchByName),
+                      () => row.kind !== "editor",
+                    ),
                   },
                 );
 
@@ -499,6 +528,27 @@ export const createOrganiserChangeRoutes = (
                   }),
                 ),
                 Effect.catchTags(catchParseErrors(set)),
+                Effect.catchTag("StaleDesiredState", (e) =>
+                  Effect.gen(function* () {
+                    // The draft named rows that no longer exist, so it was built
+                    // against state someone else has since changed. Same 409 the
+                    // baseRevision guard returns, for the same reason and with the
+                    // same remedy — reload and redo the edit — except this race
+                    // opened between LOAD and preview, which baseRevision (captured
+                    // at preview) cannot see. Refusing beats applying: with no name
+                    // fallback those rows reconcile as remove+create, dropping RSVPs
+                    // and re-minting a claim code the organiser never asked to touch.
+                    yield* Effect.logWarning("change refused: stale desired state", {
+                      changeKind: "editor",
+                      unresolved: e.unresolved,
+                    });
+                    set.status = 409;
+                    return {
+                      error: "State changed — reload the editor",
+                      reason: "stale_draft",
+                    };
+                  }),
+                ),
                 Effect.catchTag("R2Error", () =>
                   Effect.sync(() => {
                     set.status = 500;
