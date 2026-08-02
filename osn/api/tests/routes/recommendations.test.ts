@@ -163,12 +163,104 @@ describe("recommendations routes", () => {
     const { createRecommendationRoutes: mkRoutes } =
       await import("../../src/routes/recommendations");
     const alwaysRejected = { check: () => Promise.resolve(false) };
-    const limitedApp = mkRoutes(config, layer, undefined, alwaysRejected);
+    const limitedApp = mkRoutes(config, layer, undefined, {
+      suggest: alwaysRejected,
+      search: alwaysRejected,
+    });
     const res = await limitedApp.handle(
       new Request("http://localhost/recommendations/connections", {
         headers: { Authorization: `Bearer ${alice.token}` },
       }),
     );
     expect(res.status).toBe(429);
+  });
+
+  // -------------------------------------------------------------------------
+  // Search (autocomplete)
+  // -------------------------------------------------------------------------
+
+  describe("GET /recommendations/search", () => {
+    async function search(token: string, qs: string) {
+      const res = await recsApp.handle(
+        new Request(`http://localhost/recommendations/search?${qs}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+      return {
+        status: res.status,
+        json: (await res.json()) as {
+          results?: Array<{ handle: string; connectionStatus: string }>;
+        },
+      };
+    }
+
+    it("returns 401 without a token", async () => {
+      const res = await recsApp.handle(
+        new Request("http://localhost/recommendations/search?q=ali"),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects a missing q at the HTTP boundary", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      const { status } = await search(alice.token, "");
+      expect(status).toBe(422);
+    });
+
+    it("matches by handle prefix and reports connection status", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      await registerAndGetToken("b@e.com", "alicia");
+      await registerAndGetToken("c@e.com", "bob");
+
+      const { status, json } = await search(alice.token, "q=ali");
+      expect(status).toBe(200);
+      // Alice herself is excluded; `alicia` is the only other `ali*` handle.
+      expect(json.results?.map((r) => r.handle)).toEqual(["alicia"]);
+      expect(json.results?.[0]!.connectionStatus).toBe("none");
+    });
+
+    it("reflects an in-flight request as pending_sent", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      await registerAndGetToken("b@e.com", "bob");
+      await graphApp.handle(
+        new Request("http://localhost/graph/connections/bob", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${alice.token}` },
+        }),
+      );
+
+      const { json } = await search(alice.token, "q=bob");
+      expect(json.results?.[0]!.connectionStatus).toBe("pending_sent");
+    });
+
+    it("returns an empty list below the minimum query length", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      await registerAndGetToken("b@e.com", "ab");
+      const { status, json } = await search(alice.token, "q=a");
+      expect(status).toBe(200);
+      expect(json.results).toEqual([]);
+    });
+
+    it("rejects an out-of-range ?limit at the HTTP boundary", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      const { status } = await search(alice.token, "q=ali&limit=100");
+      expect(status).toBe(422);
+    });
+
+    it("returns 429 when the search limiter rejects", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      const { createRecommendationRoutes: mkRoutes } =
+        await import("../../src/routes/recommendations");
+      const limitedApp = mkRoutes(config, layer, undefined, {
+        suggest: { check: () => Promise.resolve(true) },
+        search: { check: () => Promise.resolve(false) },
+      });
+      const res = await limitedApp.handle(
+        new Request("http://localhost/recommendations/search?q=ali", {
+          headers: { Authorization: `Bearer ${alice.token}` },
+        }),
+      );
+      expect(res.status).toBe(429);
+    });
   });
 });
