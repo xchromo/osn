@@ -688,14 +688,27 @@ export function createInternalGraphRoutes(
       //   3. `status = 'accepted'` only. A pending request is not a connection,
       //      and surfacing one would leak that a request is in flight.
       //
+      // CALLER INVARIANT: `profileId` MUST be the calling service's own
+      // authenticated end user — its access token's `sub` — and NEVER a value
+      // taken from a client request. Nothing on this side can enforce that: the
+      // ARC gate authenticates the *service*, not the end user it is acting for,
+      // so a consumer that forwards a client-supplied profile id turns this into
+      // arbitrary graph enumeration in one line. cire's route takes it from
+      // `osnAuth()`'s derived `osnProfileId`; any new consumer must do the same.
+      // (`/connections` already has this exact shape, so this endpoint does not
+      // widen the trust boundary — it inherits it.)
+      //
       // Discloses nothing new to a `graph:read` holder: /connections already
       // returns any profile's connection ids under this scope, and
       // /profile-displays already maps ids → handle + displayName. This is those
-      // two calls fused, filtered, and capped. Same tombstone rule as its
-      // siblings (accounts join + deletedAt IS NULL), so an account mid-deletion
-      // never surfaces as a suggestion. Blocks need no separate filter: blocking
-      // deletes the connection row (see graph.blockProfile), so a blocked pair
-      // cannot be `accepted` here.
+      // two calls fused, filtered, and capped. One caveat on that equivalence:
+      // /connections clamps at 100 rows with no offset, so for a profile with
+      // more than 100 connections a *filtered* query here can reach an edge that
+      // paging there cannot. Same tombstone rule as its siblings (accounts join
+      // + deletedAt IS NULL), so an account mid-deletion never surfaces as a
+      // suggestion. Blocks need no separate filter: blocking deletes the
+      // connection row (see graph.blockProfile), so a blocked pair cannot be
+      // `accepted` here.
       // -----------------------------------------------------------------------
       .get(
         "/connection-search",
@@ -802,14 +815,17 @@ export function createInternalGraphRoutes(
           query: t.Object({
             profileId: t.String({ minLength: 1 }),
             /**
-             * The typed fragment. Optional + empty-legal (see header comment),
-             * and deliberately unconstrained here: an over-long value returns an
-             * empty list from the handler rather than a 422, because every
-             * failure on an autocomplete path should degrade to "no suggestions"
-             * rather than to an error the caller has to special-case. The
-             * handler's own length guard runs before any LIKE is built.
+             * The typed fragment. Optional + empty-legal (see header comment).
+             *
+             * The schema bound is deliberately looser than the handler's
+             * `MAX_CONNECTION_QUERY_LEN` (64): anything between the two degrades
+             * to an empty list rather than a 422, because every failure on an
+             * autocomplete path should read as "no suggestions" rather than as
+             * an error the caller has to special-case. The outer bound is still
+             * declared so an unbounded string is never allocated or normalised
+             * — the handler's guard rejects *after* three O(n) passes.
              */
-            q: t.Optional(t.String()),
+            q: t.Optional(t.String({ maxLength: 256 })),
             limit: t.Optional(t.String()),
           }),
         },

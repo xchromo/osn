@@ -740,6 +740,28 @@ describe("internal graph routes (ARC-protected)", () => {
       expect(body.profiles.map((p) => p.handle)).toEqual(["b_ob"]);
     });
 
+    it("gets the range's EXCLUSIVE upper bound right at the boundary", async () => {
+      const { token } = await setupArcService();
+      const user1 = await registerProfile("u1@example.com", "user1");
+      const user19 = await registerProfile("u19@example.com", "user19");
+      await registerProfile("u2@example.com", "user2");
+
+      // `user1` → range ["user1", "user2"). The half-open bound must include
+      // "user1" itself and everything extending it, and exclude "user2". Only
+      // a real query can catch a divergence between JS `<` and SQLite's BINARY
+      // collation — the unit test in @shared/db-utils re-implements the
+      // comparison in JS, which is not the same proof.
+      const res = await app.handle(
+        new Request("http://localhost/graph/internal/profile-search?prefix=user1", {
+          headers: { Authorization: `ARC ${token}` },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { profiles: { id: string; handle: string }[] };
+      expect(body.profiles.map((p) => p.handle)).toEqual(["user1", "user19"]);
+      expect(body.profiles.map((p) => p.id)).toEqual([user1, user19]);
+    });
+
     it("returns an empty list for a prefix no handle could contain", async () => {
       const { token } = await setupArcService();
       await registerProfile("alice@example.com", "alice");
@@ -979,7 +1001,29 @@ describe("internal graph routes (ARC-protected)", () => {
 
       // "priya" is neither a prefix of the handle nor of the display name.
       const res = await search(token, `profileId=${alice}&q=priya`);
-      expect(await handlesOf(res)).toEqual(["pk_1994"]);
+      const body = (await res.json()) as { profiles: unknown[] };
+      // Assert the WHOLE row, not just the handle: this is the exact shape
+      // cire's ARC bridge parses, and a dropped column would otherwise be
+      // invisible here and degrade silently to nameless suggestions there.
+      expect(body.profiles).toEqual([
+        { id: pk, handle: "pk_1994", displayName: "Anaya Priyadarshini", avatarUrl: null },
+      ]);
+    });
+
+    it("escapes LIKE wildcards on the display-name arm", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const rao = await registerProfile("rao@example.com", "arao");
+      await setDisplayName(rao, "Alina Rao");
+      await connect(alice, rao);
+
+      // `a%o` holds a character no handle can contain, so the prefix range is
+      // null and ONLY the display-name LIKE runs — the one production call site
+      // in this endpoint where the escaping matters. Unescaped, `%a%o%` would
+      // match "Alina Rao".
+      expect(await handlesOf(await search(token, `profileId=${alice}&q=a%25o`))).toEqual([]);
+      // Control: the same row IS reachable by a literal substring.
+      expect(await handlesOf(await search(token, `profileId=${alice}&q=rao`))).toEqual(["arao"]);
     });
 
     it("strips a leading @ and folds case before matching", async () => {
@@ -1125,17 +1169,30 @@ describe("internal graph routes (ARC-protected)", () => {
       expect(body.profiles).toHaveLength(1);
     });
 
-    it("returns an empty list (never a 4xx) for an absurdly long query", async () => {
+    it("returns an empty list (never a 4xx) for a query past the length guard", async () => {
       const { token } = await setupArcService();
       const alice = await registerProfile("alice@example.com", "alice");
       const bob = await registerProfile("bob@example.com", "bob");
+      // A display name long enough that an over-long query CAN legitimately
+      // match a substring of it. Without this the assertion would hold whether
+      // or not the guard existed — handles cap at 30 characters, so any long
+      // query returns nothing anyway, and the test would prove nothing.
+      await setDisplayName(bob, `Bartholomew ${"o".repeat(100)}`);
       await connect(alice, bob);
 
-      const res = await search(token, `profileId=${alice}&q=${"b".repeat(200)}`);
+      // 70 chars — past MAX_CONNECTION_QUERY_LEN (64), so the guard fires
+      // before any LIKE pattern is built.
+      const over = await search(token, `profileId=${alice}&q=${"o".repeat(70)}`);
       // Degrades to "no suggestions" rather than an error the caller must
       // special-case — every failure on an autocomplete path should.
-      expect(res.status).toBe(200);
-      expect(await handlesOf(res)).toEqual([]);
+      expect(over.status).toBe(200);
+      expect(await handlesOf(over)).toEqual([]);
+
+      // 60 chars — inside the guard, and a real substring of that display
+      // name. This is the half that makes the guard the only difference
+      // between the two outcomes.
+      const under = await search(token, `profileId=${alice}&q=${"o".repeat(60)}`);
+      expect(await handlesOf(under)).toEqual(["bob"]);
     });
 
     it("returns 401 without an ARC token", async () => {

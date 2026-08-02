@@ -393,6 +393,117 @@ describe("HostsPanel", () => {
     expect(within(screen.getByRole("option")).queryByText(/Connected/i)).toBeNull();
   });
 
+  it("does NOT refetch connections when focusing an input that already has text", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([
+        { profileId: "usr_alina", handle: "alina", displayName: "Alina Rao", connected: true },
+        { profileId: "usr_alice", handle: "alice", displayName: "Alice", connected: false },
+      ]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    typeHandle("al");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    fireEvent.blur(screen.getByRole("combobox"));
+    focusHandle();
+
+    // Refetching "" here would swap their filtered matches for the unfiltered
+    // connections list and flip the caption — mid-edit, unprompted.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(authFetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("From your OSN connections")).toBeNull();
+  });
+
+  it("serves the cached connections on backspace-to-empty instead of refetching", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true }]),
+    );
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([
+        { profileId: "usr_alice", handle: "alice", displayName: null, connected: false },
+      ]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(screen.getByText("@zoe")).toBeTruthy());
+    typeHandle("al");
+    await waitFor(() => expect(screen.getByText("@alice")).toBeTruthy());
+
+    // Clearing the field re-shows the cached connections. The upstream query
+    // for an empty search scans the organiser's whole connection list, so it
+    // must not re-run every time they backspace.
+    typeHandle("");
+    await waitFor(() => expect(screen.getByText("@zoe")).toBeTruthy());
+    expect(screen.getByText("From your OSN connections")).toBeTruthy();
+    expect(authFetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("re-pulls connections after an add, since the added host is now stale in the list", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] })); // initial load
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true }]),
+    );
+    authFetchMock.mockResolvedValueOnce(
+      json({ host: { osnProfileId: "usr_zoe", handle: "zoe", role: "editor", createdAt: 2 } }, 201),
+    );
+    authFetchMock.mockResolvedValueOnce(searchJson([]));
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(screen.getByRole("option")).toBeTruthy());
+    fireEvent.mouseDown(screen.getByRole("option", { name: /@zoe/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add host/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+
+    // Without the post-add cache reset, @zoe would sit in the cached dropdown
+    // forever — a suggestion whose click now leads straight to a 409.
+    focusHandle();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(4));
+    expect(String(authFetchMock.mock.calls[3]![0])).toBe(
+      "https://api.test/api/organiser/handle-search?q=",
+    );
+  });
+
+  it("a slow on-focus fetch cannot clobber a newer typed search", async () => {
+    // Focus bypasses the debounce, so the on-focus fetch and the first
+    // keystroke's fetch are routinely in flight together. If the focus response
+    // lands last, the dropdown must NOT revert to the unfiltered list.
+    let resolveFocusFetch: ((r: Response) => void) | undefined;
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] })); // initial load
+    authFetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFocusFetch = resolve;
+        }),
+    );
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([
+        { profileId: "usr_alice", handle: "alice", displayName: null, connected: false },
+      ]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle(); // starts the (hanging) q= fetch
+    typeHandle("al"); // debounces into the q=al fetch
+    await waitFor(() => expect(screen.getByText("@alice")).toBeTruthy());
+
+    // The superseded focus response arrives late and must be discarded.
+    resolveFocusFetch?.(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true }]),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByText("@alice")).toBeTruthy();
+    expect(screen.queryByText("@zoe")).toBeNull();
+    expect(screen.queryByText("From your OSN connections")).toBeNull();
+  });
+
   it("fails soft (no dropdown) when the connections fetch errors on focus", async () => {
     authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
     authFetchMock.mockResolvedValueOnce(json({ error: "nope" }, 500));

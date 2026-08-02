@@ -1,3 +1,4 @@
+import { normaliseHandleQuery } from "@shared/db-utils/search";
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
@@ -12,6 +13,18 @@ const PREFIX = "/api/organiser";
 
 /** Max suggestions returned, however many sources contributed to them. */
 const MAX_SUGGESTIONS = 8;
+
+/**
+ * Shortest query the GLOBAL handle search can answer with anything. osn-api's
+ * `/graph/internal/profile-search` floors at 2 characters *after* stripping the
+ * `@`, so a shorter query is a signature plus a round trip to be told "empty".
+ * Mirrored here — via the same `normaliseHandleQuery` that endpoint uses, so the
+ * two floors stay in lockstep by construction rather than by comment.
+ *
+ * The CONNECTION source has no such floor: it searches one organiser's own
+ * graph, where even a single character narrows a list they can already read.
+ */
+const MIN_GLOBAL_SEARCH_LEN = 2;
 
 /** One suggestion as the organiser portal consumes it. */
 interface Suggestion {
@@ -88,7 +101,9 @@ export const createOrganiserHandleSearchRoutes = (
       const viewerId = osnProfileId;
 
       const q = typeof query.q === "string" ? query.q : "";
-      const trimmed = q.trim();
+      // Normalised the way osn-api will normalise it, so the global source's
+      // minimum-length decision is made on the same string osn-api would floor.
+      const normalised = normaliseHandleQuery(q);
 
       // Nothing configured at all — suggest nothing. Not an error: the manual
       // add path is unaffected.
@@ -104,9 +119,11 @@ export const createOrganiserHandleSearchRoutes = (
           try: async (): Promise<Suggestion[]> => {
             // Both lookups are independent S2S calls — run them concurrently so
             // the dropdown's latency is the slower of the two, not their sum.
-            // The global search is skipped entirely for an empty query: osn-api
-            // would return nothing (it floors at 2 chars) and the on-focus case
-            // is meant to show connections only.
+            // The global search is skipped below its own minimum length: osn-api
+            // floors at 2 characters, so a shorter query would cost an ARC
+            // signature and a round trip to be handed back an empty list. That
+            // includes the empty on-focus query, which is meant to show
+            // connections only.
             //
             // Each source is caught INDEPENDENTLY, not with a single
             // `Promise.all` + outer catch: one failing lookup must degrade only
@@ -120,7 +137,7 @@ export const createOrganiserHandleSearchRoutes = (
               connectionSearch
                 ? connectionSearch(viewerId, q).catch(() => [])
                 : Promise.resolve([]),
-              handleSearch && trimmed.length > 0
+              handleSearch && normalised.length >= MIN_GLOBAL_SEARCH_LEN
                 ? handleSearch(q).catch(() => [])
                 : Promise.resolve([]),
             ]);

@@ -163,6 +163,50 @@ describe("GET /api/organiser/handle-search", () => {
     expect(body[0]!.connected).toBe(false);
   });
 
+  it("filters the caller out of the CONNECTIONS source too, not just the global one", async () => {
+    // The test above only exercises the global loop, because the connection
+    // stub returns nothing for a non-ORGANISER caller. Seeding the caller into
+    // the connections result is what proves both loops honour the self-filter.
+    const { app } = buildApp({
+      resolveOsnConnectionSearch: async () => [
+        { profileId: ORGANISER, handle: "organiser", displayName: "Me" },
+        { profileId: "usr_zoe", handle: "zoe", displayName: "Zoe" },
+      ],
+      resolveOsnHandleSearch: async () => [],
+    });
+    const res = await req(app, searchPath("o"), ORGANISER);
+    expect((await profiles(res)).map((p) => p.handle)).toEqual(["zoe"]);
+  });
+
+  it("skips the global search below its 2-char floor (osn-api would answer empty)", async () => {
+    let globalCalls = 0;
+    let connectionCalls = 0;
+    const { app } = buildApp({
+      resolveOsnHandleSearch: async () => {
+        globalCalls++;
+        return [];
+      },
+      resolveOsnConnectionSearch: async () => {
+        connectionCalls++;
+        return [];
+      },
+    });
+    // "@a" normalises to "a" — one character, below osn-api's floor. Calling it
+    // would cost an ARC signature and a round trip to be handed back nothing.
+    for (const q of ["a", "@", "@a"]) {
+      // eslint-disable-next-line no-await-in-loop -- sequential assertions
+      const res = await req(app, searchPath(q), ORGANISER);
+      expect(res.status).toBe(200);
+    }
+    expect(globalCalls).toBe(0);
+    // The connection source has no floor — it searches the caller's own graph.
+    expect(connectionCalls).toBe(3);
+
+    // Two characters clears the floor and the global source runs.
+    await req(app, searchPath("al"), ORGANISER);
+    expect(globalCalls).toBe(1);
+  });
+
   it("scopes connections to the calling organiser, not to whoever asks", async () => {
     const { app } = buildApp();
     // A different signed-in organiser has no connections in the stub — they get
@@ -188,6 +232,28 @@ describe("GET /api/organiser/handle-search", () => {
     expect(body).toHaveLength(8);
     // The cap is applied after ranking, so all 6 connections survive it.
     expect(body.filter((p) => p.connected)).toHaveLength(6);
+  });
+
+  it("caps at 8 when the connections source alone overflows it", async () => {
+    // Exercises the break in the FIRST loop — the branch the mixed test above
+    // never reaches. A cap applied only after merging would pass that one.
+    const many: OsnHandleSuggestion[] = Array.from({ length: 10 }, (_, i) => ({
+      profileId: `usr_${i}`,
+      handle: `user${i}`,
+      displayName: null,
+    }));
+    const { app } = buildApp({
+      resolveOsnConnectionSearch: async () => many,
+      resolveOsnHandleSearch: async () => [
+        { profileId: "usr_global", handle: "userglobal", displayName: null },
+      ],
+    });
+    const res = await req(app, searchPath("user"), ORGANISER);
+    const body = await profiles(res);
+    expect(body).toHaveLength(8);
+    expect(body.every((p) => p.connected)).toBe(true);
+    // The global result is crowded out entirely — connections rank first.
+    expect(body.some((p) => p.handle === "userglobal")).toBe(false);
   });
 
   it("falls back to the global search when no connection resolver is configured", async () => {

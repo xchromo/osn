@@ -107,9 +107,23 @@ export default function HostsPanel(props: HostsPanelProps) {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   // Monotonic request id so a slow earlier fetch can't clobber a newer result.
   let searchSeq = 0;
-  // One on-focus connections fetch per mount: re-focusing an empty input shows
-  // the cached list rather than re-hitting the (rate-limited) search endpoint.
+  // Aborts the superseded request rather than merely ignoring its result. The
+  // `searchSeq` check alone spaces out request *starts*; without an abort a
+  // fast typist leaves several fetches running to completion, each still
+  // costing its two upstream S2S calls. Focus bypasses the debounce entirely,
+  // so this is also what stops the on-focus fetch racing the first keystroke.
+  let inFlight: AbortController | undefined;
+  // One connections fetch per mount: re-focusing (or backspacing back to) an
+  // empty input shows the cached list rather than re-hitting the endpoint,
+  // whose upstream query costs a scan of the organiser's whole connection list.
+  // The list is cached SEPARATELY from `suggestions` — restoring from
+  // `suggestions` would re-show whatever the last *typed* search returned, under
+  // the "From your OSN connections" caption, which is a different list wearing
+  // the wrong label.
   let connectionsFetched = false;
+  let cachedConnections: HandleSuggestion[] = [];
+
+  onCleanup(() => inFlight?.abort());
 
   const endpoint = () => apiUrl(`/api/organiser/weddings/${props.weddingId}/hosts`);
 
@@ -131,10 +145,29 @@ export default function HostsPanel(props: HostsPanelProps) {
    */
   async function runSearch(raw: string) {
     const q = raw.trim();
+    // An empty query has ONE answer per mount — the organiser's connections —
+    // so serve the cached list instead of re-asking. This is the backspace-to-
+    // empty path; `onHandleFocus` guards the other way in.
+    if (q.length === 0) {
+      if (connectionsFetched && cachedConnections.length > 0) {
+        setSuggestions(cachedConnections);
+        setActiveIdx(-1);
+        setBrowsingConnections(true);
+        setOpen(true);
+        return;
+      }
+      // Marked before the request, not after, so an empty result doesn't leave
+      // the flag false and refetch on every subsequent focus or backspace.
+      connectionsFetched = true;
+    }
     const seq = ++searchSeq;
+    inFlight?.abort();
+    const controller = new AbortController();
+    inFlight = controller;
     try {
       const res = await authFetch(
         apiUrl(`/api/organiser/handle-search?q=${encodeURIComponent(q)}`),
+        { signal: controller.signal },
       );
       // A newer keystroke already superseded this request — drop the result.
       if (seq !== searchSeq) return;
@@ -147,12 +180,16 @@ export default function HostsPanel(props: HostsPanelProps) {
       }
       const body = (await res.json()) as { profiles?: HandleSuggestion[] };
       const list = Array.isArray(body.profiles) ? body.profiles : [];
+      if (q.length === 0) cachedConnections = list;
       setSuggestions(list);
       setActiveIdx(-1);
       setBrowsingConnections(q.length === 0);
       setOpen(list.length > 0);
     } catch (err) {
       if (seq !== searchSeq) return;
+      // An abort is our own doing (a newer search, or unmount) — never a
+      // reason to clear a list the newer request is about to replace.
+      if (controller.signal.aborted) return;
       if (isAuthExpired(err)) return redirectToLogin();
       // Network blip — fail soft, keep the manual path usable.
       setSuggestions([]);
@@ -178,8 +215,9 @@ export default function HostsPanel(props: HostsPanelProps) {
       setOpen(true);
       return;
     }
+    // Something already typed ⇒ leave their filtered results alone; refetching
+    // "" here would swap them for the unfiltered connections list mid-edit.
     if (handle().trim().length > 0 || connectionsFetched) return;
-    connectionsFetched = true;
     await runSearch("");
   }
 
@@ -289,8 +327,10 @@ export default function HostsPanel(props: HostsPanelProps) {
       setRole("editor");
       setSuggestions([]);
       // The just-added host is now an existing co-host, so the cached connection
-      // list is stale — let the next focus pull a fresh one.
+      // list is stale — let the next focus pull a fresh one. Left cached, it
+      // would keep offering someone whose click now leads straight to a 409.
       connectionsFetched = false;
+      cachedConnections = [];
       toast.success(
         `Added ${body.host.handle ? `@${body.host.handle}` : "host"} as ${
           body.host.role === "viewer" ? "a viewer" : "an editor"

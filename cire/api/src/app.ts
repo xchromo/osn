@@ -114,12 +114,20 @@ const defaultExportLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_0
  */
 const defaultHostLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 /**
- * Default per-IP limiter for the co-host handle-search autocomplete (S-L1).
- * osnAuth-gated already, so this just caps the per-keystroke ARC-sign + S2S
- * amplifier (the route debounces client-side, but a scripted caller wouldn't);
- * 60/min is generous for hand-typing a handle while bounding the amplification.
+ * Default per-IP limiter for the co-host autocomplete (S-L1). osnAuth-gated
+ * already, so this just caps the per-keystroke ARC-sign + S2S amplifier (the
+ * route debounces client-side, but a scripted caller wouldn't).
+ *
+ * **30/min, halved from 60 when the route gained its second source.** The 60
+ * was set against a route that made ONE ARC signature + ONE subrequest per
+ * request; it now fans out to two (connections + global handle search), so the
+ * old number silently authorised twice the backend work it was chosen to
+ * permit. 30 restores the ceiling the limit was actually signed off with, and
+ * is still far above what a 280 ms client debounce can produce from real
+ * typing. Per-IP means a NAT'd office shares the bucket — moving to
+ * `rateLimitMiddlewareByUser` is tracked as P-I in the backlog.
  */
-const defaultHandleSearchLimiter = createRateLimiter({ maxRequests: 60, windowMs: 60_000 });
+const defaultHandleSearchLimiter = createRateLimiter({ maxRequests: 30, windowMs: 60_000 });
 /**
  * Default per-IP limiter for the vendor portal routes (S-L1). Covers both the
  * unauthenticated claim preview (DB-query amplifier) and the ARC-calling consume
