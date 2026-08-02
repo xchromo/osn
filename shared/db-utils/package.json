@@ -1,10 +1,11 @@
 {
   "name": "@shared/db-utils",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./search": "./src/search.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
