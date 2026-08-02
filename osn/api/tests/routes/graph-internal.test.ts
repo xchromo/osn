@@ -832,6 +832,276 @@ describe("internal graph routes (ARC-protected)", () => {
   });
 
   // -------------------------------------------------------------------------
+  // GET /graph/internal/connection-search  (co-host autocomplete, own graph)
+  // -------------------------------------------------------------------------
+
+  describe("GET /graph/internal/connection-search", () => {
+    /** Set a profile's display name — registerProfile leaves it unset. */
+    async function setDisplayName(profileId: string, displayName: string): Promise<void> {
+      await runWithLayer(
+        Effect.gen(function* () {
+          const { db } = yield* Db;
+          yield* Effect.tryPromise({
+            try: () => db.update(users).set({ displayName }).where(eq(users.id, profileId)),
+            catch: (e) => e,
+          });
+        }),
+      );
+    }
+
+    /** Establish an accepted connection between two profiles. */
+    async function connect(a: string, b: string): Promise<void> {
+      await runWithLayer(graph.sendConnectionRequest(a, b));
+      await runWithLayer(graph.acceptConnection(b, a));
+    }
+
+    const search = async (token: string, qs: string) =>
+      app.handle(
+        new Request(`http://localhost/graph/internal/connection-search?${qs}`, {
+          headers: { Authorization: `ARC ${token}` },
+        }),
+      );
+
+    const handlesOf = async (res: Response) => {
+      const body = (await res.json()) as { profiles: { handle: string }[] };
+      return body.profiles.map((p) => p.handle);
+    };
+
+    it("returns the viewer's accepted connections when the query is empty", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      const zoe = await registerProfile("zoe@example.com", "zoe");
+      await connect(alice, bob);
+      await connect(alice, zoe);
+
+      const res = await search(token, `profileId=${alice}&q=`);
+      expect(res.status).toBe(200);
+      // Ordered by handle, both directions of the pair resolved to the peer.
+      expect(await handlesOf(res)).toEqual(["bob", "zoe"]);
+    });
+
+    it("returns connections when `q` is omitted entirely", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      await connect(alice, bob);
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(res.status).toBe(200);
+      expect(await handlesOf(res)).toEqual(["bob"]);
+    });
+
+    it("resolves the peer regardless of who requested the connection", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      // bob is the REQUESTER here — alice must still see bob, not herself.
+      await connect(bob, alice);
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(await handlesOf(res)).toEqual(["bob"]);
+    });
+
+    it("filters by handle prefix", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      const bella = await registerProfile("bella@example.com", "bella");
+      const zoe = await registerProfile("zoe@example.com", "zoe");
+      await connect(alice, bob);
+      await connect(alice, bella);
+      await connect(alice, zoe);
+
+      const res = await search(token, `profileId=${alice}&q=be`);
+      expect(await handlesOf(res)).toEqual(["bella"]);
+    });
+
+    it("matches a display-name substring, not just a handle prefix", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const pk = await registerProfile("priya@example.com", "pk_1994");
+      await setDisplayName(pk, "Anaya Priyadarshini");
+      await connect(alice, pk);
+
+      // "priya" is neither a prefix of the handle nor of the display name.
+      const res = await search(token, `profileId=${alice}&q=priya`);
+      expect(await handlesOf(res)).toEqual(["pk_1994"]);
+    });
+
+    it("strips a leading @ and folds case before matching", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      await connect(alice, bob);
+
+      const res = await search(token, `profileId=${alice}&q=%40BO`);
+      expect(await handlesOf(res)).toEqual(["bob"]);
+    });
+
+    it("accepts a single character — there is no minimum-length floor here", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      await connect(alice, bob);
+
+      // The floor on /profile-search exists to stop namespace enumeration; a
+      // single accepted-connection list has no namespace to enumerate.
+      const res = await search(token, `profileId=${alice}&q=b`);
+      expect(await handlesOf(res)).toEqual(["bob"]);
+    });
+
+    it("treats `_` in the query literally rather than as a LIKE wildcard", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const underscore = await registerProfile("u1@example.com", "b_ob");
+      const plain = await registerProfile("u2@example.com", "brob");
+      await connect(alice, underscore);
+      await connect(alice, plain);
+
+      const res = await search(token, `profileId=${alice}&q=b_o`);
+      // "brob" would match if `_` were a single-char wildcard.
+      expect(await handlesOf(res)).toEqual(["b_ob"]);
+    });
+
+    it("excludes pending (not yet accepted) connection requests", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      // Requested but never accepted — not a connection, and surfacing it would
+      // leak that a request is in flight.
+      await runWithLayer(graph.sendConnectionRequest(alice, bob));
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(await handlesOf(res)).toEqual([]);
+    });
+
+    it("returns an empty list for a profile with no connections", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      await registerProfile("bob@example.com", "bob");
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(res.status).toBe(200);
+      expect(await handlesOf(res)).toEqual([]);
+    });
+
+    it("does not leak another profile's connections into the viewer's list", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      const carol = await registerProfile("carol@example.com", "carol");
+      // bob↔carol are connected; alice is connected to neither.
+      await connect(bob, carol);
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(await handlesOf(res)).toEqual([]);
+    });
+
+    it("does not return connections whose account is soft-deleted (tombstone rule)", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      const zoe = await registerProfile("zoe@example.com", "zoe");
+      await connect(alice, bob);
+      await connect(alice, zoe);
+
+      await runWithLayer(
+        Effect.gen(function* () {
+          const { db } = yield* Db;
+          const rows = yield* Effect.tryPromise({
+            try: () =>
+              db.select({ accountId: users.accountId }).from(users).where(eq(users.id, bob)),
+            catch: (e) => e,
+          });
+          const accountId = rows[0]!.accountId;
+          yield* Effect.tryPromise({
+            try: () =>
+              db
+                .update(accounts)
+                .set({ deletedAt: Math.floor(Date.now() / 1000) })
+                .where(eq(accounts.id, accountId)),
+            catch: (e) => e,
+          });
+        }),
+      );
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(await handlesOf(res)).toEqual(["zoe"]);
+    });
+
+    it("drops a connection once one side blocks the other", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      await connect(alice, bob);
+      // Blocking deletes the connection row, so no separate block filter is
+      // needed for a blocked pair to disappear from suggestions.
+      await runWithLayer(graph.blockProfile(bob, alice));
+
+      const res = await search(token, `profileId=${alice}`);
+      expect(await handlesOf(res)).toEqual([]);
+    });
+
+    it("caps the result count at the hard maximum (10) even when limit is larger", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      for (let i = 0; i < 12; i++) {
+        const n = String(i).padStart(2, "0");
+        // eslint-disable-next-line no-await-in-loop -- sequential seeding
+        const peer = await registerProfile(`user${n}@example.com`, `user${n}`);
+        // eslint-disable-next-line no-await-in-loop -- sequential seeding
+        await connect(alice, peer);
+      }
+
+      const res = await search(token, `profileId=${alice}&limit=50`);
+      const body = (await res.json()) as { profiles: unknown[] };
+      expect(body.profiles).toHaveLength(10);
+    });
+
+    it("honours a smaller explicit limit", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      const carol = await registerProfile("carol@example.com", "carol");
+      await connect(alice, bob);
+      await connect(alice, carol);
+
+      const res = await search(token, `profileId=${alice}&limit=1`);
+      const body = (await res.json()) as { profiles: unknown[] };
+      expect(body.profiles).toHaveLength(1);
+    });
+
+    it("returns an empty list (never a 4xx) for an absurdly long query", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+      const bob = await registerProfile("bob@example.com", "bob");
+      await connect(alice, bob);
+
+      const res = await search(token, `profileId=${alice}&q=${"b".repeat(200)}`);
+      // Degrades to "no suggestions" rather than an error the caller must
+      // special-case — every failure on an autocomplete path should.
+      expect(res.status).toBe(200);
+      expect(await handlesOf(res)).toEqual([]);
+    });
+
+    it("returns 401 without an ARC token", async () => {
+      const alice = await registerProfile("alice@example.com", "alice");
+      const res = await app.handle(
+        new Request(`http://localhost/graph/internal/connection-search?profileId=${alice}`),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 401 for a token without graph:read scope", async () => {
+      const { token } = await setupArcService("pulse-api", "account:erase");
+      const alice = await registerProfile("alice@example.com", "alice");
+      const res = await search(token, `profileId=${alice}`);
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // POST /graph/internal/register-service  (T-R1)
   // -------------------------------------------------------------------------
 

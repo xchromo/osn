@@ -254,9 +254,19 @@ describe("HostsPanel", () => {
 
   /** Convenience: the search response shape returned by /handle-search. */
   function searchJson(
-    profiles: { profileId: string; handle: string; displayName: string | null }[],
+    profiles: {
+      profileId: string;
+      handle: string;
+      displayName: string | null;
+      connected?: boolean;
+    }[],
   ) {
     return json({ profiles });
+  }
+
+  /** Focus the add-co-host combobox — triggers the on-focus connections fetch. */
+  function focusHandle() {
+    fireEvent.focus(screen.getByRole("combobox"));
   }
 
   it("debounces the search and fetches suggestions for a 2+ char prefix", async () => {
@@ -284,16 +294,116 @@ describe("HostsPanel", () => {
     expect(authFetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not search for a sub-2-char prefix", async () => {
-    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+  it("searches a single character too — connections have no minimum length", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] })); // initial load
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: "Zoe", connected: true }]),
+    );
     render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
     await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
 
-    typeHandle("a");
-    // Give the debounce window time to fire (it shouldn't, the prefix is too short).
-    await new Promise((r) => setTimeout(r, 350));
+    // The old two-character floor existed for the global handle search; the
+    // connection source has no namespace to enumerate, so one character is
+    // enough to narrow a list the organiser already has access to.
+    typeHandle("z");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    expect(screen.getByText("@zoe")).toBeTruthy();
+    const [url] = authFetchMock.mock.calls[1]!;
+    expect(String(url)).toBe("https://api.test/api/organiser/handle-search?q=z");
+  });
+
+  // --- Connections-driven suggestions -----------------------------------------
+
+  it("shows the organiser's OSN connections on focus, before a keystroke", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] })); // initial load
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([
+        { profileId: "usr_alina", handle: "alina", displayName: "Alina Rao", connected: true },
+        { profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true },
+      ]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    expect(screen.getByText("@alina")).toBeTruthy();
+    expect(screen.getByText("@zoe")).toBeTruthy();
+    // The caption is what makes an unprompted dropdown legible.
+    expect(screen.getByText("From your OSN connections")).toBeTruthy();
+    // An empty query is what asks the API for connections.
+    const [url] = authFetchMock.mock.calls[1]!;
+    expect(String(url)).toBe("https://api.test/api/organiser/handle-search?q=");
+  });
+
+  it("fetches the connections list once per focus cycle, not on every focus", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true }]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    fireEvent.blur(screen.getByRole("combobox"));
+    focusHandle();
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+
+    // Initial host load + exactly one connections fetch: re-focusing reopens the
+    // cached list rather than spending another (rate-limited) request.
+    expect(authFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("badges a connection in a mixed result list", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([
+        { profileId: "usr_alina", handle: "alina", displayName: "Alina Rao", connected: true },
+        { profileId: "usr_alice", handle: "alice", displayName: "Alice", connected: false },
+      ]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    typeHandle("al");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    const options = screen.getAllByRole("option");
+    // Connections lead the list (the API ranks them) and carry the badge; the
+    // non-connection does not.
+    expect(within(options[0]!).getByText("@alina")).toBeTruthy();
+    expect(within(options[0]!).getByText(/Connected/i)).toBeTruthy();
+    expect(within(options[1]!).queryByText(/Connected/i)).toBeNull();
+    // No caption — this list isn't the plain connections browse.
+    expect(screen.queryByText("From your OSN connections")).toBeNull();
+  });
+
+  it("omits the per-row badge when the whole list is connections", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(
+      searchJson([{ profileId: "usr_zoe", handle: "zoe", displayName: null, connected: true }]),
+    );
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+    // The caption already says it — a badge on every row would be noise.
+    expect(screen.getByText("From your OSN connections")).toBeTruthy();
+    expect(within(screen.getByRole("option")).queryByText(/Connected/i)).toBeNull();
+  });
+
+  it("fails soft (no dropdown) when the connections fetch errors on focus", async () => {
+    authFetchMock.mockResolvedValueOnce(json({ hosts: [] }));
+    authFetchMock.mockResolvedValueOnce(json({ error: "nope" }, 500));
+    render(() => <HostsPanel weddingId="wed_a" canManage canAdd />);
+    await waitFor(() => expect(screen.getByText(/No co-hosts yet/i)).toBeTruthy());
+
+    focusHandle();
+    await waitFor(() => expect(authFetchMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("listbox")).toBeNull();
-    expect(authFetchMock).toHaveBeenCalledTimes(1); // only the initial load
+    // Manual typing is untouched by a search outage.
+    expect((screen.getByRole("combobox") as HTMLInputElement).disabled).toBe(false);
   });
 
   it("fills the input when a suggestion is selected", async () => {

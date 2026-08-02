@@ -41,12 +41,17 @@ interface HandleSuggestion {
   profileId: string;
   handle: string;
   displayName: string | null;
+  /**
+   * True when this profile is one of the organiser's own OSN connections. The
+   * API ranks these first; the badge tells the organiser which of two similar
+   * handles is the person they actually know — worth surfacing when the click
+   * hands someone write access to a guest list.
+   */
+  connected?: boolean;
 }
 
 /** Debounce window (ms) before a typed prefix triggers a handle-search fetch. */
 const SEARCH_DEBOUNCE_MS = 280;
-/** Minimum prefix length before we bother the search endpoint (osn-api also floors at 2). */
-const MIN_SEARCH_LEN = 2;
 /** Stable DOM id for the suggestion listbox (aria-controls target). */
 const LISTBOX_ID = "host-handle-suggestions";
 /** Per-option DOM id, referenced by aria-activedescendant for keyboard nav. */
@@ -96,9 +101,15 @@ export default function HostsPanel(props: HostsPanelProps) {
   const [open, setOpen] = createSignal(false);
   // Index of the keyboard-highlighted suggestion; -1 = none highlighted.
   const [activeIdx, setActiveIdx] = createSignal(-1);
+  // True while the open dropdown is showing the organiser's connections with
+  // nothing typed — the on-focus case, which gets its own caption.
+  const [browsingConnections, setBrowsingConnections] = createSignal(false);
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   // Monotonic request id so a slow earlier fetch can't clobber a newer result.
   let searchSeq = 0;
+  // One on-focus connections fetch per mount: re-focusing an empty input shows
+  // the cached list rather than re-hitting the (rate-limited) search endpoint.
+  let connectionsFetched = false;
 
   const endpoint = () => apiUrl(`/api/organiser/weddings/${props.weddingId}/hosts`);
 
@@ -109,15 +120,17 @@ export default function HostsPanel(props: HostsPanelProps) {
     setActiveIdx(-1);
   }
 
-  /** Fetch handle suggestions for the current input, debounced + race-safe. */
+  /**
+   * Fetch suggestions for the current input, debounced + race-safe.
+   *
+   * Every input length is meaningful, so there is no client-side floor: an
+   * EMPTY query asks for the organiser's own OSN connections (what the dropdown
+   * shows on focus, before a keystroke), and a one-character query still filters
+   * those connections. The global handle search keeps its own two-character
+   * floor server-side, so a short query simply comes back with connections only.
+   */
   async function runSearch(raw: string) {
     const q = raw.trim();
-    const normalised = q.startsWith("@") ? q.slice(1) : q;
-    if (normalised.length < MIN_SEARCH_LEN) {
-      setSuggestions([]);
-      closeSuggestions();
-      return;
-    }
     const seq = ++searchSeq;
     try {
       const res = await authFetch(
@@ -136,6 +149,7 @@ export default function HostsPanel(props: HostsPanelProps) {
       const list = Array.isArray(body.profiles) ? body.profiles : [];
       setSuggestions(list);
       setActiveIdx(-1);
+      setBrowsingConnections(q.length === 0);
       setOpen(list.length > 0);
     } catch (err) {
       if (seq !== searchSeq) return;
@@ -151,6 +165,22 @@ export default function HostsPanel(props: HostsPanelProps) {
     setAddError(null);
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void runSearch(value), SEARCH_DEBOUNCE_MS);
+  }
+
+  /**
+   * Focus: re-open the cached list if there is one, otherwise — with nothing
+   * typed — pull the organiser's OSN connections so the person they're most
+   * likely adding is one click away, before any keystroke. Fetched once per
+   * mount; a search outage just leaves the dropdown closed.
+   */
+  async function onHandleFocus() {
+    if (suggestions().length > 0) {
+      setOpen(true);
+      return;
+    }
+    if (handle().trim().length > 0 || connectionsFetched) return;
+    connectionsFetched = true;
+    await runSearch("");
   }
 
   /** Pick a suggestion: fill the input with its handle and close the list. */
@@ -258,6 +288,9 @@ export default function HostsPanel(props: HostsPanelProps) {
       setHandle("");
       setRole("editor");
       setSuggestions([]);
+      // The just-added host is now an existing co-host, so the cached connection
+      // list is stale — let the next focus pull a fresh one.
+      connectionsFetched = false;
       toast.success(
         `Added ${body.host.handle ? `@${body.host.handle}` : "host"} as ${
           body.host.role === "viewer" ? "a viewer" : "an editor"
@@ -324,9 +357,9 @@ export default function HostsPanel(props: HostsPanelProps) {
         title="Share this wedding's dashboard"
         description={
           props.canManage
-            ? "Invite a partner or planner to help. Add them by their OSN handle — editors can change everything here and bring in more helpers, viewers can only look around, and only you, the owner, can change a role or remove someone."
+            ? "Invite a partner or planner to help. Pick someone from your OSN connections, or add them by handle — editors can change everything here and bring in more helpers, viewers can only look around, and only you, the owner, can change a role or remove someone."
             : props.canAdd
-              ? "Invite a partner or planner to help — add them by their OSN handle. Editors can change everything here, viewers can only look around. Changing a role or removing someone is the owner's call."
+              ? "Invite a partner or planner to help — pick someone from your OSN connections, or add them by handle. Editors can change everything here, viewers can only look around. Changing a role or removing someone is the owner's call."
               : "These co-hosts help run this wedding — editors can make changes, viewers can only look around. Ask the owner for editor access to add someone."
         }
       />
@@ -369,47 +402,67 @@ export default function HostsPanel(props: HostsPanelProps) {
                   // Delay close so a click on a suggestion (which blurs the input)
                   // still registers before the list unmounts.
                   onBlur={() => setTimeout(closeSuggestions, 120)}
-                  onFocus={() => {
-                    if (suggestions().length > 0) setOpen(true);
-                  }}
+                  onFocus={() => void onHandleFocus()}
                   disabled={adding()}
                   class="border-border bg-bg font-body text-text focus:border-gold w-full rounded-sm border px-3 py-2 text-[0.95rem] transition-colors outline-none placeholder:opacity-40 disabled:opacity-40"
                 />
                 <Show when={open() && suggestions().length > 0}>
-                  <ul
-                    id={LISTBOX_ID}
-                    role="listbox"
-                    aria-label="Matching OSN profiles"
-                    class="border-border bg-bg absolute top-full right-0 left-0 z-10 mt-1 max-h-60 overflow-auto rounded-sm border shadow-lg"
-                  >
-                    <For each={suggestions()}>
-                      {(s, i) => (
-                        <li
-                          id={optionId(i())}
-                          role="option"
-                          aria-selected={activeIdx() === i()}
-                          // onMouseDown (not click) so the input's onBlur doesn't
-                          // close the list before the selection lands.
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            pick(s);
-                          }}
-                          onMouseEnter={() => setActiveIdx(i())}
-                          class="flex cursor-pointer flex-col gap-0.5 px-3 py-2 text-left"
-                          classList={{
-                            "bg-surface": activeIdx() === i(),
-                          }}
-                        >
-                          <span class="font-body text-gold-dim text-[0.9rem]">@{s.handle}</span>
-                          <Show when={s.displayName}>
-                            <span class="font-body text-text-muted text-[0.78rem]">
-                              {s.displayName}
+                  <div class="border-border bg-bg absolute top-full right-0 left-0 z-10 mt-1 overflow-hidden rounded-sm border shadow-lg">
+                    {/* Caption for the on-focus case only: with nothing typed the
+                        list IS the organiser's connections, and saying so is what
+                        makes an unprompted dropdown legible rather than startling. */}
+                    <Show when={browsingConnections()}>
+                      <p class="border-border text-text-muted font-body border-b px-3 py-2 text-[0.68rem] tracking-[0.1em] uppercase">
+                        From your OSN connections
+                      </p>
+                    </Show>
+                    <ul
+                      id={LISTBOX_ID}
+                      role="listbox"
+                      aria-label={
+                        browsingConnections() ? "Your OSN connections" : "Matching OSN profiles"
+                      }
+                      class="max-h-60 overflow-auto"
+                    >
+                      <For each={suggestions()}>
+                        {(s, i) => (
+                          <li
+                            id={optionId(i())}
+                            role="option"
+                            aria-selected={activeIdx() === i()}
+                            // onMouseDown (not click) so the input's onBlur doesn't
+                            // close the list before the selection lands.
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              pick(s);
+                            }}
+                            onMouseEnter={() => setActiveIdx(i())}
+                            class="flex cursor-pointer flex-col gap-0.5 px-3 py-2 text-left"
+                            classList={{
+                              "bg-surface": activeIdx() === i(),
+                            }}
+                          >
+                            <span class="flex flex-wrap items-center gap-2">
+                              <span class="font-body text-gold-dim text-[0.9rem]">@{s.handle}</span>
+                              {/* Only on the mixed list — when every row is a
+                                  connection the caption already said so, and a
+                                  badge on every row is noise. */}
+                              <Show when={s.connected && !browsingConnections()}>
+                                <span class="border-gold/40 text-gold font-body rounded-sm border px-1.5 py-0.5 text-[0.58rem] tracking-[0.14em] uppercase">
+                                  Connected
+                                </span>
+                              </Show>
                             </span>
-                          </Show>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
+                            <Show when={s.displayName}>
+                              <span class="font-body text-text-muted text-[0.78rem]">
+                                {s.displayName}
+                              </span>
+                            </Show>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </div>
                 </Show>
               </div>
               <button
