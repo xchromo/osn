@@ -12,7 +12,7 @@ import {
 import { Toaster } from "solid-toast";
 
 import { createClaimCode } from "../../components/claim-code";
-import { createSessionRestore } from "../../components/claim-session";
+import { createSessionRestore, noteClaimed } from "../../components/claim-session";
 import { createRsvpClosed } from "../../components/createRsvpClosed";
 import { DetailsModal } from "../../components/DetailsModal";
 import { EventCard } from "../../components/EventCard";
@@ -125,6 +125,7 @@ export default function InvitePage(props: InvitePageProps) {
   // instead of asking for the code again.
   createSessionRestore({
     apiUrl: props.apiUrl,
+    slug: props.slug,
     result: claimResult,
     onRestored: (result) => {
       // Order matters — `restoredSession` must be true before the events
@@ -211,6 +212,10 @@ export default function InvitePage(props: InvitePageProps) {
 
   async function handleClaimed(result: ClaimResult) {
     setClaimResult(result);
+    // Mark this browser as having a household session, so the next visit
+    // restores instead of asking for the code again — and so a first-time
+    // visitor never spends a request on a guaranteed 401.
+    noteClaimed();
 
     // Wait a tick so SolidJS renders the events section into the DOM
     await new Promise((r) => setTimeout(r, 0));

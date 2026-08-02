@@ -1,7 +1,8 @@
 import { derivePalette, PALETTE_PRESETS } from "@cire/theme";
 import { render, cleanup, fireEvent, waitFor } from "@solidjs/testing-library";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
+import { noteClaimed } from "../../components/claim-session";
 import type { ClaimResult, RsvpSummary } from "../../components/types";
 import { noSession, withSession } from "../../test-support/claim-fetch";
 import InvitePage from "./InvitePage";
@@ -807,6 +808,16 @@ describe("InvitePage", () => {
   });
 
   describe("session restore", () => {
+    beforeEach(() => {
+      // Returning guest: the restore is gated on the non-credential
+      // `cire_claimed` hint written by a successful claim.
+      noteClaimed();
+    });
+
+    afterEach(() => {
+      document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+    });
+
     it("re-opens the invite from an existing session, with no code entry", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         new Response(JSON.stringify({ theme: null }), {
@@ -816,7 +827,9 @@ describe("InvitePage", () => {
       );
       vi.stubGlobal("fetch", withSession(claim, fetchMock as unknown as typeof fetch));
 
-      const { getByText } = render(() => <InvitePage apiUrl="https://api.test" />);
+      const { getByText } = render(() => (
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
+      ));
 
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
       // The single-member fixture greets the individual, not the household.
@@ -826,15 +839,22 @@ describe("InvitePage", () => {
     it("sends the household cookie on the restore read", async () => {
       // Asserted on a bare mock, not through `withSession`: the wrapper answers
       // the restore itself, so the call never reaches the inner mock.
-      const restore = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(claim), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+      // A fresh Response per call: `mockResolvedValue` would hand the same one
+      // to both the invite revalidation and the restore, and a body can only be
+      // read once.
+      const restore = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(claim), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
       );
       vi.stubGlobal("fetch", restore);
 
-      const { getByText } = render(() => <InvitePage apiUrl="https://api.test" />);
+      const { getByText } = render(() => (
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
+      ));
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
 
       const call = restore.mock.calls.find((c) => String(c[0]).includes("/api/claim/session"));
@@ -851,7 +871,9 @@ describe("InvitePage", () => {
       );
       vi.stubGlobal("fetch", withSession(claim, fetchMock as unknown as typeof fetch));
 
-      const { getByText, container } = render(() => <InvitePage apiUrl="https://api.test" />);
+      const { getByText, container } = render(() => (
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
+      ));
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
 
       const section = container.querySelector("[data-event-card]")!.closest("section")!;
@@ -872,7 +894,9 @@ describe("InvitePage", () => {
       );
       vi.stubGlobal("fetch", withSession(claim, fetchMock as unknown as typeof fetch));
 
-      const { getByText } = render(() => <InvitePage apiUrl="https://api.test" />);
+      const { getByText } = render(() => (
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
+      ));
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
 
       expect(unlockRevealSequence).not.toHaveBeenCalled();
@@ -888,7 +912,7 @@ describe("InvitePage", () => {
       vi.stubGlobal("fetch", noSession(fetchMock as unknown as typeof fetch));
 
       const { getByPlaceholderText, queryByText } = render(() => (
-        <InvitePage apiUrl="https://api.test" />
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
       ));
 
       await waitFor(() => expect(getByPlaceholderText(/PATEL-JOY/)).toBeTruthy());
@@ -897,15 +921,22 @@ describe("InvitePage", () => {
 
     it("does not restore over a ?code= deep-link — the explicit code wins", async () => {
       window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
-      const restore = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(claim), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+      // A fresh Response per call: `mockResolvedValue` would hand the same one
+      // to both the invite revalidation and the restore, and a body can only be
+      // read once.
+      const restore = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(claim), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
       );
       vi.stubGlobal("fetch", restore);
 
-      const { getByText } = render(() => <InvitePage apiUrl="https://api.test" />);
+      const { getByText } = render(() => (
+        <InvitePage apiUrl="https://api.test" slug="anita-and-ben" />
+      ));
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
 
       expect(restore.mock.calls.some((c) => String(c[0]).includes("/api/claim/session"))).toBe(
