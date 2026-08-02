@@ -129,6 +129,13 @@ interface ChangeSummary {
   baseRevision: string;
   removeManual: boolean;
   /**
+   * Whether an id-less desired row may match an existing row by name. Persisted
+   * so the apply-time re-diff matches exactly as the preview did. A row written
+   * before this field existed has none — apply then derives it from the change's
+   * `kind`, which is a column and always right.
+   */
+  matchByName?: boolean;
+  /**
    * Which halves of the wedding the change is authoritative over — `"both"`
    * unless the organiser uploaded a single sheet. Read back at apply so the
    * re-diff manages exactly the halves the preview did; a legacy row written
@@ -284,12 +291,17 @@ export const createOrganiserChangeRoutes = (
                   decoded.desiredState.events,
                   decoded.desiredState.families as ParsedFamily[],
                   weddingId,
-                  { removeManual: decoded.removeManual, scope: decoded.scope },
+                  {
+                    removeManual: decoded.removeManual,
+                    scope: decoded.scope,
+                    matchByName: decoded.matchByName,
+                  },
                 );
 
                 const summary: ChangeSummary = {
                   baseRevision,
                   removeManual: decoded.removeManual,
+                  matchByName: decoded.matchByName,
                   scope: decoded.scope,
                   eventCreates: plan.eventCreates.length,
                   eventUpdates: plan.eventUpdates.length,
@@ -444,7 +456,13 @@ export const createOrganiserChangeRoutes = (
                   desired.events,
                   desired.families as ParsedFamily[],
                   weddingId,
-                  { removeManual: stored.removeManual ?? false, scope },
+                  {
+                    removeManual: stored.removeManual ?? false,
+                    scope,
+                    // A pre-`matchByName` row falls back to the change's `kind`:
+                    // an editor save is id-authoritative, a spreadsheet is not.
+                    matchByName: stored.matchByName ?? row.kind !== "editor",
+                  },
                 );
 
                 // E3 checkpoint: snapshot the pre-change state at full fidelity

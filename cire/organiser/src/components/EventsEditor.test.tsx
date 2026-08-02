@@ -31,6 +31,7 @@ vi.mock("../lib/api", () => ({
 
 import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
+import { __resetHouseholdsCache } from "../lib/households-store";
 import EventsEditor from "./EventsEditor";
 
 function json(body: unknown, status = 200) {
@@ -93,10 +94,23 @@ const GUESTS = [
   },
 ];
 
+const HOUSEHOLDS = [
+  {
+    familyId: "fam_a",
+    publicId: "SHARMA-KITE-77Q2",
+    familyName: "Sharma",
+    guestCount: 1,
+    codeSharedAt: null,
+    firstOpenedAt: null,
+    deactivatedAt: null,
+  },
+];
+
 function primeLoad() {
   authFetchMock.mockImplementation((url: string) => {
     if (String(url).endsWith("/events")) return Promise.resolve(json(EVENTS));
     if (String(url).endsWith("/guests")) return Promise.resolve(json(GUESTS));
+    if (String(url).endsWith("/households")) return Promise.resolve(json(HOUSEHOLDS));
     return Promise.resolve(json({}));
   });
 }
@@ -117,6 +131,7 @@ describe("EventsEditor", () => {
     toastSuccess.mockReset();
     toastError.mockReset();
     __resetGuestsCache();
+    __resetHouseholdsCache();
     __resetEventsCache();
   });
 
@@ -237,6 +252,7 @@ describe("EventsEditor", () => {
       if (u.endsWith("/events"))
         return Promise.resolve(json([{ ...EVENTS[0], name: "Wedding Ceremony" }, EVENTS[1]]));
       if (u.endsWith("/guests")) return Promise.resolve(json(GUESTS));
+      if (u.endsWith("/households")) return Promise.resolve(json(HOUSEHOLDS));
       return Promise.resolve(json({}));
     });
 

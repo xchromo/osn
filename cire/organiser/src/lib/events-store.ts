@@ -103,6 +103,10 @@ export function patchCachedEvent(
  *  mutation that can change the event list — e.g. an import apply. */
 export function invalidateEvents(weddingId: string): void {
   cache.delete(weddingId);
+  // Drop any in-flight load too: it was started against the PRE-mutation state,
+  // and a caller that invalidates and immediately reloads would otherwise await
+  // that stale fetch and cache its result as fresh.
+  inflight.delete(weddingId);
 }
 
 /** In-flight loads, keyed by weddingId, so panels mounting in the same tick

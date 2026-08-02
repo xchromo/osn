@@ -13,7 +13,12 @@ import { Effect, Data } from "effect";
 import { DbService, dbQuery } from "../db";
 import { resolveRsvpDeadline } from "../lib/rsvp-deadline";
 import { measureClaimLookup, metricClaimAttempt, metricInviteOpened } from "../metrics";
-import type { ClaimResponse, OrganiserGuestRow, DressSwatch } from "../schemas/claim";
+import type {
+  ClaimResponse,
+  OrganiserGuestRow,
+  OrganiserHouseholdRow,
+  DressSwatch,
+} from "../schemas/claim";
 import { decodeCrop, type ImageCrop } from "../schemas/invite";
 import { eventImagePath, versionFromKey } from "./event-image";
 
@@ -455,5 +460,61 @@ export const claimService = {
       }
       return Array.from(byGuest.values());
     }).pipe(Effect.withSpan("cire.claim.getAllGuests"));
+  },
+
+  /**
+   * All HOUSEHOLDS for one wedding (organiser view), including ones that hold no
+   * guests — see {@link OrganiserHouseholdRow} for why the guest-shaped read
+   * can't answer this. Ordered oldest-first so the editor appends a code-only
+   * household in creation order rather than an arbitrary one.
+   */
+  getAllHouseholds(weddingId: string): Effect.Effect<OrganiserHouseholdRow[], never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+
+      // LEFT JOIN, so a household with no guests still yields exactly one row.
+      const rows = yield* dbQuery(() =>
+        db
+          .select({
+            familyId: families.id,
+            publicId: families.publicId,
+            familyName: families.familyName,
+            codeSharedAt: families.codeSharedAt,
+            firstOpenedAt: families.firstOpenedAt,
+            deactivatedAt: families.deactivatedAt,
+            guestId: guests.id,
+          })
+          .from(families)
+          .leftJoin(guests, eq(guests.familyId, families.id))
+          // Same host-preview exclusion as the guest read: the synthetic family
+          // is not part of the organiser's roster and must never round-trip
+          // through a draft save.
+          .where(and(eq(families.weddingId, weddingId), ne(families.kind, "host")))
+          .orderBy(asc(families.createdAt))
+          .all(),
+      );
+
+      const byFamily = new Map<
+        string,
+        { -readonly [K in keyof OrganiserHouseholdRow]: OrganiserHouseholdRow[K] }
+      >();
+      for (const row of rows) {
+        let entry = byFamily.get(row.familyId);
+        if (!entry) {
+          entry = {
+            familyId: row.familyId,
+            publicId: row.publicId,
+            familyName: row.familyName,
+            guestCount: 0,
+            codeSharedAt: row.codeSharedAt === null ? null : row.codeSharedAt.getTime(),
+            firstOpenedAt: row.firstOpenedAt === null ? null : row.firstOpenedAt.getTime(),
+            deactivatedAt: row.deactivatedAt === null ? null : row.deactivatedAt.getTime(),
+          };
+          byFamily.set(row.familyId, entry);
+        }
+        if (row.guestId !== null) entry.guestCount += 1;
+      }
+      return Array.from(byFamily.values());
+    }).pipe(Effect.withSpan("cire.claim.getAllHouseholds"));
   },
 };

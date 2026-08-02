@@ -9,7 +9,7 @@ import {
   SortableProvider,
   useDragDropContext,
 } from "@thisbeyond/solid-dnd";
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { toast } from "solid-toast";
 
@@ -28,6 +28,13 @@ import {
   invalidateGuests,
   type OrganiserGuestRow,
 } from "../lib/guests-store";
+import {
+  ensureHouseholdsLoaded,
+  householdsAccessor,
+  invalidateHouseholds,
+  type OrganiserHouseholdRow,
+} from "../lib/households-store";
+import { registerUnsavedGuard } from "../lib/unsaved-guard";
 import ChangePreview, { type ChangePlan } from "./ChangePreview";
 import ColorPicker from "./ColorPicker";
 import DatePicker from "./DatePicker";
@@ -140,7 +147,7 @@ export default function EventsEditor(props: { weddingId: string }) {
    *  WHOLE DesiredState, so an unloaded guest slice would read as "delete every
    *  household". */
   async function loadInto() {
-    const [events, guests] = await Promise.all([
+    const [events, guests, households] = await Promise.all([
       ensureEventsLoaded(props.weddingId, async () => {
         const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/events`));
         if (res.status === 401) {
@@ -159,11 +166,29 @@ export default function EventsEditor(props: { weddingId: string }) {
         if (!res.ok) throw new Error("Failed to load guests");
         return (await res.json()) as OrganiserGuestRow[];
       }).then(() => guestsAccessor(props.weddingId)() ?? []),
+      // Households ride along for the same reason the guests do, one level down:
+      // the guest rows can't describe a household that holds no guests, so
+      // without this read a guest-less household is absent from the DesiredState
+      // and a schedule-only save deletes it (and its live claim code).
+      ensureHouseholdsLoaded(props.weddingId, async () => {
+        const res = await authFetch(
+          apiUrl(`/api/organiser/weddings/${props.weddingId}/households`),
+        );
+        if (res.status === 401) {
+          redirectToLogin();
+          throw new Error("unauthenticated");
+        }
+        if (!res.ok) throw new Error("Failed to load households");
+        return (await res.json()) as OrganiserHouseholdRow[];
+      }).then(() => householdsAccessor(props.weddingId)() ?? []),
     ]);
-    store.load(events, guests);
+    store.load(events, guests, households);
   }
 
   onMount(async () => {
+    // Same two-layer guard as the guests editor + invite builder: SPA navigation
+    // asks before switching away, the browser asks on close/reload.
+    onCleanup(registerUnsavedGuard(() => store.dirty()));
     try {
       await loadInto();
     } catch (err) {
@@ -248,6 +273,7 @@ export default function EventsEditor(props: { weddingId: string }) {
       }
       invalidateEvents(props.weddingId);
       invalidateGuests(props.weddingId);
+      invalidateHouseholds(props.weddingId);
       setPreview(null);
       setEditingKey(null);
       await loadInto();

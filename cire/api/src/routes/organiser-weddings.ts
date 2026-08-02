@@ -126,6 +126,27 @@ export const createOrganiserWeddingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
             ),
           );
         })
+        // Household-shaped companion to `/guests`: one row per family, INCLUDING
+        // families that currently hold no guests (which the guest-shaped read
+        // cannot represent). The guest editor loads it so a code-only household
+        // survives a draft save instead of reading as a deletion.
+        .get("/households", ({ weddingId, set }) => {
+          if (!weddingId) {
+            set.status = 500;
+            return { error: "Internal error" };
+          }
+          return runCire(
+            claimService.getAllHouseholds(weddingId).pipe(
+              Effect.provideService(DbService, db),
+              Effect.catchAllDefect(() =>
+                Effect.sync(() => {
+                  set.status = 500;
+                  return { error: "Internal error" };
+                }),
+              ),
+            ),
+          );
+        })
         .get("/events", ({ weddingId, set }) => {
           if (!weddingId) {
             set.status = 500;
