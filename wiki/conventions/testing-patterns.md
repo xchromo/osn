@@ -124,7 +124,9 @@ Adding a column is then a one-file change in `src/schema/`. The emitter carries 
 
 `osn/db/tests/ddl-lockstep.test.ts` diffs a normalised structural snapshot of the emitted schema against the full `osn/db/drizzle/*.sql` migration chain. It compares columns, types, defaults, nullability, indexes (**including column order within an index** — SQLite serves only a leading prefix), partial predicates, foreign keys and their referential actions, and pins CHECK/trigger/view sets as empty. It fails when a migration lands without a schema change, when a schema change lands without a migration, or when the emitter loses a constraint. `zap/db` has the same test; `cire/api/src/db/ddl-lockstep.test.ts` covers cire's three-way mirror.
 
-**If you extend one emitter, extend all three** — they are copies. `pulse/db` is the one package with no lockstep guard, because its migration chain does not currently apply from empty (**D-H1** in `wiki/TODO.md`); land the port once that is repaired.
+**If you extend one emitter, extend all three** — they are copies, and all three (`osn/db`, `pulse/db`, `zap/db`) now carry the lockstep test.
+
+Writing pulse's found **D-H1**: a `user_id` → `profile_id` rename had reached `src/schema` without ever reaching migration `0000`, and three `events` columns existed with no migration at all — so `wrangler d1 migrations apply pulse-db` against a fresh D1 would have failed. Every Pulse test builds from `applySchema()`, so nothing exercised the chain until this test did.
 
 When you write one of these, prove it can fail. Mutate the emitter — drop a constraint, reverse an index's columns — and confirm the test goes red. The first version of the osn test passed with every foreign key removed and with composite index columns reversed.
 
@@ -160,6 +162,17 @@ afterEach(() => {
 Because the spies are shared, a `describe` block that forgets a reset inherits call counts from the block above it. Always call `resetOrganiserMocks()` rather than hand-listing the spies you happen to remember.
 
 A suite that genuinely needs a different shape (an extra `useAuth` field, an `importOriginal` spread) keeps its own local mock. These harnesses cover the common case; they are not a mandate.
+
+## The D1 integration lane
+
+Each API package has a `src/d1-integration.test.ts` that runs against a real workerd-backed D1 via Miniflare. These files sit **outside** the vitest `include` glob (`tests/**/*.test.ts`), so `bun run test` never reaches them — they are the only coverage of the **asynchronous** D1 driver that dev/staging/prod actually use, as opposed to the synchronous `bun:sqlite` every other suite runs on.
+
+```bash
+bun run test:d1            # all four packages, serially
+bun run --cwd zap/api test:d1
+```
+
+Run serially. Concurrent Miniflare workerd instances contend and fail spuriously, which is why the root script pins `--concurrency=1`. Both `ci.yml` and `deploy.yml` run this lane; before 2026-08 neither did, and zap's test sat failing on a stale fixture for as long as it took someone to run it by hand.
 
 ## Running Tests
 

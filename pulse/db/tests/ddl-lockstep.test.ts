@@ -7,12 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import { createSchemaSql } from "../src/testing";
 
-// Mechanical enforcement of the Zap DDL lockstep contract, ported from
+// Mechanical enforcement of the Pulse DDL lockstep contract, ported from
 // osn/db's ddl-lockstep.test.ts.
 //
 // Two surfaces must describe the same database shape:
-//   1. zap/db/drizzle/*.sql — what production D1 actually is,
-//   2. `createSchemaSql()` — the schema-derived DDL every Zap test runs on
+//   1. pulse/db/drizzle/*.sql — what production D1 actually is,
+//   2. `createSchemaSql()` — the schema-derived DDL every Pulse test runs on
 //      (bun:sqlite for the unit suites, Miniflare D1 for d1-integration).
 //
 // Surface 2 is emitted from src/schema/index.ts, so this also pins the Drizzle
@@ -20,8 +20,15 @@ import { createSchemaSql } from "../src/testing";
 // fails here, as does a migration applied without updating schema.ts.
 //
 // The emitter this pins is a copy of @osn/db's, which was found dropping
-// column-level `.unique()` and partial-index WHERE clauses. This schema uses
-// neither today, so that bug was latent here — this test is what keeps it so.
+// column-level `.unique()`, partial-index WHERE clauses and FK referential
+// actions. Pulse's schema uses none of those today, so the bug was latent
+// here — this test is what keeps it so.
+//
+// It also guards the defect that motivated it (D-H1): the `user_id` ->
+// `profile_id` rename reached src/schema without ever reaching migration
+// 0000, so the chain could not build the schema it claims to. Every Pulse
+// test builds from applySchema(), never the chain, which is why nothing
+// noticed until this test existed.
 //
 // Normalisation — differences deliberately treated as equal, and ONLY these:
 // - Table-column ORDER is ignored (columns are keyed by name). D1's ALTER TABLE
@@ -203,7 +210,7 @@ function snapshot(db: Database): Record<string, TableShape> {
   return out;
 }
 
-describe("Zap DDL lockstep", () => {
+describe("Pulse DDL lockstep", () => {
   const migrated = snapshot(migratedDb());
   const emitted = snapshot(emittedDb());
 
