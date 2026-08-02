@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, events, weddings } from "@cire/db";
+import { BOOTSTRAP_WEDDING_ID, events, families, weddings } from "@cire/db";
 import { events as eventsData } from "@cire/db/seed";
 import { createRateLimiter } from "@shared/rate-limit";
 import { eq } from "drizzle-orm";
@@ -316,5 +316,163 @@ describe("POST /api/claim event imageUrl (migration 0019)", () => {
     // "no deadline" from "an older API that doesn't send the field" and treats
     // both as open, but only the first is a promise this endpoint makes.
     expect(data.rsvpDeadline).toBeNull();
+  });
+});
+
+// ── GET /api/claim/session ────────────────────────────────────────────────────
+// The restore read. Its whole job is to hand a household that ALREADY proved
+// membership the same payload `POST /api/claim` gives, without a second code
+// entry — so the tests below pin both halves: it returns the identical view,
+// and it never becomes a second way IN.
+
+describe("GET /api/claim/session", () => {
+  const sessionApp = createApp(db, {
+    claimLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+    claimSessionLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+  });
+
+  const claimFor = async (publicId: string) => {
+    const res = await sessionApp.fetch(
+      new Request("http://localhost/api/claim", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "cf-connecting-ip": "203.0.113.9",
+          Origin: "http://localhost:4321",
+        },
+        body: JSON.stringify({ publicId }),
+      }),
+    );
+    const cookie = res.headers.get("Set-Cookie")!.split(";")[0]!;
+    return { body: (await res.json()) as ClaimOk, cookie };
+  };
+
+  const getSession = (cookie?: string) =>
+    sessionApp.fetch(
+      new Request("http://localhost/api/claim/session", {
+        headers: {
+          "cf-connecting-ip": "203.0.113.9",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      }),
+    );
+
+  it("returns 401 with no session cookie", async () => {
+    const res = await getSession();
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 for a bogus session token", async () => {
+    const res = await getSession("cire_session=not-a-real-token");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the same invite the claim did, for a valid session", async () => {
+    const { body: claimed, cookie } = await claimFor("TESTONE-IVY-AA11");
+
+    const res = await getSession(cookie);
+    expect(res.status).toBe(200);
+    const restored = (await res.json()) as ClaimOk;
+
+    expect(restored.familyId).toBe(claimed.familyId);
+    expect(restored.publicId).toBe(claimed.publicId);
+    expect(restored.familyName).toBe(claimed.familyName);
+    expect(restored.members).toEqual(claimed.members);
+    expect(restored.events).toEqual(claimed.events);
+  });
+
+  it("carries the closing section — the claim payload is its only delivery point (S-H1)", async () => {
+    const { cookie } = await claimFor("TESTONE-IVY-AA11");
+    const res = await getSession(cookie);
+    const restored = (await res.json()) as { closing?: unknown };
+    // Present as a shape (contents depend on the wedding's customisation row);
+    // what matters is the restore does not silently drop the gated section.
+    expect(restored.closing).toBeDefined();
+  });
+
+  it("accepts NO claim code — it is a restore, not a second credential surface", async () => {
+    const { body: one } = await claimFor("TESTONE-IVY-AA11");
+    const { cookie: cookieFour } = await claimFor("TESTFOR-JOY-DD44");
+
+    // A caller holding family four's session cannot name family one, by query
+    // string or by body: the route reads only the cookie-derived family id.
+    const res = await sessionApp.fetch(
+      new Request(`http://localhost/api/claim/session?publicId=TESTONE-IVY-AA11`, {
+        headers: { "cf-connecting-ip": "203.0.113.9", Cookie: cookieFour },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const restored = (await res.json()) as ClaimOk;
+    expect(restored.familyId).not.toBe(one.familyId);
+    expect(restored.publicId).toBe("TESTFOR-JOY-DD44");
+  });
+
+  it("401s and CLEARS the cookie once the family is deactivated", async () => {
+    const { cookie, body } = await claimFor("TESTFOR-JOY-DD44");
+    // Sanity: the session works before the withdrawal.
+    expect((await getSession(cookie)).status).toBe(200);
+
+    db.update(families)
+      .set({ deactivatedAt: new Date() })
+      .where(eq(families.id, body.familyId))
+      .run();
+
+    const res = await getSession(cookie);
+    expect(res.status).toBe(401);
+    const setCookie = res.headers.get("Set-Cookie");
+    expect(setCookie).toContain("cire_session=");
+    expect(setCookie).toContain("Max-Age=0");
+
+    // Restore the fixture for any later test in this file.
+    db.update(families).set({ deactivatedAt: null }).where(eq(families.id, body.familyId)).run();
+  });
+
+  it("does not burn the claim endpoint's brute-force budget", async () => {
+    // A tight claim limiter alongside a normal session limiter: the restore
+    // must not be gated by the credential-surface budget, or a household
+    // reloading its invite would 429 itself.
+    const tightApp = createApp(db, {
+      claimLimiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }),
+      claimSessionLimiter: createRateLimiter({ maxRequests: 100, windowMs: 60_000 }),
+    });
+    const claimRes = await tightApp.fetch(
+      new Request("http://localhost/api/claim", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "cf-connecting-ip": "203.0.113.22",
+          Origin: "http://localhost:4321",
+        },
+        body: JSON.stringify({ publicId: "TESTONE-IVY-AA11" }),
+      }),
+    );
+    expect(claimRes.status).toBe(200);
+    const cookie = claimRes.headers.get("Set-Cookie")!.split(";")[0]!;
+
+    // The claim budget (1/min) is now spent — the restore is unaffected.
+    for (let i = 0; i < 5; i++) {
+      const res = await tightApp.fetch(
+        new Request("http://localhost/api/claim/session", {
+          headers: { "cf-connecting-ip": "203.0.113.22", Cookie: cookie },
+        }),
+      );
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("enforces its own limiter once that budget is spent", async () => {
+    const cappedApp = createApp(db, {
+      claimLimiter: createRateLimiter({ maxRequests: 10_000, windowMs: 60_000 }),
+      claimSessionLimiter: createRateLimiter({ maxRequests: 2, windowMs: 60_000 }),
+    });
+    const req = () =>
+      cappedApp.fetch(
+        new Request("http://localhost/api/claim/session", {
+          headers: { "cf-connecting-ip": "203.0.113.33" },
+        }),
+      );
+    await req();
+    await req();
+    expect((await req()).status).toBe(429);
   });
 });

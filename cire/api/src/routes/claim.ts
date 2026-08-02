@@ -5,7 +5,8 @@ import { Elysia } from "elysia";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
-import { buildSessionCookie } from "../lib/cookie";
+import { buildSessionCookie, clearSessionCookie } from "../lib/cookie";
+import { sessionAuth } from "../middleware/auth";
 import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { turnstileGate } from "../middleware/turnstile";
 import { runCire } from "../observability";
@@ -84,3 +85,63 @@ export const createClaimRoutes = (
     // instead of Elysia's parser error.
     { parse: () => ({}) },
   );
+
+export interface ClaimSessionRouteOptions {
+  /** Primary origin (used for the cleared cookie's `secure` flag). */
+  webOrigin: string;
+  /**
+   * Per-IP limiter for the restore read. Deliberately NOT the claim limiter:
+   * that one is a 5/min brute-force budget sized for a credential surface, and
+   * this route is hit on every page load by guests who already hold a session —
+   * a household behind one NAT would 429 itself just by reloading. See the
+   * sibling-instance split below.
+   */
+  limiter: RateLimiterBackend;
+}
+
+/**
+ * `GET /api/claim/session` — re-read the invite for the household this
+ * `cire_session` cookie already belongs to.
+ *
+ * A SIBLING instance to `createClaimRoutes` rather than another route on it, so
+ * the two get different limiters (Elysia applies a scoped middleware per
+ * instance) — the same split as the organiser hosts read/write routes. The
+ * credential surface keeps its tight budget; the restore read gets a page-load-
+ * sized one.
+ *
+ * No Turnstile: the caller isn't presenting a code, they're presenting a session
+ * this API minted. No Origin guard concerns either — it is a safe GET.
+ *
+ * On failure the stale cookie is CLEARED, so a household whose invite was
+ * withdrawn (or whose session outlived its family row) lands on the code form
+ * instead of retrying a dead cookie on every visit.
+ */
+export const createClaimSessionRoutes = (
+  db: Db,
+  { webOrigin, limiter }: ClaimSessionRouteOptions,
+) =>
+  new Elysia({ prefix: "/api/claim" })
+    .use(rateLimitMiddleware(limiter))
+    .use(sessionAuth(db))
+    .get("/session", async ({ familyId, set }) => {
+      // sessionAuth's onBeforeHandle guarantees this; the guard is a runtime
+      // safety net (and narrows the type).
+      if (!familyId) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+      return runCire(
+        claimService.restore(familyId).pipe(
+          Effect.provideService(DbService, db),
+          Effect.catchTag("InvalidCredentials", () =>
+            Effect.sync(() => {
+              set.status = 401;
+              set.headers["set-cookie"] = clearSessionCookie({
+                secure: webOrigin.startsWith("https://"),
+              });
+              return { error: "Invalid credentials" };
+            }),
+          ),
+        ),
+      );
+    });
