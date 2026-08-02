@@ -533,7 +533,7 @@ export const vendorClaims = sqliteTable(
 // `ai`) gate features by presence; capacity is LEVELED — the effective guest
 // ceiling is DERIVED from the highest capacity_* row (none→100, capacity_500→500,
 // capacity_1000→1000), so there is deliberately no guest_cap column to drift.
-// `source` distinguishes a provider purchase from a comp/manual grant (V&R,
+// `source` distinguishes a provider purchase from a comp/manual grant (R&V,
 // "contact us" capacity, support goodwill). `provider_ref` carries the
 // external provider reference on purchases (NULL on comp) and is the
 // Phase-2 webhook idempotency key.
