@@ -3,12 +3,36 @@ import { Input } from "@osn/ui/ui/input";
 import { useNavigate } from "@solidjs/router";
 import { createSignal, For, Show } from "solid-js";
 
-import { createSearchController } from "../lib/search";
+import { createSearchController, type SearchRow } from "../lib/search";
 import { IconSearch } from "./nav";
 import { OrganisationRow, PersonRow, useSearchActions } from "./SearchResultRows";
 
 const LISTBOX_ID = "global-search-results";
 const optionId = (index: number) => `global-search-option-${index}`;
+
+/**
+ * The accessible name for an option. Because the option itself is the
+ * activation target, the name has to carry what activating it will do —
+ * otherwise a screen-reader user hears a name with no affordance.
+ */
+function optionLabel(row: SearchRow): string {
+  if (row.kind === "organisation") {
+    const { name, handle, isMember } = row.organisation;
+    return `${name}, @${handle}${isMember ? ", member" : ""}, open organisation`;
+  }
+  const { handle, displayName, connectionStatus } = row.person;
+  const who = displayName ? `${displayName}, @${handle}` : `@${handle}`;
+  switch (connectionStatus) {
+    case "connected":
+      return `${who}, already connected`;
+    case "pending_sent":
+      return `${who}, request already sent`;
+    case "pending_received":
+      return `${who}, accept connection request`;
+    default:
+      return `${who}, send connection request`;
+  }
+}
 
 /**
  * The shell search bar: a live combobox in the desktop rail. People and
@@ -67,13 +91,20 @@ export function GlobalSearch(props: { token: string }) {
       const row = list[activeIndex()];
       if (!row) return;
       event.preventDefault();
-      // People carry an inline action; an organisation row is a destination.
-      if (row.kind === "person") {
-        actions.activate(row.person);
-      } else {
-        close();
-        navigate(`/organisations/${row.organisation.id}`);
-      }
+      activate(row);
+    }
+  }
+
+  /**
+   * Activating an option — by Enter or by click. A person's option connects (or
+   * accepts, when they asked first); an organisation's option navigates.
+   */
+  function activate(row: SearchRow) {
+    if (row.kind === "person") {
+      actions.activate(row.person);
+    } else {
+      close();
+      navigate(`/organisations/${row.organisation.handle}`);
     }
   }
 
@@ -119,9 +150,21 @@ export function GlobalSearch(props: { token: string }) {
               contain options, so "Searching…" can't be a child of the <ul>. */}
           <Show when={rows().length === 0}>
             <p class="text-muted-foreground text-body px-3 py-4 text-center" aria-live="polite">
-              {controller.loading() ? "Searching…" : `No results for "${controller.submitted()}"`}
+              {controller.failed()
+                ? "Search is unavailable right now. Try again in a moment."
+                : controller.loading()
+                  ? "Searching…"
+                  : `No results for "${controller.submitted()}"`}
             </p>
           </Show>
+          {/* Options carry no nested button or link. An ARIA listbox owns
+              activation through virtual focus (`aria-activedescendant` + Enter),
+              and assistive tech flattens an option to its accessible name — so
+              a nested control is announced as text and cannot be operated. The
+              whole row is the activation target instead, for pointer and
+              keyboard alike, and the trailing Connect / Accept text is a
+              non-interactive affordance label. The `/search` page, which is a
+              plain list rather than a combobox, keeps real buttons. */}
           <ul id={LISTBOX_ID} role="listbox" aria-label="Search results">
             <For each={rows()}>
               {(row, index) => (
@@ -129,33 +172,29 @@ export function GlobalSearch(props: { token: string }) {
                   id={optionId(index())}
                   role="option"
                   aria-selected={activeIndex() === index()}
-                  class={clsx("rounded-lg", activeIndex() === index() && "bg-muted/60")}
+                  aria-label={optionLabel(row)}
+                  class={clsx(
+                    "flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2",
+                    activeIndex() === index() && "bg-muted/60",
+                  )}
                   onMouseEnter={() => setActiveIndex(index())}
+                  onClick={() => activate(row)}
                 >
                   <Show
                     when={row.kind === "person" ? row.person : null}
                     fallback={
-                      <a
-                        href={`/organisations/${row.kind === "organisation" ? row.organisation.id : ""}`}
-                        class="flex items-center gap-3 px-3 py-2"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          close();
-                          if (row.kind === "organisation") {
-                            navigate(`/organisations/${row.organisation.id}`);
-                          }
-                        }}
-                      >
-                        <Show when={row.kind === "organisation" ? row.organisation : null}>
-                          {(organisation) => <OrganisationRow organisation={organisation()} />}
-                        </Show>
-                      </a>
+                      <Show when={row.kind === "organisation" ? row.organisation : null}>
+                        {(organisation) => <OrganisationRow organisation={organisation()} />}
+                      </Show>
                     }
                   >
                     {(person) => (
-                      <div class="flex items-center gap-3 px-3 py-2">
-                        <PersonRow person={person()} controller={controller} actions={actions} />
-                      </div>
+                      <PersonRow
+                        person={person()}
+                        controller={controller}
+                        actions={actions}
+                        interactive={false}
+                      />
                     )}
                   </Show>
                 </li>

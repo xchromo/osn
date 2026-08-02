@@ -176,6 +176,66 @@ describe("recommendations routes", () => {
     expect(res.status).toBe(429);
   });
 
+  it("guards each route with its own limiter, not the other's budget", async () => {
+    // Asymmetric on purpose: denying only `suggest` must 429 /connections and
+    // leave /search working. Without this, cross-wiring /connections to the
+    // looser 60/min search budget would pass every other rate-limit test.
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    const suggestOnlyDenied = createRecommendationRoutes(config, layer, undefined, {
+      suggest: { check: () => Promise.resolve(false) },
+      search: { check: () => Promise.resolve(true) },
+    });
+
+    const suggest = await suggestOnlyDenied.handle(
+      new Request("http://localhost/recommendations/connections", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const search = await suggestOnlyDenied.handle(
+      new Request("http://localhost/recommendations/search?q=ali", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+
+    expect(suggest.status).toBe(429);
+    expect(search.status).toBe(200);
+  });
+
+  it("fails closed when a limiter backend throws", async () => {
+    // The Upstash-unreachable path. Every other limiter stub resolves `false`;
+    // only this one reaches the `catch { allowed = false }` branch.
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    const throwing = { check: () => Promise.reject(new Error("redis unreachable")) };
+    const app = createRecommendationRoutes(config, layer, undefined, {
+      suggest: throwing,
+      search: throwing,
+    });
+
+    for (const path of ["/recommendations/connections", "/recommendations/search?q=ali"]) {
+      const res = await app.handle(
+        new Request(`http://localhost${path}`, {
+          headers: { Authorization: `Bearer ${alice.token}` },
+        }),
+      );
+      expect(res.status).toBe(429);
+    }
+  });
+
+  it("rejects a limiter argument that is missing either slot", () => {
+    // The rename from a single backend to the pair invites a caller passing the
+    // old shape; this guard is what turns that into a boot-time error rather
+    // than a per-request crash on `rateLimiters.suggest.check`.
+    const bare = { check: () => Promise.resolve(true) };
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately the pre-branch shape
+      createRecommendationRoutes(config, layer, undefined, bare as any),
+    ).toThrow(/suggest must have a check\(\) method/);
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately missing a slot
+      createRecommendationRoutes(config, layer, undefined, { suggest: bare } as any),
+    ).toThrow(/search must have a check\(\) method/);
+  });
+
   // -------------------------------------------------------------------------
   // Search (autocomplete)
   // -------------------------------------------------------------------------
@@ -267,6 +327,19 @@ describe("recommendations routes", () => {
       const alice = await registerAndGetToken("a@e.com", "alice");
       const { status } = await search(alice.token, "q=ali&orgLimit=0");
       expect(status).toBe(422);
+    });
+
+    it("derives orgLimit as half of limit when the caller omits it", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      const orgService = createOrganisationService();
+      for (let i = 0; i < 5; i++) {
+        await runWithLayer(orgService.createOrganisation(alice.profileId, `acme${i}`, `Acme ${i}`));
+      }
+
+      const { json } = await search(alice.token, "q=acme&limit=3");
+      // ceil(3 / 2) = 2 — organisations are the secondary section, so they get
+      // a shorter list than people unless the caller asks otherwise.
+      expect(json.organisations).toHaveLength(2);
     });
 
     it("returns 429 when the search limiter rejects", async () => {

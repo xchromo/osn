@@ -7,7 +7,7 @@ import {
   users,
 } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,16 @@ const MAX_ORG_COMEMBER_ROWS = 2_000;
 export const MIN_SEARCH_QUERY_LENGTH = 2;
 
 /**
+ * Minimum query length before the unanchored `%q%` pass is allowed to run. It
+ * is a full table scan (no index can serve a leading wildcard), and a two-char
+ * infix is simultaneously the cheapest query to abuse and the least selective —
+ * so the scan is reserved for queries long enough to be a real "I typed part of
+ * a surname" recovery. Prefix matching still works from
+ * `MIN_SEARCH_QUERY_LENGTH`.
+ */
+const MIN_INFIX_QUERY_LENGTH = 3;
+
+/**
  * How many rows to over-fetch relative to the caller's requested limit. Blocked
  * profiles and the caller's own row are filtered in application code (the block
  * set is unbounded, so binding it into the SQL `NOT IN` would risk SQLite's
@@ -110,14 +120,21 @@ export interface ProfileSearchResult {
   connectionStatus: SearchConnectionState;
 }
 
+/** Internal row shape shared by the two search passes before ranking. */
+interface ProfileRow {
+  id: string;
+  handle: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
 export interface OrganisationSearchResult {
   /**
-   * Included because the organisation detail route is keyed by id
-   * (`/organisations/:id`), so a search result the user can't open would be
-   * useless. Note this is wider than the public `orgProjection`, which omits
-   * `id` — see `wiki/TODO.md` → "Public `orgProjection` omits `id`".
+   * The handle is the address, not the `org_*` id. `GET /organisations/:handle`
+   * resolves by handle (`getOrganisationByHandle`), and the public
+   * `orgProjection` deliberately omits the id — so returning the id here would
+   * both widen that surface and hand the client a key nothing accepts.
    */
-  id: string;
   handle: string;
   name: string;
   avatarUrl: string | null;
@@ -158,6 +175,41 @@ function normaliseQuery(raw: string): string {
  */
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** The character set every handle (user and organisation) is constrained to. */
+const HANDLE_CHARS = /^[a-z0-9_]+$/;
+
+/**
+ * Half-open `[lower, upper)` range matching every handle starting with `query`,
+ * or `null` when `query` cannot prefix any handle.
+ *
+ * This exists instead of `handle LIKE 'q%'` because **that does not use the
+ * index**. SQLite's LIKE-prefix optimisation requires the indexed column's
+ * collation to match LIKE's case sensitivity; `case_sensitive_like` is off by
+ * default (D1 runs stock defaults) and both `users_handle_idx` and the implicit
+ * unique index on `organisations.handle` are BINARY, so the planner degrades to
+ * `SCAN … USING INDEX` — a full traversal — rather than a seek. An explicit
+ * BINARY range gets `SEARCH … (handle>? AND handle<?)`:
+ *
+ * ```
+ * handle LIKE 'ab%' ESCAPE '\'   ->  SCAN users USING INDEX users_handle_idx
+ * handle >= 'ab' AND handle < 'ac' ->  SEARCH users USING INDEX users_handle_idx
+ * ```
+ *
+ * The two are exactly equivalent here: handles are stored lowercase and
+ * constrained to `^[a-z0-9_]+$`, and `normaliseQuery` lowercases the query, so
+ * there is no case for the case-insensitive comparison to differ on. A query
+ * containing anything outside that set can't prefix a handle at all, hence the
+ * `null` — the caller skips the pass instead of scanning for zero rows.
+ */
+function handlePrefixRange(query: string): { lower: string; upper: string } | null {
+  if (!HANDLE_CHARS.test(query)) return null;
+  // Every handle char is single-code-unit ASCII, and the highest ('z', 0x7A)
+  // increments to '{' (0x7B), so the successor is always a valid bound.
+  const lastIndex = query.length - 1;
+  const upper = query.slice(0, lastIndex) + String.fromCharCode(query.charCodeAt(lastIndex) + 1);
+  return { lower: query, upper };
 }
 
 // ---------------------------------------------------------------------------
@@ -417,11 +469,13 @@ export function createRecommendationService() {
   /**
    * Autocomplete-oriented people search over handle and display name.
    *
-   * Two-phase by design. The left-anchored handle prefix match is the common
-   * typeahead case and rides the `users_handle_idx` B-tree; the unanchored
-   * `%q%` scan over handle + display name only runs when the anchored pass
-   * couldn't fill the page, so the table scan is the exception rather than
-   * every keystroke.
+   * Two-phase by design. Pass 1 is an index **seek** over the handle range (see
+   * `handlePrefixRange` — a plain `LIKE 'q%'` would silently full-scan) and
+   * answers the common typeahead case. Pass 2 is an unanchored `%q%` match over
+   * handle + display name; no index can serve a leading wildcard, so it is a
+   * full scan and is gated twice: it runs only when pass 1 under-fills the page
+   * *and* the query is at least `MIN_INFIX_QUERY_LENGTH` characters. Two-char
+   * queries are both the cheapest to abuse and the least useful to scan for.
    *
    * Privacy: results carry nothing beyond the public profile fields plus the
    * caller's *own* connection state with each result — the same thing
@@ -446,9 +500,7 @@ export function createRecommendationService() {
       // the enumeration surface small.
       if (query.length < MIN_SEARCH_QUERY_LENGTH) return [];
 
-      const escaped = escapeLike(query);
-      const prefixPattern = `${escaped}%`;
-      const containsPattern = `%${escaped}%`;
+      const containsPattern = `%${escapeLike(query)}%`;
       const overfetch = safeLimit * SEARCH_OVERFETCH_FACTOR;
 
       const selectMatching = (where: ReturnType<typeof and>, rows: number) =>
@@ -469,35 +521,22 @@ export function createRecommendationService() {
           catch: (cause) => new DatabaseError({ cause }),
         });
 
-      // Blocks are excluded in application code: the block set is unbounded, so
-      // binding it into a SQL `NOT IN` risks SQLite's 999-variable ceiling.
-      const [prefixRows, blockRows] = yield* Effect.all(
-        [
-          selectMatching(and(sql`${users.handle} LIKE ${prefixPattern} ESCAPE '\\'`), overfetch),
-          Effect.tryPromise({
-            try: () =>
-              db
-                .select({ blockerId: blocks.blockerId, blockedId: blocks.blockedId })
-                .from(blocks)
-                .where(or(eq(blocks.blockerId, profileId), eq(blocks.blockedId, profileId))),
-            catch: (cause) => new DatabaseError({ cause }),
-          }),
-        ],
-        { concurrency: "unbounded" },
-      );
+      const range = handlePrefixRange(query);
+      const matched = new Map<string, ProfileRow>();
 
-      const blockedIds = new Set(
-        blockRows.map((r) => (r.blockerId === profileId ? r.blockedId : r.blockerId)),
-      );
-
-      const matches = new Map<string, (typeof prefixRows)[number]>();
-      for (const row of prefixRows) {
-        if (!blockedIds.has(row.id)) matches.set(row.id, row);
+      if (range) {
+        for (const row of yield* selectMatching(
+          and(gte(users.handle, range.lower), lt(users.handle, range.upper)),
+          overfetch,
+        )) {
+          matched.set(row.id, row);
+        }
       }
 
-      // Second pass only when the cheap anchored match under-filled the page.
-      if (matches.size < safeLimit) {
-        const containsRows = yield* selectMatching(
+      // Pass 2 — the full scan. Gated on the page not being full AND on a query
+      // long enough to be worth scanning for.
+      if (matched.size < safeLimit && query.length >= MIN_INFIX_QUERY_LENGTH) {
+        for (const row of yield* selectMatching(
           and(
             or(
               sql`${users.handle} LIKE ${containsPattern} ESCAPE '\\'`,
@@ -505,12 +544,38 @@ export function createRecommendationService() {
             ),
           ),
           overfetch,
-        );
-        for (const row of containsRows) {
-          if (!blockedIds.has(row.id)) matches.set(row.id, row);
+        )) {
+          matched.set(row.id, row);
         }
       }
 
+      if (matched.size === 0) return [];
+
+      // Blocks are probed against the candidate ids, not read wholesale for the
+      // caller: an unbounded read to filter at most `overfetch × 2` rows scales
+      // with how many people the caller has blocked rather than with anything
+      // the request needs. Both `blocks_blocker_idx` and `blocks_blocked_idx`
+      // serve this, and the bound parameter count peaks around 2 × overfetch.
+      const candidateIds = [...matched.keys()];
+      const blockRows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ blockerId: blocks.blockerId, blockedId: blocks.blockedId })
+            .from(blocks)
+            .where(
+              or(
+                and(eq(blocks.blockerId, profileId), inArray(blocks.blockedId, candidateIds)),
+                and(eq(blocks.blockedId, profileId), inArray(blocks.blockerId, candidateIds)),
+              ),
+            ),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      for (const row of blockRows) {
+        matched.delete(row.blockerId === profileId ? row.blockedId : row.blockerId);
+      }
+
+      const matches = matched;
       if (matches.size === 0) return [];
 
       const ranked = [...matches.values()]
@@ -576,9 +641,9 @@ export function createRecommendationService() {
 
   /**
    * Autocomplete-oriented organisation search over handle and name. Same
-   * two-phase shape as `searchProfiles` — the anchored handle prefix pass is
-   * cheap and answers the common keystroke; the unanchored pass over handle +
-   * name runs only when that under-fills the page.
+   * two-phase shape and the same gating as `searchProfiles`: an index seek over
+   * the handle range first, then the unanchored full-scan pass only when that
+   * under-fills the page and the query is long enough to be worth scanning for.
    *
    * No exclusions beyond the query itself: organisations are public entities
    * with a handle in the same namespace as user handles, and the caller's own
@@ -597,9 +662,7 @@ export function createRecommendationService() {
       const query = normaliseQuery(rawQuery);
       if (query.length < MIN_SEARCH_QUERY_LENGTH) return [];
 
-      const escaped = escapeLike(query);
-      const prefixPattern = `${escaped}%`;
-      const containsPattern = `%${escaped}%`;
+      const containsPattern = `%${escapeLike(query)}%`;
       const overfetch = safeLimit * SEARCH_OVERFETCH_FACTOR;
 
       const selectMatching = (where: ReturnType<typeof and>, rows: number) =>
@@ -619,15 +682,23 @@ export function createRecommendationService() {
           catch: (cause) => new DatabaseError({ cause }),
         });
 
-      const prefixRows = yield* selectMatching(
-        and(sql`${organisations.handle} LIKE ${prefixPattern} ESCAPE '\\'`),
-        overfetch,
-      );
+      const range = handlePrefixRange(query);
+      const matches = new Map<
+        string,
+        { id: string; handle: string; name: string; avatarUrl: string | null }
+      >();
 
-      const matches = new Map(prefixRows.map((row) => [row.id, row]));
+      if (range) {
+        for (const row of yield* selectMatching(
+          and(gte(organisations.handle, range.lower), lt(organisations.handle, range.upper)),
+          overfetch,
+        )) {
+          matches.set(row.id, row);
+        }
+      }
 
-      if (matches.size < safeLimit) {
-        const containsRows = yield* selectMatching(
+      if (matches.size < safeLimit && query.length >= MIN_INFIX_QUERY_LENGTH) {
+        for (const row of yield* selectMatching(
           and(
             or(
               sql`${organisations.handle} LIKE ${containsPattern} ESCAPE '\\'`,
@@ -635,8 +706,9 @@ export function createRecommendationService() {
             ),
           ),
           overfetch,
-        );
-        for (const row of containsRows) matches.set(row.id, row);
+        )) {
+          matches.set(row.id, row);
+        }
       }
 
       if (matches.size === 0) return [];
@@ -670,7 +742,6 @@ export function createRecommendationService() {
       const memberOf = new Set(membershipRows.map((r) => r.organisationId));
 
       return ranked.map((row) => ({
-        id: row.id,
         handle: row.handle,
         name: row.name,
         avatarUrl: row.avatarUrl,

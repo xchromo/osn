@@ -32,7 +32,7 @@ export interface ProfileSearchResult {
 }
 
 export interface OrganisationSearchResult {
-  id: string;
+  /** The public address: `GET /organisations/:handle` resolves by handle. */
   handle: string;
   name: string;
   avatarUrl: string | null;

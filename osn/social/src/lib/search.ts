@@ -1,5 +1,12 @@
 import type { SearchConnectionState, SearchResults } from "@osn/client";
-import { createEffect, createResource, createSignal, onCleanup } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+  untrack,
+} from "solid-js";
 
 import { recommendationClient } from "./api";
 
@@ -30,6 +37,8 @@ export interface SearchController {
   /** Flat list in render order — what arrow-key navigation indexes into. */
   flat: () => SearchRow[];
   loading: () => boolean;
+  /** Set when the last request failed, so a surface can say so. */
+  failed: () => boolean;
   tooShort: () => boolean;
   /** Local, optimistic overrides so a row can flip without a refetch. */
   connectionStatus: (handle: string, fallback: SearchConnectionState) => SearchConnectionState;
@@ -69,16 +78,21 @@ export function createSearchController(
   let inFlight: AbortController | null = null;
   onCleanup(() => inFlight?.abort());
 
+  // The source is the query *string*, not an object carrying the token: an
+  // object literal is never `===` to the last one, and reading `token()` here
+  // would make it a tracked dependency — so every silent token refresh (5-min
+  // TTL) would refire an identical search. The token is read untracked at call
+  // time instead, which still picks up a refreshed value on the next real query.
   const [results] = createResource(
     () => {
       const q = normaliseQuery(debounced());
-      return token() && q.length >= MIN_QUERY_LENGTH ? { q, token: token() } : undefined;
+      return token() && q.length >= MIN_QUERY_LENGTH ? q : undefined;
     },
-    async ({ q, token: tk }) => {
+    async (q) => {
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
-      return await recommendationClient.search(tk, q, {
+      return await recommendationClient.search(untrack(token), q, {
         limit: options.limit,
         orgLimit: options.orgLimit,
         signal: controller.signal,
@@ -87,15 +101,24 @@ export function createSearchController(
   );
 
   // `latest` keeps the previous page on screen while the next one loads, so the
-  // list doesn't blank out between keystrokes.
-  const current = (): SearchResults => results.latest ?? EMPTY;
+  // list doesn't blank out between keystrokes — but it *rethrows* when the
+  // resource is in its error state, so the error has to be checked first. That
+  // read is also what marks the rejection handled; without it a failed search
+  // escapes to `window.onunhandledrejection`.
+  const current = (): SearchResults => {
+    if (results.error !== undefined) return EMPTY;
+    return results.latest ?? EMPTY;
+  };
   const people = () => current().people;
   const organisations = () => current().organisations;
 
-  const flat = (): SearchRow[] => [
+  // A memo, not a plain function: `<For>` reconciles by item reference, so
+  // rebuilding the wrapper objects on every read would tear down and recreate
+  // every row on each keystroke instead of reusing the unchanged ones.
+  const flat = createMemo((): SearchRow[] => [
     ...people().map((person): SearchRow => ({ kind: "person", person })),
     ...organisations().map((organisation): SearchRow => ({ kind: "organisation", organisation })),
-  ];
+  ]);
 
   return {
     query,
@@ -105,6 +128,11 @@ export function createSearchController(
     organisations,
     flat,
     loading: () => results.loading,
+    // Reading `results.error` is what stops a rejected request from escaping to
+    // `window.onunhandledrejection` and leaving the surface on its spinner
+    // forever — the expected failure here is a 429, since search is budgeted at
+    // 60/min and the client throws on any non-2xx.
+    failed: () => results.error !== undefined,
     tooShort: () => normaliseQuery(query()).length < MIN_QUERY_LENGTH,
     connectionStatus: (handle, fallback) => overrides()[handle] ?? fallback,
     setConnectionStatus: (handle, status) =>

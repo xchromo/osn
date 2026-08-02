@@ -57,7 +57,6 @@ const person = (handle: string, connectionStatus = "none") => ({
 });
 
 const org = (handle: string, name: string, isMember = false) => ({
-  id: `org_${handle}`,
   handle,
   name,
   avatarUrl: null,
@@ -150,6 +149,39 @@ describe("<SearchPage />", () => {
     renderPage();
     await type("zzz");
     await waitFor(() => expect(screen.getByText(/No results for "zzz"/)).toBeDefined());
+  });
+
+  it("surfaces a failed search instead of spinning forever", async () => {
+    mocks.search.mockRejectedValue(new Error("Rate limited"));
+    renderPage();
+    await type("ali");
+
+    await waitFor(() => expect(screen.getByText(/Search is unavailable/)).toBeDefined());
+    expect(screen.queryByText("Searching…")).toBeNull();
+  });
+
+  it("does not flip the row when the connect request fails", async () => {
+    mocks.search.mockResolvedValue({ people: [person("alice")], organisations: [] });
+    mocks.sendConnectionRequest.mockRejectedValue(new Error("boom"));
+    renderPage();
+    await type("ali");
+
+    await waitFor(() => expect(screen.getByText("Connect")).toBeDefined());
+    fireEvent.click(screen.getByText("Connect"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await waitFor(() => expect(screen.getByText("Connect")).toBeDefined());
+    expect(screen.queryByText("Requested")).toBeNull();
+  });
+
+  it("links an organisation to its handle-addressed detail page", async () => {
+    mocks.search.mockResolvedValue({ people: [], organisations: [org("acme", "Acme Inc")] });
+    renderPage();
+    await type("acme");
+
+    await waitFor(() => expect(screen.getByRole("link")).toBeDefined());
+    // Handle, not the org_* id — that is what GET /organisations/:handle resolves.
+    expect(screen.getByRole("link").getAttribute("href")).toBe("/organisations/acme");
   });
 
   it("asks a signed-out visitor to sign in rather than showing a dead input", async () => {

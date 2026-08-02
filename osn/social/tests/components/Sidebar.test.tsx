@@ -171,5 +171,8 @@ describe("<Sidebar /> — unauthenticated", () => {
 
     expect(result.getByText("Create account")).toBeDefined();
     expect(result.getByText("Sign in")).toBeDefined();
+    // No search field without a session: /recommendations/search is
+    // authenticated, so an input that could only 401 is worse than no input.
+    expect(result.queryByRole("combobox")).toBeNull();
   });
 });

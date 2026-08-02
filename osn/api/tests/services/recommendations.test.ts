@@ -1,4 +1,7 @@
 import { it, expect, describe } from "@effect/vitest";
+import { accounts } from "@osn/db/schema";
+import { Db } from "@osn/db/service";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { beforeAll } from "vitest";
 
@@ -276,6 +279,28 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  it.effect("never suggests a friend-of-friend whose account is tombstoned", () =>
+    Effect.gen(function* () {
+      // Art. 17 erasure is pending on dana's account — she must not resurface
+      // in Discover while the deletion sweeper works through the grace window.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const dana = yield* auth.registerProfile("d@e.com", "dana");
+      yield* connect(alice.id, bob.id);
+      yield* connect(bob.id, dana.id);
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() =>
+        db
+          .update(accounts)
+          .set({ deletedAt: 1_700_000_000 })
+          .where(eq(accounts.id, dana.accountId)),
+      );
+
+      expect(yield* recs.suggestConnections(alice.id)).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("never suggests an organisation co-member the caller has blocked", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
@@ -334,6 +359,99 @@ describe("searchProfiles", () => {
 
       const result = yield* recs.searchProfiles(alice.id, "robert");
       expect(result.map((r) => r.handle)).toEqual(["bob"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("does not run the infix scan for a two-character query", () =>
+    Effect.gen(function* () {
+      // The unanchored `%q%` pass is a full table scan, so it is reserved for
+      // queries of MIN_INFIX_QUERY_LENGTH or more. A 2-char query still gets
+      // prefix matching — it just can't reach into the middle of a name.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "zebra", "Bobby Tables");
+
+      // "ob" appears inside both the display name and nothing else; only the
+      // infix pass could find it, and it must not run.
+      expect(yield* recs.searchProfiles(alice.id, "ob")).toEqual([]);
+      // Three characters unlocks it.
+      expect((yield* recs.searchProfiles(alice.id, "obb")).map((r) => r.handle)).toEqual(["zebra"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("matches the handle prefix exactly, without LIKE wildcard semantics", () =>
+    Effect.gen(function* () {
+      // The prefix pass is a BINARY range seek, not `LIKE 'q%'`. Guard the
+      // boundary: the range must not spill past its last character.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "ab");
+      yield* auth.registerProfile("c@e.com", "abz");
+      yield* auth.registerProfile("d@e.com", "ac");
+
+      const result = yield* recs.searchProfiles(alice.id, "ab");
+      expect(result.map((r) => r.handle).toSorted()).toEqual(["ab", "abz"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("returns [] for a query that cannot prefix any handle", () =>
+    Effect.gen(function* () {
+      // Handles are `^[a-z0-9_]+$`, so a query with other characters skips the
+      // range pass entirely rather than seeking for zero rows.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("b@e.com", "bob", "Zoë Smith");
+
+      // Still reachable through the display-name pass.
+      expect((yield* recs.searchProfiles(alice.id, "zoë")).map((r) => r.handle)).toEqual(["bob"]);
+      expect(yield* recs.searchProfiles(alice.id, "!!!")).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("ranks every matchRank tier in order", () =>
+    Effect.gen(function* () {
+      // Tier ordering is the whole ranking contract: exact handle, handle
+      // prefix, name prefix, handle infix, then name infix.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("e@e.com", "bob"); // 0 — exact handle
+      yield* auth.registerProfile("p@e.com", "bobx"); // 1 — handle prefix
+      yield* auth.registerProfile("n@e.com", "zed", "Bobby Zed"); // 2 — name prefix
+      yield* auth.registerProfile("i@e.com", "carbob"); // 3 — handle infix
+      yield* auth.registerProfile("m@e.com", "zeta", "Rob Bobson"); // 4 — name infix
+
+      const result = yield* recs.searchProfiles(alice.id, "bob");
+      expect(result.map((r) => r.handle)).toEqual(["bob", "bobx", "zed", "carbob", "zeta"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("still fills the page when blocked profiles are filtered out", () =>
+    Effect.gen(function* () {
+      // SEARCH_OVERFETCH_FACTOR exists so application-side block filtering
+      // can't leave a short page.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const blocked: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        const p = yield* auth.registerProfile(`z${i}@e.com`, `zeta${i}`);
+        if (i < 4) blocked.push(p.id);
+      }
+      for (const id of blocked) yield* graph.blockProfile(alice.id, id);
+
+      const result = yield* recs.searchProfiles(alice.id, "zeta", 8);
+      expect(result).toHaveLength(8);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("never returns a profile whose account is tombstoned", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const doomed = yield* auth.registerProfile("z@e.com", "zeta");
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() =>
+        db
+          .update(accounts)
+          .set({ deletedAt: 1_700_000_000 })
+          .where(eq(accounts.id, doomed.accountId)),
+      );
+
+      expect(yield* recs.searchProfiles(alice.id, "zeta")).toEqual([]);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -460,13 +578,17 @@ describe("searchOrganisations", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("returns the id so the result can link to the organisation page", () =>
+  it.effect("addresses results by handle, not the internal org_* id", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
-      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
 
       const result = yield* recs.searchOrganisations(alice.id, "acme");
-      expect(result[0]!.id).toBe(org.id);
+      // `GET /organisations/:handle` resolves by handle and the public
+      // projection omits the id — leaking it here would hand the client a key
+      // nothing accepts.
+      expect(result[0]!.handle).toBe("acme");
+      expect(result[0]).not.toHaveProperty("id");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

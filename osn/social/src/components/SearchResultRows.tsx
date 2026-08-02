@@ -3,6 +3,7 @@ import type {
   ProfileSearchResult,
   SearchConnectionState,
 } from "@osn/client";
+import { clsx } from "@osn/ui/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@osn/ui/ui/avatar";
 import { Button } from "@osn/ui/ui/button";
 import { A } from "@solidjs/router";
@@ -81,19 +82,52 @@ function ResultAvatar(props: { url: string | null; label: string; size: string }
   );
 }
 
-/** The right-hand affordance for a person row, chosen by connection state. */
+/** The label for a person row's affordance, given the caller's state with them. */
+function actionLabel(status: SearchConnectionState, busy: boolean): string {
+  if (busy) return "…";
+  switch (status) {
+    case "connected":
+      return "Connected";
+    case "pending_sent":
+      return "Requested";
+    case "pending_received":
+      return "Accept";
+    default:
+      return "Connect";
+  }
+}
+
+/**
+ * The right-hand affordance for a person row.
+ *
+ * `interactive: false` renders it as plain text rather than a `<Button>`. That
+ * is not cosmetic — inside the rail's ARIA listbox the row *is* the activation
+ * target, and a listbox option may not contain operable descendants (assistive
+ * tech flattens an option to its accessible name, so a nested button is
+ * announced as text and can't be triggered). The `/search` page is a plain
+ * list, so it keeps real buttons.
+ */
 export function PersonAction(props: {
   status: SearchConnectionState;
   busy: boolean;
+  interactive?: boolean;
   onConnect: () => void;
   onAccept: () => void;
 }) {
+  const actionable = () => props.status === "none" || props.status === "pending_received";
+  const label = () => actionLabel(props.status, props.busy);
+
   return (
     <Show
-      when={props.status === "none" || props.status === "pending_received"}
+      when={props.interactive !== false && actionable()}
       fallback={
-        <span class="text-subtle text-meta shrink-0">
-          {props.status === "connected" ? "Connected" : "Requested"}
+        <span
+          class={clsx(
+            "text-meta shrink-0",
+            actionable() ? "text-foreground font-medium" : "text-subtle",
+          )}
+        >
+          {label()}
         </span>
       }
     >
@@ -103,7 +137,7 @@ export function PersonAction(props: {
         disabled={props.busy}
         onClick={() => (props.status === "none" ? props.onConnect() : props.onAccept())}
       >
-        {props.busy ? "…" : props.status === "none" ? "Connect" : "Accept"}
+        {label()}
       </Button>
     </Show>
   );
@@ -113,6 +147,8 @@ export function PersonRow(props: {
   person: ProfileSearchResult;
   controller: SearchController;
   actions: SearchActions;
+  /** See `PersonAction` — `false` inside an ARIA listbox option. */
+  interactive?: boolean;
 }) {
   const status = () =>
     props.controller.connectionStatus(props.person.handle, props.person.connectionStatus);
@@ -131,6 +167,7 @@ export function PersonRow(props: {
       <PersonAction
         status={status()}
         busy={props.actions.pending().has(props.person.handle)}
+        interactive={props.interactive}
         onConnect={() => props.actions.connect(props.person.handle)}
         onAccept={() => props.actions.accept(props.person.handle)}
       />
@@ -157,18 +194,17 @@ export function OrganisationRow(props: { organisation: OrganisationSearchResult 
   );
 }
 
-/** Wraps an organisation row in the link to its detail page. */
+/**
+ * Wraps an organisation row in the link to its detail page. Used by the
+ * `/search` page; the rail dropdown can't use it, because a listbox option may
+ * not contain a link (see `PersonAction`) and activates the row instead.
+ */
 export function OrganisationLink(props: {
   organisation: OrganisationSearchResult;
   class?: string;
-  onNavigate?: () => void;
 }) {
   return (
-    <A
-      href={`/organisations/${props.organisation.id}`}
-      class={props.class}
-      onClick={() => props.onNavigate?.()}
-    >
+    <A href={`/organisations/${props.organisation.handle}`} class={props.class}>
       <OrganisationRow organisation={props.organisation} />
     </A>
   );

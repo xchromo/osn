@@ -1,10 +1,9 @@
 import { useAuth } from "@osn/client/solid";
 import { Input } from "@osn/ui/ui/input";
-import { A } from "@solidjs/router";
 import { For, onMount, Show } from "solid-js";
 
 import { IconSearch } from "../components/nav";
-import { OrganisationRow, PersonRow, useSearchActions } from "../components/SearchResultRows";
+import { OrganisationLink, PersonRow, useSearchActions } from "../components/SearchResultRows";
 import { createSearchController, MIN_QUERY_LENGTH } from "../lib/search";
 
 /**
@@ -71,7 +70,11 @@ export function SearchPage() {
             when={hasResults()}
             fallback={
               <p class="text-muted-foreground text-body py-12 text-center" aria-live="polite">
-                {controller.loading() ? "Searching…" : `No results for "${controller.submitted()}"`}
+                {controller.failed()
+                  ? "Search is unavailable right now. Try again in a moment."
+                  : controller.loading()
+                    ? "Searching…"
+                    : `No results for "${controller.submitted()}"`}
               </p>
             }
           >
@@ -94,12 +97,10 @@ export function SearchPage() {
                 <For each={controller.organisations()}>
                   {(organisation) => (
                     <li>
-                      <A
-                        href={`/organisations/${organisation.id}`}
+                      <OrganisationLink
+                        organisation={organisation}
                         class="hover:bg-muted/50 active:bg-muted/50 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors"
-                      >
-                        <OrganisationRow organisation={organisation} />
-                      </A>
+                      />
                     </li>
                   )}
                 </For>
