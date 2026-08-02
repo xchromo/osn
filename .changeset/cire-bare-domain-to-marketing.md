@@ -17,8 +17,12 @@ The endpoint wasn't re-pointed at a better "primary" — there is no correct sin
 wedding to resolve, so the concept is gone:
 
 - `pages/index.astro` now 302s to `PUBLIC_MARKETING_URL` (default and production
-  value `https://cireweddings.com`, wired in `deploy.yml`). It makes no API call,
-  so the route has no failure mode and no neutral/error state left to render.
+  value `https://cireweddings.com`, wired in `deploy.yml`), resolved through
+  `resolveMarketingUrl`, which falls back to the apex for an empty, whitespace,
+  relative or non-`http(s)` value — a plain `??` would let a present-but-empty
+  env var through as `""`, and an empty `Location` resolves against the request
+  URL, turning `/` into a redirect loop. It makes no API call, so the route has
+  no failure mode and no neutral/error state left to render.
   Query strings are dropped — the only one that ever rode `/` was a `?code=`
   host-preview deep link, meaningless to the marketing site and not something to
   forward off-origin. 302 rather than 301, since where the root points is a
