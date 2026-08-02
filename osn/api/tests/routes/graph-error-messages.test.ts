@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { createGraphRoutes } from "../../src/routes/graph";
 import { createAuthService } from "../../src/services/auth";
 import { makeTestAuthConfig } from "../helpers/auth-config";
-import { createTestLayer } from "../helpers/db";
+import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
 let config: Awaited<ReturnType<typeof makeTestAuthConfig>>;
 
@@ -104,6 +104,37 @@ describe("graph route error messages", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBe("Pending request not found");
+  });
+
+  it("a DatabaseError still collapses to 'Request failed' — DB internals never leak (S-M17)", async () => {
+    const { layer: brokenLayer, sqlite } = createTestLayerWithSqlite();
+    const brokenApp = createGraphRoutes(config, brokenLayer);
+    const brokenRun = <A>(eff: Effect.Effect<A, unknown, Db>): Promise<A> =>
+      Effect.runPromise(eff.pipe(Effect.provide(brokenLayer)) as Effect.Effect<A, never, never>);
+
+    const user = await brokenRun(auth.registerProfile("alice@example.com", "alice"));
+    await brokenRun(auth.registerProfile("bob@example.com", "bob"));
+    const tokens = await brokenRun(
+      auth.issueTokens(user.id, user.accountId, user.email, user.handle, user.displayName),
+    );
+
+    // Break the graph tables underneath the service so the send path fails
+    // with a DatabaseError rather than a tagged business-rule error.
+    sqlite.run("DROP TABLE connections");
+
+    const res = await brokenApp.handle(
+      new Request("http://localhost/graph/connections/bob", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      }),
+    );
+    expect(res.status).toBe(400);
+    const raw = await res.text();
+    const body = JSON.parse(raw) as { error?: string };
+    expect(body.error).toBe("Request failed");
+    // The SQLite failure detail must never reach the client.
+    expect(raw).not.toContain("no such table");
+    expect(raw).not.toContain("SQLITE");
   });
 
   it("POST with Content-Type: application/json and no body (GraphClient's shape) still succeeds", async () => {
