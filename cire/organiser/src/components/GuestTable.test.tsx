@@ -39,7 +39,6 @@ import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
 import {
   authFetchMock,
-  redirectSpy,
   resetOrganiserMocks,
   toastError,
   toastSuccess,

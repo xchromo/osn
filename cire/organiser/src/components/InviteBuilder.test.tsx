@@ -80,7 +80,6 @@ import { confirmNavigation } from "../lib/unsaved-guard";
 import { captureDeclaredStyles } from "../test-support/declared-style";
 import {
   authFetchMock,
-  redirectSpy,
   resetOrganiserMocks,
   toastError,
   toastSuccess,

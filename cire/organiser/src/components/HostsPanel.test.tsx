@@ -28,7 +28,6 @@ import {
   authFetchMock,
   redirectSpy,
   resetOrganiserMocks,
-  toastError,
   toastSuccess,
 } from "../test-support/mocks";
 import HostsPanel from "./HostsPanel";

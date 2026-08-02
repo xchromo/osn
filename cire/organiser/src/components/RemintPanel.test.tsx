@@ -24,13 +24,7 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import {
-  authFetchMock,
-  redirectSpy,
-  resetOrganiserMocks,
-  toastError,
-  toastSuccess,
-} from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks, toastSuccess } from "../test-support/mocks";
 import RemintPanel from "./RemintPanel";
 
 function json(body: unknown, status = 200) {

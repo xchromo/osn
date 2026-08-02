@@ -33,7 +33,6 @@ vi.mock("../lib/download", () => ({
 import { __resetEventsCache, invalidateEvents } from "../lib/events-store";
 import {
   authFetchMock,
-  redirectSpy,
   resetOrganiserMocks,
   toastError,
   toastSuccess,

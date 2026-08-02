@@ -179,7 +179,7 @@ function snapshot(db: Database): Record<string, TableShape> {
       // The PK's autoindex is already pinned by the `pk` ordinals above.
       if (i.origin === "pk") continue;
       // seqno order is load-bearing — an index serves only a leading prefix.
-      const cols = (
+      const indexCols = (
         db.query(`PRAGMA index_info("${i.name}")`).all() as Array<{
           seqno: number;
           name: string | null;
@@ -197,7 +197,7 @@ function snapshot(db: Database): Record<string, TableShape> {
       }
       // Not deduped: "migrations declare two indexes here, the emitter declares
       // one" is exactly the class of drift this test exists to catch.
-      indexes.push({ unique: i.unique === 1, columns: cols, where });
+      indexes.push({ unique: i.unique === 1, columns: indexCols, where });
     }
 
     out[name] = {

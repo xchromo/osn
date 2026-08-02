@@ -29,13 +29,7 @@ import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
 import { __resetHouseholdsCache } from "../lib/households-store";
 import { confirmNavigation } from "../lib/unsaved-guard";
-import {
-  authFetchMock,
-  redirectSpy,
-  resetOrganiserMocks,
-  toastError,
-  toastSuccess,
-} from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks, toastSuccess } from "../test-support/mocks";
 import EventsEditor from "./EventsEditor";
 
 function json(body: unknown, status = 200) {

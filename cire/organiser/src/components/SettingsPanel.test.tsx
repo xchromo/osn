@@ -27,7 +27,6 @@ vi.mock("../lib/api", async () => {
 
 import {
   authFetchMock,
-  redirectSpy,
   resetOrganiserMocks,
   toastError,
   toastSuccess,
