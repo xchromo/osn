@@ -11,19 +11,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * and the dismiss/restore + persistence.
  */
 
-const authFetchMock = vi.fn();
-const redirectSpy = vi.fn();
+vi.mock("@shared/rp-auth/solid", async () => {
+  const { rpAuthSolidMock } = await import("../test-support/mocks");
+  return rpAuthSolidMock();
+});
 
-vi.mock("@shared/rp-auth/solid", () => ({
-  useAuth: () => ({ authFetch: authFetchMock }),
-}));
+vi.mock("../lib/api", async () => {
+  const { organiserApiMock } = await import("../test-support/mocks");
+  return organiserApiMock();
+});
 
-vi.mock("../lib/api", () => ({
-  apiUrl: (path: string) => `https://api.test${path}`,
-  isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
-  redirectToLogin: () => redirectSpy(),
-}));
-
+import { authFetchMock, redirectSpy } from "../test-support/mocks";
 import GettingStarted from "./GettingStarted";
 
 function json(body: unknown, status = 200) {

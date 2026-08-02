@@ -13,24 +13,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * `updatedAt`, which doubles as the guest image-cache version — P-W1).
  */
 
-const authFetchMock = vi.fn();
-const redirectSpy = vi.fn();
-const toastSuccess = vi.fn();
-const toastError = vi.fn();
+vi.mock("@shared/rp-auth/solid", async () => {
+  const { rpAuthSolidMock } = await import("../test-support/mocks");
+  return rpAuthSolidMock();
+});
 
-vi.mock("@shared/rp-auth/solid", () => ({
-  useAuth: () => ({ authFetch: authFetchMock }),
-}));
+vi.mock("solid-toast", async () => {
+  const { solidToastMock } = await import("../test-support/mocks");
+  return solidToastMock();
+});
 
-vi.mock("solid-toast", () => ({
-  toast: { success: (m: string) => toastSuccess(m), error: (m: string) => toastError(m) },
-}));
-
-vi.mock("../lib/api", () => ({
-  apiUrl: (path: string) => `https://api.test${path}`,
-  isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
-  redirectToLogin: () => redirectSpy(),
-}));
+vi.mock("../lib/api", async () => {
+  const { organiserApiMock } = await import("../test-support/mocks");
+  return organiserApiMock();
+});
 
 // Test-only catalog: a premium design BETWEEN the two free ones, so keyboard
 // navigation's locked-skip behaviour is exercised (mirrors the TEST_CATALOG
@@ -82,6 +78,7 @@ vi.mock("./ImageCropModal", () => ({
 // reaches the process-global registry the dashboard consults.
 import { confirmNavigation } from "../lib/unsaved-guard";
 import { captureDeclaredStyles } from "../test-support/declared-style";
+import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
 import InviteBuilder, { isDesignLocked, SECTION_MENU_COLUMNS } from "./InviteBuilder";
 
 function json(body: unknown, status = 200) {

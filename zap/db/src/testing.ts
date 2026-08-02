@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
 
-import { is } from "drizzle-orm";
+import { is, type SQL } from "drizzle-orm";
 import {
   getTableConfig,
+  SQLiteSyncDialect,
   SQLiteTable,
   type AnySQLiteColumn,
   type SQLiteColumn,
@@ -89,6 +90,11 @@ function emitColumn(col: AnySQLiteColumn): string {
   const parts = [`"${col.name}"`, col.getSQLType()];
   if (col.primary) parts.push("PRIMARY KEY");
   if (col.notNull) parts.push("NOT NULL");
+  // Column-level `.unique()` lands on `col.isUnique`, not in the table config's
+  // `uniqueConstraints` (table-level only). Zap's schema currently uses
+  // `uniqueIndex()`/table-level `unique()` throughout, so this is latent here —
+  // keep it so a future column-level `.unique()` isn't silently dropped.
+  if (col.isUnique) parts.push("UNIQUE");
   if (col.hasDefault && col.default !== undefined) {
     parts.push(`DEFAULT ${formatDefault(col, col.default)}`);
   }
@@ -111,6 +117,7 @@ interface IndexLike {
     name: string;
     columns: ReadonlyArray<{ name?: string } | unknown>;
     unique: boolean;
+    where?: SQL;
   };
 }
 
@@ -129,5 +136,9 @@ function emitCreateIndex(idx: IndexLike, table: SQLiteTable): string {
       return `"${colName}"`;
     })
     .join(", ");
-  return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols});`;
+  // Partial indexes: without the WHERE clause a partial index silently becomes
+  // a full one. Latent here (no `.where()` in this schema yet) — kept in step
+  // with @osn/db/testing so a future partial index isn't silently widened.
+  const where = cfg.where ? ` WHERE ${new SQLiteSyncDialect().sqlToQuery(cfg.where).sql}` : "";
+  return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols})${where};`;
 }

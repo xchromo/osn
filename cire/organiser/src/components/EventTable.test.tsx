@@ -9,24 +9,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * per-event image wiring hits the right endpoints and updates the preview.
  */
 
-const authFetchMock = vi.fn();
-const redirectSpy = vi.fn();
-const toastSuccess = vi.fn();
-const toastError = vi.fn();
+vi.mock("@shared/rp-auth/solid", async () => {
+  const { rpAuthSolidMock } = await import("../test-support/mocks");
+  return rpAuthSolidMock();
+});
 
-vi.mock("@shared/rp-auth/solid", () => ({
-  useAuth: () => ({ authFetch: authFetchMock }),
-}));
+vi.mock("solid-toast", async () => {
+  const { solidToastMock } = await import("../test-support/mocks");
+  return solidToastMock();
+});
 
-vi.mock("solid-toast", () => ({
-  toast: { success: (m: string) => toastSuccess(m), error: (m: string) => toastError(m) },
-}));
-
-vi.mock("../lib/api", () => ({
-  apiUrl: (path: string) => `https://api.test${path}`,
-  isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
-  redirectToLogin: () => redirectSpy(),
-}));
+vi.mock("../lib/api", async () => {
+  const { organiserApiMock } = await import("../test-support/mocks");
+  return organiserApiMock();
+});
 
 const downloadBlobMock = vi.fn();
 vi.mock("../lib/download", () => ({
@@ -35,6 +31,7 @@ vi.mock("../lib/download", () => ({
 }));
 
 import { __resetEventsCache, invalidateEvents } from "../lib/events-store";
+import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
 import EventTable from "./EventTable";
 
 function json(body: unknown, status = 200) {

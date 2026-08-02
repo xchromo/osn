@@ -9,19 +9,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * callback, validation, and the auth/error branches.
  */
 
-const authFetchMock = vi.fn();
-const redirectSpy = vi.fn();
+vi.mock("@shared/rp-auth/solid", async () => {
+  const { rpAuthSolidMock } = await import("../test-support/mocks");
+  return rpAuthSolidMock();
+});
 
-vi.mock("@shared/rp-auth/solid", () => ({
-  useAuth: () => ({ authFetch: authFetchMock }),
-}));
+vi.mock("../lib/api", async () => {
+  const { organiserApiMock } = await import("../test-support/mocks");
+  return organiserApiMock();
+});
 
-vi.mock("../lib/api", () => ({
-  apiUrl: (path: string) => `https://api.test${path}`,
-  isAuthExpired: (err: unknown) => String(err).includes("AuthExpiredError"),
-  redirectToLogin: () => redirectSpy(),
-}));
-
+import { authFetchMock, redirectSpy } from "../test-support/mocks";
 import CreateWeddingForm from "./CreateWeddingForm";
 
 function fill(value: string) {

@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
 
-import { is } from "drizzle-orm";
+import { is, type SQL } from "drizzle-orm";
 import {
   getTableConfig,
+  SQLiteSyncDialect,
   SQLiteTable,
   type AnySQLiteColumn,
   type SQLiteColumn,
@@ -89,6 +90,13 @@ function emitColumn(col: AnySQLiteColumn): string {
   const parts = [`"${col.name}"`, col.getSQLType()];
   if (col.primary) parts.push("PRIMARY KEY");
   if (col.notNull) parts.push("NOT NULL");
+  // Column-level `.unique()` lands on `col.isUnique`, NOT in the table config's
+  // `uniqueConstraints` (that only carries table-level `unique()` from the
+  // extras callback). Emitting only the latter silently dropped every
+  // column-level UNIQUE — accounts.email, users.handle, passkeys.credential_id
+  // and four more — so tests ran on a schema that accepted duplicates D1
+  // rejects. Guarded by tests/ddl-lockstep.test.ts.
+  if (col.isUnique) parts.push("UNIQUE");
   if (col.hasDefault && col.default !== undefined) {
     parts.push(`DEFAULT ${formatDefault(col, col.default)}`);
   }
@@ -111,6 +119,7 @@ interface IndexLike {
     name: string;
     columns: ReadonlyArray<{ name?: string } | unknown>;
     unique: boolean;
+    where?: SQL;
   };
 }
 
@@ -129,5 +138,10 @@ function emitCreateIndex(idx: IndexLike, table: SQLiteTable): string {
       return `"${colName}"`;
     })
     .join(", ");
-  return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols});`;
+  // Partial indexes: without the WHERE clause a partial index silently becomes
+  // a full one, and two partial indexes over the same column (deletion_jobs'
+  // pulse/zap pending pair) collapse into a single duplicate. Guarded by
+  // tests/ddl-lockstep.test.ts.
+  const where = cfg.where ? ` WHERE ${new SQLiteSyncDialect().sqlToQuery(cfg.where).sql}` : "";
+  return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols})${where};`;
 }
