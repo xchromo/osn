@@ -20,7 +20,7 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, redirectSpy, resetOrganiserMocks } from "../test-support/mocks";
 import RsvpView from "./RsvpView";
 
 function json(body: unknown, status = 200) {
@@ -91,8 +91,7 @@ const VIEW = {
 describe("RsvpView", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
   });
 
   it("renders RSVPs grouped by event with correct counts", async () => {

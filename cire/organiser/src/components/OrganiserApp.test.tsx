@@ -107,7 +107,7 @@ vi.mock("./SecurityPanel", () => ({
 // The unsaved-changes guard is real (unmocked) — the veto tests below register
 // a guard directly, standing in for any mounted dirty form (the invite builder).
 import { registerUnsavedGuard } from "../lib/unsaved-guard";
-import { redirectSpy } from "../test-support/mocks";
+import { redirectSpy, resetOrganiserMocks } from "../test-support/mocks";
 import OrganiserApp from "./OrganiserApp";
 
 function listResponse(
@@ -139,8 +139,7 @@ function listResponse(
 describe("OrganiserApp Dashboard", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
     vi.unstubAllGlobals();
     // The dashboard mirrors its state into the URL hash — reset it so one test's
     // deep link doesn't seed the next.

@@ -7,27 +7,21 @@ import { describe, expect, it } from "vitest";
 
 import { createSchemaSql } from "../src/testing";
 
-// Mechanical enforcement of the OSN DDL lockstep contract, ported from
-// cire/api's ddl-lockstep.test.ts (T-S1).
+// Mechanical enforcement of the Zap DDL lockstep contract, ported from
+// osn/db's ddl-lockstep.test.ts.
 //
 // Two surfaces must describe the same database shape:
-//   1. osn/db/drizzle/*.sql — what production D1 actually is,
-//   2. `createSchemaSql()` — the schema-derived DDL every OSN test runs on
+//   1. zap/db/drizzle/*.sql — what production D1 actually is,
+//   2. `createSchemaSql()` — the schema-derived DDL every Zap test runs on
 //      (bun:sqlite for the unit suites, Miniflare D1 for d1-integration).
 //
 // Surface 2 is emitted from src/schema/index.ts, so this also pins the Drizzle
 // schema itself: a column added to schema.ts without a generated migration
 // fails here, as does a migration applied without updating schema.ts.
 //
-// This test exists because the emitter used to drop column-level `.unique()`
-// entirely (it read only the table-level `uniqueConstraints`). Seven UNIQUE
-// constraints — accounts.email, accounts.passkey_user_id, users.handle,
-// passkeys.credential_id, recovery_codes.code_hash, organisations.handle and
-// oauth_clients.client_id — were absent from every database the emitter built,
-// most consequentially the Miniflare D1 in osn/api/src/d1-integration.test.ts:
-// the one test proving OSN core runs on real D1 accepted duplicates that
-// production rejects. It also dropped partial-index WHERE clauses and FK
-// referential actions. Each of those is now compared below.
+// The emitter this pins is a copy of @osn/db's, which was found dropping
+// column-level `.unique()` and partial-index WHERE clauses. This schema uses
+// neither today, so that bug was latent here — this test is what keeps it so.
 //
 // Normalisation — differences deliberately treated as equal, and ONLY these:
 // - Table-column ORDER is ignored (columns are keyed by name). D1's ALTER TABLE

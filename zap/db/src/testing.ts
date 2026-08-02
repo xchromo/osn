@@ -19,7 +19,17 @@ import * as schema from "./schema";
  *
  * Mirrors `@pulse/db/testing` — keep the two in sync if the emitter is extended.
  */
+let cachedSchemaSql: string[] | undefined;
+
 export function createSchemaSql(): string[] {
+  // The Drizzle schema is a static module-level import, so the emitted DDL is
+  // constant for the process lifetime. Reflecting it per test DB made ~24% of
+  // setup pure recomputation, scaling with both test count and schema size.
+  // Frozen: the array is shared by every caller, so a stray mutation must be loud.
+  return (cachedSchemaSql ??= Object.freeze(buildSchemaSql()) as string[]);
+}
+
+function buildSchemaSql(): string[] {
   const tables = (Object.values(schema) as unknown[]).filter((value): value is SQLiteTable =>
     is(value, SQLiteTable),
   );
@@ -57,6 +67,9 @@ function topoSortByForeignKey(tables: SQLiteTable[]): SQLiteTable[] {
   for (const t of tables) visit(t);
   return sorted;
 }
+
+/** Stateless with respect to a single `sqlToQuery` call — one instance is enough. */
+const DIALECT = new SQLiteSyncDialect();
 
 function emitCreateTable(table: SQLiteTable): string {
   const cfg = getTableConfig(table);
@@ -139,6 +152,6 @@ function emitCreateIndex(idx: IndexLike, table: SQLiteTable): string {
   // Partial indexes: without the WHERE clause a partial index silently becomes
   // a full one. Latent here (no `.where()` in this schema yet) — kept in step
   // with @osn/db/testing so a future partial index isn't silently widened.
-  const where = cfg.where ? ` WHERE ${new SQLiteSyncDialect().sqlToQuery(cfg.where).sql}` : "";
+  const where = cfg.where ? ` WHERE ${DIALECT.sqlToQuery(cfg.where).sql}` : "";
   return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols})${where};`;
 }

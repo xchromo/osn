@@ -23,7 +23,7 @@ vi.mock("../lib/api", () => ({
   redirectToLogin: redirectToLoginMock,
 }));
 
-import { authFetchMock } from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import ImportPanel from "./ImportPanel";
 
 // Capture the Blobs handed to URL.createObjectURL so we can read their text.
@@ -50,7 +50,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  authFetchMock.mockReset();
+  resetOrganiserMocks();
   redirectToLoginMock.mockReset();
   URL.createObjectURL = realCreate;
   URL.revokeObjectURL = realRevoke;

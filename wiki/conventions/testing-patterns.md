@@ -120,11 +120,13 @@ const sqlite = new Database(":memory:");
 applySchema(sqlite);
 ```
 
-Adding a column is then a one-file change in `src/schema/`. The emitter carries column-level `.unique()` (via `col.isUnique`) and partial-index `WHERE` clauses — both were silently dropped before 2026-08, so tests ran on a shape production D1 rejects.
+Adding a column is then a one-file change in `src/schema/`. The emitter carries column-level `.unique()` (via `col.isUnique`), partial-index `WHERE` clauses, and foreign-key `ON DELETE`/`ON UPDATE` actions — all three were silently dropped before 2026-08, so tests ran on a shape production D1 rejects. The emitted array is memoised and frozen: the schema is a static module import, so reflecting it per test database was pure recomputation.
 
-`osn/db/tests/ddl-lockstep.test.ts` diffs a normalised structural snapshot of the emitted schema against the full `osn/db/drizzle/*.sql` migration chain (columns, defaults, indexes, partial predicates). It fails when a migration lands without a schema change, when a schema change lands without a migration, or when the emitter loses a constraint. `cire/api/src/db/ddl-lockstep.test.ts` does the same for cire's three-way mirror.
+`osn/db/tests/ddl-lockstep.test.ts` diffs a normalised structural snapshot of the emitted schema against the full `osn/db/drizzle/*.sql` migration chain. It compares columns, types, defaults, nullability, indexes (**including column order within an index** — SQLite serves only a leading prefix), partial predicates, foreign keys and their referential actions, and pins CHECK/trigger/view sets as empty. It fails when a migration lands without a schema change, when a schema change lands without a migration, or when the emitter loses a constraint. `zap/db` has the same test; `cire/api/src/db/ddl-lockstep.test.ts` covers cire's three-way mirror.
 
-**If you extend one emitter, extend all three** — they are copies, and only osn's is lockstep-guarded.
+**If you extend one emitter, extend all three** — they are copies. `pulse/db` is the one package with no lockstep guard, because its migration chain does not currently apply from empty (**D-H1** in `wiki/TODO.md`); land the port once that is repaired.
+
+When you write one of these, prove it can fail. Mutate the emitter — drop a constraint, reverse an index's columns — and confirm the test goes red. The first version of the osn test passed with every foreign key removed and with composite index columns reversed.
 
 ## Shared test harnesses
 
@@ -132,10 +134,10 @@ Reach for these before hand-rolling setup:
 
 | Harness | Use for |
 |---|---|
-| `@shared/crypto/testing` → `makeAccessTokenSigner()` | ES256 OSN access tokens (`aud: "osn-access"`). Returns `{ privateKey, publicKey, sign(profileId, claims?) }`. `claims` covers `email`, `audience`, `expiresIn`, `kid` for negative tests. Used by the pulse, zap and cire route suites. |
+| `@shared/crypto/testing` → `makeAccessTokenSigner()` | ES256 OSN access tokens (`aud: "osn-access"`, 5-minute `exp` matching production). Returns `{ privateKey, publicKey, sign(profileId, claims?) }`; `claims` covers `email`, `audience`, `expiresIn`, `issuer`, `kid` for negative tests. Used by the pulse, zap and cire route suites. |
 | `cire/api/src/test-helpers/osn-token.ts` → `makeOsnTestAuth()` | The cire-shaped `{ key, sign }` adapter over the above. |
 | `cire/api/src/test-helpers.ts` → `appRequest()` | Elysia requests with `cf-connecting-ip` + `Origin` pre-injected. |
-| `cire/organiser/src/test-support/mocks.ts` | The `@shared/rp-auth/solid` + `solid-toast` + `lib/api` mock trio and their spies. |
+| `cire/organiser/src/test-support/mocks.ts` | The `@shared/rp-auth/solid` + `solid-toast` + `lib/api` mock trio, their spies, and `resetOrganiserMocks()`. |
 | `pulse/app/tests/helpers/toast.ts` → `solidToastMock()` | Same idea for the Pulse app. |
 
 Call `makeAccessTokenSigner()` once per suite in `beforeAll` — there is no reason to re-key per test.
@@ -147,8 +149,15 @@ vi.mock("../lib/api", async () => {
   const { organiserApiMock } = await import("../test-support/mocks");
   return organiserApiMock();
 });
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, redirectSpy, resetOrganiserMocks } from "../test-support/mocks";
+
+afterEach(() => {
+  cleanup();
+  resetOrganiserMocks(); // the spies are module singletons — reset every one
+});
 ```
+
+Because the spies are shared, a `describe` block that forgets a reset inherits call counts from the block above it. Always call `resetOrganiserMocks()` rather than hand-listing the spies you happen to remember.
 
 A suite that genuinely needs a different shape (an extra `useAuth` field, an `importOriginal` spread) keeps its own local mock. These harnesses cover the common case; they are not a mandate.
 

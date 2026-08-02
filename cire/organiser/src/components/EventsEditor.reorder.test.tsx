@@ -32,7 +32,7 @@ vi.mock("../lib/api", () => ({
 import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
 import { __resetHouseholdsCache } from "../lib/households-store";
-import { authFetchMock } from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import EventsEditor from "./EventsEditor";
 
 function json(body: unknown) {
@@ -136,7 +136,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  authFetchMock.mockReset();
+  resetOrganiserMocks();
   __resetGuestsCache();
   __resetHouseholdsCache();
   __resetEventsCache();

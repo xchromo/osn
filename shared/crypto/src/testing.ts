@@ -23,8 +23,15 @@ export interface AccessTokenClaims {
   email?: string;
   /** Override the audience to exercise audience-rejection paths. */
   audience?: string;
-  /** Set an explicit expiry (e.g. `"-1s"` for an expired-token test). */
+  /**
+   * Override the expiry. Defaults to `"5m"`, matching what production's
+   * `issueAccessToken` stamps — a test token must never be longer-lived than a
+   * real one. Pass a negative offset (`"-120s"`, comfortably past the verifier's
+   * ±30s `clockTolerance`) to exercise the expired-token reject path.
+   */
   expiresIn?: string;
+  /** Set an `iss` claim — cire pins the issuer, other verifiers ignore it. */
+  issuer?: string;
   /** Override the `kid` header to exercise key-mismatch paths. */
   kid?: string;
 }
@@ -56,9 +63,10 @@ export async function makeAccessTokenSigner(): Promise<AccessTokenSigner> {
       let jwt = new SignJWT(payload)
         .setProtectedHeader({ alg: "ES256", kid: claims.kid ?? "test-kid" })
         .setAudience(claims.audience ?? "osn-access")
-        .setIssuedAt();
+        .setIssuedAt()
+        .setExpirationTime(claims.expiresIn ?? "5m");
 
-      if (claims.expiresIn !== undefined) jwt = jwt.setExpirationTime(claims.expiresIn);
+      if (claims.issuer !== undefined) jwt = jwt.setIssuer(claims.issuer);
 
       return jwt.sign(privateKey);
     },

@@ -31,7 +31,13 @@ vi.mock("../lib/download", () => ({
 }));
 
 import { __resetEventsCache, invalidateEvents } from "../lib/events-store";
-import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
+import {
+  authFetchMock,
+  redirectSpy,
+  resetOrganiserMocks,
+  toastError,
+  toastSuccess,
+} from "../test-support/mocks";
 import EventTable from "./EventTable";
 
 function json(body: unknown, status = 200) {
@@ -62,10 +68,7 @@ describe("EventTable per-event image", () => {
   afterEach(() => {
     cleanup();
     __resetEventsCache();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
   });
 
   it("renders the event with an image upload field and the replace note", async () => {
@@ -141,10 +144,7 @@ describe("EventTable events caching", () => {
   afterEach(() => {
     cleanup();
     __resetEventsCache();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
   });
 
   it("does NOT re-fetch events when the tab switches back (remount, same wedding)", async () => {
@@ -222,10 +222,7 @@ describe("EventTable events CSV export", () => {
   afterEach(() => {
     cleanup();
     __resetEventsCache();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
     downloadBlobMock.mockReset();
   });
 
@@ -276,7 +273,7 @@ describe("EventTable open-ended events (endAt '')", () => {
   afterEach(() => {
     cleanup();
     __resetEventsCache();
-    authFetchMock.mockReset();
+    resetOrganiserMocks();
   });
 
   it("renders just the start time when endAt is the '' no-stated-end sentinel", async () => {

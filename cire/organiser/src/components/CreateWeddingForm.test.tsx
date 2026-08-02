@@ -19,7 +19,7 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, redirectSpy, resetOrganiserMocks } from "../test-support/mocks";
 import CreateWeddingForm from "./CreateWeddingForm";
 
 function fill(value: string) {
@@ -30,8 +30,7 @@ function fill(value: string) {
 describe("CreateWeddingForm", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
   });
 
   it("POSTs the display name and calls onCreated with the new wedding", async () => {

@@ -15,22 +15,40 @@ The schema-reflection emitters in `@osn/db/testing`, `@pulse/db/testing` and
 
 - **Column-level `UNIQUE`.** `emitColumn()` read only the table config's
   `uniqueConstraints` (table-level `unique()`), never `col.isUnique`, where
-  Drizzle records column-level `.unique()`. Seven OSN constraints were missing
-  from every test database — `accounts.email`, `accounts.passkey_user_id`,
-  `users.handle`, `passkeys.credential_id`, `recovery_codes.code_hash`,
-  `organisations.handle`, `oauth_clients.client_id` — including the Miniflare
-  D1 that `osn/api/src/d1-integration.test.ts` builds, so the only test proving
-  OSN core runs on real D1 ran against a schema accepting duplicates.
+  Drizzle records column-level `.unique()`. Seven OSN constraints were dropped —
+  `accounts.email`, `accounts.passkey_user_id`, `users.handle`,
+  `passkeys.credential_id`, `recovery_codes.code_hash`, `organisations.handle`,
+  `oauth_clients.client_id`.
 - **Partial-index `WHERE` clauses.** Four OSN partial indexes were emitted as
   full indexes, and `deletion_jobs`' pulse/zap pending pair collapsed into a
   single duplicate.
 
+The blast radius was narrower than it first appears, and worth stating
+precisely: `osn/api`'s unit lane used a hand-written DDL block that already
+carried all seven UNIQUEs, so replacing it with `applySchema()` is drift-proofing
+rather than new coverage. The lane that genuinely ran without them is the
+Miniflare D1 in `osn/api/src/d1-integration.test.ts`, which builds from
+`createSchemaSql()` directly — the only test proving OSN core runs on real D1 was
+doing so against a schema that accepted duplicates and had four indexes widened.
+
 `osn/db/tests/ddl-lockstep.test.ts` (new) diffs a normalised structural
 snapshot of the emitted schema against the full `osn/db/drizzle/*.sql`
-migration chain and fails on either divergence. Both fixes are applied to all
-three emitter copies; pulse and zap were unaffected in practice (neither schema
-uses column-level `.unique()` or partial indexes today) but carried the same
-latent trap.
+migration chain — columns, defaults, indexes (including column order within an
+index), partial predicates, foreign keys and their referential actions — and
+fails on any divergence. `zap/db` gets the same test. Both emitter fixes are
+applied to all three copies; pulse and zap were unaffected in practice (neither
+schema uses column-level `.unique()` or partial indexes today) but carried the
+same latent trap.
+
+The emitter also now emits `ON DELETE`/`ON UPDATE` actions, which it previously
+dropped — harmless while every OSN foreign key is `no action`, but the first
+`onDelete: "cascade"` would otherwise have cascaded in production and restricted
+in every test.
+
+Two performance fixes to the emitters, both measured: the reflected DDL is
+memoised (it was ~24% of per-test database setup, recomputed for a schema that
+cannot change within a process) and the `SQLiteSyncDialect` is hoisted out of
+the per-index loop.
 
 Also in this change:
 

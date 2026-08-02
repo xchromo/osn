@@ -28,7 +28,13 @@ import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
 import { __resetHouseholdsCache } from "../lib/households-store";
 import { confirmNavigation } from "../lib/unsaved-guard";
-import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
+import {
+  authFetchMock,
+  redirectSpy,
+  resetOrganiserMocks,
+  toastError,
+  toastSuccess,
+} from "../test-support/mocks";
 import GuestsEditor from "./GuestsEditor";
 
 function json(body: unknown, status = 200) {
@@ -117,10 +123,7 @@ function primeLoad() {
 describe("GuestsEditor", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
     __resetGuestsCache();
     __resetHouseholdsCache();
     __resetEventsCache();

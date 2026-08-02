@@ -30,7 +30,7 @@ vi.mock("../lib/guests-store", () => ({
   invalidateGuests: (id: string) => invalidateGuestsMock(id),
 }));
 
-import { authFetchMock } from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import ChangeHistory from "./ChangeHistory";
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
@@ -88,7 +88,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  authFetchMock.mockReset();
+  resetOrganiserMocks();
   invalidateEventsMock.mockReset();
   invalidateGuestsMock.mockReset();
 });

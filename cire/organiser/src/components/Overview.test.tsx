@@ -31,7 +31,7 @@ import { __resetBudgetCache } from "../lib/budget-store";
 import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache, setCachedGuests } from "../lib/guests-store";
 import { __resetTasksCache } from "../lib/tasks-store";
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import Overview from "./Overview";
 
 function json(body: unknown, status = 200) {
@@ -122,8 +122,7 @@ const RSVPS = [
 describe("Overview", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
     __resetBudgetCache();
     __resetEventsCache();
     __resetGuestsCache();

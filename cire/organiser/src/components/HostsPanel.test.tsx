@@ -24,7 +24,13 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
+import {
+  authFetchMock,
+  redirectSpy,
+  resetOrganiserMocks,
+  toastError,
+  toastSuccess,
+} from "../test-support/mocks";
 import HostsPanel from "./HostsPanel";
 
 function json(body: unknown, status = 200) {
@@ -42,10 +48,7 @@ function typeHandle(value: string) {
 describe("HostsPanel", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
   });
 
   it("loads and lists existing hosts", async () => {

@@ -21,7 +21,7 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import GettingStarted from "./GettingStarted";
 
 function json(body: unknown, status = 200) {
@@ -55,8 +55,7 @@ function stepButtons() {
 describe("GettingStarted", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
     // Dismissal persists to localStorage per wedding — reset between tests so
     // one test's dismiss doesn't hide the checklist in the next.
     localStorage.clear();

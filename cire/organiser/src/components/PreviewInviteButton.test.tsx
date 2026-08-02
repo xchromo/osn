@@ -30,7 +30,7 @@ vi.mock("../lib/api", async () => {
   return organiserApiMock();
 });
 
-import { authFetchMock, redirectSpy } from "../test-support/mocks";
+import { authFetchMock, redirectSpy, resetOrganiserMocks } from "../test-support/mocks";
 import PreviewInviteButton from "./PreviewInviteButton";
 
 type FakeWindow = ReturnType<typeof makeFakeWindow>;
@@ -60,8 +60,7 @@ function clickPreview() {
 describe("PreviewInviteButton", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
+    resetOrganiserMocks();
     toastErrorSpy.mockReset();
     vi.unstubAllGlobals();
   });

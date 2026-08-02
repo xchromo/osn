@@ -19,7 +19,17 @@ import * as schema from "./schema";
  *
  * Mirrors `@pulse/db/testing` — keep the two in sync if the emitter is extended.
  */
+let cachedSchemaSql: string[] | undefined;
+
 export function createSchemaSql(): string[] {
+  // The Drizzle schema is a static module-level import, so the emitted DDL is
+  // constant for the process lifetime. Reflecting it per test DB made ~24% of
+  // setup pure recomputation, scaling with both test count and schema size.
+  // Frozen: the array is shared by every caller, so a stray mutation must be loud.
+  return (cachedSchemaSql ??= Object.freeze(buildSchemaSql()) as string[]);
+}
+
+function buildSchemaSql(): string[] {
   const tables = (Object.values(schema) as unknown[]).filter((value): value is SQLiteTable =>
     is(value, SQLiteTable),
   );
@@ -58,6 +68,9 @@ function topoSortByForeignKey(tables: SQLiteTable[]): SQLiteTable[] {
   return sorted;
 }
 
+/** Stateless with respect to a single `sqlToQuery` call — one instance is enough. */
+const DIALECT = new SQLiteSyncDialect();
+
 function emitCreateTable(table: SQLiteTable): string {
   const cfg = getTableConfig(table);
   const parts: string[] = [];
@@ -80,7 +93,16 @@ function emitCreateTable(table: SQLiteTable): string {
     const local = ref.columns.map((c) => `"${c.name}"`).join(", ");
     const foreignTableName = getTableConfig(ref.foreignTable).name;
     const foreignCols = ref.foreignColumns.map((c) => `"${c.name}"`).join(", ");
-    parts.push(`  FOREIGN KEY (${local}) REFERENCES "${foreignTableName}"(${foreignCols})`);
+    // Referential ACTIONS matter as much as the reference: without them a
+    // schema that cascades in production silently restricts in tests. Every
+    // osn FK is `no action` today, which SQLite reports as the default — but
+    // the first `onDelete: "cascade"` must not be lost. Guarded by
+    // tests/ddl-lockstep.test.ts.
+    const onDelete = fk.onDelete ? ` ON DELETE ${fk.onDelete.toUpperCase()}` : "";
+    const onUpdate = fk.onUpdate ? ` ON UPDATE ${fk.onUpdate.toUpperCase()}` : "";
+    parts.push(
+      `  FOREIGN KEY (${local}) REFERENCES "${foreignTableName}"(${foreignCols})${onDelete}${onUpdate}`,
+    );
   }
 
   return `CREATE TABLE "${cfg.name}" (\n${parts.join(",\n")}\n);`;
@@ -142,6 +164,6 @@ function emitCreateIndex(idx: IndexLike, table: SQLiteTable): string {
   // a full one, and two partial indexes over the same column (deletion_jobs'
   // pulse/zap pending pair) collapse into a single duplicate. Guarded by
   // tests/ddl-lockstep.test.ts.
-  const where = cfg.where ? ` WHERE ${new SQLiteSyncDialect().sqlToQuery(cfg.where).sql}` : "";
+  const where = cfg.where ? ` WHERE ${DIALECT.sqlToQuery(cfg.where).sql}` : "";
   return `CREATE ${cfg.unique ? "UNIQUE " : ""}INDEX "${cfg.name}" ON "${tableName}" (${cols})${where};`;
 }

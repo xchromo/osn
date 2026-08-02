@@ -37,7 +37,13 @@ vi.mock("../lib/download", () => ({
 
 import { __resetEventsCache } from "../lib/events-store";
 import { __resetGuestsCache } from "../lib/guests-store";
-import { authFetchMock, redirectSpy, toastError, toastSuccess } from "../test-support/mocks";
+import {
+  authFetchMock,
+  redirectSpy,
+  resetOrganiserMocks,
+  toastError,
+  toastSuccess,
+} from "../test-support/mocks";
 import GuestTable from "./GuestTable";
 
 function json(body: unknown, status = 200) {
@@ -87,10 +93,7 @@ function primeLoad(inviteMessage: string | null = null) {
 describe("GuestTable", () => {
   afterEach(() => {
     cleanup();
-    authFetchMock.mockReset();
-    redirectSpy.mockReset();
-    toastSuccess.mockReset();
-    toastError.mockReset();
+    resetOrganiserMocks();
     writeText.mockReset();
     downloadBlobMock.mockReset();
     // GuestTable reads guests + events from module-scoped caches (P-I3); clear
