@@ -244,6 +244,36 @@ describe("diff: family rename = remove + create", () => {
     expect(plan.familyRemoves.map((f) => f.familyName)).toContain("Testfamily");
     expect(plan.familyCreates.map((f) => f.familyName)).toContain("Testfamily-Placeholder");
   });
+
+  it("a name-matched case/whitespace variant emits NO familyUpdate (no-id plan unchanged)", async () => {
+    // `familyUpdates` is emitted only on the ID-matched path. A plain (id-less)
+    // sheet whose family name differs from the DB only in case/whitespace still
+    // NAME-matches — and must not start rewriting the stored casing, or the
+    // historical no-id plan would stop being byte-identical.
+    const sharedDb = createDb(":memory:");
+    seedBootstrapWedding(sharedDb);
+    const sharedLayer = Layer.succeed(DbService, sharedDb);
+
+    const { ev, fam } = await parsedFromCsv();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const seedPlan = yield* diffAgainstDb(ev, fam, BOOTSTRAP_WEDDING_ID);
+        yield* applyImport("import-seed", seedPlan, BOOTSTRAP_WEDDING_ID);
+      }).pipe(Effect.provide(sharedLayer)),
+    );
+
+    const caseFoldedCsv = FOUR_FAMILIES_CSV.replaceAll("Testfamily,", "TESTFAMILY,");
+    const foldedFam = (await Effect.runPromise(
+      parseGuestsCsv(caseFoldedCsv, ev),
+    )) as ParsedFamily[];
+    const plan = await Effect.runPromise(
+      diffAgainstDb(ev, foldedFam, BOOTSTRAP_WEDDING_ID).pipe(Effect.provide(sharedLayer)),
+    );
+
+    expect(plan.familyUpdates).toHaveLength(0);
+    expect(plan.familyCreates).toHaveLength(0);
+    expect(plan.familyRemoves).toHaveLength(0);
+  });
 });
 
 describe("diff: guest first-name change = remove + create", () => {
