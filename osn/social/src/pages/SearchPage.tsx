@@ -62,7 +62,9 @@ export function SearchPage() {
           when={!controller.tooShort()}
           fallback={
             <p class="text-muted-foreground text-body py-12 text-center">
-              Type at least {MIN_QUERY_LENGTH} characters to search.
+              {MIN_QUERY_LENGTH > 1
+                ? `Type at least ${MIN_QUERY_LENGTH} characters to search.`
+                : "Start typing to find people and organisations."}
             </p>
           }
         >

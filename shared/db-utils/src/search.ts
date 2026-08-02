@@ -23,6 +23,21 @@
 const HANDLE_CHARS = /^[a-z0-9_]+$/;
 
 /**
+ * Token separator for both queries and the names they are matched against.
+ * Anything that is not a letter, a digit or an underscore splits — so
+ * `"Smith-Jones"`, `"O'Brien"` and `"Acme  Inc."` all tokenise the way a person
+ * reading them would. Unicode-aware (`\p{L}`), because display names are not
+ * ASCII.
+ *
+ * The underscore is the exception, and it is not a stylistic one: `_` is a
+ * legal handle character (`^[a-z0-9_]+$`). Splitting on it would turn a typed
+ * `@jo_smith` into the two tokens `jo` and `smith`, which then match `@joxsmith`
+ * as readily as the handle actually typed — quietly undoing the literal-`_`
+ * matching that {@link escapeLike} exists to provide.
+ */
+const TOKEN_SEPARATOR = /[^\p{L}\p{N}_]+/u;
+
+/**
  * Normalises a user-typed query the way handle storage expects: trims, strips
  * any leading `@` sigils, then lowercases. `users.handle` is stored lowercase
  * and constrained to `^[a-z0-9_]+$`, so this is what makes `@Alice`, `alice`
@@ -91,4 +106,55 @@ export function handlePrefixRange(query: string): { lower: string; upper: string
   const lastIndex = query.length - 1;
   const upper = query.slice(0, lastIndex) + String.fromCharCode(query.charCodeAt(lastIndex) + 1);
   return { lower: query, upper };
+}
+
+/**
+ * Splits a normalised query into its word tokens, dropping empties.
+ *
+ * A search box takes what a person types, and people type names the way they
+ * say them — `"john smith"`, not `"johnsmith"`. Without tokens the whole query
+ * is one opaque string, so `"john smith"` can only ever match a display name
+ * that contains that exact substring in that exact order: `"Smith, John"` and
+ * `"John A. Smith"` both miss, and `@johnsmith` — the handle the person is
+ * almost certainly reaching for — misses too because the space can't prefix a
+ * handle. Tokens are what let the caller ask the two questions worth asking:
+ * does every token appear (order-free matching), and does every token *start* a
+ * name token (the prefix match a typeahead is really doing).
+ *
+ * @see {@link joinTokens} for the handle-shaped rejoin of the same tokens.
+ */
+export function tokeniseQuery(query: string): string[] {
+  return query.split(TOKEN_SEPARATOR).filter((token) => token.length > 0);
+}
+
+/**
+ * Rejoins tokens into the handle they would spell — `["john", "smith"]` becomes
+ * `"johnsmith"`. Handles have no separators, so this is the form a multi-word
+ * query has to take before it can seek a handle prefix range at all.
+ *
+ * For a single-token query this is the identity, which is what keeps the
+ * one-word path (the overwhelming majority of typeahead traffic) unchanged.
+ */
+export function joinTokens(tokens: string[]): string {
+  return tokens.join("");
+}
+
+/**
+ * True when every token of `query` prefixes some token of `text`.
+ *
+ * This is the match a name-based typeahead is actually performing: typing
+ * `"smith"` should find `"Roberta Smith"`, and typing `"rob smi"` should find
+ * her too. A plain substring test can't express either — it ranks
+ * `"Roberta Smith"` for `"smith"` no higher than `"Blacksmith Ltd"`, and finds
+ * nothing at all for `"smi rob"`.
+ *
+ * Tokens are matched independently and may share a target token, so
+ * `"jo jo"` still matches `"Jo"`. That looseness is deliberate: this decides
+ * *ranking*, not visibility, and a duplicated token is a typo, not an attack.
+ */
+export function tokensPrefixName(text: string | null | undefined, tokens: string[]): boolean {
+  if (!text || tokens.length === 0) return false;
+  const nameTokens = tokeniseQuery(text.toLowerCase());
+  if (nameTokens.length === 0) return false;
+  return tokens.every((token) => nameTokens.some((nameToken) => nameToken.startsWith(token)));
 }

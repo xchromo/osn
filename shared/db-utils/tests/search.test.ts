@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 
-import { escapeLike, handlePrefixRange, likeContains, normaliseHandleQuery } from "../src/search";
+import {
+  escapeLike,
+  handlePrefixRange,
+  joinTokens,
+  likeContains,
+  normaliseHandleQuery,
+  tokeniseQuery,
+  tokensPrefixName,
+} from "../src/search";
 
 describe("normaliseHandleQuery", () => {
   it("strips a leading @ and lowercases", () => {
@@ -99,5 +107,83 @@ describe("handlePrefixRange", () => {
       lower: "alice",
       upper: "alicf",
     });
+  });
+});
+
+describe("tokeniseQuery", () => {
+  it("splits on whitespace and punctuation", () => {
+    expect(tokeniseQuery("john smith")).toEqual(["john", "smith"]);
+    expect(tokeniseQuery("  john   smith  ")).toEqual(["john", "smith"]);
+    expect(tokeniseQuery("smith-jones")).toEqual(["smith", "jones"]);
+    expect(tokeniseQuery("o'brien")).toEqual(["o", "brien"]);
+    expect(tokeniseQuery("acme inc.")).toEqual(["acme", "inc"]);
+  });
+
+  it("keeps underscores, because handles contain them", () => {
+    // Splitting here would turn a typed `@jo_smith` into `jo` + `smith`, which
+    // then matches `@joxsmith` just as well — quietly undoing the literal-`_`
+    // matching `escapeLike` exists to provide.
+    expect(tokeniseQuery("jo_smith")).toEqual(["jo_smith"]);
+  });
+
+  it("is unicode-aware", () => {
+    expect(tokeniseQuery("zoë müller")).toEqual(["zoë", "müller"]);
+    expect(tokeniseQuery("日本 太郎")).toEqual(["日本", "太郎"]);
+  });
+
+  it("returns [] for a query with no word characters", () => {
+    expect(tokeniseQuery("")).toEqual([]);
+    expect(tokeniseQuery("   ")).toEqual([]);
+    expect(tokeniseQuery("!!!")).toEqual([]);
+  });
+});
+
+describe("joinTokens", () => {
+  it("spells the handle a multi-word query is reaching for", () => {
+    expect(joinTokens(["john", "smith"])).toBe("johnsmith");
+    expect(joinTokens(["alice"])).toBe("alice");
+    expect(joinTokens([])).toBe("");
+  });
+
+  it("composes into a prefix range a spaced query could not produce alone", () => {
+    // A space can't prefix a handle, so `handlePrefixRange("john smith")` is
+    // null — the seek is skipped entirely without the rejoin.
+    expect(handlePrefixRange("john smith")).toBeNull();
+    expect(handlePrefixRange(joinTokens(tokeniseQuery("john smith")))).toEqual({
+      lower: "johnsmith",
+      upper: "johnsmiti",
+    });
+  });
+});
+
+describe("tokensPrefixName", () => {
+  it("matches a token that is not the first", () => {
+    // The whole point: surnames are not prefixes of full names.
+    expect(tokensPrefixName("Roberta Smith", ["smith"])).toBe(true);
+    expect(tokensPrefixName("Roberta Smith", ["rob"])).toBe(true);
+    expect(tokensPrefixName("Roberta Smith", ["rob", "smi"])).toBe(true);
+    expect(tokensPrefixName("Roberta Smith", ["smi", "rob"])).toBe(true);
+  });
+
+  it("requires a prefix, not a substring", () => {
+    // What separates this tier from the name-infix tier below it.
+    expect(tokensPrefixName("Blacksmith Ltd", ["smith"])).toBe(false);
+    expect(tokensPrefixName("Blacksmith Ltd", ["black"])).toBe(true);
+  });
+
+  it("requires every query token to land", () => {
+    expect(tokensPrefixName("Roberta Smith", ["rob", "zed"])).toBe(false);
+  });
+
+  it("is case-insensitive and splits the name like the query", () => {
+    expect(tokensPrefixName("ROBERTA SMITH-JONES", ["jones"])).toBe(true);
+    expect(tokensPrefixName("O'Brien", ["brien"])).toBe(true);
+  });
+
+  it("is false for an absent name or an empty token list", () => {
+    expect(tokensPrefixName(null, ["rob"])).toBe(false);
+    expect(tokensPrefixName(undefined, ["rob"])).toBe(false);
+    expect(tokensPrefixName("Roberta Smith", [])).toBe(false);
+    expect(tokensPrefixName("!!!", ["rob"])).toBe(false);
   });
 });
