@@ -4,12 +4,18 @@
 "@osn/social": minor
 ---
 
-Contact suggestions and search autocomplete in OSN Social. The Discover page
-gains a people-search box that suggests as you type, and its suggestion cards
-now say why each person is being suggested.
+Contact suggestions and a shell search bar in OSN Social. Search is reachable
+from anywhere — a live combobox in the desktop rail and a `/search` page behind
+a new Search tab in the mobile bottom bar — and Discover's suggestion cards now
+say why each person is being suggested.
 
-- `@osn/api`: new `GET /recommendations/search?q=&limit=` — autocomplete over
-  handle and display name. Two-phase by design: the left-anchored
+- `@osn/api`: new `GET /recommendations/search?q=&limit=&orgLimit=` —
+  autocomplete over people **and** organisations, both sections in one round
+  trip. One endpoint rather than two because this is typeahead: one request per
+  keystroke means one abort to cancel, one rate-limit budget to reason about,
+  and no torn state where the people half of a result set is newer than the
+  organisation half. People match on handle and display name, two-phase by
+  design: the left-anchored
   `handle LIKE 'q%'` pass rides `users_handle_idx` and answers the common
   keystroke, and the unanchored `%q%` pass over handle + display name runs only
   when that under-fills the page, so the table scan is the exception rather
@@ -23,6 +29,12 @@ now say why each person is being suggested.
   no new disclosure. Deliberately no mutual counts: search takes an arbitrary
   handle, and answering "how many mutuals" for arbitrary handles is a
   graph-inference oracle.
+- `@osn/api`: organisation results follow the same two-phase shape and share
+  the ranking function, but carry no exclusions — organisations are public, and
+  the caller's own are *more* relevant in a search box, so they come back
+  flagged `isMember: true` and render a badge instead of a CTA. Results include
+  `id` because the detail route is keyed by it; a result you can't open would
+  be useless.
 - `@osn/api`: `suggestConnections` gains organisation co-members as a second
   signal, so an account with no connections yet has something to act on — FOF
   alone returns nothing until the first connection is accepted. Suggestions now
@@ -40,13 +52,20 @@ now say why each person is being suggested.
   for the fan-out and `recs:search` at 60/user/min for typeahead, which fires
   once per debounced keystroke and would otherwise 429 a user mid-word. Both
   stay per-user and fail-closed.
-- `@osn/client`: `createRecommendationClient` gains `searchProfiles`, which
-  takes an `AbortSignal` so a caller can cancel a superseded keystroke;
-  `Suggestion` gains `reason` and `sharedOrganisation`.
-- `@osn/social`: new `PeopleSearch` component on the Discover page, built as an
-  ARIA combobox — arrow keys move `aria-activedescendant` without leaving the
-  field, Enter acts on the active row (Connect, or Accept when they asked
-  first), Escape closes. Input is debounced 250 ms, superseded requests are
-  aborted, and a row's status flips locally on success rather than refetching
-  and reordering the list under the cursor. Suggestion cards render the reason
-  line ("3 mutual connections" / "Also in Acme Inc").
+- `@osn/client`: `createRecommendationClient` gains `search`, returning people
+  and organisations together and taking an `AbortSignal` so a caller can cancel
+  a superseded keystroke; `Suggestion` gains `reason` and `sharedOrganisation`.
+- `@osn/social`: search now lives in the shell rather than on one page.
+  `GlobalSearch` is an ARIA combobox in the desktop rail — arrow keys move
+  `aria-activedescendant` across both sections without leaving the field, Enter
+  acts on the active row (Connect / Accept for a person, navigate for an
+  organisation), Escape closes. The new `/search` page groups results under
+  section headings and is the mobile shell's **Search tab**: the bottom bar is
+  the thumb-reachable surface, where a header field is not. `NAV_ITEMS` gained
+  a `mobileOnly` flag so the rail — which has the live field — doesn't also
+  carry the link, and Discover's icon moved from a magnifier to a person-plus
+  so the tab bar doesn't show two magnifiers. Both surfaces share one
+  `createSearchController` (debounce, abort, optimistic status), so a row's
+  state flips locally on success rather than refetching and reordering the list
+  under the cursor. Discover is now suggestions-only, its cards rendering the
+  reason line ("3 mutual connections" / "Also in Acme Inc").

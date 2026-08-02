@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+
+import { MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // module-level `recommendationClient` / `graphClient` references pick up the
 // mocked implementations.
 const mocks = vi.hoisted(() => ({
-  searchProfiles: vi.fn(),
+  search: vi.fn(),
   sendConnectionRequest: vi.fn(),
   acceptConnection: vi.fn(),
 }));
@@ -17,20 +19,37 @@ vi.mock("../../src/lib/api", () => ({
     acceptConnection: mocks.acceptConnection,
   },
   orgClient: {},
-  recommendationClient: { searchProfiles: mocks.searchProfiles },
+  recommendationClient: { search: mocks.search },
 }));
 
-import { PeopleSearch } from "../../src/components/PeopleSearch";
+import { GlobalSearch } from "../../src/components/GlobalSearch";
 
-const result = (handle: string, connectionStatus = "none", displayName: string | null = null) => ({
+const person = (handle: string, connectionStatus = "none", displayName: string | null = null) => ({
   handle,
   displayName,
   avatarUrl: null,
   connectionStatus,
 });
 
+const org = (handle: string, name: string, isMember = false) => ({
+  id: `org_${handle}`,
+  handle,
+  name,
+  avatarUrl: null,
+  isMember,
+});
+
+const results = (
+  people: ReturnType<typeof person>[] = [],
+  organisations: ReturnType<typeof org>[] = [],
+) => ({ people, organisations });
+
 function renderSearch() {
-  return render(() => <PeopleSearch token="tkn" />);
+  return render(() => (
+    <MemoryRouter>
+      <Route path="/" component={() => <GlobalSearch token="tkn" />} />
+    </MemoryRouter>
+  ));
 }
 
 /** Types into the combobox and lets the debounce timer fire. */
@@ -43,7 +62,7 @@ async function type(value: string) {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  mocks.searchProfiles.mockResolvedValue({ results: [] });
+  mocks.search.mockResolvedValue(results());
   mocks.sendConnectionRequest.mockResolvedValue({ ok: true });
   mocks.acceptConnection.mockResolvedValue({ ok: true });
 });
@@ -54,11 +73,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("<PeopleSearch />", () => {
+describe("<GlobalSearch />", () => {
   it("does not query the API below the minimum query length", async () => {
     renderSearch();
     await type("a");
-    expect(mocks.searchProfiles).not.toHaveBeenCalled();
+    expect(mocks.search).not.toHaveBeenCalled();
   });
 
   it("debounces so a burst of keystrokes issues a single request", async () => {
@@ -70,34 +89,53 @@ describe("<PeopleSearch />", () => {
     }
     await vi.advanceTimersByTimeAsync(300);
 
-    expect(mocks.searchProfiles).toHaveBeenCalledTimes(1);
-    expect(mocks.searchProfiles).toHaveBeenCalledWith(
+    expect(mocks.search).toHaveBeenCalledTimes(1);
+    expect(mocks.search).toHaveBeenCalledWith(
       "tkn",
       "alice",
-      expect.objectContaining({ limit: 8 }),
+      expect.objectContaining({ limit: 6 }),
     );
   });
 
   it("strips a leading @ before querying", async () => {
     renderSearch();
     await type("@alice");
-    expect(mocks.searchProfiles).toHaveBeenCalledWith("tkn", "alice", expect.anything());
+    expect(mocks.search).toHaveBeenCalledWith("tkn", "alice", expect.anything());
   });
 
-  it("renders matches as listbox options", async () => {
-    mocks.searchProfiles.mockResolvedValue({
-      results: [result("alice", "none", "Alice Ainsley"), result("alicia")],
-    });
+  it("renders people and organisations as one flat listbox, people first", async () => {
+    mocks.search.mockResolvedValue(
+      results([person("alice"), person("alicia")], [org("aligned", "Aligned Co")]),
+    );
     renderSearch();
     await type("ali");
 
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
-    expect(screen.getByText("Alice Ainsley")).toBeDefined();
-    expect(screen.getByText("@alicia")).toBeDefined();
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    const options = screen.getAllByRole("option");
+    expect(options[0]!.textContent).toContain("alice");
+    expect(options[2]!.textContent).toContain("Aligned Co");
   });
 
-  it("sends a connection request when a result's Connect button is clicked", async () => {
-    mocks.searchProfiles.mockResolvedValue({ results: [result("alice")] });
+  it("links an organisation result to its detail page", async () => {
+    mocks.search.mockResolvedValue(results([], [org("acme", "Acme Inc")]));
+    renderSearch();
+    await type("acme");
+
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
+    const link = screen.getByRole("link");
+    expect(link.getAttribute("href")).toBe("/organisations/org_acme");
+  });
+
+  it("marks an organisation the caller already belongs to", async () => {
+    mocks.search.mockResolvedValue(results([], [org("acme", "Acme Inc", true)]));
+    renderSearch();
+    await type("acme");
+
+    await waitFor(() => expect(screen.getByText("Member")).toBeDefined());
+  });
+
+  it("sends a connection request when a person's Connect button is clicked", async () => {
+    mocks.search.mockResolvedValue(results([person("alice")]));
     renderSearch();
     await type("ali");
 
@@ -111,7 +149,7 @@ describe("<PeopleSearch />", () => {
   });
 
   it("offers Accept for someone who already requested the caller", async () => {
-    mocks.searchProfiles.mockResolvedValue({ results: [result("alice", "pending_received")] });
+    mocks.search.mockResolvedValue(results([person("alice", "pending_received")]));
     renderSearch();
     await type("ali");
 
@@ -124,9 +162,9 @@ describe("<PeopleSearch />", () => {
   });
 
   it("shows a non-actionable label for results already connected or requested", async () => {
-    mocks.searchProfiles.mockResolvedValue({
-      results: [result("alice", "connected"), result("alicia", "pending_sent")],
-    });
+    mocks.search.mockResolvedValue(
+      results([person("alice", "connected"), person("alicia", "pending_sent")]),
+    );
     renderSearch();
     await type("ali");
 
@@ -136,36 +174,50 @@ describe("<PeopleSearch />", () => {
   });
 
   it("moves the active option with the arrow keys and acts on Enter", async () => {
-    mocks.searchProfiles.mockResolvedValue({
-      results: [result("alice"), result("alicia")],
-    });
+    mocks.search.mockResolvedValue(results([person("alice"), person("alicia")]));
     renderSearch();
     const input = await type("ali");
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(input.getAttribute("aria-activedescendant")).toBe("people-search-option-1");
+    expect(input.getAttribute("aria-activedescendant")).toBe("global-search-option-1");
 
     fireEvent.keyDown(input, { key: "Enter" });
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.sendConnectionRequest).toHaveBeenCalledWith("tkn", "alicia");
   });
 
+  it("walks past the people section into organisations with the arrow keys", async () => {
+    mocks.search.mockResolvedValue(results([person("alice")], [org("acme", "Acme Inc")]));
+    renderSearch();
+    const input = await type("a");
+    fireEvent.input(input, { target: { value: "ac" } });
+    await vi.advanceTimersByTimeAsync(300);
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe("global-search-option-1");
+
+    // Enter on an organisation navigates rather than firing a graph write.
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sendConnectionRequest).not.toHaveBeenCalled();
+  });
+
   it("wraps to the last option on ArrowUp from an inactive field", async () => {
-    mocks.searchProfiles.mockResolvedValue({
-      results: [result("alice"), result("alicia"), result("alina")],
-    });
+    mocks.search.mockResolvedValue(results([person("alice"), person("alicia"), person("alina")]));
     renderSearch();
     const input = await type("ali");
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
 
     fireEvent.keyDown(input, { key: "ArrowUp" });
-    expect(input.getAttribute("aria-activedescendant")).toBe("people-search-option-2");
+    expect(input.getAttribute("aria-activedescendant")).toBe("global-search-option-2");
   });
 
   it("closes the listbox on Escape", async () => {
-    mocks.searchProfiles.mockResolvedValue({ results: [result("alice")] });
+    mocks.search.mockResolvedValue(results([person("alice")]));
     renderSearch();
     const input = await type("ali");
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
@@ -176,17 +228,17 @@ describe("<PeopleSearch />", () => {
   });
 
   it("reports an empty result set instead of leaving the panel blank", async () => {
-    mocks.searchProfiles.mockResolvedValue({ results: [] });
+    mocks.search.mockResolvedValue(results());
     renderSearch();
     await type("zzz");
 
-    await waitFor(() => expect(screen.getByText(/No one found for "zzz"/)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/No results for "zzz"/)).toBeDefined());
   });
 
   it("passes an abort signal so a superseded request can be cancelled", async () => {
     renderSearch();
     await type("ali");
-    const options = mocks.searchProfiles.mock.calls[0]![2] as { signal?: AbortSignal };
+    const options = mocks.search.mock.calls[0]![2] as { signal?: AbortSignal };
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(options.signal!.aborted).toBe(false);
   });

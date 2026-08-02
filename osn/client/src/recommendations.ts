@@ -31,6 +31,20 @@ export interface ProfileSearchResult {
   connectionStatus: SearchConnectionState;
 }
 
+export interface OrganisationSearchResult {
+  id: string;
+  handle: string;
+  name: string;
+  avatarUrl: string | null;
+  /** Whether the caller already belongs to this organisation. */
+  isMember: boolean;
+}
+
+export interface SearchResults {
+  people: ProfileSearchResult[];
+  organisations: OrganisationSearchResult[];
+}
+
 export class RecommendationClientError extends Error {
   constructor(message: string) {
     super(message);
@@ -57,19 +71,19 @@ export interface RecommendationClient {
     options?: { limit?: number },
   ): Promise<{ suggestions: Suggestion[] }>;
   /**
-   * People search for autocomplete. Queries shorter than the server minimum
-   * (2 characters after trimming and stripping a leading `@`) come back as an
-   * empty list rather than an error.
+   * Search people and organisations for autocomplete. Queries shorter than the
+   * server minimum (2 characters after trimming and stripping a leading `@`)
+   * come back as empty lists rather than an error.
    *
    * `signal` exists because this is typeahead: callers should abort the
    * in-flight request when the query changes, so a slow early keystroke can't
    * land after — and overwrite — a fast later one.
    */
-  searchProfiles(
+  search(
     token: string,
     query: string,
-    options?: { limit?: number; signal?: AbortSignal },
-  ): Promise<{ results: ProfileSearchResult[] }>;
+    options?: { limit?: number; orgLimit?: number; signal?: AbortSignal },
+  ): Promise<SearchResults>;
 }
 
 export function createRecommendationClient(
@@ -94,14 +108,15 @@ export function createRecommendationClient(
       return json;
     },
 
-    searchProfiles: async (token, query, options) => {
+    search: async (token, query, options) => {
       const params = new URLSearchParams({ q: query });
       if (options?.limit !== undefined) params.set("limit", String(options.limit));
+      if (options?.orgLimit !== undefined) params.set("orgLimit", String(options.orgLimit));
       const res = await fetch(`${base}/search?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: options?.signal,
       });
-      const json = await safeJson<{ results: ProfileSearchResult[] }>(res);
+      const json = await safeJson<SearchResults>(res);
       if (!res.ok) {
         throw new RecommendationClientError(safeErrorMessage(json?.error, res.status));
       }

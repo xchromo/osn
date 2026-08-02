@@ -409,3 +409,75 @@ describe("searchProfiles", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 });
+
+// ---------------------------------------------------------------------------
+// searchOrganisations
+// ---------------------------------------------------------------------------
+
+describe("searchOrganisations", () => {
+  it.effect("returns [] below the minimum query length", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+
+      expect(yield* recs.searchOrganisations(alice.id, "a")).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("matches on handle prefix and flags the caller's membership", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.createOrganisation(bob.id, "acorn", "Acorn Ltd");
+
+      const result = yield* recs.searchOrganisations(alice.id, "ac");
+      expect(result.map((o) => o.handle)).toEqual(["acme", "acorn"]);
+      // Creating an organisation makes you an admin member of it.
+      expect(result.find((o) => o.handle === "acme")!.isMember).toBe(true);
+      expect(result.find((o) => o.handle === "acorn")!.isMember).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("falls back to a name match when the handle prefix pass is thin", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* orgs.createOrganisation(alice.id, "zzz", "Brighton Rowing Club");
+
+      const result = yield* recs.searchOrganisations(alice.id, "rowing");
+      expect(result.map((o) => o.handle)).toEqual(["zzz"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("ranks an exact handle match first", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* orgs.createOrganisation(alice.id, "acmecorp", "Acme Corp");
+      yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+
+      const result = yield* recs.searchOrganisations(alice.id, "acme");
+      expect(result[0]!.handle).toBe("acme");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("returns the id so the result can link to the organisation page", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+
+      const result = yield* recs.searchOrganisations(alice.id, "acme");
+      expect(result[0]!.id).toBe(org.id);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("treats an underscore in the query literally", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* orgs.createOrganisation(alice.id, "ac_me", "Underscore Org");
+      yield* orgs.createOrganisation(alice.id, "acxme", "Other Org");
+
+      const result = yield* recs.searchOrganisations(alice.id, "ac_m");
+      expect(result.map((o) => o.handle)).toEqual(["ac_me"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+});

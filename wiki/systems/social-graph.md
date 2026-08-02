@@ -122,9 +122,13 @@ Privacy: the endpoint returns `mutualCount` alongside each suggestion. This leak
 
 Rate-limited at 20 req/user/min via `createRedisRecommendationRateLimiters().suggest` — see [[rate-limiting]].
 
-## People search (autocomplete)
+## Search (autocomplete)
 
-`searchProfiles()` backs `GET /recommendations/search?q=&limit=`, the typeahead behind the Discover search box. It is the **user-facing** sibling of the ARC-gated `/graph/internal/profile-search` (co-host autocomplete); the two share the same guardrails but not the same auth.
+`GET /recommendations/search?q=&limit=&orgLimit=` backs every search surface in `@osn/social`. It answers with **both** sections in one round trip — `people` from `searchProfiles()` and `organisations` from `searchOrganisations()`. One endpoint rather than two because this is typeahead: one request per keystroke means one abort to cancel, one rate-limit budget to reason about, and no torn state where the people half of a result set is newer than the organisation half.
+
+### People (`searchProfiles`)
+
+The user-facing sibling of the ARC-gated `/graph/internal/profile-search`. The two share the same guardrails but not the same auth.
 
 - **Normalisation** — trim, strip a leading `@`, lowercase. `users.handle` is stored lowercase, so `@Alice` and `alice` are the same search. LIKE wildcards (`%`, `_`) in the typed query are escaped so an underscore in a handle matches literally.
 - **Minimum length 2** — shorter queries return an empty list, never a 4xx. Same friction social apps put on @-mention autocomplete: it stops one keystroke walking the handle namespace.
@@ -134,7 +138,18 @@ Rate-limited at 20 req/user/min via `createRedisRecommendationRateLimiters().sug
 - **Connection state** — each result carries the caller's own state with it (`none` / `pending_sent` / `pending_received` / `connected`), batched in one query for the whole page, so the UI renders Connect / Accept / Requested / Connected without a request per row. This is the same fact `GET /graph/connections/:handle` already reports per handle — no new disclosure, just fewer round trips.
 - **No mutual counts.** Deliberate: suggestions describe profiles already adjacent to the caller's graph, but search takes an *arbitrary* handle, and answering "how many mutuals" for arbitrary handles is a graph-inference oracle (cf. S-L4).
 
-Rate-limited at 60 req/user/min via `createRedisRecommendationRateLimiters().search` — looser than the suggestion budget because typeahead fires once per debounced keystroke, and a 20/min budget would 429 a user mid-word. The client debounces 250 ms and aborts superseded requests.
+### Organisations (`searchOrganisations`)
+
+Same two-phase shape — anchored `handle LIKE 'q%'`, then an unanchored pass over handle + name only when the first under-fills — and the same normalisation, LIKE-escaping and minimum length. Ranking is shared with people search via `matchRank`, so the two lists sort on identical rules.
+
+Differences from people search, all deliberate:
+
+- **No exclusions.** Organisations are public entities whose handles share a namespace with user handles, and the caller's *own* organisations are more relevant in a search box, not less — they come back flagged `isMember: true` so the row renders a badge instead of a CTA.
+- **Returns `id`.** The organisation detail route is keyed by id (`/organisations/:id`), so a result without one would be unopenable. This is wider than the public `orgProjection`, which omits `id` — see the open item in `wiki/TODO.md`.
+
+### Budget
+
+Rate-limited at 60 req/user/min via `createRedisRecommendationRateLimiters().search` — looser than the suggestion budget because typeahead fires once per debounced keystroke, and a 20/min budget would 429 a user mid-word. The client debounces 250 ms and aborts superseded requests. `orgLimit` defaults to half `limit`: organisations are the secondary section in the UI.
 
 ## Source Files
 
@@ -142,7 +157,9 @@ Rate-limited at 60 req/user/min via `createRedisRecommendationRateLimiters().sea
 - [osn/api/src/services/recommendations.ts](../../osn/api/src/services/recommendations.ts) -- contact suggestions + people search
 - [osn/api/src/routes/graph.ts](../../osn/api/src/routes/graph.ts) -- graph routes
 - [osn/api/src/routes/recommendations.ts](../../osn/api/src/routes/recommendations.ts) -- `/recommendations/connections` + `/recommendations/search`
-- [osn/social/src/components/PeopleSearch.tsx](../../osn/social/src/components/PeopleSearch.tsx) -- search combobox (debounce, abort, keyboard nav)
+- [osn/social/src/lib/search.ts](../../osn/social/src/lib/search.ts) -- shared client search controller (debounce, abort, optimistic status)
+- [osn/social/src/components/GlobalSearch.tsx](../../osn/social/src/components/GlobalSearch.tsx) -- desktop rail search combobox
+- [osn/social/src/pages/SearchPage.tsx](../../osn/social/src/pages/SearchPage.tsx) -- `/search`, the mobile Search tab
 - [osn/db/src/schema.ts](../../osn/db/src/schema.ts) -- schema (connections, blocks)
 - [osn/api/tests/services/graph.test.ts](../../osn/api/tests/services/graph.test.ts) -- service tests
 - [osn/api/tests/services/recommendations.test.ts](../../osn/api/tests/services/recommendations.test.ts) -- recommendations tests

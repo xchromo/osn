@@ -153,12 +153,17 @@ export function createRecommendationRoutes(
         },
       )
       // -----------------------------------------------------------------------
-      // People search (autocomplete)
+      // Search (autocomplete) — people and organisations in one round trip
+      //
+      // One endpoint rather than two because this backs a typeahead: a single
+      // request per keystroke means one abort to cancel, one rate-limit budget
+      // to reason about, and no torn state where the people half of a result
+      // set is newer than the organisation half.
       //
       // `q` is deliberately permissive at the schema layer (any string up to 64
       // chars) — a search box takes whatever the user types, and the service
       // normalises + escapes it. Queries shorter than the service minimum come
-      // back as an empty list, not a 4xx, so a half-typed word isn't an error.
+      // back as empty lists, not a 4xx, so a half-typed word isn't an error.
       // -----------------------------------------------------------------------
       .get(
         "/search",
@@ -170,10 +175,14 @@ export function createRecommendationRoutes(
           }
           try {
             const limit = query.limit ?? 8;
-            const results = await run(
-              recommendations.searchProfiles(caller.profileId, query.q, limit),
-            );
-            return { results };
+            // `orgLimit` defaults smaller: organisations are the secondary
+            // section in the UI, so they get a shorter list than people.
+            const orgLimit = query.orgLimit ?? Math.max(1, Math.ceil(limit / 2));
+            const [people, organisations] = await Promise.all([
+              run(recommendations.searchProfiles(caller.profileId, query.q, limit)),
+              run(recommendations.searchOrganisations(caller.profileId, query.q, orgLimit)),
+            ]);
+            return { people, organisations };
           } catch {
             set.status = 500;
             return { error: "Request failed" };
@@ -183,6 +192,7 @@ export function createRecommendationRoutes(
           query: t.Object({
             q: t.String({ maxLength: 64 }),
             limit: t.Optional(t.Numeric({ minimum: 1, maximum: 20 })),
+            orgLimit: t.Optional(t.Numeric({ minimum: 1, maximum: 20 })),
           }),
         },
       )

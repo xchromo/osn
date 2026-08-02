@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { AuthContext } from "@osn/client/solid";
+import { MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   suggestConnections: vi.fn(),
-  searchProfiles: vi.fn(),
   sendConnectionRequest: vi.fn(),
   acceptConnection: vi.fn(),
 }));
@@ -18,7 +18,6 @@ vi.mock("../../src/lib/api", () => ({
   orgClient: {},
   recommendationClient: {
     suggestConnections: mocks.suggestConnections,
-    searchProfiles: mocks.searchProfiles,
   },
 }));
 
@@ -64,16 +63,18 @@ const suggestion = (overrides: Record<string, unknown>) => ({
 });
 
 function renderDiscover() {
+  // The empty state links to /search, so the page needs a router in scope.
   return render(() => (
     <AuthContext.Provider value={authedProvider()}>
-      <DiscoverPage />
+      <MemoryRouter>
+        <Route path="/" component={DiscoverPage} />
+      </MemoryRouter>
     </AuthContext.Provider>
   ));
 }
 
 beforeEach(() => {
   mocks.suggestConnections.mockResolvedValue({ suggestions: [] });
-  mocks.searchProfiles.mockResolvedValue({ results: [] });
   mocks.sendConnectionRequest.mockResolvedValue({ ok: true });
 });
 
@@ -83,10 +84,10 @@ afterEach(() => {
 });
 
 describe("<DiscoverPage />", () => {
-  it("renders the people search box alongside the suggestions", async () => {
+  it("leaves search to the shell — Discover is suggestions only", async () => {
     renderDiscover();
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeDefined());
-    expect(screen.getByPlaceholderText("Search by name or @handle")).toBeDefined();
+    await waitFor(() => expect(screen.getByText("Discover")).toBeDefined());
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   it("explains a friends-of-friends suggestion with its mutual count", async () => {
@@ -130,6 +131,7 @@ describe("<DiscoverPage />", () => {
 
   it("points an empty suggestion list at search rather than a dead end", async () => {
     renderDiscover();
-    expect(await screen.findByText(/Search for someone above/)).toBeDefined();
+    const link = await screen.findByText("Search for someone");
+    expect(link.getAttribute("href")).toBe("/search");
   });
 });

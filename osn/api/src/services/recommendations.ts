@@ -110,9 +110,38 @@ export interface ProfileSearchResult {
   connectionStatus: SearchConnectionState;
 }
 
+export interface OrganisationSearchResult {
+  /**
+   * Included because the organisation detail route is keyed by id
+   * (`/organisations/:id`), so a search result the user can't open would be
+   * useless. Note this is wider than the public `orgProjection`, which omits
+   * `id` — see `wiki/TODO.md` → "Public `orgProjection` omits `id`".
+   */
+  id: string;
+  handle: string;
+  name: string;
+  avatarUrl: string | null;
+  /** Whether the caller is already a member — the row renders a badge, not a CTA. */
+  isMember: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Ranks a two-field match: exact handle first, then handle prefix, then
+ * name/display-name prefix, then handle infix, then name infix. Shared by
+ * profile and organisation search so the two lists sort on the same rules.
+ */
+function matchRank(handle: string, name: string | null, query: string): number {
+  const lowered = name?.toLowerCase() ?? "";
+  if (handle === query) return 0;
+  if (handle.startsWith(query)) return 1;
+  if (lowered.startsWith(query)) return 2;
+  if (handle.includes(query)) return 3;
+  return 4;
+}
 
 /**
  * Normalises a search query the same way handle resolution does: trims, strips
@@ -484,19 +513,12 @@ export function createRecommendationService() {
 
       if (matches.size === 0) return [];
 
-      // Rank: exact handle, then handle prefix, then display-name prefix, then
-      // anything else that merely contains the query. Handle breaks ties.
-      const rankOf = (row: { handle: string; displayName: string | null }): number => {
-        const display = row.displayName?.toLowerCase() ?? "";
-        if (row.handle === query) return 0;
-        if (row.handle.startsWith(query)) return 1;
-        if (display.startsWith(query)) return 2;
-        if (row.handle.includes(query)) return 3;
-        return 4;
-      };
-
       const ranked = [...matches.values()]
-        .toSorted((a, b) => rankOf(a) - rankOf(b) || (a.handle < b.handle ? -1 : 1))
+        .toSorted(
+          (a, b) =>
+            matchRank(a.handle, a.displayName, query) - matchRank(b.handle, b.displayName, query) ||
+            (a.handle < b.handle ? -1 : 1),
+        )
         .slice(0, safeLimit);
 
       // Batch the caller's connection state across the page — one query for the
@@ -552,7 +574,111 @@ export function createRecommendationService() {
       }));
     }).pipe(Effect.withSpan("recommendations.search_profiles"));
 
-  return { suggestConnections, searchProfiles };
+  /**
+   * Autocomplete-oriented organisation search over handle and name. Same
+   * two-phase shape as `searchProfiles` — the anchored handle prefix pass is
+   * cheap and answers the common keystroke; the unanchored pass over handle +
+   * name runs only when that under-fills the page.
+   *
+   * No exclusions beyond the query itself: organisations are public entities
+   * with a handle in the same namespace as user handles, and the caller's own
+   * organisations are *more* relevant in a search box, not less — they come
+   * back flagged `isMember: true` so the row can say so.
+   */
+  const searchOrganisations = (
+    profileId: string,
+    rawQuery: string,
+    limit = 5,
+  ): Effect.Effect<OrganisationSearchResult[], DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const safeLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 5, 1), 20);
+
+      const query = normaliseQuery(rawQuery);
+      if (query.length < MIN_SEARCH_QUERY_LENGTH) return [];
+
+      const escaped = escapeLike(query);
+      const prefixPattern = `${escaped}%`;
+      const containsPattern = `%${escaped}%`;
+      const overfetch = safeLimit * SEARCH_OVERFETCH_FACTOR;
+
+      const selectMatching = (where: ReturnType<typeof and>, rows: number) =>
+        Effect.tryPromise({
+          try: () =>
+            db
+              .select({
+                id: organisations.id,
+                handle: organisations.handle,
+                name: organisations.name,
+                avatarUrl: organisations.avatarUrl,
+              })
+              .from(organisations)
+              .where(where)
+              .orderBy(asc(organisations.handle))
+              .limit(rows),
+          catch: (cause) => new DatabaseError({ cause }),
+        });
+
+      const prefixRows = yield* selectMatching(
+        and(sql`${organisations.handle} LIKE ${prefixPattern} ESCAPE '\\'`),
+        overfetch,
+      );
+
+      const matches = new Map(prefixRows.map((row) => [row.id, row]));
+
+      if (matches.size < safeLimit) {
+        const containsRows = yield* selectMatching(
+          and(
+            or(
+              sql`${organisations.handle} LIKE ${containsPattern} ESCAPE '\\'`,
+              sql`${organisations.name} LIKE ${containsPattern} ESCAPE '\\'`,
+            ),
+          ),
+          overfetch,
+        );
+        for (const row of containsRows) matches.set(row.id, row);
+      }
+
+      if (matches.size === 0) return [];
+
+      const ranked = [...matches.values()]
+        .toSorted(
+          (a, b) =>
+            matchRank(a.handle, a.name, query) - matchRank(b.handle, b.name, query) ||
+            (a.handle < b.handle ? -1 : 1),
+        )
+        .slice(0, safeLimit);
+
+      // One membership probe for the whole page rather than one per row.
+      const membershipRows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ organisationId: organisationMembers.organisationId })
+            .from(organisationMembers)
+            .where(
+              and(
+                eq(organisationMembers.profileId, profileId),
+                inArray(
+                  organisationMembers.organisationId,
+                  ranked.map((r) => r.id),
+                ),
+              ),
+            ),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      const memberOf = new Set(membershipRows.map((r) => r.organisationId));
+
+      return ranked.map((row) => ({
+        id: row.id,
+        handle: row.handle,
+        name: row.name,
+        avatarUrl: row.avatarUrl,
+        isMember: memberOf.has(row.id),
+      }));
+    }).pipe(Effect.withSpan("recommendations.search_organisations"));
+
+  return { suggestConnections, searchProfiles, searchOrganisations };
 }
 
 export type RecommendationService = ReturnType<typeof createRecommendationService>;

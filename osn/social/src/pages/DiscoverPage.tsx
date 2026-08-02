@@ -2,10 +2,10 @@ import type { Suggestion } from "@osn/client";
 import { useAuth } from "@osn/client/solid";
 import { Avatar, AvatarFallback, AvatarImage } from "@osn/ui/ui/avatar";
 import { Button } from "@osn/ui/ui/button";
+import { A } from "@solidjs/router";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { toast } from "solid-toast";
 
-import { PeopleSearch } from "../components/PeopleSearch";
 import { graphClient, recommendationClient } from "../lib/api";
 import { safeAvatarUrl } from "../lib/utils";
 
@@ -56,7 +56,7 @@ export function DiscoverPage() {
       <div class="mb-6">
         <h1 class="text-foreground text-display font-medium">Discover</h1>
         <p class="text-muted-foreground text-body mt-1">
-          Search for someone by name, or add the people you already have in common.
+          People you may know, from mutual connections and shared organisations.
         </p>
       </div>
 
@@ -68,12 +68,6 @@ export function DiscoverPage() {
           </div>
         }
       >
-        <div class="mb-8">
-          <PeopleSearch token={token()} />
-        </div>
-
-        <h2 class="text-foreground text-title mb-3 font-medium">Suggested for you</h2>
-
         <Show
           when={!recommendations.loading}
           fallback={
@@ -88,8 +82,11 @@ export function DiscoverPage() {
             when={(recommendations()?.suggestions.length ?? 0) > 0}
             fallback={
               <div class="text-muted-foreground border-border rounded-card text-body border border-dashed py-16 text-center">
-                No suggestions yet. Search for someone above, or join an organisation to find people
-                you already share one with.
+                No suggestions yet.{" "}
+                <A href="/search" class="text-foreground underline underline-offset-2">
+                  Search for someone
+                </A>
+                , or join an organisation to find people you already share one with.
               </div>
             }
           >

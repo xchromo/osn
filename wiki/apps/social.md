@@ -39,7 +39,8 @@ No Tauri wrapper yet — the app ships as a web build only. Tauri wrapping is tr
 | Route | Component | Purpose |
 |---|---|---|
 | `/` + `/connections` | `ConnectionsPage` | All connections, pending requests, close friends, blocks (tabbed) |
-| `/discover` | `DiscoverPage` | People search (`GET /recommendations/search`) plus contact suggestions (`GET /recommendations/connections`) — see [[social-graph]] for both algorithms |
+| `/search` | `SearchPage` | People + organisations search (`GET /recommendations/search`), grouped under section headings. The mobile shell's Search tab; reachable at any width |
+| `/discover` | `DiscoverPage` | Contact suggestions (`GET /recommendations/connections`) — mutual connections and shared organisations, each card saying which. See [[social-graph]] |
 | `/organisations` | `OrganisationsPage` | Orgs the user owns or belongs to; create new |
 | `/organisations/:id` | `OrgDetailPage` | Org detail + member management |
 | `/settings` | `SettingsPage` | Profile / Account / **Security** (passkey add/rename/delete, step-up gated) / Connected apps tabs. The Security tab is lazy-loaded (`SecuritySection` chunk) so `@simplewebauthn/browser` only ships when opened. |
@@ -61,7 +62,7 @@ Pages talk to `@osn/api` via three plain-fetch clients factored out of `@osn/cli
 
 - `createGraphClient` — connections, pending requests, close friends, blocks (`osn/client/src/graph.ts`)
 - `createOrgClient` — org CRUD and membership (`osn/client/src/organisations.ts`)
-- `createRecommendationClient` — contact suggestions + people search (`osn/client/src/recommendations.ts`). `searchProfiles` takes an `AbortSignal` because it backs typeahead: the caller aborts the in-flight request when the query changes, so a slow early keystroke can't land after a fast later one.
+- `createRecommendationClient` — contact suggestions + search (`osn/client/src/recommendations.ts`). `search` returns people and organisations together and takes an `AbortSignal` because it backs typeahead: the caller aborts the in-flight request when the query changes, so a slow early keystroke can't land after a fast later one.
 
 All three share the same hardening: `authGet/authPost/authPatch/authDelete` with `safeJson` wrapping (no `SyntaxError` leakage), capped error strings, and per-module typed error classes. These helpers are duplicated per module; factoring them out is tracked as P-I1.
 
@@ -139,6 +140,6 @@ Per-user Redis-backed limiters on the two recommendations endpoints, both fail-c
 
 `osn/social/tests/` covers the sidebar mount path under `AuthContext` + `MemoryRouter` using `@solidjs/testing-library` + `happy-dom`. The tests do not assert the full open-and-click interaction for the Kobalte dropdown: Kobalte's trigger relies on pointer-capture behaviour that happy-dom does not reproduce.
 
-`tests/components/PeopleSearch.test.tsx` drives the search combobox on fake timers: the debounce collapses a burst of keystrokes into one request, queries below the two-character minimum never leave the browser, arrow keys move `aria-activedescendant` without moving focus, and Enter acts on the active row (Connect, or Accept when they asked first). `tests/components/DiscoverPage.test.tsx` covers the suggestion cards' reason line.
+`tests/components/GlobalSearch.test.tsx` drives the rail combobox on fake timers: the debounce collapses a burst of keystrokes into one request, queries below the two-character minimum never leave the browser, arrow keys move `aria-activedescendant` across both sections without moving focus, and Enter acts on the active row (Connect / Accept for a person, navigate for an organisation). `tests/components/SearchPage.test.tsx` covers the grouped page, and `tests/components/DiscoverPage.test.tsx` the suggestion cards' reason line.
 
 `tests/components/AuthorizePage.test.tsx` drives the consent screen the same way, with the authorize client mocked and `location.assign` stubbed: a malformed request id never reaches the API, a 404 is terminal, the decision carries the chosen profile, `login_required` keeps the request alive, and `invalid_client` ends the flow naming the app.

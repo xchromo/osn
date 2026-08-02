@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { createGraphRoutes } from "../../src/routes/graph";
 import { createRecommendationRoutes } from "../../src/routes/recommendations";
 import { createAuthService } from "../../src/services/auth";
+import { createOrganisationService } from "../../src/services/organisation";
 import { makeTestAuthConfig } from "../helpers/auth-config";
 import { createTestLayer } from "../helpers/db";
 
@@ -189,7 +190,8 @@ describe("recommendations routes", () => {
       return {
         status: res.status,
         json: (await res.json()) as {
-          results?: Array<{ handle: string; connectionStatus: string }>;
+          people?: Array<{ handle: string; connectionStatus: string }>;
+          organisations?: Array<{ handle: string; name: string; isMember: boolean }>;
         },
       };
     }
@@ -215,8 +217,8 @@ describe("recommendations routes", () => {
       const { status, json } = await search(alice.token, "q=ali");
       expect(status).toBe(200);
       // Alice herself is excluded; `alicia` is the only other `ali*` handle.
-      expect(json.results?.map((r) => r.handle)).toEqual(["alicia"]);
-      expect(json.results?.[0]!.connectionStatus).toBe("none");
+      expect(json.people?.map((r) => r.handle)).toEqual(["alicia"]);
+      expect(json.people?.[0]!.connectionStatus).toBe("none");
     });
 
     it("reflects an in-flight request as pending_sent", async () => {
@@ -230,7 +232,7 @@ describe("recommendations routes", () => {
       );
 
       const { json } = await search(alice.token, "q=bob");
-      expect(json.results?.[0]!.connectionStatus).toBe("pending_sent");
+      expect(json.people?.[0]!.connectionStatus).toBe("pending_sent");
     });
 
     it("returns an empty list below the minimum query length", async () => {
@@ -238,12 +240,32 @@ describe("recommendations routes", () => {
       await registerAndGetToken("b@e.com", "ab");
       const { status, json } = await search(alice.token, "q=a");
       expect(status).toBe(200);
-      expect(json.results).toEqual([]);
+      expect(json.people).toEqual([]);
+      expect(json.organisations).toEqual([]);
     });
 
     it("rejects an out-of-range ?limit at the HTTP boundary", async () => {
       const alice = await registerAndGetToken("a@e.com", "alice");
       const { status } = await search(alice.token, "q=ali&limit=100");
+      expect(status).toBe(422);
+    });
+
+    it("returns matching organisations alongside people", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      await runWithLayer(
+        createOrganisationService().createOrganisation(alice.profileId, "acme", "Acme Inc"),
+      );
+
+      const { status, json } = await search(alice.token, "q=acme");
+      expect(status).toBe(200);
+      expect(json.organisations?.map((o) => o.handle)).toEqual(["acme"]);
+      // The caller owns it, so they're a member — the row renders a badge.
+      expect(json.organisations?.[0]!.isMember).toBe(true);
+    });
+
+    it("rejects an out-of-range ?orgLimit at the HTTP boundary", async () => {
+      const alice = await registerAndGetToken("a@e.com", "alice");
+      const { status } = await search(alice.token, "q=ali&orgLimit=0");
       expect(status).toBe(422);
     });
 
