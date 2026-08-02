@@ -707,6 +707,59 @@ describe("internal graph routes (ARC-protected)", () => {
       expect(body.profiles.map((p) => p.id)).toContain(alice);
     });
 
+    it("strips the @ even when the query is padded with whitespace", async () => {
+      const { token } = await setupArcService();
+      const alice = await registerProfile("alice@example.com", "alice");
+
+      // Regression: the old local normaliser tested `startsWith("@")` BEFORE
+      // trimming, so a leading space (what a paste or a mobile keyboard's
+      // auto-space produces) left the sigil in place and matched nothing.
+      const res = await app.handle(
+        new Request("http://localhost/graph/internal/profile-search?prefix=%20%40al%20", {
+          headers: { Authorization: `ARC ${token}` },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { profiles: { id: string }[] };
+      expect(body.profiles.map((p) => p.id)).toContain(alice);
+    });
+
+    it("treats `_` in the prefix literally rather than as a LIKE wildcard", async () => {
+      const { token } = await setupArcService();
+      await registerProfile("u1@example.com", "b_ob");
+      await registerProfile("u2@example.com", "brob");
+
+      const res = await app.handle(
+        new Request("http://localhost/graph/internal/profile-search?prefix=b_o", {
+          headers: { Authorization: `ARC ${token}` },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { profiles: { handle: string }[] };
+      // "brob" would match if `_` were a single-char wildcard.
+      expect(body.profiles.map((p) => p.handle)).toEqual(["b_ob"]);
+    });
+
+    it("returns an empty list for a prefix no handle could contain", async () => {
+      const { token } = await setupArcService();
+      await registerProfile("alice@example.com", "alice");
+
+      // Handles are `^[a-z0-9_]+$`, so a query with a space, a dot or a `%`
+      // cannot prefix one — the route skips the query rather than scanning.
+      for (const prefix of ["al%25", "al.ice", "al%20ice"]) {
+        // eslint-disable-next-line no-await-in-loop -- sequential assertions
+        const res = await app.handle(
+          new Request(`http://localhost/graph/internal/profile-search?prefix=${prefix}`, {
+            headers: { Authorization: `ARC ${token}` },
+          }),
+        );
+        expect(res.status).toBe(200);
+        // eslint-disable-next-line no-await-in-loop -- sequential assertions
+        const body = (await res.json()) as { profiles: unknown[] };
+        expect(body.profiles).toEqual([]);
+      }
+    });
+
     it("returns an empty list (not an error) for a prefix below the minimum length", async () => {
       const { token } = await setupArcService();
       await registerProfile("alice@example.com", "alice");

@@ -2,7 +2,8 @@ import { accounts, connections, serviceAccounts, serviceAccountKeys, users } fro
 import { Db, DbLive } from "@osn/db/service";
 import { evictPublicKeyCacheEntry, importKeyFromJwk } from "@shared/crypto";
 import { timingSafeEqualString } from "@shared/crypto/timing-safe";
-import { and, asc, inArray, eq, isNull, or, sql } from "drizzle-orm";
+import { handlePrefixRange, likeContains, normaliseHandleQuery } from "@shared/db-utils/search";
+import { and, asc, gte, inArray, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -81,25 +82,22 @@ function safeError(e: unknown): string {
 }
 
 /**
- * Normalises a handle the same way the user-facing identifier resolution does:
- * strips a leading `@` sigil and lowercases. `users.handle` is stored lowercase
- * (the `^[a-z0-9_]{1,30}$` HandleSchema rejects uppercase at registration) and
- * `findProfileByHandle` does an exact match, so a caller passing `@Alice` must
- * be folded to `alice` to resolve. Returns `null` when nothing usable remains.
+ * Normalises a handle the same way the user-facing identifier resolution does —
+ * `@Alice` → `alice` — and collapses "nothing usable left" to `null` so a caller
+ * can 404 rather than query for the empty string. `users.handle` is stored
+ * lowercase (the `^[a-z0-9_]{1,30}$` HandleSchema rejects uppercase at
+ * registration) and `findProfileByHandle` does an exact match, so the fold is
+ * what makes `@Alice` resolve at all.
+ *
+ * The normalisation itself is `@shared/db-utils/search`'s, shared with the
+ * people/organisation search service and cire's directory browse. This wrapper
+ * adds only the `null`. Worth noting what moving to the shared version fixed:
+ * the copy that lived here tested `raw.startsWith("@")` BEFORE trimming, so
+ * `" @alice"` kept its sigil and resolved to nothing.
  */
 function normaliseHandle(raw: string): string | null {
-  const stripped = (raw.startsWith("@") ? raw.slice(1) : raw).trim().toLowerCase();
+  const stripped = normaliseHandleQuery(raw);
   return stripped.length > 0 ? stripped : null;
-}
-
-/**
- * Escapes the LIKE wildcards (`%`, `_`) and the escape char itself in a
- * user-supplied fragment so they match literally — `_` is valid in a handle, so
- * an unescaped one would silently widen the match to any single character.
- * Pair with an explicit `ESCAPE '\'` clause at the call site.
- */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -581,8 +579,12 @@ export function createInternalGraphRoutes(
       // internal endpoint. Handles are already public identifiers (@usernames),
       // so this exposes nothing beyond what the exact /profile-by-handle lookup
       // does — it just lets the caller find a handle without typing it in full.
-      // The `_` LIKE wildcard is escaped so an underscore in the typed prefix
-      // matches literally (handles may contain `_`), not as a single-char match.
+      //
+      // The prefix match is an explicit BINARY range, NOT `handle LIKE 'q%'`:
+      // the LIKE form does not use `users_handle_idx` and degrades to a full
+      // index traversal on every keystroke. See `handlePrefixRange` in
+      // `@shared/db-utils/search` for why, and note that the range also makes
+      // `_` literal for free — no LIKE escaping needed on this path.
       // -----------------------------------------------------------------------
       .get(
         "/profile-search",
@@ -611,9 +613,10 @@ export function createInternalGraphRoutes(
               ? Math.min(parsedLimit, MAX_SEARCH_LIMIT)
               : DEFAULT_SEARCH_LIMIT;
 
-          // Escape LIKE wildcards (`%`, `_`) in the user-supplied prefix so they
-          // match literally — `_` is valid in a handle. `\` is the escape char.
-          const pattern = `${escapeLike(prefix)}%`;
+          // `null` ⇒ the prefix contains a character no handle can hold, so it
+          // cannot match anything. Skip the query rather than scan for zero rows.
+          const range = handlePrefixRange(prefix);
+          if (!range) return { profiles: [] };
 
           try {
             const rows = await run(
@@ -632,9 +635,10 @@ export function createInternalGraphRoutes(
                       .innerJoin(accounts, eq(users.accountId, accounts.id))
                       .where(
                         and(
-                          // Left-anchored LIKE with an explicit ESCAPE char so the
-                          // wildcards we escaped in `pattern` match literally.
-                          sql`${users.handle} LIKE ${pattern} ESCAPE '\\'`,
+                          // Half-open BINARY range — an index SEEK, where the
+                          // equivalent `LIKE 'q%'` is an index SCAN.
+                          gte(users.handle, range.lower),
+                          lt(users.handle, range.upper),
                           isNull(accounts.deletedAt),
                         ),
                       )
@@ -716,13 +720,17 @@ export function createInternalGraphRoutes(
 
           // The typed fragment, `@`-stripped and folded. Empty is legal (see the
           // header comment) and simply means "no filter — first page".
-          const fragment = (query.q?.startsWith("@") ? query.q.slice(1) : (query.q ?? ""))
-            .trim()
-            .toLowerCase();
+          const fragment = normaliseHandleQuery(query.q ?? "");
           if (fragment.length > MAX_CONNECTION_QUERY_LEN) {
             return { profiles: [] };
           }
-          const escaped = escapeLike(fragment);
+          // The handle half is a range (index-friendly, and `_` is literal for
+          // free); the display-name half stays a LIKE because it is a SUBSTRING
+          // match, which no range can express. `null` here means the fragment
+          // can't prefix a handle — the display-name arm still can, so this
+          // narrows the OR rather than short-circuiting the query.
+          const range = handlePrefixRange(fragment);
+          const namePattern = likeContains(fragment);
 
           try {
             const rows = await run(
@@ -763,12 +771,17 @@ export function createInternalGraphRoutes(
                           // No fragment ⇒ no filter (first page of connections).
                           fragment.length > 0
                             ? or(
-                                sql`${users.handle} LIKE ${`${escaped}%`} ESCAPE '\\'`,
+                                range
+                                  ? and(
+                                      gte(users.handle, range.lower),
+                                      lt(users.handle, range.upper),
+                                    )
+                                  : undefined,
                                 // Substring, not prefix — "priya" should find
                                 // "Anaya Priyadarshini". LIKE is case-insensitive
                                 // for ASCII in SQLite, and displayName may be
                                 // NULL (LIKE on NULL is NULL ⇒ simply no match).
-                                sql`${users.displayName} LIKE ${`%${escaped}%`} ESCAPE '\\'`,
+                                sql`${users.displayName} LIKE ${namePattern} ESCAPE '\\'`,
                               )
                             : undefined,
                         ),
