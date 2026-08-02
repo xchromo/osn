@@ -14,6 +14,8 @@ last-reviewed: 2026-08-02
 
 Frontend feature work. Tick items as PRs land; add new entries when scope is discovered. Don't edit `wiki/todo/status.md` for area-specific items.
 
+- [x] **ChangePreview showed 0 for household renames** (`claude/cire-web-editor-household-name-qcfkb4`, 2026-08-02) — the households row's "update" cell was hard-coded `0`, so a rename-only editor save previewed as an all-zero plan (consistent with the API bug it sat on top of — see [[api]]: the plan genuinely carried no family update op). Now renders `plan.familyUpdates?.length ?? 0`; `ImportPanel`'s applied summary line gains the matching `~N` families slot. Organiser 696 → 697.
+
 Completed feature history is archived in `[[changelog/completed-features]]` (Migrated from web.md, 2026-06-21). The 3 most recent done items are kept inline below for recent context.
 
 ## Open

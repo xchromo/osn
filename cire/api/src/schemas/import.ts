@@ -127,6 +127,21 @@ export const FamilyCreate = Schema.Struct({
 });
 export type FamilyCreate = Schema.Schema.Type<typeof FamilyCreate>;
 
+/**
+ * An id-matched household RENAME. Only the name can change in place — the row,
+ * its claim code (`publicId`) and its guests all survive by construction of the
+ * id match, so the op carries just the id and the new name. Emitted only on the
+ * id-matched path (the editor front door, a full-fidelity re-import, a
+ * before-image revert): a name-matched household's name is unchanged by
+ * definition modulo case/whitespace, and the no-id plan stays byte-identical to
+ * the historical diff by never writing it.
+ */
+export const FamilyUpdate = Schema.Struct({
+  id: Schema.String,
+  familyName: Schema.String,
+});
+export type FamilyUpdate = Schema.Schema.Type<typeof FamilyUpdate>;
+
 export const FamilyRemove = Schema.Struct({
   id: Schema.String,
   familyName: Schema.String,
@@ -175,6 +190,7 @@ export const ImportPlan = Schema.Struct({
   eventUpdates: Schema.Array(EventUpdate),
   eventRemoves: Schema.Array(EventRemove),
   familyCreates: Schema.Array(FamilyCreate),
+  familyUpdates: Schema.Array(FamilyUpdate),
   familyRemoves: Schema.Array(FamilyRemove),
   guestCreates: Schema.Array(GuestCreate),
   guestUpdates: Schema.Array(GuestUpdate),
@@ -191,6 +207,7 @@ export const ImportSummary = Schema.Struct({
   eventsUpdated: Schema.Number,
   eventsRemoved: Schema.Number,
   familiesCreated: Schema.Number,
+  familiesUpdated: Schema.Number,
   familiesRemoved: Schema.Number,
   guestsCreated: Schema.Number,
   guestsUpdated: Schema.Number,
