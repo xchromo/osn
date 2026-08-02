@@ -574,6 +574,20 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
     expect(remaining.map((f) => f.familyName)).toEqual(["Editorhousehold"]);
   });
 
+  it("rejects a blank household name at the schema boundary (400, S-L2)", async () => {
+    // The editor client validates non-blank names, but the client is not a
+    // security boundary — the DesiredState JSON front door used to accept a
+    // blank (or unbounded) familyName straight through to rows the guest
+    // invite renders. The schema refinement now 400s it before any diff runs.
+    const { app } = buildApp();
+    const blankName = {
+      ...desiredState,
+      families: [{ ...desiredState.families[0]!, familyName: "   " }],
+    };
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, { desiredState: blankName });
+    expect(res.status).toBe(400);
+  });
+
   it("saves a HOUSEHOLD NAME edit — id-matched rename writes through, code + guests survive", async () => {
     const { app, db } = buildApp();
 

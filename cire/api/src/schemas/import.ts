@@ -56,7 +56,16 @@ export const ParsedFamily = Schema.Struct({
    *  Carried through so a full-fidelity round trip preserves invite codes; the
    *  households-always-coded model means every household has one. */
   publicId: Schema.optional(Schema.String),
-  familyName: Schema.String,
+  /** Non-blank, bounded (same 10k cell cap the CSV parser enforces). The CSV
+   *  front door already guarantees both; this closes the DesiredState JSON
+   *  front door, which previously accepted a blank or multi-hundred-KB name
+   *  straight onto rows the guest invite renders (S-L2). Validation only — no
+   *  trim transform, so the diff still compares the exact submitted value. */
+  familyName: Schema.String.pipe(
+    Schema.filter((s) => s.trim().length > 0 && s.length <= 10_000, {
+      message: () => "familyName must be non-blank and at most 10000 characters",
+    }),
+  ),
   guests: Schema.Array(ParsedGuest),
 });
 export type ParsedFamily = Schema.Schema.Type<typeof ParsedFamily>;

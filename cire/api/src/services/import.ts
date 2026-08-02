@@ -971,13 +971,17 @@ export function applyImport(
       );
     }
 
-    // 5b. family updates (id-matched renames — only the name changes in place)
+    // 5b. family updates (id-matched renames — only the name changes in place).
+    // The wedding conjunct is defence in depth: every plan reaching here today
+    // is built from wedding-scoped reads, but that guarantee lives in
+    // diffAgainstDb — this keeps the statement itself tenant-safe if a future
+    // caller ever hands applyImport a plan from elsewhere (S-L1).
     for (const fu of plan.familyUpdates) {
       statements.push(
         db
           .update(families)
           .set({ familyName: fu.familyName, updatedAt: now })
-          .where(eq(families.id, fu.id)),
+          .where(and(eq(families.id, fu.id), eq(families.weddingId, weddingId))),
       );
     }
 
