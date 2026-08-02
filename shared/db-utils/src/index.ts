@@ -176,6 +176,7 @@ export function rowsChanged(result: unknown): number {
 export {
   escapeLike,
   handlePrefixRange,
+  hasScanworthyToken,
   joinTokens,
   likeContains,
   normaliseHandleQuery,

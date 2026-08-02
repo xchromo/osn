@@ -62,4 +62,13 @@ this branch:
   nothing, so `LIMIT` never short-circuits the scan. Capped at
   `MAX_QUERY_TOKENS = 6`.
 
+The infix gate is **script-aware** (`hasScanworthyToken`). A minimum-length
+gate is a proxy for a minimum-selectivity gate, and character count is only a
+good proxy inside one alphabet: two Han characters pick a name out of a very
+large space where two Latin letters barely narrow anything. Tokens in Han,
+Hiragana, Katakana or Hangul therefore clear the gate at two characters. This
+was a regression the token-length fix above introduced — `"日本 太郎"` is a
+complete name whose every token is two characters, and a flat three-character
+rule made it unsearchable.
+
 No change to the response shape of either search surface.

@@ -9,6 +9,7 @@ import {
 import { Db } from "@osn/db/service";
 import {
   handlePrefixRange,
+  hasScanworthyToken,
   joinTokens,
   likeContains,
   normaliseHandleQuery,
@@ -101,10 +102,13 @@ const MIN_GLOBAL_QUERY_LENGTH = 2;
  * to be a real "I typed part of a surname" recovery. Prefix matching still
  * works from `MIN_GLOBAL_QUERY_LENGTH`.
  *
- * The longest token rather than the total, because the patterns are ANDed and a
- * conjunction is only as selective as its most selective conjunct. `"a b c"`
- * totals three characters but is three near-matchless scans; `"j smith"` totals
- * six and carries one genuine term. The first must not run, the second must.
+ * Applied per token by `hasScanworthyToken`, not to the query as a whole: the
+ * patterns are ANDed, and a conjunction is only as selective as its most
+ * selective conjunct. `"a b c"` totals three characters but is three
+ * near-matchless scans; `"j smith"` totals six and carries one genuine term.
+ * The first must not run, the second must. That helper also lowers the bar to
+ * two characters for dense scripts, so a Latin-shaped threshold does not make
+ * `"日本 太郎"` — every token of which is two characters — unsearchable.
  */
 const MIN_INFIX_QUERY_LENGTH = 3;
 
@@ -217,14 +221,6 @@ interface ParsedQuery {
    * as three characters while carrying two.
    */
   readonly contentLength: number;
-  /**
-   * Length of the longest token — the selectivity of the whole query, because
-   * an `AND` of `LIKE` patterns is only as selective as its most selective
-   * conjunct. This is what the infix scan gates on: `"a b c"` carries three
-   * characters but no term worth scanning for, while `"j smith"` carries a real
-   * one and should run.
-   */
-  readonly longestToken: number;
 }
 
 function parseQuery(raw: string): ParsedQuery {
@@ -242,7 +238,6 @@ function parseQuery(raw: string): ParsedQuery {
     tokens,
     handleQuery: joinTokens(tokens),
     contentLength: tokenContentLength(tokens),
-    longestToken: tokens.reduce((longest, t) => Math.max(longest, t.length), 0),
   };
 }
 
@@ -753,7 +748,7 @@ export function createRecommendationService() {
 
       // Pass 2 — the full scan. Gated on the page not being full AND on a query
       // long enough to be worth scanning for.
-      if (matched.size < safeLimit && query.longestToken >= MIN_INFIX_QUERY_LENGTH) {
+      if (matched.size < safeLimit && hasScanworthyToken(query.tokens, MIN_INFIX_QUERY_LENGTH)) {
         for (const row of yield* selectGlobal(containsQuery, overfetch)) {
           matched.set(row.id, row);
         }
@@ -975,7 +970,7 @@ export function createRecommendationService() {
 
       for (const row of [...memberRows, ...prefixRows]) matches.set(row.id, row);
 
-      if (matches.size < safeLimit && query.longestToken >= MIN_INFIX_QUERY_LENGTH) {
+      if (matches.size < safeLimit && hasScanworthyToken(query.tokens, MIN_INFIX_QUERY_LENGTH)) {
         for (const row of yield* selectMatching(containsQuery, overfetch)) {
           matches.set(row.id, row);
         }

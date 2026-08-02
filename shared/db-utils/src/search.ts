@@ -150,6 +150,35 @@ export function tokeniseQuery(query: string): string[] {
 }
 
 /**
+ * Scripts where a character carries far more signal than a Latin letter does.
+ *
+ * A minimum-length gate is really a minimum-*selectivity* gate, and character
+ * count is only a proxy for selectivity. It is a decent proxy within an
+ * alphabet of 26 and a bad one across scripts: two Han characters pick a name
+ * out of a very large space, where two Latin letters barely narrow anything.
+ * Applying one threshold to both is what makes a Latin-shaped rule quietly
+ * exclude entire writing systems — `"日本 太郎"` is a complete name whose every
+ * token is two characters long.
+ */
+const DENSE_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * Whether any token is selective enough to justify an unanchored scan.
+ *
+ * `minimum` is the Latin threshold; tokens in a {@link DENSE_SCRIPT} clear the
+ * gate at two characters instead, because two characters there is already a
+ * specific query. Testing *some* token rather than the total is deliberate: an
+ * `AND` of `LIKE` patterns is only as selective as its most selective conjunct,
+ * so `"a b c"` is three near-matchless scans while `"j smith"` carries one
+ * genuine term and should run.
+ */
+export function hasScanworthyToken(tokens: string[], minimum: number): boolean {
+  return tokens.some(
+    (token) => token.length >= (DENSE_SCRIPT.test(token) ? Math.min(2, minimum) : minimum),
+  );
+}
+
+/**
  * Total length of the query's token content — the query with its whitespace
  * removed.
  *

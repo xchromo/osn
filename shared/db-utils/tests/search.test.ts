@@ -10,6 +10,7 @@ import {
   joinTokens,
   likeContains,
   normaliseHandleQuery,
+  hasScanworthyToken,
   tokenContentLength,
   tokeniseQuery,
   tokensPrefixName,
@@ -172,6 +173,40 @@ describe("tokenContentLength", () => {
   });
 });
 
+describe("hasScanworthyToken", () => {
+  it("passes a query carrying one real term, even beside short ones", () => {
+    // An AND of LIKE patterns is only as selective as its most selective
+    // conjunct, so the gate asks whether ANY token is worth scanning for.
+    expect(hasScanworthyToken(tokeniseQuery("j smith"), 3)).toBe(true);
+    expect(hasScanworthyToken(tokeniseQuery("smith"), 3)).toBe(true);
+  });
+
+  it("blocks a query that is only short tokens", () => {
+    expect(hasScanworthyToken(tokeniseQuery("a b c"), 3)).toBe(false);
+    expect(hasScanworthyToken(tokeniseQuery("a a"), 3)).toBe(false);
+    expect(hasScanworthyToken(tokeniseQuery("ab"), 3)).toBe(false);
+    expect(hasScanworthyToken([], 3)).toBe(false);
+  });
+
+  it("clears dense scripts at two characters", () => {
+    // The Latin threshold is a proxy for selectivity, and a bad one across
+    // scripts. "日本 太郎" is a complete name whose every token is two
+    // characters; a flat three-character rule makes it unsearchable.
+    expect(hasScanworthyToken(tokeniseQuery("日本 太郎"), 3)).toBe(true);
+    expect(hasScanworthyToken(tokeniseQuery("太郎"), 3)).toBe(true);
+    expect(hasScanworthyToken(tokeniseQuery("김민"), 3)).toBe(true);
+    expect(hasScanworthyToken(tokeniseQuery("たろ"), 3)).toBe(true);
+    // One character is still one character in any script.
+    expect(hasScanworthyToken(tokeniseQuery("本"), 3)).toBe(false);
+  });
+
+  it("does not lower the bar for accented Latin", () => {
+    // Diacritics are not a dense script — "mü" narrows about as much as "mu".
+    expect(hasScanworthyToken(tokeniseQuery("mü"), 3)).toBe(false);
+    expect(hasScanworthyToken(tokeniseQuery("müller"), 3)).toBe(true);
+  });
+});
+
 describe("joinTokens", () => {
   it("spells the handle a multi-word query is reaching for", () => {
     expect(joinTokens(["john", "smith"])).toBe("johnsmith");
@@ -244,6 +279,7 @@ describe("barrel re-exports", () => {
     expect(barrel.tokeniseQuery).toBe(tokeniseQuery);
     expect(barrel.joinTokens).toBe(joinTokens);
     expect(barrel.tokenContentLength).toBe(tokenContentLength);
+    expect(barrel.hasScanworthyToken).toBe(hasScanworthyToken);
     expect(barrel.tokensPrefixName).toBe(tokensPrefixName);
   });
 });

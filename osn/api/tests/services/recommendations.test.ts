@@ -10,7 +10,7 @@ import { createGraphService } from "../../src/services/graph";
 import { createOrganisationService } from "../../src/services/organisation";
 import { createRecommendationService } from "../../src/services/recommendations";
 import { makeTestAuthConfig } from "../helpers/auth-config";
-import { createTestLayer } from "../helpers/db";
+import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
 let config: Awaited<ReturnType<typeof makeTestAuthConfig>>;
 let auth: ReturnType<typeof createAuthService>;
@@ -767,6 +767,113 @@ describe("searchProfiles", () => {
       const result = yield* recs.searchProfiles(alice.id, "jo_s");
       expect(result.map((r) => r.handle)).toEqual(["jo_smith"]);
     }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("finds a non-ASCII display name", () =>
+    Effect.gen(function* () {
+      // Retrieval folds case with SQLite LIKE (ASCII only); ranking folds with
+      // JS toLowerCase (full Unicode). The query is lowercased in JS before SQL
+      // sees it, so a lowercase-stored accent matches from any input casing.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("m@e.com", "mul", "Zoë Müller");
+
+      for (const q of ["müller", "MÜLLER", "Müller", "zoë mül"]) {
+        expect((yield* recs.searchProfiles(alice.id, q)).map((r) => r.handle)).toEqual(["mul"]);
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("finds a CJK display name, whose tokens are two characters", () =>
+    Effect.gen(function* () {
+      // The infix gate's Latin threshold of 3 would make this name
+      // unsearchable — every token of it is two characters wide. Two Han
+      // characters is a specific query, so dense scripts clear the gate at 2.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      yield* auth.registerProfile("t@e.com", "taro", "日本 太郎");
+
+      for (const q of ["日本 太郎", "太郎", "日本"]) {
+        expect((yield* recs.searchProfiles(alice.id, q)).map((r) => r.handle)).toEqual(["taro"]);
+      }
+      // One character is still one character in any script.
+      expect(yield* recs.searchProfiles(alice.id, "本")).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("truncates the connections pass at its cap, alphabetically", () =>
+    Effect.gen(function* () {
+      // MAX_CONNECTION_MATCH_ROWS bounds the recall guarantee, so the bound is
+      // itself a stated contract: past the cap, which connections survive is
+      // decided by handle order, not arbitrarily. 60 matching connections on
+      // one edge direction exceeds the 50-row cap.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      for (let i = 0; i < 60; i++) {
+        const friend = yield* auth.registerProfile(
+          `z${i}@e.com`,
+          `zeta${String(i).padStart(2, "0")}`,
+        );
+        yield* connect(alice.id, friend.id);
+      }
+
+      // A one-character query reaches nothing but the connections pass, so the
+      // page is drawn purely from its (capped, handle-ordered) output.
+      const result = yield* recs.searchProfiles(alice.id, "z", 20);
+      expect(result).toHaveLength(20);
+      expect(result.map((r) => r.handle)).toEqual(
+        Array.from({ length: 20 }, (_, i) => `zeta${String(i).padStart(2, "0")}`),
+      );
+      expect(result.every((r) => r.connectionStatus === "connected")).toBe(true);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("survives the largest candidate set the bounds allow", () =>
+    Effect.gen(function* () {
+      // Worst case for the probes that follow retrieval: both edge directions
+      // at the cap plus both global passes at `limit × SEARCH_OVERFETCH_FACTOR`
+      // is ~220 candidate ids, and the block and edge probes each bind that
+      // list twice. This is the test that defends the sizing argument the
+      // constants are justified by — SQLite's 999-variable ceiling.
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      for (let i = 0; i < 60; i++) {
+        const friend = yield* auth.registerProfile(
+          `f${i}@e.com`,
+          `zeta_f${String(i).padStart(2, "0")}`,
+        );
+        yield* connect(alice.id, friend.id);
+      }
+      for (let i = 0; i < 80; i++) {
+        yield* auth.registerProfile(`s${i}@e.com`, `zeta_s${String(i).padStart(2, "0")}`);
+      }
+
+      const result = yield* recs.searchProfiles(alice.id, "zeta", 20);
+      expect(result).toHaveLength(20);
+      // Connections outrank strangers on an identical lexical tier, so the
+      // whole page comes from the connection set.
+      expect(result.every((r) => r.connectionStatus === "connected")).toBe(true);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("surfaces a failing probe as DatabaseError, not a partial result", () =>
+    Effect.gen(function* () {
+      // The three post-retrieval probes run as one `Effect.all`, which changed
+      // the failure semantics: a failing probe now interrupts its siblings.
+      // Assert the failure lands in the error channel as the tagged error the
+      // route's `catch` expects, rather than escaping as a defect or — worse —
+      // yielding a page built from probes that never answered, which would drop
+      // the block filter.
+      // Built inline rather than via `Effect.provide` on the whole generator,
+      // because the raw handle is what lets the failure be injected mid-flight.
+      const { layer, sqlite } = createTestLayerWithSqlite();
+      const alice = yield* auth.registerProfile("a@e.com", "alice").pipe(Effect.provide(layer));
+      yield* auth.registerProfile("b@e.com", "bobby").pipe(Effect.provide(layer));
+
+      // Retrieval succeeds, then the block probe hits a table that is gone.
+      sqlite.exec("DROP TABLE blocks");
+
+      const error = yield* Effect.flip(
+        recs.searchProfiles(alice.id, "bob").pipe(Effect.provide(layer)),
+      );
+      expect(error._tag).toBe("DatabaseError");
+    }),
   );
 
   it.effect("clamps the limit to [1, 20]", () =>
