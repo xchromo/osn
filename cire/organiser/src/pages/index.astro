@@ -30,10 +30,29 @@ import { THEME_BOOT_SCRIPT } from '../lib/theme-boot'
       There is no masthead. The old one stacked a "Cire" eyebrow and a "Host
       Dashboard" title above a portal nav above a per-wedding header — three
       bands of chrome before the first thing an organiser came to do. The island
-      now renders one sticky top bar instead, and owns `<main>` with it: a static
-      padded wrapper here would show as an empty band until hydration.
+      renders one sticky top bar instead, and owns `<main>` with it.
+
+      The bar below is that bar's first frame, not a placeholder for it: same
+      height, same hairline, same wordmark in the same place, so the page has
+      something to paint (and a text LCP candidate) before the island's
+      JavaScript has run, and the real bar replaces it without moving anything.
+      TopBar removes it on mount. It is `aria-hidden` and holds no controls —
+      nothing here works until the island is up, and a screen reader should not
+      be offered a wordmark that does nothing.
     -->
     <div class="@container/frame">
+      <header
+        id="boot-chrome"
+        aria-hidden="true"
+        class="border-border bg-bg/85 sticky top-0 z-30 border-b backdrop-blur-md"
+      >
+        <div class="page-frame flex h-14 items-center gap-2 @2xl/frame:h-16">
+          <span class="flex shrink-0 items-center gap-2 px-1.5 py-1.5">
+            <span class="text-gold text-[0.85rem] leading-none">✦</span>
+            <span class="font-display text-text text-[1.05rem] leading-none font-light tracking-[0.02em]">Cire</span>
+          </span>
+        </div>
+      </header>
       <OrganiserApp client:only="solid-js" />
     </div>
   </body>

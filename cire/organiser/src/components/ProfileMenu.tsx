@@ -2,7 +2,7 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import type { RpSession } from "@shared/rp-auth";
 import { For, Show } from "solid-js";
 
-import { haptic, hapticsSupported } from "../lib/haptics";
+import { haptic, hapticsAvailable } from "../lib/haptics";
 import {
   hapticsEnabled,
   setHapticsEnabled,
@@ -127,9 +127,10 @@ export default function ProfileMenu(props: {
             </DropdownMenu.RadioGroup>
           </DropdownMenu.Group>
 
-          {/* Only offered where the device can actually answer. On hardware
-              with no vibration motor the switch would be a lie. */}
-          <Show when={hapticsSupported()}>
+          {/* Offered wherever the portal can deliver feedback — which includes
+              iOS, where the API check says no and the switch fallback says yes.
+              Feedback a host cannot turn off is the failure worth avoiding. */}
+          <Show when={hapticsAvailable()}>
             <DropdownMenu.CheckboxItem
               checked={hapticsEnabled()}
               closeOnSelect={false}

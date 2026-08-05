@@ -83,6 +83,17 @@ describe("TopBar", () => {
     expect(onAll).toHaveBeenCalledOnce();
   });
 
+  it("clears the static boot bar it replaces", () => {
+    // index.astro paints a matching bar so the page is not blank before the
+    // island runs. Two sticky bars is the failure mode if this is ever dropped,
+    // and it is invisible in a test that never renders the static one.
+    const boot = document.createElement("header");
+    boot.id = "boot-chrome";
+    document.body.append(boot);
+    mount();
+    expect(document.getElementById("boot-chrome")).toBeNull();
+  });
+
   it("names the open wedding through the switcher", () => {
     mount();
     expect(screen.getByRole("button", { name: /switch wedding/i }).textContent).toContain(
@@ -113,9 +124,10 @@ describe("TopBar", () => {
     expect(screen.getByTitle(/ask the owner for editor access/i).textContent).toBe("Viewer");
   });
 
-  it("falls back to the editor badge for a role it does not know", () => {
+  it("falls back to the least privileged badge for a role it does not know", () => {
     // Roles come off the API. An unknown one must still render something honest
-    // rather than a blank chip or a crash.
+    // rather than a blank chip or a crash — and it must understate rather than
+    // overstate, so nobody is told they can edit a wedding the API will refuse.
     render(() => (
       <TopBar
         session={SESSION}
@@ -129,7 +141,7 @@ describe("TopBar", () => {
         onOpenPalette={() => {}}
       />
     ));
-    expect(screen.getByTitle(/view and edit/i).textContent).toBe("Editor");
+    expect(screen.getByTitle(/ask the owner for editor access/i).textContent).toBe("Viewer");
   });
 
   it("opens the palette, and advertises its shortcut", () => {

@@ -66,9 +66,21 @@ function instance(): WebHaptics | undefined {
   return engine;
 }
 
-/** Whether the device can actually produce a vibration (not the iOS fallback). */
-export function hapticsSupported(): boolean {
-  return WebHaptics.isSupported;
+/**
+ * Whether this build can produce touch feedback at all — which is the question
+ * the profile menu's switch is asking, and deliberately *not* the same question
+ * as `WebHaptics.isSupported`.
+ *
+ * `isSupported` is `typeof navigator.vibrate === "function"`, which is false on
+ * iOS Safari — the one platform where the switch-element fallback actually
+ * plays a system haptic. Gating the control on it would hide the off switch on
+ * the only device that buzzes, and show it on desktop Chrome, where
+ * `navigator.vibrate` exists and does nothing. So the gate is "there is a
+ * document to hang the fallback on", and the library's own guards decide
+ * whether anything is delivered.
+ */
+export function hapticsAvailable(): boolean {
+  return typeof document !== "undefined";
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Dialog } from "@kobalte/core/dialog";
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import type { Module } from "../lib/dashboard-route";
 import { haptic } from "../lib/haptics";
@@ -62,7 +62,12 @@ export default function CommandPalette(props: {
   const [active, setActive] = createSignal(0);
   let listRef: HTMLUListElement | undefined;
 
-  const commands = (): Command[] => {
+  // Memos rather than plain accessors, and not for the arithmetic — the list is
+  // a dozen rows and filtering it is free. It is for identity: `<For>`
+  // reconciles by reference, so a fresh array of fresh objects on every read
+  // would tear down and rebuild every row and heading on each keystroke rather
+  // than reordering them.
+  const commands = createMemo((): Command[] => {
     const list: Command[] = [];
 
     const wedding = props.wedding;
@@ -130,9 +135,9 @@ export default function CommandPalette(props: {
     );
 
     return list;
-  };
+  });
 
-  const results = () => commands().filter((command) => matches(command, query()));
+  const results = createMemo(() => commands().filter((command) => matches(command, query())));
 
   /** The heading a row sits under, or null when the row above shares it — the
    *  list is already grouped by construction, so a change of group is the
@@ -202,7 +207,10 @@ export default function CommandPalette(props: {
   });
 
   // Keep the highlight in range as the result set shrinks under the query.
+  // Gated on `open` so a theme change or a refreshed wedding list doesn't run it
+  // against a palette nobody is looking at.
   createEffect(() => {
+    if (!props.open) return;
     const count = results().length;
     if (active() >= count) setActive(Math.max(0, count - 1));
   });

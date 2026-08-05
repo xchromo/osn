@@ -1,5 +1,5 @@
 import type { RpSession } from "@shared/rp-auth";
-import { Show } from "solid-js";
+import { onMount, Show } from "solid-js";
 
 import type { WeddingSummary } from "./CreateWeddingForm";
 import PreviewInviteButton from "./PreviewInviteButton";
@@ -51,10 +51,20 @@ export default function TopBar(props: {
   onSignOut: () => void;
   onOpenPalette: () => void;
 }) {
+  // The static bar in `index.astro` paints this row before the island's script
+  // arrives, and stands in for it through the session check. It goes the moment
+  // the real one exists — mount, not module load, so the two never overlap for
+  // a frame and never both go missing.
+  onMount(() => document.getElementById("boot-chrome")?.remove());
+
+  // A role the portal does not know badges as the *least* privileged one it
+  // does. Roles come off the API, and a chip that overstates what a co-host may
+  // do is worse than one that understates it — the API is the real gate either
+  // way, so the only thing at stake here is what the host is told.
   const badge = () => {
     const wedding = props.wedding;
     if (!wedding) return null;
-    return ROLE_BADGE[wedding.role] ?? ROLE_BADGE.editor!;
+    return ROLE_BADGE[wedding.role] ?? ROLE_BADGE.viewer!;
   };
 
   return (

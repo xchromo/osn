@@ -104,18 +104,19 @@ describe("haptic", () => {
   });
 });
 
-describe("hapticsSupported", () => {
-  it("is true where the Vibration API exists", async () => {
-    const { hapticsSupported } = await load();
-    expect(hapticsSupported()).toBe(true);
+describe("hapticsAvailable", () => {
+  it("is true where there is a document to deliver through", async () => {
+    const { hapticsAvailable } = await load();
+    expect(hapticsAvailable()).toBe(true);
   });
 
-  it("reports the library's own answer, and stays callable, where it does not", async () => {
-    // The library reads `navigator.vibrate` once, when its class is defined —
-    // and being a real dependency it is loaded outside the module registry that
-    // `resetModules` clears, so deleting the API here would come too late.
-    // Standing in for it is the honest way to reach the unsupported branch: an
-    // iPhone, where the fallback is a hidden switch and never a vibration.
+  it("stays true where the Vibration API is absent, because the iOS fallback is not", async () => {
+    // This is the whole point of the gate. The library reads `navigator.vibrate`
+    // once, when its class is defined — and being a real dependency it is loaded
+    // outside the module registry that `resetModules` clears, so deleting the
+    // API here would come too late. Standing in for it is the honest way to
+    // reach that branch: an iPhone, where the fallback is a hidden switch and
+    // never a vibration, and where the host still needs the off switch.
     vi.resetModules();
     vi.doMock("web-haptics", () => ({
       WebHaptics: class {
@@ -124,8 +125,8 @@ describe("hapticsSupported", () => {
         destroy = () => {};
       },
     }));
-    const { haptic, hapticsSupported, resetHaptics } = await import("./haptics");
-    expect(hapticsSupported()).toBe(false);
+    const { haptic, hapticsAvailable, resetHaptics } = await import("./haptics");
+    expect(hapticsAvailable()).toBe(true);
     expect(() => haptic("dismiss")).not.toThrow();
     resetHaptics();
     vi.doUnmock("web-haptics");
