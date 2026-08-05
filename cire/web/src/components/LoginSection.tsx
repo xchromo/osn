@@ -82,7 +82,19 @@ export function LoginSection(props: LoginSectionProps) {
               // A border tint alone is too quiet to mark focus on the page's
               // one input; the ring keeps keyboard users oriented. Text cursor
               // on a text field — the pointer belongs on buttons only.
-              class="border-border font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border bg-transparent px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+              //
+              // The fill and the border are both drawn from `--color-text` (the
+              // scheme's ink) at low alpha rather than from a surface token,
+              // because the organiser picks which surface this section sits on
+              // (`welcome_tone`: ground / card / raised). A fixed token would be
+              // invisible on the tone that happens to match it; ink-at-alpha is
+              // one step away from WHATEVER is behind it on every palette, and
+              // in the right direction — it darkens a light scheme and lightens
+              // a dark one. `border-border` is the same ink at 0.12, which on a
+              // pale scheme left the field indistinguishable from the flat
+              // section behind it (and from the outlined submit button below);
+              // 0.25 is still a hairline, just a legible one.
+              class="border-text/25 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
               placeholder="e.g. PATEL-JOY-RK97"
               value={claim.code()}
               onInput={(e) => claim.setCode(e.currentTarget.value)}

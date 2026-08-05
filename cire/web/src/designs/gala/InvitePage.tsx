@@ -287,7 +287,11 @@ export default function InvitePage(props: InvitePageProps) {
                     never truncated. The server still validates the code. */}
                 <input
                   type="text"
-                  class="border-border font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border bg-transparent px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+                  // Ink-at-alpha fill + border rather than a surface token, so
+                  // the field stays one legible step from its background on
+                  // every palette and every section tone the organiser can pick.
+                  // Same values as classic's LoginSection — see the note there.
+                  class="border-text/25 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
                   placeholder="e.g. PATEL-JOY-RK97"
                   value={claim.code()}
                   onInput={(e) => claim.setCode(e.currentTarget.value)}

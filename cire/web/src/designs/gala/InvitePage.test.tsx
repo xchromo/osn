@@ -108,6 +108,21 @@ describe("gala InvitePage", () => {
     expect(queryByTestId("events-column")).toBeNull();
   });
 
+  // Drift guard: gala renders its own claim markup rather than reusing
+  // LoginSection, so the code field's contrast contract has to be asserted in
+  // both packs or the two silently diverge. Same values, same reasoning — see
+  // the note in components/LoginSection.tsx.
+  it("draws the code field one step off its surface, like classic", () => {
+    const { getByPlaceholderText } = render(() => <InvitePage apiUrl="https://api.test" />);
+    const cls = (getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement).className;
+
+    expect(cls).toContain("bg-text/[0.045]");
+    expect(cls).toContain("border-text/25");
+    expect(cls).not.toContain("border-border");
+    expect(cls).not.toContain("bg-transparent");
+    expect(cls).toContain("focus:border-gold");
+  });
+
   it("renders the events section with a data-event-card wrapper per event after a claim", async () => {
     vi.stubGlobal(
       "fetch",
