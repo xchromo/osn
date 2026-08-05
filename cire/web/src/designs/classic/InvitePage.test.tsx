@@ -944,4 +944,78 @@ describe("InvitePage", () => {
       );
     });
   });
+
+  // The swap between the code form and the welcome banner is driven by ONE
+  // signal (`revealed`), read by LoginSection's `display` bindings. The unlock
+  // sequence reports the moment via `onFormHidden` and never writes `display`
+  // itself, because Solid diffs a style binding against the last value it wrote
+  // — an imperative write from the animation would leave Solid believing the
+  // form is displayed and silently skip every later attempt to show it again.
+  describe("form/welcome swap", () => {
+    async function claimWith(sequence: () => Promise<void>) {
+      const { unlockRevealSequence } = await import("./UnlockReveal.motion");
+      vi.mocked(unlockRevealSequence).mockImplementation(sequence);
+      vi.stubGlobal(
+        "fetch",
+        noSession(
+          vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(claim), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        ),
+      );
+      const screen = render(() => <InvitePage apiUrl="https://api.test" />);
+      fireEvent.input(screen.getByPlaceholderText(/PATEL-JOY/), {
+        target: { value: "SHARMA-JOY-RK97" },
+      });
+      fireEvent.click(screen.getByText("Open Invitation"));
+      return screen;
+    }
+
+    /** The form's wrapper — the element whose `display` the swap drives. */
+    const formPanel = (screen: { getByText: (t: string) => HTMLElement }) =>
+      screen.getByText("Enter Your Code").parentElement as HTMLElement;
+
+    it("hides the form when the sequence reports it faded out", async () => {
+      const { getByText } = await claimWith(async (_f, _w, _e, hooks) => {
+        hooks?.onFormHidden?.();
+      });
+      await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+    });
+
+    it("keeps the form up until that moment — the fade needs it on screen", async () => {
+      // The old arrangement derived `display` from `claimResult`, so Solid hid
+      // the form the instant the claim resolved — a beat BEFORE the sequence
+      // ran, leaving step 1 animating an already-invisible element.
+      let release: (() => void) | undefined;
+      const { getByText } = await claimWith(
+        () => new Promise<void>((resolve) => (release = resolve)),
+      );
+      await waitFor(() => expect(release).toBeDefined());
+      expect(formPanel({ getByText }).style.display).toBe("");
+      release!();
+      await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+    });
+
+    it("still completes the swap when the sequence throws", async () => {
+      // A motion chunk that fails to load (offline mid-session, stale deploy)
+      // must never leave the code form sitting on top of a claimed invite —
+      // that is what the `finally` in handleClaimed guarantees.
+      const { getByText, queryByText } = await claimWith(() => {
+        throw new Error("chunk failed");
+      });
+      await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+      // …and the welcome banner is the thing standing in its place. The fixture
+      // is a single-guest code, so that is the individual greeting.
+      expect(queryByText(/Dear Priya/)).toBeTruthy();
+    });
+
+    it("still completes the swap when the sequence never reports", async () => {
+      // Resolving without ever calling `onFormHidden` — same guarantee.
+      const { getByText } = await claimWith(() => Promise.resolve());
+      await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+    });
+  });
 });

@@ -9,6 +9,20 @@ interface LoginSectionProps {
   apiUrl: string;
   result: ClaimResult | null;
   onClaimed: (result: ClaimResult) => void;
+  /**
+   * Which half of this section is on screen: `false` ⇒ the code form, `true` ⇒
+   * the welcome banner. Absent ⇒ derived from `result`, i.e. the plain instant
+   * swap, which is what a caller that doesn't choreograph the unlock wants.
+   *
+   * It is a separate signal from `result` because the swap is CHOREOGRAPHED: the
+   * form fades out before it leaves the layout, so it has to stay displayed for
+   * the length of that fade — a beat after the claim has already resolved. This
+   * prop is the single owner of both elements' `display`; the motion sequence
+   * reports when to flip it and never writes `display` itself — see the
+   * `RevealHooks` note in each design pack's `UnlockReveal.motion.ts` for why
+   * an imperative write there would desynchronise this binding permanently.
+   */
+  revealed?: boolean;
   formRef?: (el: HTMLDivElement) => void;
   welcomeRef?: (el: HTMLDivElement) => void;
   /**
@@ -34,6 +48,11 @@ export function LoginSection(props: LoginSectionProps) {
     result: () => props.result,
     onClaimed: (result) => props.onClaimed(result),
   });
+
+  // Falls back to `result` so the section still swaps for a caller that passes
+  // no `revealed` — and it is only ever READ here, never written, so this
+  // component cannot latch itself into either half.
+  const showWelcome = () => props.revealed ?? props.result !== null;
 
   // A claim code can cover one guest or a whole household. A single-guest code
   // greets the person individually ("Dear {name}"); a multi-guest code greets
@@ -62,7 +81,7 @@ export function LoginSection(props: LoginSectionProps) {
     >
       <div class="mx-auto max-w-[540px] text-center md:max-w-[640px]">
         {/* Login form — visible before claim */}
-        <div ref={props.formRef} style={{ display: props.result ? "none" : "" }}>
+        <div ref={props.formRef} style={{ display: showWelcome() ? "none" : "" }}>
           <p class="font-body text-gold-ink mb-3 text-[0.72rem] tracking-[0.2em] uppercase">
             Your Invitation
           </p>
@@ -131,7 +150,7 @@ export function LoginSection(props: LoginSectionProps) {
         </div>
 
         {/* Welcome message — visible after claim */}
-        <div ref={props.welcomeRef} style={{ display: props.result ? "" : "none" }}>
+        <div ref={props.welcomeRef} style={{ display: showWelcome() ? "" : "none" }}>
           <Show when={props.result?.preview}>
             <p
               class="border-gold/40 bg-gold/5 text-gold-ink mx-auto mb-6 max-w-[420px] rounded-sm border px-4 py-3 text-[0.78rem] tracking-[0.08em] uppercase"

@@ -1,4 +1,5 @@
 import { cleanup, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LoginSection } from "./LoginSection";
@@ -96,6 +97,60 @@ describe("LoginSection greeting", () => {
     ));
     expect(individual.container.textContent).toContain(greeting);
     expect(individual.container.textContent).not.toContain("We are delighted to invite you");
+  });
+});
+
+describe("LoginSection form/welcome swap", () => {
+  const panels = (container: HTMLElement) => {
+    const divs = container.querySelectorAll("section > div > div");
+    return { form: divs[0] as HTMLElement, welcome: divs[1] as HTMLElement };
+  };
+
+  it("follows `revealed` in BOTH directions", () => {
+    // The point of the prop. `display` has exactly one owner, so the swap is
+    // reversible — the failure it replaced was an imperative
+    // `style.display = "none"` from the unlock animation, which desynchronised
+    // Solid's binding: Solid went on believing `display` was `""`, so every
+    // later attempt to show the form again was a diff it skipped, and the code
+    // form could never come back for the life of the page.
+    const [revealed, setRevealed] = createSignal(false);
+    const { container } = render(() => (
+      <LoginSection
+        apiUrl="http://x"
+        result={result([member("Chidi")])}
+        revealed={revealed()}
+        onClaimed={noop}
+      />
+    ));
+
+    expect(panels(container).form.style.display).toBe("");
+    expect(panels(container).welcome.style.display).toBe("none");
+
+    setRevealed(true);
+    expect(panels(container).form.style.display).toBe("none");
+    expect(panels(container).welcome.style.display).toBe("");
+
+    // Back again — a sign-out, or a claim rolled back after a failed follow-up.
+    setRevealed(false);
+    expect(panels(container).form.style.display).toBe("");
+    expect(panels(container).welcome.style.display).toBe("none");
+  });
+
+  it("falls back to `result` when no `revealed` is passed", () => {
+    // Callers that don't choreograph the unlock (and every greeting test above)
+    // get the plain instant swap.
+    const claimed = render(() => (
+      <LoginSection apiUrl="http://x" result={result([member("Chidi")])} onClaimed={noop} />
+    ));
+    expect(panels(claimed.container).form.style.display).toBe("none");
+    expect(panels(claimed.container).welcome.style.display).toBe("");
+    cleanup();
+
+    const unclaimed = render(() => (
+      <LoginSection apiUrl="http://x" result={null} onClaimed={noop} />
+    ));
+    expect(panels(unclaimed.container).form.style.display).toBe("");
+    expect(panels(unclaimed.container).welcome.style.display).toBe("none");
   });
 });
 

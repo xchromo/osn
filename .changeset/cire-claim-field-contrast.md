@@ -2,11 +2,12 @@
 "@cire/web": patch
 ---
 
-Guest invite: make the claim code field legible, and stop hydrating the island
-that owns it against the guest's scroll position.
+Guest invite: make the claim code field legible, stop hydrating the island that
+owns it against the guest's scroll position, and give the form's visibility a
+single owner.
 
 Reported as "the claim input box is disappearing sometimes", with a screen
-recording from a phone on 4G. Two separate things in it.
+recording from a phone on 4G. Three things in it.
 
 **The field was invisible.** Measured against the live invite's palette, the
 input's fill was `bg-transparent` — literally 1.00:1 against the section behind
@@ -37,6 +38,28 @@ drifted. `client:load` hydrates off-screen during the initial load instead —
 which is what the note there was already reaching for, since the session restore
 wants to resolve while the hero is still on screen rather than when the guest is
 already waiting on it. The chunk is one every guest fetches anyway.
+
+**The form's visibility now has one owner.** `unlockRevealSequence` wrote
+`loginForm.style.display = "none"` directly on an element whose `display` is also
+a reactive SolidJS binding. Solid diffs a style binding against the last value
+*it* wrote, so that imperative write didn't duplicate the binding — it
+desynchronised it: Solid went on believing `display` was `""` and would skip
+every later attempt to show the form again, for the life of the page. Latent
+today only because nothing sets `claimResult` back to `null`; a sign-out or a
+rolled-back claim surfaces it immediately.
+
+The sequence now *reports* the swap through an `onFormHidden` hook and never
+touches `display`; the island owns it through one `revealed` signal, which
+`LoginSection` reads via a new optional `revealed` prop (absent ⇒ derived from
+`result`, so callers that don't choreograph — and the greeting tests — are
+unchanged). `handleClaimed` sets it in a `finally`, so a motion chunk that fails
+to load can no longer leave the code form sitting on top of a claimed invite —
+previously that was covered only incidentally, by the binding this replaces.
+
+It also fixes the fade the choreography was written for: deriving `display` from
+`claimResult` meant Solid hid the form the instant the claim resolved, a beat
+*before* the sequence ran, so step 1 was animating an already-invisible element.
+The form now stays on screen for its own fade-out.
 
 Root cause of the disappearance is **not** confirmed. Ruled out by reproduction
 against the live wedding's exact palette, on both the dev server and a real

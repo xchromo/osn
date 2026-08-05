@@ -108,6 +108,14 @@ export default function InvitePage(props: InvitePageProps) {
   // `opacity-0`: that class is only safe when something is going to animate it
   // back, and on this path nothing is.
   const [restoredSession, setRestoredSession] = createSignal(false);
+  // Whether the post-claim view has taken over from the claim form. Deliberately
+  // NOT derived from `claimResult`: the swap is choreographed, so the form has
+  // to stay in the layout for the length of its fade-out. This signal is the
+  // SINGLE owner of both elements' `display`; the motion sequence reports the
+  // moment via `onFormHidden` and never writes `display` itself, because an
+  // imperative write desynchronises Solid's style binding permanently. See
+  // `RevealHooks` in ./UnlockReveal.motion.
+  const [revealed, setRevealed] = createSignal(false);
 
   // Warm the two chunks that are otherwise fetched mid-interaction: the unlock
   // sequence (imported inside `handleClaimed`, i.e. after the claim resolves)
@@ -130,8 +138,11 @@ export default function InvitePage(props: InvitePageProps) {
     onRestored: (result) => {
       // Order matters — `restoredSession` must be true before the events
       // section first renders, or it paints at `opacity-0` with nothing queued
-      // to reveal it.
+      // to reveal it. `revealed` goes with it for the same reason: a restore
+      // runs no choreography, so nothing would ever flip it, and the claim form
+      // would sit on top of the household's own invite.
       setRestoredSession(true);
+      setRevealed(true);
       setClaimResult(result);
     },
   });
@@ -220,17 +231,24 @@ export default function InvitePage(props: InvitePageProps) {
     // Wait a tick so SolidJS renders the events section into the DOM
     await new Promise((r) => setTimeout(r, 0));
 
-    if (loginFormRef && welcomeRef && eventsSectionRef) {
-      try {
+    try {
+      if (loginFormRef && welcomeRef && eventsSectionRef) {
         const { unlockRevealSequence } = await import("./UnlockReveal.motion");
-        await unlockRevealSequence(loginFormRef, welcomeRef, eventsSectionRef);
-      } catch {
-        // The motion chunk failed to load (offline mid-session, stale deploy) —
-        // reveal without the animation; the invite must never stay hidden.
+        await unlockRevealSequence(loginFormRef, welcomeRef, eventsSectionRef, {
+          onFormHidden: () => setRevealed(true),
+        });
+      } else if (eventsSectionRef) {
         eventsSectionRef.style.opacity = "1";
       }
-    } else if (eventsSectionRef) {
-      eventsSectionRef.style.opacity = "1";
+    } catch {
+      // The motion chunk failed to load (offline mid-session, stale deploy) —
+      // reveal without the animation; the invite must never stay hidden.
+      if (eventsSectionRef) eventsSectionRef.style.opacity = "1";
+    } finally {
+      // The swap completes even when the choreography did not — a failed chunk,
+      // a missing ref or a throw mid-sequence must never leave the claim form
+      // sitting on top of an invite this guest has already claimed. Idempotent.
+      setRevealed(true);
     }
   }
 
@@ -270,7 +288,7 @@ export default function InvitePage(props: InvitePageProps) {
             }}
           >
             {/* Login form — visible before claim */}
-            <div ref={(el) => (loginFormRef = el)} style={{ display: claimResult() ? "none" : "" }}>
+            <div ref={(el) => (loginFormRef = el)} style={{ display: revealed() ? "none" : "" }}>
               <p class="font-body text-gold-ink mb-3 text-[0.72rem] tracking-[0.2em] uppercase">
                 Your Invitation
               </p>
@@ -329,7 +347,7 @@ export default function InvitePage(props: InvitePageProps) {
 
             {/* Welcome message — visible after claim, inside the same bordered
                 object (a ref-toggled swap, not a second panel). */}
-            <div ref={(el) => (welcomeRef = el)} style={{ display: claimResult() ? "" : "none" }}>
+            <div ref={(el) => (welcomeRef = el)} style={{ display: revealed() ? "" : "none" }}>
               <Show when={claimResult()?.preview}>
                 <p
                   class="border-gold/40 bg-gold/5 text-gold-ink mb-6 rounded-sm border px-4 py-3 text-[0.78rem] tracking-[0.08em] uppercase"
