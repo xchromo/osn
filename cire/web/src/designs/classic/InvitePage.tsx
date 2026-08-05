@@ -1,5 +1,6 @@
 import { AuthProvider } from "@shared/rp-auth/solid";
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -135,16 +136,25 @@ export default function InvitePage(props: InvitePageProps) {
     apiUrl: props.apiUrl,
     slug: props.slug,
     result: claimResult,
-    onRestored: (result) => {
+    onRestored: (result) =>
       // Order matters — `restoredSession` must be true before the events
       // section first renders, or it paints at `opacity-0` with nothing queued
       // to reveal it. `revealed` goes with it for the same reason: a restore
       // runs no choreography, so nothing would ever flip it, and the code form
       // would sit on top of the household's own invite.
-      setRestoredSession(true);
-      setRevealed(true);
-      setClaimResult(result);
-    },
+      //
+      // `batch` so the three commit as one (S-L1). Solid runs style bindings
+      // synchronously on write, so unbatched there is a window — one statement
+      // wide today — where `revealed` is true and `claimResult` is still null:
+      // the form hidden, the welcome banner rendering from nothing. Nothing
+      // paints in it now, but it is the state that hides the only door into the
+      // invite committed ahead of the result that justifies hiding it, and any
+      // later `await` or transition between these lines would open it for real.
+      batch(() => {
+        setRestoredSession(true);
+        setRevealed(true);
+        setClaimResult(result);
+      }),
   });
 
   const siteUrl = () =>

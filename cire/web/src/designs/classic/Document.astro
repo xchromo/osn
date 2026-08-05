@@ -76,29 +76,12 @@ const apiPreconnect = apiPreconnectHref(apiUrl)
   <body>
     <InviteHeader client:load apiUrl={apiUrl} slug={slug} initial={initialInvite} />
     <InvitePage
-      {/* `client:load`, NOT `client:visible`. This island owns the code form —
-          the only door into the invite — and `client:visible` tied the moment it
-          hydrates to the guest's scroll position. Two problems with that, both
-          seen on a real phone on a slow connection:
-
-          1. Hydration swaps Solid's freshly rendered DOM in for the server-
-             rendered markup. Under `client:visible` on a slow link the island's
-             chunk lands long after first paint, so that swap happens exactly
-             when the guest has scrolled the form into view — the form is
-             replaced under their finger, and any hiccup in the swap leaves them
-             looking at a page with no way in and no error.
-          2. The rootMargin was load-bearing but fragile: it was tuned against a
-             `min-h-dvh` hero, and the hero's height moves (dvh changes as the
-             mobile toolbar collapses, and the backdrop image settles late), so
-             what it actually observed drifted.
-
-          `client:load` hydrates at the earliest possible moment instead — off
-          screen, during the initial load — which is also what the old comment
-          here was reaching for: the session restore wants to resolve while the
-          hero is still on screen, not when the guest is already waiting on it.
-          The cost is a chunk every guest was going to fetch anyway, since every
-          guest scrolls to this form. */}
-      client:load
+      {/* rootMargin so the island hydrates while the full-viewport hero is
+          still on screen. Bare `client:visible` cannot fire at scroll position
+          0 (the hero is `min-h-dvh`), which would delay the session restore
+          until the guest has already scrolled to the code form — i.e. to the
+          exact moment they are waiting on its result. */}
+      client:visible={{ rootMargin: "600px" }}
       apiUrl={apiUrl}
       slug={slug}
       siteUrl={siteUrl}

@@ -103,17 +103,31 @@ export function LoginSection(props: LoginSectionProps) {
               // on a text field — the pointer belongs on buttons only.
               //
               // The fill and the border are both drawn from `--color-text` (the
-              // scheme's ink) at low alpha rather than from a surface token,
-              // because the organiser picks which surface this section sits on
+              // scheme's ink) at alpha rather than from a surface token, because
+              // the organiser picks which surface this section sits on
               // (`welcome_tone`: ground / card / raised). A fixed token would be
               // invisible on the tone that happens to match it; ink-at-alpha is
               // one step away from WHATEVER is behind it on every palette, and
               // in the right direction — it darkens a light scheme and lightens
-              // a dark one. `border-border` is the same ink at 0.12, which on a
-              // pale scheme left the field indistinguishable from the flat
-              // section behind it (and from the outlined submit button below);
-              // 0.25 is still a hairline, just a legible one.
-              class="border-text/25 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+              // a dark one.
+              //
+              // `border-border` — the same ink at 0.12 — measured 1.27:1 against
+              // this section on the live invite, so the field read as flat page
+              // (and as a twin of the outlined submit button below it). WCAG 2.1
+              // SC 1.4.11 asks **3:1** of the visual boundary that identifies a
+              // control, and this is the guest site's only input, so under the
+              // bar is not an option. 0.55 is the lowest alpha that clears it on
+              // the WORST preset/tone pair — garden/ground at 3.23:1, measured
+              // by compositing over every `PALETTE_PRESETS` entry × all three
+              // tones in a real browser. The fill stays deliberately faint
+              // (~1.09:1): it only has to read as a well, the border is what the
+              // standard governs.
+              class="border-text/55 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+              // A placeholder is not an accessible name — it is not exposed as
+              // one, and it disappears the moment the guest types. Without this
+              // the only control on the page is an unnamed edit field to a
+              // screen reader or voice control (WCAG SC 3.3.2 / 4.1.2).
+              aria-label="Invitation code"
               placeholder="e.g. PATEL-JOY-RK97"
               value={claim.code()}
               onInput={(e) => claim.setCode(e.currentTarget.value)}

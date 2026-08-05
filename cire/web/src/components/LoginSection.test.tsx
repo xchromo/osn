@@ -101,9 +101,14 @@ describe("LoginSection greeting", () => {
 });
 
 describe("LoginSection form/welcome swap", () => {
+  // Anchored to content, not to sibling order (T-S3): a positional
+  // `section > div > div` lookup silently re-points at the wrong element the
+  // day a wrapper or a third sibling is added, and an assertion on the wrong
+  // element passes for the wrong reason instead of failing.
   const panels = (container: HTMLElement) => {
-    const divs = container.querySelectorAll("section > div > div");
-    return { form: divs[0] as HTMLElement, welcome: divs[1] as HTMLElement };
+    const form = container.querySelector("form")?.closest("div") as HTMLElement;
+    const welcome = form.nextElementSibling as HTMLElement;
+    return { form, welcome };
   };
 
   it("follows `revealed` in BOTH directions", () => {
@@ -165,11 +170,12 @@ describe("LoginSection code field", () => {
   }
 
   // jsdom computes no colours, so the contrast contract is pinned as classes —
-  // the same tactic the sticky-footer and grid-column contracts use. The values
-  // were measured in a real browser against the live invite's palette: the fill
-  // lifts the field off its section (1.00:1 → 1.09:1, i.e. from literally
-  // indistinguishable to a visible well) and the border roughly doubles its
-  // separation (1.27:1 → 1.77:1).
+  // the same tactic the sticky-footer and grid-column contracts use. The alphas
+  // were chosen by compositing over every `PALETTE_PRESETS` entry × all three
+  // section tones in a real browser: the border clears WCAG SC 1.4.11's 3:1 on
+  // the WORST pair (garden/ground, 3.23:1; it was 1.27:1 before), and the fill
+  // lifts the field off its section from 1.00:1 — literally indistinguishable —
+  // to ~1.09:1.
   it("draws the field one step off whatever surface it sits on", () => {
     const cls = codeInput().className;
     // Ink-at-alpha, NOT a surface token: the organiser chooses this section's
@@ -177,12 +183,19 @@ describe("LoginSection code field", () => {
     // the tone that matches it. Ink adapts to any palette in the right
     // direction — darkening a light scheme, lightening a dark one.
     expect(cls).toContain("bg-text/[0.045]");
-    expect(cls).toContain("border-text/25");
+    expect(cls).toContain("border-text/55");
     // `border-border` is the same ink at 0.12 — the hairline this replaced, and
     // the reason the field read as flat page on a pale scheme.
     expect(cls).not.toContain("border-border");
     // A fill means the field is no longer see-through.
     expect(cls).not.toContain("bg-transparent");
+  });
+
+  it("gives the field an accessible name that outlives the placeholder", () => {
+    // A placeholder is not an accessible name and disappears on input, so
+    // without this the page's only control is an unnamed edit field to a screen
+    // reader or voice control (WCAG SC 3.3.2 / 4.1.2).
+    expect(codeInput().getAttribute("aria-label")).toBe("Invitation code");
   });
 
   it("keeps the gold focus border and ring", () => {

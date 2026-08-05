@@ -1,5 +1,6 @@
 import { AuthProvider } from "@shared/rp-auth/solid";
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -135,16 +136,25 @@ export default function InvitePage(props: InvitePageProps) {
     apiUrl: props.apiUrl,
     slug: props.slug,
     result: claimResult,
-    onRestored: (result) => {
+    onRestored: (result) =>
       // Order matters — `restoredSession` must be true before the events
       // section first renders, or it paints at `opacity-0` with nothing queued
       // to reveal it. `revealed` goes with it for the same reason: a restore
       // runs no choreography, so nothing would ever flip it, and the claim form
       // would sit on top of the household's own invite.
-      setRestoredSession(true);
-      setRevealed(true);
-      setClaimResult(result);
-    },
+      //
+      // `batch` so the three commit as one (S-L1). Solid runs style bindings
+      // synchronously on write, so unbatched there is a window — one statement
+      // wide today — where `revealed` is true and `claimResult` is still null:
+      // the form hidden, the welcome banner rendering from nothing. Nothing
+      // paints in it now, but it is the state that hides the only door into the
+      // invite committed ahead of the result that justifies hiding it, and any
+      // later `await` or transition between these lines would open it for real.
+      batch(() => {
+        setRestoredSession(true);
+        setRevealed(true);
+        setClaimResult(result);
+      }),
   });
 
   const siteUrl = () =>
@@ -307,9 +317,14 @@ export default function InvitePage(props: InvitePageProps) {
                   type="text"
                   // Ink-at-alpha fill + border rather than a surface token, so
                   // the field stays one legible step from its background on
-                  // every palette and every section tone the organiser can pick.
-                  // Same values as classic's LoginSection — see the note there.
-                  class="border-text/25 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+                  // every palette and every section tone the organiser can pick,
+                  // with the border clearing WCAG SC 1.4.11's 3:1 on the worst
+                  // of them. Same values as classic's LoginSection — see the
+                  // note there; the two packs must not drift.
+                  class="border-text/55 bg-text/[0.045] font-body text-text placeholder:text-text-muted focus:border-gold w-full cursor-text rounded-sm border px-4 py-3.5 text-center text-base tracking-[0.1em] uppercase transition-colors duration-200 placeholder:tracking-[0.04em] placeholder:normal-case focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+                  // A placeholder is not an accessible name, and it vanishes on
+                  // input — see the note in classic's LoginSection.
+                  aria-label="Invitation code"
                   placeholder="e.g. PATEL-JOY-RK97"
                   value={claim.code()}
                   onInput={(e) => claim.setCode(e.currentTarget.value)}

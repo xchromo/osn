@@ -76,12 +76,12 @@ const apiPreconnect = apiPreconnectHref(apiUrl)
   <body>
     <InviteHeader client:load apiUrl={apiUrl} slug={slug} initial={initialInvite} />
     <InvitePage
-      {/* `client:load`, NOT `client:visible` — this island owns the code form,
-          and tying its hydration to the guest's scroll position meant the
-          server-rendered form was swapped for the client one exactly as the
-          guest scrolled it into view. See the fuller note in classic's
-          Document.astro; the two packs must not drift on this. */}
-      client:load
+      {/* rootMargin so the island hydrates while the full-viewport hero is
+          still on screen. Bare `client:visible` cannot fire at scroll position
+          0 (the hero is `min-h-dvh`), which would delay the session restore
+          until the guest has already scrolled to the code form — i.e. to the
+          exact moment they are waiting on its result. */}
+      client:visible={{ rootMargin: "600px" }}
       apiUrl={apiUrl}
       slug={slug}
       siteUrl={siteUrl}

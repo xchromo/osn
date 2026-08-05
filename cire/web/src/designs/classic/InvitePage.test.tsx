@@ -834,6 +834,15 @@ describe("InvitePage", () => {
       await waitFor(() => expect(getByText("Mehndi")).toBeTruthy(), { timeout: 2000 });
       // The single-member fixture greets the individual, not the household.
       expect(getByText(/Dear Priya/)).toBeTruthy();
+      // T-U2: and the code form is actually GONE, not merely behind the events.
+      // A restore runs no choreography, so `setRevealed(true)` in `onRestored`
+      // is the only thing that flips it — drop that line and every returning
+      // guest loads their invite with the form still sitting on top of it. The
+      // greeting assertion above cannot see that: textContent queries match
+      // inside a `display: none` subtree.
+      expect((getByText("Enter Your Code").parentElement as HTMLElement).style.display).toBe(
+        "none",
+      );
     });
 
     it("sends the household cookie on the restore read", async () => {
@@ -997,6 +1006,24 @@ describe("InvitePage", () => {
       expect(formPanel({ getByText }).style.display).toBe("");
       release!();
       await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+    });
+
+    it("hides the form when REPORTED, not merely when the sequence ends", async () => {
+      // T-U3: the mirror of the test above. Holding the sequence open AFTER it
+      // reports is the only way to tell "hidden on report" from "hidden by the
+      // `finally`" — once the promise settles the `finally` masks the
+      // difference, which is why dropping the `onFormHidden` wiring altogether
+      // was otherwise invisible to every test. Without the hook the form sits
+      // in the layout through the whole sequence, so the welcome banner's
+      // fade-in plays underneath a form still occupying its space.
+      let release: (() => void) | undefined;
+      const { getByText } = await claimWith((_f, _w, _e, hooks) => {
+        hooks?.onFormHidden?.();
+        return new Promise<void>((resolve) => (release = resolve));
+      });
+      await waitFor(() => expect(formPanel({ getByText }).style.display).toBe("none"));
+      expect(release).toBeDefined();
+      release!();
     });
 
     it("still completes the swap when the sequence throws", async () => {
