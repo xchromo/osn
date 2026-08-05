@@ -26,28 +26,15 @@ import { THEME_BOOT_SCRIPT } from '../lib/theme-boot'
       `@container/frame` wraps the whole document so the page gutters respond to
       the width the frame actually has. Every other measurement inside the app
       derives from this one, which is why nothing here uses a media query.
+
+      There is no masthead. The old one stacked a "Cire" eyebrow and a "Host
+      Dashboard" title above a portal nav above a per-wedding header — three
+      bands of chrome before the first thing an organiser came to do. The island
+      now renders one sticky top bar instead, and owns `<main>` with it: a static
+      padded wrapper here would show as an empty band until hydration.
     -->
     <div class="@container/frame">
-      <!-- The masthead is a full-bleed band with a hairline under it; the
-           content below shares the same `page-frame` measure so the rule reads
-           as a margin line, not a floating divider. `page-frame` (global.css)
-           replaces the old fixed 1100px cap: gutters and measure both scale
-           with the frame, so a widescreen gets a wide dashboard instead of a
-           narrow column between two empty margins. -->
-      <header class="border-border border-b">
-        <div class="page-frame @2xl/frame:py-8 flex flex-col gap-2 py-6">
-          <p class="font-body text-gold text-[0.7rem] uppercase tracking-[0.24em]">
-            Cire
-          </p>
-          <h1 class="font-display text-[clamp(1.9rem,7cqi,3rem)] font-light leading-[1.05] text-text">
-            Host Dashboard
-          </h1>
-        </div>
-      </header>
-
-      <main class="page-frame @2xl/frame:py-10 py-8">
-        <OrganiserApp client:only="solid-js" />
-      </main>
+      <OrganiserApp client:only="solid-js" />
     </div>
   </body>
 </html>
