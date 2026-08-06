@@ -2,6 +2,7 @@ import { render, cleanup, fireEvent, waitFor, within } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
+import { SAVED_DWELL_MS, SWEEP_DURATION_MS } from "./rsvp-saved";
 import { RsvpModal } from "./RsvpModal";
 import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
 
@@ -208,10 +209,14 @@ describe("RsvpModal", () => {
       ],
     });
 
-    await waitFor(() => {
-      expect(onSubmitted).toHaveBeenCalledWith(updatedRsvps);
-      expect(onClose).toHaveBeenCalled();
-    });
+    // The fresh rows reach the page as soon as the server confirms them, so the
+    // events section behind the sheet is already correct while the confirmation
+    // is still on screen. The close comes later, on its own timer — asserted
+    // with an explicit budget rather than `waitFor`'s 1000ms default, which the
+    // dwell would otherwise sit inside by a margin thin enough to flake.
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(updatedRsvps));
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: SAVED_DWELL_MS + 750 });
   });
 
   async function submitOnce(): Promise<void> {
@@ -540,9 +545,34 @@ describe("RsvpModal", () => {
     fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
     fireEvent.click(getByText("Save"));
 
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: SAVED_DWELL_MS + 750 });
     // The deliberate no-op: nothing left the browser and nothing was "saved".
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("plays the guest's confirmation in preview without claiming anything was stored", async () => {
+    // The point of preview is that a host feels exactly what a guest feels. If
+    // the confirmation were skipped here, the one piece of feedback a host most
+    // needs to sign off on would be the one thing preview never showed them.
+    const onSubmitted = vi.fn();
+    vi.stubGlobal("fetch", vi.fn());
+
+    const { getByRole, findByText } = render(() => (
+      <RsvpModal
+        event={event}
+        members={[priya]}
+        apiUrl="https://api.test"
+        preview={true}
+        onClose={() => {}}
+        onSubmitted={onSubmitted}
+      />
+    ));
+
+    fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+    fireEvent.click(getByRole("button", { name: "Save" }));
+
+    expect(await findByText("Saved")).toBeTruthy();
     expect(onSubmitted).not.toHaveBeenCalled();
   });
 
@@ -701,6 +731,198 @@ describe("RsvpModal", () => {
       />
     ));
     expect(getByText(/RSVPs have closed/)).toBeTruthy();
+  });
+
+  describe("confirmed state", () => {
+    /**
+     * A successful RSVP used to be indistinguishable from a mis-tap: the sheet
+     * simply vanished. These pin the confirmation that replaced that — the gold
+     * sweep, the tick, and the held beat before the sheet closes itself.
+     *
+     * happy-dom and jsdom compute no CSS, so none of this can assert what the
+     * guest actually SEES. What is checkable is the contract the visuals hang
+     * off: which classes are present, which state flags flip, and what the
+     * component does with focus and callbacks. The durations themselves are
+     * guarded in `rsvp-saved.test.ts`.
+     */
+
+    /** Stub a 200 and answer for Priya, leaving the sheet mid-confirmation. */
+    async function confirmOnce(props: Partial<{ onClose: () => void }> = {}) {
+      const rsvps: RsvpSummary[] = [
+        { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+      ];
+      const fetchSpy = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ rsvps }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const view = render(() => (
+        <RsvpModal
+          event={event}
+          members={[priya]}
+          apiUrl="https://api.test"
+          onClose={props.onClose ?? (() => {})}
+        />
+      ));
+
+      fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      const save = view.getByRole("button", { name: "Save" });
+      save.focus();
+      fireEvent.click(save);
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      await view.findByText("Saved");
+      return { ...view, fetchSpy };
+    }
+
+    it("swaps the Save button's label for the recorded-reply wording", async () => {
+      const { getByRole } = await confirmOnce();
+      expect(getByRole("button", { name: "Saved" })).toBeTruthy();
+    });
+
+    it("sweeps the gold fill across the button once the reply is recorded", async () => {
+      await confirmOnce();
+      const submit = document.querySelector("button[type='submit']") as HTMLElement;
+      const fill = submit.querySelector("span[aria-hidden='true']") as HTMLElement;
+
+      // `origin-left` is the whole gesture: without it the fill grows from the
+      // centre outwards and the left-to-right sweep is simply gone.
+      expect(fill.className).toContain("origin-left");
+      expect(fill.className).toContain("scale-x-100");
+      expect(fill.className).toContain("bg-gold");
+      // The duration is written in CSS but reasoned about in JS (the dwell has
+      // to outlast it), so pin the two together — see `rsvp-saved.ts`.
+      expect(fill.className).toContain(`duration-${SWEEP_DURATION_MS}`);
+    });
+
+    it("mounts the fill collapsed from the start, so the sweep has a frame to travel from", () => {
+      // The bug this prevents: rendering the fill only once saved. A CSS
+      // transition needs a starting frame — an element created already at its
+      // end state just appears there, and the sweep silently becomes a pop.
+      render(() => (
+        <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={() => {}} />
+      ));
+      const submit = document.querySelector("button[type='submit']") as HTMLElement;
+      const fill = submit.querySelector("span[aria-hidden='true']") as HTMLElement;
+      expect(fill).toBeTruthy();
+      expect(fill.className).toContain("scale-x-0");
+      expect(fill.className).toContain("transition-transform");
+    });
+
+    it("draws a tick that the reduced-motion clamp can land instantly", async () => {
+      await confirmOnce();
+      const path = document.querySelector("button[type='submit'] svg path") as SVGPathElement;
+      expect(path).toBeTruthy();
+      // The dash pair is what makes the stroke drawable at all; the keyframe
+      // walks the offset, so the dasharray has to be on the element.
+      expect(path.getAttribute("stroke-dasharray")).toBe("20");
+      expect(path.getAttribute("class")).toContain("animate-tick-draw");
+      // Decorative — the live region below carries the meaning.
+      expect(path.closest("svg")!.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("announces the recorded reply in a live region", async () => {
+      // A colour sweep and a tick say nothing to a screen reader, and the
+      // button's own label is not re-read on change.
+      const { getByRole } = await confirmOnce();
+      const status = getByRole("status");
+      expect(status.textContent).toContain("has been saved");
+      expect(status.textContent).toContain(event.name);
+      expect(status.className).toContain("sr-only");
+    });
+
+    it("keeps the live region mounted before the reply, so the change is announced", () => {
+      // A region that springs into existence with its content is routinely
+      // missed; one that was already there and changed is not.
+      const { getByRole } = render(() => (
+        <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={() => {}} />
+      ));
+      const status = getByRole("status");
+      expect(status).toBeTruthy();
+      expect(status.textContent?.trim()).toBe("");
+    });
+
+    it("keeps focus on the Save button through the confirmation", async () => {
+      // Disabling the focused control would drop focus to <body> — outside the
+      // aria-modal dialog, with no keyboard route back in. That is the C-L2
+      // failure, and it must not be reintroduced by the success path.
+      const { getByRole } = await confirmOnce();
+      const save = getByRole("button", { name: "Saved" });
+      expect(document.activeElement).toBe(save);
+      expect(save.hasAttribute("disabled")).toBe(false);
+      expect(save.getAttribute("aria-disabled")).toBe("true");
+    });
+
+    it("refuses a second submit while the confirmation is on screen", async () => {
+      // `aria-disabled` is advisory to the browser, so the guard in
+      // `handleSubmit` is what actually stops a double write.
+      const { getByRole, fetchSpy } = await confirmOnce();
+      fireEvent.click(getByRole("button", { name: "Saved" }));
+      fireEvent.submit(document.querySelector("form")!);
+      await Promise.resolve();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("locks the party's controls once the reply is recorded", async () => {
+      const { getByRole } = await confirmOnce();
+      const fs = fieldsetFor("Priya");
+      // Editing an answer that can no longer be sent is a dead end.
+      expect((within(fs).getByText("Attending") as HTMLButtonElement).disabled).toBe(true);
+      expect((within(fs).getByText("Not attending") as HTMLButtonElement).disabled).toBe(true);
+      // Cancel too: there is nothing left to cancel, and an early `onClose`
+      // here would race the dwell timer for the same call.
+      expect((getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("never wears the in-flight fade while confirming", async () => {
+      // The confirmed button is the one state that must look most alive, so it
+      // must not inherit the 40% fade the in-flight state uses.
+      await confirmOnce();
+      const submit = document.querySelector("button[type='submit']") as HTMLElement;
+      expect(submit.className).not.toContain("opacity-40");
+    });
+
+    it("drops the dwell timer if the guest dismisses the confirmation early", async () => {
+      // Escape, the close chip or a backdrop tap all unmount this component
+      // mid-dwell. A surviving timer would then call `onClose` a second time on
+      // a disposed instance.
+      vi.useFakeTimers();
+      try {
+        const onClose = vi.fn();
+        const rsvps: RsvpSummary[] = [
+          { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+        ];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ rsvps }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+
+        const { getByRole } = render(() => (
+          <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={onClose} />
+        ));
+
+        fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+        fireEvent.click(getByRole("button", { name: "Save" }));
+
+        // Let the fetch promise chain settle without letting the dwell elapse.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(getByRole("button", { name: "Saved" })).toBeTruthy();
+
+        cleanup();
+        await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS * 3);
+        expect(onClose).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("seats the action bar on the sheet's bottom edge and balances the card insets", () => {
