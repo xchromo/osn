@@ -355,3 +355,32 @@ a tighter guard than the hand-written `width:` bars it replaces.
   left the count announced nowhere. The `aria-hidden` is gone, so a screen reader gets "2 / 4 done" from the
   text and "Setup progress, 50%" from the rail. Worth recording because the loss is invisible in the diff:
   nothing was deleted, an attribute elsewhere simply stopped being redundant.
+
+**Vendor portal redesign (`claude/cire-vendor-portal-redesign-9tdbul`) — security review (2026-08-06).**
+Brings #372–#378 across to `cire/vendor`. **No open findings**; three things the diff touches that a
+reviewer would want checked, each verified rather than assumed.
+
+**The CSP got tighter, not looser.** `style-src` and `font-src` drop `https://fonts.googleapis.com` /
+`https://fonts.gstatic.com` — a source change, not a guess: `astro.config.mjs` now downloads both faces at
+build time via `fontProviders.google()` and none of the three page shells links the stylesheet.
+`headers.test.ts` asserts their **absence** now, so re-adding a `<link>` without re-adding the origin fails
+the suite rather than silently falling back to Georgia under enforcement. `script-src 'unsafe-inline'` was
+already there and is now load-bearing (the `is:inline` theme-boot script must run before first paint); that
+is recorded in `_headers` so it is not "cleaned up" later.
+
+**The avatar sink came with `ProfileMenu`.** The OIDC `picture` claim is unvalidated at every earlier hop.
+The port keeps the host portal's guard verbatim — render only an absolute `https:` URL, else fall back to the
+initial — and `ProfileMenu.test.tsx` pins it against `http:`, `javascript:` and an unparseable string. No
+avatar origin is allowlisted in `img-src`, matching the organiser: nothing populates the claim today, and a
+set avatar renders empty rather than falling back. Same TODO, now in two places.
+
+**Two new links leave the origin** (the empty org list's "create one in musubi", the profile menu's "account
+& passkeys"). Both are `target="_blank" rel="noopener noreferrer"`, both asserted in tests, so neither hands
+`window.opener` to musubi. Both point at `PUBLIC_OSN_ACCOUNT_URL`, which is build-time config, not
+user data.
+
+Also worth recording because it is invisible in the diff: **`astro check` now runs on this package**, and the
+first run found five type errors in test files that had never been checked — including an `AuthProvider`
+handed a non-existent `issuerUrl` key instead of `apiBase`. That one is not exploitable (the suites mock
+`useAuth`, so the value was never read), but it is exactly the shape of thing that stops being harmless the
+day a test stops mocking.

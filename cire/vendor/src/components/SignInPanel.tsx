@@ -9,6 +9,8 @@ import {
 import { createSignal, onMount, Show } from "solid-js";
 
 import { CIRE_API_URL } from "../lib/osn";
+import Button from "./ui/Button";
+import Notice from "./ui/Notice";
 
 const authConfig: RpAuthConfig = { apiBase: CIRE_API_URL };
 
@@ -61,38 +63,31 @@ export default function SignInPanel() {
 
   return (
     <div class="flex flex-col gap-6">
+      {/* Tinted and marked, where it used to be a plain bordered box in the
+          page's own colours — a cancelled sign-in read as a piece of the form.
+          `alert` because it appears in answer to something the vendor just did:
+          they came back from the issuer without a session. */}
       <Show when={error()}>
         {(message) => (
-          <p
-            role="alert"
-            class="border-border bg-background text-text rounded-sm border px-4 py-3 text-sm"
-          >
+          <Notice tone="error" alert>
             {message()}
-          </p>
+          </Notice>
         )}
       </Show>
 
-      <p class="text-muted-foreground text-sm leading-relaxed">
+      <p class="font-body text-text-muted text-[0.88rem] leading-relaxed">
         Cire uses your musubi account to sign you in. Your passkey stays with musubi — Cire never
         sees it.
       </p>
 
       <div class="flex flex-col gap-3">
-        <button
-          type="button"
-          onClick={signIn}
-          class="bg-gold text-background w-full rounded-sm px-6 py-3 text-sm font-medium tracking-wide transition-opacity hover:opacity-90"
-        >
+        <Button variant="primary" onClick={signIn} class="w-full">
           Continue with musubi
-        </button>
+        </Button>
 
-        <button
-          type="button"
-          onClick={createAccount}
-          class="border-border text-text hover:border-gold w-full rounded-sm border px-6 py-3 text-sm font-medium tracking-wide transition-colors"
-        >
+        <Button variant="outline" onClick={createAccount} class="w-full">
           Create account with musubi
-        </button>
+        </Button>
       </div>
     </div>
   );
