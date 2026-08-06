@@ -69,6 +69,14 @@ export default function EditWorkspace(props: {
           {(m) => (
             <button
               type="button"
+              /* A real <input type="radio"> would be the tag for this, and the
+                 lint rule is right in general. Not here: choosing a mode can be
+                 REFUSED (an unsaved draft, confirm declined), and a native radio
+                 has already moved its own checked state by the time the handler
+                 runs — leaving the dot on a mode the panel didn't switch to,
+                 with no signal change to re-render it back. `aria-checked` is
+                 derived from the signal, so a refusal simply never moves it. */
+              // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
               role="radio"
               aria-checked={mode() === m.id}
               title={m.hint}
