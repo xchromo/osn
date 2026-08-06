@@ -30,6 +30,15 @@ import { createSignal, onCleanup, onMount } from "solid-js";
  * way the reader is watching a wipe instead of reading. So changes past `cap`
  * skip the animation entirely — which, given the paragraph above, means they
  * touch nothing at all.
+ *
+ * ## A reflow is not a change of content
+ *
+ * The height also changes when nothing was swapped: a window dragged narrower
+ * rewraps the text inside and the box gets taller. Animating that means the
+ * frame trails its own content for the whole drag, restarting a fresh 200ms
+ * transition every frame and never finishing one. The tell is the **width**: a
+ * content swap happens at a fixed width, a reflow does not. It is free to know —
+ * the rect being measured for the height carries it.
  */
 
 /** Past this many px, snap instead of animate. Roughly a tall laptop viewport. */
@@ -76,6 +85,9 @@ export function createAutoSize(cap = AUTO_SIZE_CAP): AutoSize {
   // Kept out of the signal for the same reason as the sliding pill's: what the
   // last height was is bookkeeping, not something to read back reactively.
   let last: number | null = null;
+  // The content's width at the last measure. See "A reflow is not a change of
+  // content" above.
+  let lastWidth: number | null = null;
 
   /** Hand the box back to the layout. Safe to call when it never left. */
   function release() {
@@ -87,6 +99,7 @@ export function createAutoSize(cap = AUTO_SIZE_CAP): AutoSize {
     frameEl.style.height = "";
     frameEl.style.overflow = "";
     frameEl.style.transition = "";
+    frameEl.style.contain = "";
   }
 
   function onTransitionEnd(event: TransitionEvent) {
@@ -95,20 +108,28 @@ export function createAutoSize(cap = AUTO_SIZE_CAP): AutoSize {
     if (event.target === frameEl && event.propertyName === "height") release();
   }
 
-  function apply(next: number) {
+  function apply(next: number, width: number) {
     if (!frameEl) return;
     const from = last;
+    const reflowed = lastWidth !== null && lastWidth !== width;
+    lastWidth = width;
     if (from === next) return;
     last = next;
     setHeight(next);
 
-    if (!autoSizeAnimates(from, next, cap)) {
+    if (reflowed || !autoSizeAnimates(from, next, cap)) {
       release();
       return;
     }
 
     release();
     frameEl.style.overflow = "hidden";
+    // For the length of the move only. The frame's own size is being driven from
+    // out here, so nothing inside it can change what the rest of the page does —
+    // which is exactly the promise `contain` makes, and it keeps a frame that is
+    // animating from making the browser re-lay-out the page around it on every
+    // one of the ~12 frames. Dropped again by `release()`, like the rest.
+    frameEl.style.contain = "layout paint";
     frameEl.style.transition = "none";
     frameEl.style.height = `${from}px`;
     // Read layout back, so the browser commits the starting height as a style of
@@ -121,7 +142,12 @@ export function createAutoSize(cap = AUTO_SIZE_CAP): AutoSize {
   }
 
   function measure() {
-    if (contentEl) apply(contentEl.getBoundingClientRect().height);
+    // One rect, read once, for both numbers. An element torn out of the document
+    // measures zero on every axis, and a frame told it is 0px tall is a frame
+    // that collapses the moment it is put back.
+    if (!contentEl?.isConnected) return;
+    const rect = contentEl.getBoundingClientRect();
+    apply(rect.height, rect.width);
   }
 
   function start() {

@@ -197,6 +197,19 @@ describe("createSlidingPill", () => {
     expect(pillEl().style.width).toBe("260px");
   });
 
+  it("snaps rather than slides when it was the track that changed width", async () => {
+    // A window being dragged fires the observer every frame. The pill's new
+    // place each time is not a move the host made, and sliding to it means the
+    // pill lags its own label for the whole drag.
+    const { pillEl } = mount();
+    await settle();
+    rects.track = rect(0, 100, 260, 200);
+    rects.one = rect(0, 108, 260, 36);
+    FakeResizeObserver.fire();
+    expect(pillEl().style.width).toBe("260px");
+    expect(pillEl().style.transition).toBe("none");
+  });
+
   it("hides itself when the active key names no item", async () => {
     const { pillEl, setActive } = mount();
     await settle();

@@ -77,7 +77,14 @@ const MOVE = "var(--dur-base) var(--ease-out)";
  *
  * `settled` is false for the first frame at a new position and on the frame the
  * pill first appears, so it arrives where it belongs instead of sliding in from
- * the track's corner. Transform rather than `left`/`top` so the move is composited.
+ * the track's corner.
+ *
+ * Position moves by `transform` rather than `left`/`top`, which is the half of
+ * this that is composited. `width` and `height` are not, and they are in the
+ * list on purpose: the tab strip's items are genuinely different widths, and a
+ * pill that slid to a new place and then snapped to a new size would read as two
+ * events. The pill is `position: absolute` and childless, so the layout it costs
+ * is its own and touches no sibling.
  */
 export function pillStyle(box: PillBox | null, settled: boolean): JSX.CSSProperties {
   if (!box) return { opacity: 0, transition: "none" };
@@ -114,29 +121,41 @@ export function createSlidingPill(active: () => string): SlidingPill {
   // `measure` runs inside an effect, and reading what it is about to write
   // would make the effect depend on its own output.
   let last: PillBox | null = null;
+  // The track's width at the last measure, to tell a move apart from a reflow.
+  let lastWidth: number | null = null;
 
   function measure() {
     const el = items.get(active());
     if (!trackEl || !el?.isConnected) {
       last = null;
+      lastWidth = null;
       setBox(null);
       setSettled(false);
       return;
     }
-    const next = pillBox(trackEl.getBoundingClientRect(), el.getBoundingClientRect(), {
+    const track = trackEl.getBoundingClientRect();
+    const next = pillBox(track, el.getBoundingClientRect(), {
       left: trackEl.scrollLeft,
       top: trackEl.scrollTop,
     });
+    // A window being dragged fires the observer every frame, and the pill's new
+    // place each time is not a move the host made — it is the old place, in a
+    // track that is now a different width. Sliding to it means the pill lags the
+    // label it belongs to for the whole drag, restarting a 200ms transition it
+    // never finishes. Same width, different place: a real move. Free to read,
+    // since the rect was needed anyway.
+    const reflowed = lastWidth !== null && lastWidth !== track.width;
+    lastWidth = track.width;
     // A ResizeObserver reports on every reflow, most of which move nothing.
     // Bail on an unchanged box so the style is not rewritten for no reason.
     if (next && last && samePlace(last, next)) return;
-    // Appearing is not a move. Place it, then arm the transition on the next
-    // frame so only *subsequent* changes of active row animate.
+    // Appearing is not a move either. Place it, then arm the transition on the
+    // next frame so only *subsequent* changes of active row animate.
     const appearing = next !== null && last === null;
     last = next;
     setBox(next);
     if (next === null) setSettled(false);
-    else if (appearing) {
+    else if (appearing || reflowed) {
       setSettled(false);
       requestAnimationFrame(() => setSettled(true));
     }
@@ -149,6 +168,12 @@ export function createSlidingPill(active: () => string): SlidingPill {
     // lands after the first measure.
     observer ??= new ResizeObserver(() => measure());
     observer.observe(el);
+    // Released with the element, not with the component. A tab strip inside a
+    // `<For>` rebuilds every row on each module switch, and an observation the
+    // element never gets back holds the dead row and its subtree reachable,
+    // lengthens every subsequent delivery, and fires one spurious measure per
+    // switch. `disconnect()` on unmount covers the end; this covers the churn.
+    onCleanup(() => observer?.unobserve(el));
   }
 
   onMount(() => {

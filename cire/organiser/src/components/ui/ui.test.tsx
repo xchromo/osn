@@ -119,16 +119,66 @@ describe("Notice", () => {
   });
 
   it("gives each tone a different look", () => {
-    const { getByText } = render(() => (
+    const { getAllByTestId } = render(() => (
       <>
-        <Notice tone="error">E</Notice>
-        <Notice tone="warn">W</Notice>
-        <Notice tone="success">S</Notice>
-        <Notice tone="info">I</Notice>
+        <Notice tone="error" data-testid="n">
+          E
+        </Notice>
+        <Notice tone="warn" data-testid="n">
+          W
+        </Notice>
+        <Notice tone="success" data-testid="n">
+          S
+        </Notice>
+        <Notice tone="info" data-testid="n">
+          I
+        </Notice>
       </>
     ));
-    const classes = ["E", "W", "S", "I"].map((label) => getByText(label).className);
+    const classes = getAllByTestId("n").map((el) => el.className);
     expect(new Set(classes).size).toBe(4);
+  });
+
+  it("marks the three that report an outcome, and each with a different shape", () => {
+    // Hue alone would put "saved" and "failed to save" in the same rectangle,
+    // and error and warn are the closest pair in the palette.
+    const { getAllByTestId } = render(() => (
+      <>
+        <Notice tone="error" data-testid="n">
+          E
+        </Notice>
+        <Notice tone="warn" data-testid="n">
+          W
+        </Notice>
+        <Notice tone="success" data-testid="n">
+          S
+        </Notice>
+      </>
+    ));
+    const glyphs = getAllByTestId("n").map(
+      (el) => el.querySelector("[aria-hidden='true']")?.textContent,
+    );
+    expect(glyphs.every(Boolean)).toBe(true);
+    expect(new Set(glyphs).size).toBe(3);
+  });
+
+  it("says the word a glyph cannot be heard as", () => {
+    const { getByRole } = render(() => (
+      <Notice tone="error" alert>
+        Could not save.
+      </Notice>
+    ));
+    expect(getByRole("alert")).toHaveTextContent("Error: Could not save.");
+  });
+
+  it("leaves the standing note unmarked", () => {
+    // Nothing has happened, so there is no outcome to signal.
+    const { getByTestId } = render(() => (
+      <Notice tone="info" data-testid="n">
+        Two hosts can edit.
+      </Notice>
+    ));
+    expect(getByTestId("n").querySelector("[aria-hidden='true']")).toBeNull();
   });
 });
 
@@ -188,7 +238,7 @@ describe("Meter", () => {
 describe("Table", () => {
   it("tells a screen reader which cells a header governs", () => {
     const { getAllByRole } = render(() => (
-      <Table>
+      <Table label="Guests">
         <thead>
           <tr>
             <Th>Guest</Th>
@@ -208,7 +258,7 @@ describe("Table", () => {
 
   it("lines the figures up down their column", () => {
     const { getByText } = render(() => (
-      <Table>
+      <Table label="Replies">
         <tbody>
           <tr>
             <Td numeric>2</Td>
@@ -221,7 +271,7 @@ describe("Table", () => {
 
   it("reaches its own overflow, so the page never scrolls sideways", () => {
     const { container } = render(() => (
-      <Table>
+      <Table label="Guests">
         <tbody>
           <tr>
             <Td>Ada</Td>
@@ -230,6 +280,22 @@ describe("Table", () => {
       </Table>
     ));
     expect(container.firstElementChild?.className).toContain("overflow-x-auto");
+  });
+
+  it("lets a keyboard reach the columns that are off the edge, and says what it is", () => {
+    // WebKit does not make an overflow container focusable on its own, so
+    // without this the email column is simply unreachable without a mouse. The
+    // name is what stops the new tab stop being an unexplained one.
+    const { getByRole } = render(() => (
+      <Table label="Guests">
+        <tbody>
+          <tr>
+            <Td>Ada</Td>
+          </tr>
+        </tbody>
+      </Table>
+    ));
+    expect(getByRole("region", { name: "Guests" })).toHaveAttribute("tabindex", "0");
   });
 });
 

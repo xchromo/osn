@@ -1,4 +1,6 @@
-import { type ComponentProps, splitProps } from "solid-js";
+import { splitProps } from "solid-js";
+
+import type { SafeProps } from "./props";
 
 /**
  * The portal's button.
@@ -48,7 +50,7 @@ const SIZE: Readonly<Record<ButtonSize, string>> = {
   icon: "h-8 w-8 shrink-0 p-0 text-[0.9rem]",
 };
 
-export type ButtonProps = ComponentProps<"button"> & {
+export type ButtonProps = SafeProps<"button"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
 };

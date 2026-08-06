@@ -198,7 +198,26 @@ whole app to 0.1× and a reference behaviour can be judged frame by frame. Nothi
 in the app itself writes it.
 
 `prefers-reduced-motion: reduce` is a global kill switch in `@layer base`, not a
-per-component branch.
+per-component branch. It sets `transition-duration` and `animation-duration` with
+`!important`, which beats an inline style — so a hook that writes a duration
+inline still stops, and no hook needs a `matchMedia` check of its own.
+
+Two hooks carry the design law of §1, both in `src/lib/`:
+
+- **`createAutoSize`** — animates a frame between its own heights, then hands the
+  height back to the content. It holds **nothing at rest**: no pixel height
+  survives the transition, so a resized window, a changed font size or a late
+  image never fights a stale number. The measured wrapper is a `flow-root`, so a
+  child's top margin cannot escape it and change the answer depending on whether
+  the frame was clipped at the time.
+- **`createSlidingPill`** — moves one highlight between tabs instead of
+  cross-fading one highlight per tab. That is what makes a strip read as a single
+  control rather than a row of them. The pill's row must be `relative`: an
+  absolutely positioned element paints above non-positioned siblings in the same
+  stacking context, and without it the underlay covers its own labels.
+
+The sheet variant of the module nav deliberately gets no pill. A pill measures a
+strip the eye can see all of at once, and a sheet is a list.
 
 **Focus.** One ring for the whole dashboard: 2px solid `--focus`, 2px offset,
 never animated, never removed — the shell is keyboard-driven. It deliberately

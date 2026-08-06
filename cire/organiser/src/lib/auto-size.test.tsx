@@ -36,13 +36,18 @@ const originalRect = Element.prototype.getBoundingClientRect;
  */
 let contentHeight = 0;
 
+/** The content's width, same idea. Only a *change* of it means anything. */
+let contentWidth = 320;
+
 beforeEach(() => {
   FakeResizeObserver.live = [];
   contentHeight = 0;
+  contentWidth = 320;
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   Element.prototype.getBoundingClientRect = function () {
     const h = contentHeight;
-    return { left: 0, top: 0, width: 0, height: h, right: 0, bottom: h, x: 0, y: 0 } as DOMRect;
+    const w = contentWidth;
+    return { left: 0, top: 0, width: w, height: h, right: w, bottom: h, x: 0, y: 0 } as DOMRect;
   };
 });
 
@@ -169,6 +174,34 @@ describe("createAutoSize", () => {
     resizeTo(AUTO_SIZE_CAP + 400);
     expect(frame().style.height).toBe("");
     expect(frame().style.overflow).toBe("");
+  });
+
+  it("snaps when the width changed too, because that is a reflow", () => {
+    // A window dragged narrower rewraps the text and the box gets taller. Sliding
+    // to it means the frame trails its own content for the whole drag.
+    const { frame } = mount(120);
+    contentWidth = 240;
+    resizeTo(180);
+    expect(frame().style.height).toBe("");
+    expect(frame().style.overflow).toBe("");
+  });
+
+  it("animates again once the width has settled", () => {
+    // The drag ends, and the next change of content is a change of content.
+    const { frame } = mount(120);
+    contentWidth = 240;
+    resizeTo(180);
+    resizeTo(210);
+    expect(frame().style.height).toBe("210px");
+  });
+
+  it("does not measure a frame that has left the document", () => {
+    // A torn-out element reports zero on every axis, and a frame told it is 0px
+    // tall is a frame that collapses the moment it is put back.
+    const { size, content } = mount(120);
+    content().remove();
+    resizeTo(0);
+    expect(size.height()).toBe(120);
   });
 
   it("reports the measured height", () => {
