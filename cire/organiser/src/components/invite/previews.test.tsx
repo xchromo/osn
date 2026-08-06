@@ -1,11 +1,17 @@
 // @vitest-environment happy-dom
 import { headingSizeCss, typographyVar } from "@cire/theme";
-import { cleanup, render, screen } from "@solidjs/testing-library";
+import { cleanup, render, screen, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CROP_ASPECT } from "../../lib/image-crop";
 import { captureDeclaredStyles } from "../../test-support/declared-style";
-import { HeroSample, LEGACY_CROP_ASPECT, SectionSample } from "./previews";
+import {
+  HeroPreview,
+  HeroSample,
+  LEGACY_CROP_ASPECT,
+  SectionPreview,
+  SectionSample,
+} from "./previews";
 
 /**
  * The two shared preview samples. Every preview layer in the builder is built
@@ -347,5 +353,112 @@ describe("design-aware shape", () => {
     const galaBlock = gala.container.querySelector(".rounded-sm")!;
     expect(galaBlock.className).toContain("border");
     expect(galaBlock.className).toContain("m-4");
+  });
+});
+
+/**
+ * The INLINE preview layer's design forwarding. `PreviewPane` is the wide
+ * layout's sticky pane; these two wrappers are what a builder narrower than
+ * `@4xl/builder` shows instead — i.e. what an organiser on a laptop or phone
+ * is actually looking at while editing. The samples' shape contract is pinned
+ * above, so all that's needed here is that the prop arrives: without these,
+ * deleting `design=` from the six inline call sites in `InviteBuilder.tsx`
+ * leaves the whole suite green on the majority surface.
+ */
+describe("inline preview wrappers forward the design", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("HeroPreview renders gala's bottom-left hero, not classic's centred one", () => {
+    render(() => (
+      <HeroPreview
+        imageUrl={null}
+        title="Anita & Ben"
+        heroBlur={28}
+        backdropOpacity={0}
+        backdropBlur={0}
+        tokens={{}}
+        surface="var(--color-bg)"
+        design="gala"
+      />
+    ));
+    const frame = screen.getByLabelText("Hero preview");
+    expect(frame.querySelector(".items-start")).toBeTruthy();
+    expect(frame.querySelector(".justify-end")).toBeTruthy();
+    expect(within(frame).getByText("Anita & Ben").className).toContain("text-left");
+  });
+
+  it("HeroPreview still centres for classic", () => {
+    render(() => (
+      <HeroPreview
+        imageUrl={null}
+        title="Anita & Ben"
+        heroBlur={28}
+        backdropOpacity={0}
+        backdropBlur={0}
+        tokens={{}}
+        surface="var(--color-bg)"
+        design="classic"
+      />
+    ));
+    const frame = screen.getByLabelText("Hero preview");
+    expect(frame.querySelector(".items-center")).toBeTruthy();
+    expect(frame.querySelector(".justify-end")).toBeNull();
+  });
+
+  it("SectionPreview forwards design + rule (gala's events hairline)", () => {
+    render(() => (
+      <SectionPreview
+        label="Events Section"
+        tokens={{}}
+        surface="var(--color-bg)"
+        eyebrow="Celebrate With Us"
+        heading="Your Events"
+        body="Your events, from the spreadsheet import."
+        design="gala"
+        rule
+      />
+    ));
+    const frame = screen.getByLabelText("Events Section preview");
+    expect(frame.querySelector(".text-left")).toBeTruthy();
+    expect(frame.querySelector("hr")).toBeTruthy();
+  });
+
+  it("SectionPreview forwards panel (gala's inset code-entry card)", () => {
+    render(() => (
+      <SectionPreview
+        label="Code Entry & Welcome"
+        tokens={{}}
+        surface="var(--color-bg)"
+        eyebrow="Your Invitation"
+        heading="Enter Your Code"
+        body="We are delighted to invite you."
+        design="gala"
+        panel
+      />
+    ));
+    const block = screen.getByLabelText("Code Entry & Welcome preview").querySelector(".m-4")!;
+    expect(block.className).toContain("border");
+  });
+
+  it("SectionPreview leaves classic a full band with no rule", () => {
+    render(() => (
+      <SectionPreview
+        label="Events Section"
+        tokens={{}}
+        surface="var(--color-bg)"
+        eyebrow="Celebrate With Us"
+        heading="Your Events"
+        body="Your events, from the spreadsheet import."
+        design="classic"
+        rule
+        panel
+      />
+    ));
+    const frame = screen.getByLabelText("Events Section preview");
+    expect(frame.querySelector("hr")).toBeNull();
+    expect(frame.querySelector(".m-4")).toBeNull();
   });
 });

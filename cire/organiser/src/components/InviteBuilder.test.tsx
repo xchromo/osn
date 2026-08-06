@@ -1061,24 +1061,26 @@ describe("design selector", () => {
       expect(screen.getAllByLabelText("Invite preview").length).toBeGreaterThan(0),
     );
     const pane = () => screen.getAllByLabelText("Invite preview")[0]!;
-    // Classic: every section's copy sits on the column's own axis, and the
-    // events header runs straight into the cards.
-    expect(pane().querySelector(".text-center")).toBeTruthy();
+    // Classic: no events hairline, no inset code-entry panel. (Alignment is
+    // deliberately NOT asserted on the classic side here — the hidden-section
+    // placeholder strips carry `text-center` whatever the design, so that
+    // assertion could not fail. `previews.test.tsx` pins alignment per sample.)
     expect(pane().querySelector("hr")).toBeNull();
+    expect(pane().querySelector(".m-4")).toBeNull();
     expect(screen.getAllByTestId("preview-design")[0]!.textContent).toContain("Classic");
 
     fireEvent.click(screen.getByRole("radio", { name: /Gala/ }));
 
-    // Gala: left-aligned copy and the events hairline. The miniature used to be
-    // pixel-identical either side of this click.
+    // Gala: left-aligned copy, the events hairline, and the inset code-entry
+    // panel — the last of which flows through PreviewPane's own
+    // `panel={layout().welcome === "panel"}` wiring, not just the sample's.
+    // The miniature used to be pixel-identical either side of this click.
     await waitFor(() =>
       expect(screen.getAllByTestId("preview-design")[0]!.textContent).toContain("Gala"),
     );
-    // (The remaining `text-center` boxes are the hidden-section strips, which
-    // are builder chrome rather than pack layout. `previews.test.tsx` pins the
-    // per-sample alignment contract exactly.)
     expect(pane().querySelector(".text-left")).toBeTruthy();
     expect(pane().querySelector("hr")).toBeTruthy();
+    expect(pane().querySelector(".m-4")).toBeTruthy();
   });
 
   it("a failed design save keeps the current selection and toasts the error", async () => {

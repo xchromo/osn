@@ -965,9 +965,14 @@ in `cire/web/src/designs/<id>/` own the real markup, and re-rendering it here at
 miniature scale would be a copy to drift. What is described is the handful of
 moves that read at 20rem wide and that an organiser is actually choosing
 between. `design-layout.test.ts` asserts every catalog id has an entry of its
-own, so a new pack fails loudly rather than silently previewing as Classic, and
+own (a KEY-set assertion — comparing stringified shapes would fail the first
+time two packs legitimately shared a signature, and a guard that fails for a
+legitimate reason is a guard that gets deleted), and
 `designLayout()` falls back to `DEFAULT_DESIGN_ID` for an id this build's
-catalog doesn't carry — the same fallback the guest registry's `resolveDesignId`
+catalog doesn't carry — via `Object.hasOwn`, because a bare lookup resolves
+PROTOTYPE keys, so `constructor`/`__proto__`/`toString` each returned something
+truthy, the `??` never fired, and every field read `undefined`: a fourth,
+unintended shape (S-L2) — the same fallback the guest registry's `resolveDesignId`
 makes, so the two can't disagree about what an unknown id renders as. The pane
 names the pack it is showing ("Gala design"), because the packs differ in
 layout rather than colour: unlabelled, a re-shaped preview reads as a rendering

@@ -43,7 +43,7 @@ export interface DesignPreviewLayout {
   readonly eventsRule: boolean;
 }
 
-const LAYOUTS: Record<DesignId, DesignPreviewLayout> = {
+export const LAYOUTS: Record<DesignId, DesignPreviewLayout> = {
   classic: { heroAnchor: "center", align: "center", welcome: "band", eventsRule: false },
   gala: { heroAnchor: "bottom-left", align: "left", welcome: "panel", eventsRule: true },
 };
@@ -51,7 +51,16 @@ const LAYOUTS: Record<DesignId, DesignPreviewLayout> = {
 /** The layout for a design id. An unknown id (a wedding on a pack this build
  *  doesn't carry, mid-deploy) previews as the default pack — the same fallback
  *  the guest site's registry makes, so the two never disagree about what an
- *  unrecognised id renders as. */
+ *  unrecognised id renders as.
+ *
+ *  `Object.hasOwn`, not a bare lookup with `??`: indexing an object literal
+ *  with a caller-supplied string resolves PROTOTYPE keys too, so `constructor`
+ *  / `__proto__` / `toString` each return something truthy, the `??` never
+ *  fires, and every field reads `undefined` — a fourth, unintended shape
+ *  instead of the documented default-pack fallback. Same footgun as S-L6's
+ *  `SHEET_LABEL` lookup; closed by construction here. */
 export function designLayout(designId: string | null | undefined): DesignPreviewLayout {
-  return LAYOUTS[designId as DesignId] ?? LAYOUTS[DEFAULT_DESIGN_ID];
+  return designId != null && Object.hasOwn(LAYOUTS, designId)
+    ? LAYOUTS[designId as DesignId]
+    : LAYOUTS[DEFAULT_DESIGN_ID];
 }

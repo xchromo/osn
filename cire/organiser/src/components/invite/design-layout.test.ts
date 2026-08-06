@@ -1,7 +1,7 @@
 import { DEFAULT_DESIGN_ID, DESIGNS } from "@cire/invite-designs";
 import { describe, expect, it } from "vitest";
 
-import { designLayout } from "./design-layout";
+import { designLayout, LAYOUTS } from "./design-layout";
 
 /**
  * Drift guard for the preview's design shapes. The catalog is the source of
@@ -10,9 +10,14 @@ import { designLayout } from "./design-layout";
  * Classic — the exact bug the table was added to fix — so that fails a test.
  */
 describe("designLayout", () => {
-  it("gives every catalog design its own shape", () => {
-    const shapes = DESIGNS.map((d) => JSON.stringify(designLayout(d.id)));
-    expect(new Set(shapes).size).toBe(DESIGNS.length);
+  it("gives every catalog design an entry of its own", () => {
+    // A KEY-set assertion, not value-uniqueness. Comparing stringified shapes
+    // would fail the first time two packs legitimately share a signature (two
+    // centred packs differing only in colour and type is entirely plausible),
+    // and a guard that fails for a legitimate reason is a guard that gets
+    // deleted. It would also miss a typo'd key whose fallback shape happened
+    // to be unique.
+    expect(DESIGNS.map((d) => d.id).toSorted()).toEqual(Object.keys(LAYOUTS).toSorted());
   });
 
   it("distinguishes the two shipped packs where they actually differ", () => {
@@ -33,5 +38,17 @@ describe("designLayout", () => {
     expect(designLayout("not-a-design")).toEqual(fallback);
     expect(designLayout(null)).toEqual(fallback);
     expect(designLayout(undefined)).toEqual(fallback);
+  });
+
+  it("falls back for PROTOTYPE keys too, which a bare lookup would resolve", () => {
+    // `LAYOUTS["constructor"]` is truthy via the prototype chain, so a
+    // `lookup ?? default` never fires and every field reads `undefined` — a
+    // fourth, unintended shape. Not reachable today (the API validates
+    // `designId` against the catalog), but the fallback should hold whatever
+    // the caller passes (S-L2).
+    const fallback = designLayout(DEFAULT_DESIGN_ID);
+    for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      expect(designLayout(key)).toEqual(fallback);
+    }
   });
 });

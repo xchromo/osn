@@ -697,8 +697,11 @@ function EventDrawer(props: {
   onPatch: (patch: Parameters<ReturnType<typeof createGuestEventDraft>["updateEvent"]>[1]) => void;
   onClose: () => void;
 }) {
-  const start = () => splitIso(props.event.startAt);
-  const end = () => splitIso(props.event.endAt);
+  // Memos, not plain accessors: the drawer reads each of these from several
+  // places per render (the picker, the time input, `stamped`, the hint), and a
+  // plain accessor re-runs `splitIso`'s regex on every one of them (P-I1).
+  const start = createMemo(() => splitIso(props.event.startAt));
+  const end = createMemo(() => splitIso(props.event.endAt));
 
   /** Stamp the offset the event's ZONE is on for this wall-clock date + time.
    *  The organiser never types an offset any more — it is a fact about the zone
@@ -734,14 +737,34 @@ function EventDrawer(props: {
 
   /** The zone spelled out with its abbreviation and the offset it is actually
    *  on for this event's own start date — the number the drawer no longer asks
-   *  for, shown where it's a fact rather than a question. */
-  const zoneHint = () => {
+   *  for, shown where it's a fact rather than a question. A zone this runtime
+   *  can't resolve (an imported free-text value) gets the bare name and no
+   *  offset claim, rather than a number that would be wrong.
+   *
+   *  Memoised because `Field` reads `props.hint` from four places — the
+   *  `aria-describedby` id, the spread getter, the `<Show>` gate and the text
+   *  insert — and each read would otherwise redo two `Intl` lookups (P-I1). */
+  const zoneHint = createMemo(() => {
     const zone = props.event.timezone.trim();
     if (zone.length === 0) return "Pick the zone the event's times are in.";
-    const described = describeTimeZone(zone, start().date || null);
-    const offset = zoneOffset(zone, start().date, start().time || "12:00");
+    const s = start();
+    const described = describeTimeZone(zone, s.date || null);
+    const offset = zoneOffset(zone, s.date, s.time || "12:00");
     return offset ? `${described} — UTC${offset} on this date.` : described;
-  };
+  });
+
+  /** The dropdown's option groups. Memoised so the ~900-node option list is not
+   *  rebuilt on every zone change (P-W1) — `timeZoneGroups` returns a stable
+   *  identity for a known zone, and this stops the `each` expression re-running
+   *  for one anyway. */
+  const zoneGroups = createMemo(() => timeZoneGroups(props.event.timezone));
+
+  /** A blank zone matches no option, and a `<select>` whose value matches none
+   *  displays the FIRST one — so a legacy row with `timezone: ""` would read as
+   *  "Africa/Abidjan" while the draft still held "", with the free-text escape
+   *  hatch now gone. An explicit empty option keeps the field honestly empty and
+   *  lets `validateDraft`'s "Timezone is required" mean what it says. */
+  const zoneUnset = () => props.event.timezone.trim().length === 0;
 
   const addSwatch = () =>
     props.onPatch({
@@ -812,7 +835,10 @@ function EventDrawer(props: {
                   value={props.event.timezone}
                   onChange={(e) => setTimezone(e.currentTarget.value)}
                 >
-                  <For each={timeZoneGroups(props.event.timezone)}>
+                  <Show when={zoneUnset()}>
+                    <option value="">Select a timezone…</option>
+                  </Show>
+                  <For each={zoneGroups()}>
                     {(group) => (
                       <optgroup label={group.label}>
                         <For each={group.zones}>

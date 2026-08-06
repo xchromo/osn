@@ -11,8 +11,11 @@ picking a day emitted `""`, the picker re-read `""`, and the trigger went
 straight back to "Pick a date…". A date with no time now round-trips as the bare
 `YYYY-MM-DD`. It is deliberately still not a valid timestamp: `validateDraft`
 reports "Start time is required" and Save stays disabled, so the half-entered
-state is visible and blocking rather than invisible and silent, and no invented
-midnight can reach the wire.
+state is visible and blocking rather than invisible and silent, and the editor
+never invents a midnight for a time nobody typed. (That guard is client-side —
+the DesiredState front door does not enforce `isIsoTimestamp` on `startAt` at
+all, which is pre-existing and tracked as S-M1, now promoted since this client
+mirror became the only thing holding the invariant.)
 
 **The UTC-offset picker is gone; events carry a timezone.** An offset is a fact
 *about* a zone on a particular date, not a property of the event, so asking for
@@ -23,7 +26,12 @@ seeded on a new event with the organiser's own zone, and derives the offset for
 each timestamp from that zone on that event's own date — DST included. Changing
 the zone re-stamps Start and End together in one patch, keeping the wall-clock
 times put. New `lib/timezones.ts` holds the helpers (shared with the settings
-panel's deadline zone).
+panel's deadline zone), including a client-side `canonicalTimeZone` so a
+fixed-offset pseudo-zone can't answer with a DST-blind constant and so the
+formatter caches key on a finite set. A blank stored zone renders as an
+explicit empty option: a `<select>` whose value matches no option displays the
+FIRST one, so a legacy row with `timezone: ""` otherwise read as
+"Africa/Abidjan" while the draft still held "".
 
 **The invite builder's live preview ignored the design pack.** Colours, fonts
 and copy were exact while the layout — the one thing a design pack actually is —

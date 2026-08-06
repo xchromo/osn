@@ -459,8 +459,12 @@ describe("validateDraft — event field rules (E6)", () => {
       const errors = validateDraft(store.draft).map((e) => e.message);
       expect(errors).toContain("Start time is required.");
       expect(errors).toContain("End time is required.");
-      // Still blocking — a partial must never reach the wire as a midnight.
-      expect(errors.length).toBeGreaterThan(0);
+      // Named, not merely rejected: the generic "not a valid date, time &
+      // timezone offset" is true but doesn't say which half is missing.
+      expect(errors).not.toContain("Start must be a valid date, time & timezone offset.");
+      // (That these BLOCK the save is pinned where it is observable — the
+      // disabled Save button in `EventsEditor.test.tsx`. Asserting a non-empty
+      // array here could not fail, given the two `toContain`s above it.)
       dispose();
     });
   });
