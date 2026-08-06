@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const startSignIn = vi.fn();
 const clearAuthError = vi.fn();
-const resumeSession = vi.fn(() => Promise.resolve(false));
+const resumeSession = vi.fn((..._args: unknown[]) => Promise.resolve(false));
 let authError: string | null = null;
 
 vi.mock("@shared/rp-auth", () => ({
@@ -73,8 +73,13 @@ describe("SignInPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue with musubi/i }));
 
     expect(startSignIn).toHaveBeenCalledTimes(1);
-    const [, returnTo] = startSignIn.mock.calls[0]!;
+    const [, returnTo, options] = startSignIn.mock.calls[0]!;
     expect(new URL(returnTo as string).pathname).toBe("/");
+    // T-S2: and no `prompt`. Removing the second button is only half the
+    // change — passing `{ prompt: "create" }` through the one that remains
+    // would reinstate the removed guess, and every other assertion here
+    // (the button count, the absent "Create account" label) would stay green.
+    expect(options).toBeUndefined();
   });
 
   it("leaves account creation to the issuer instead of offering a second door", () => {

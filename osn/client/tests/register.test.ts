@@ -232,6 +232,31 @@ describe("createRegistrationClient", () => {
         client.passkeyRegisterBegin({ profileId: "usr_abc", accessToken: "bad" }),
       ).rejects.toThrow("unauthorized");
     });
+
+    /**
+     * T-U1. Enrollment shares `postJson` with registration, so it inherits
+     * `credentials: "include"` — and it needs it for its own reason. The bearer
+     * token names the *account*; the cookie names *which session is the
+     * caller's own*, which is how `/passkey/register/complete` knows to spare
+     * that one when it revokes the rest (S-H1). Without the cookie the server
+     * falls back to the access token's `osn_sid` binding rather than failing,
+     * so a regression here is silent — no test elsewhere would go red. Pinning
+     * it at both cookie-dependent routes makes the header a property of the
+     * transport instead of one test's happy path.
+     */
+    it("sends credentials on both enrollment legs, not just registration", async () => {
+      const begin = stubFetch(() => jsonResponse({ challenge: "ch_123" }));
+      await client.passkeyRegisterBegin({ profileId: "usr_abc", accessToken: "acc_999" });
+      expect(begin.calls[0].init?.credentials).toBe("include");
+
+      const complete = stubFetch(() => jsonResponse({ passkeyId: "pk_xyz" }));
+      await client.passkeyRegisterComplete({
+        profileId: "usr_abc",
+        accessToken: "acc_999",
+        attestation: { id: "cred_id" },
+      });
+      expect(complete.calls[0].init?.credentials).toBe("include");
+    });
   });
 
   it("strips a trailing slash from issuerUrl", async () => {

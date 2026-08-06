@@ -384,6 +384,26 @@ describe("<AuthorizePage />", () => {
   });
 
   /**
+   * T-S1. The rule is "`create` leads with sign-up until a ceremony happens
+   * *here*", not "until a session exists" — the two predicates differ exactly
+   * on this case, and only this case tells them apart. `prompt=create` parks
+   * with `requireAuthAfter = now` server-side, so an existing session does not
+   * satisfy the request and the visitor still has to go through the panel;
+   * simplifying the gate to `!ctx().signedIn` would keep every other test green
+   * while quietly dropping the sign-up half for anyone already signed in.
+   */
+  it("still leads with sign-up when reason=create finds an existing session", async () => {
+    mocks.getContext.mockResolvedValue(context());
+
+    renderPage(`?request=${REQUEST_ID}&reason=create`);
+
+    const panel = await screen.findByText("finish sign-in");
+    expect(panel.dataset["initialMode"]).toBe("register");
+    // The session it found is not enough on its own — no decision yet.
+    expect(screen.queryByText("Allow")).toBeNull();
+  });
+
+  /**
    * The URL still says `create` after the account exists, so anything that
    * sends the user back to the sign-in screen — here, a decision the server
    * answered `login_required` — used to reopen "Create your OSN account" at
