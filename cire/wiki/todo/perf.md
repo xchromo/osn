@@ -375,3 +375,22 @@ Also recorded, no action: the haptics wrapper reuses **one** `WebHaptics` engine
 constructing one per call (asserted by test), and every call site is a discrete user gesture — a tap, a drop,
 a confirm — so there is no per-frame or per-keystroke haptic path to budget for. `web-haptics@0.0.6` is ~1 KiB
 of the +18.7 KiB above; the rest is the palette, the switcher and the account menu, all Kobalte.
+
+**Host-portal UI primitives (`feat/cire-portal-primitives`) — perf review (2026-08-06).**
+Phase 3 of the redesign: seven shared components in `cire/organiser/src/components/ui/` and two motion
+utilities, `createAutoSize` and `createSlidingPill`. Every finding below is **fixed on branch** — the two
+hooks are the only new per-frame code in the portal, so they got the attention. Bundle: `OrganiserApp` is
+**495,694 B raw / 131,862 gzip**, against the **492,807 / 130,649** recorded for the stack parent above —
+**+2.9 KiB raw / +1.2 KiB gzip** for the whole set, and still under Vite's 500 kB warning. The common chunk
+that the palette split created is byte-identical (34,754 B), which is what makes the two figures comparable.
+No Critical.
+
+- [x] **PRIM-P-W1** (fixed on branch) — **both hooks animated their own reflow.** A `ResizeObserver` fires on every frame of a window drag, and neither hook could tell "the host switched module / opened a panel" from "the box just rewrapped". Animating the second kind means a fresh 200 ms transition started every frame and never finished one, so the pill trails its own label and the frame trails its own content for the whole drag. The tell is the **width** — a content swap happens at a fixed width, a reflow does not — and it is free to read, since the rect being measured for the position carries it. Both hooks now keep a `lastWidth` and snap rather than slide when it changed. Two regression tests, one per hook, fire the fake observer with a changed track width and assert `transition: none`.
+- [x] **PRIM-P-W2** (fixed on branch) — `createAutoSize` measured a node that had left the document. A detached element reports zero on every axis, so a frame torn out mid-move (a tab hidden before it settled, a panel unmounted under an in-flight transition) got told it was `0px` tall and kept that height — collapsing the moment it was put back. Now `measure()` bails on `!contentEl?.isConnected`, the same guard `createSlidingPill` uses for its active item. Cheap: it is a property read in front of the layout read that would have cost something.
+- [x] **PRIM-P-W3** (fixed on branch) — `Meter` animated `width`, which is layout, paint and composite on the main thread for every frame of the move. The Budget module draws one bar per category, so a dozen of them relay out together on the frame a single figure was edited. The fill is now full width and squashed by a `transform`, which is none of those things. The rounding had to move to the track with it: a transform squashes a radius along with everything else, and a scaled `rounded-full` gives an ellipse that changes shape as the bar moves — so the track clips and the fill inside it is a plain rectangle.
+- [x] **PRIM-P-I1** (fixed on branch) — an animating frame made the browser re-lay-out the page around it on each of its ~12 frames. `createAutoSize` now takes `contain: layout paint` **for the length of the move only**, released by the same `release()` that drops the pixel height, the `overflow: hidden` and the transition. Holding it at rest would have been the wrong trade for the same reason holding the height is: containment on a settled box is a permanent tax on everything inside it. The `transitionend` listener is the real release signal, with an 800 ms `setTimeout` backstop for the transition that never starts.
+- [x] **PRIM-P-I2** (fixed on branch) — the height and the width came from two separate reads of the same node. `getBoundingClientRect()` flushes pending layout, so the second read is a second forced synchronous layout on a path that runs on every observer callback. One rect now serves both numbers.
+
+Also recorded, no action: neither hook guards `typeof ResizeObserver`. It has been in every browser this
+portal supports since 2020 and there is no server path to reach this code — the portal mounts
+`client:only="solid-js"`, so a feature test here would only ever answer yes.
