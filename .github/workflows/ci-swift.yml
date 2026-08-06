@@ -7,21 +7,16 @@ on:
     branches: [main]
 
 jobs:
-  swift-test:
-    name: swift test (OSNShared)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: swift test
-        working-directory: shared/swift/OSNShared
-        run: swift test
-
   # macOS runner minutes bill at a multiple of Linux, so the iOS build only
   # runs when a push/PR actually touches Swift/Xcode files. GitHub Actions
   # has no native per-job `paths:` filter (that key only gates whole
   # workflows), so this job computes the equivalent itself from `git diff`
   # against the two commits GitHub already gives us for each event type.
+  #
+  # `swift-test` is gated the same way for a different reason: no job in this
+  # repo has ever run on a runner image with a Swift toolchain, so if
+  # `ubuntu-latest` ships no `swift` the failure should land on Swift PRs
+  # only, not on every PR to main.
   changes:
     name: detect Swift/Xcode changes
     runs-on: ubuntu-latest
@@ -51,6 +46,21 @@ jobs:
           else
             echo "ios=false" >> "$GITHUB_OUTPUT"
           fi
+
+  swift-test:
+    name: swift test (OSNShared)
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift toolchain info
+        run: swift --version
+
+      - name: swift test
+        working-directory: shared/swift/OSNShared
+        run: swift test
 
   ios-build:
     name: xcodegen + xcodebuild (Pulse)

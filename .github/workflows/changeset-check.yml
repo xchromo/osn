@@ -16,18 +16,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Self-test the allowlist before trusting it, so a parser regression fails
+      # here rather than silently waving PRs through with no changelog.
+      - name: Test changeset-required allowlist
+        run: bash scripts/changeset-required.test.sh
+
       - name: Check for changeset
         run: |
           diff=$(git diff --name-only origin/main...HEAD)
 
-          # A PR touching no versioned workspace file (no package.json under
-          # cire/osn/pulse/zap/shared) has no honest package to name in a
-          # changeset — e.g. pure Swift/Xcode scaffolding under pulse/ios and
-          # shared/swift. Skip the requirement rather than force a false
-          # changelog entry against an unrelated package.
-          versioned=$(echo "$diff" | grep -E '^(cire|osn|pulse|zap|shared)/.*/package\.json$' || true)
-          if [ -z "$versioned" ]; then
-            echo "✅ No versioned workspace file touched — changeset not required."
+          # A PR touching nothing any versioned package ships — Swift/Xcode
+          # scaffolding, CI, wiki — has no honest package to name in a
+          # changeset. Skip the requirement rather than force a false changelog
+          # entry against an unrelated package. The allowlist and its reasoning
+          # live in scripts/changeset-required.sh.
+          if [ "$(printf '%s\n' "$diff" | bash scripts/changeset-required.sh)" = "skip" ]; then
+            echo "✅ Nothing versioned touched — changeset not required."
             exit 0
           fi
 
