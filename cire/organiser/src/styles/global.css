@@ -492,3 +492,31 @@
     animation: sheet-panel-out var(--dur-base) var(--ease-in-out);
   }
 }
+
+/* ── Attention glow ─────────────────────────────────────────────────────────
+ * A slow gold breath around a box that wants to be noticed once — today, the
+ * CSV format guide the first time an organiser meets an import panel. Three
+ * pulses and it stops on its own: a permanent pulse stops being a signal and
+ * starts being noise, and the class is dropped the moment the box is touched.
+ *
+ * `box-shadow` rather than a border or an outline, so it can't fight the
+ * element's own border utility, doesn't move anything, and doesn't take the
+ * space a focus ring needs — a keyboard focus ring lands on top of it and stays
+ * legible. Suppressed entirely by the reduced-motion block above, which leaves
+ * the guide simply expanded, which is the actual affordance.
+ */
+@keyframes attention-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in oklch, var(--gold) 34%, transparent),
+      0 0 18px 2px color-mix(in oklch, var(--gold) 20%, transparent);
+  }
+}
+
+@utility attention-glow {
+  animation: attention-glow calc(2.6s * var(--motion-scale)) var(--ease-in-out) 3;
+}
