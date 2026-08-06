@@ -40,11 +40,23 @@
 #     navigations, which no `connect-src` governs. The localhost entry keeps a
 #     local `wrangler pages dev dist` pointed at a local API.
 #
-# On avatars, the same note the organiser carries: `ProfileMenu` renders the
-# OIDC `picture` claim, which can point at ANY https host. OSN has no avatar
-# hosting yet, so nothing populates it today and no origin is allowlisted. Add
-# the host here when it exists; until then a set avatar renders empty rather
-# than falling back to the initial.
+# On avatars: `ProfileMenu` renders the OIDC `picture` claim, which can point at
+# ANY https host — it is unvalidated at every hop between osn-api and here, so
+# the sink (`AccountAvatar.httpsAvatarUrl`) is what enforces the scheme.
+#
+# The `img-src` above does NOT currently restrain it, and it is worth being
+# precise about why, because the organiser's copy of this comment reads as
+# though it does. `img-src` lives only on the REPORT-ONLY line; the enforced
+# header carries `frame-ancestors`, `object-src` and `base-uri` and nothing
+# else. So the allowlist is **staged, not active**: today it would only file a
+# violation report, not block the request.
+#
+# That is fine while nothing populates the claim — osn-api writes `avatarUrl`
+# null on registration and on erasure, and has no update path — but it is the
+# thing to fix *before* OSN ships avatar hosting, or the portal starts issuing
+# a request to a user-named host on every page load, carrying the vendor's IP
+# and a `strict-origin-when-cross-origin` Referer. Bind promoting this policy to
+# enforcement to that milestone, and add the avatar host here at the same time.
 #
 # The `/claim*` rule above only overrides `Referrer-Policy` (a claim token rides
 # in the URL); Cloudflare merges the rules, so that path keeps both CSP headers.
