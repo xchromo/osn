@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONFIRMATION_END_MS,
+  INK_FLIP_DELAY_MS,
   SAVED_DWELL_MS,
   SWEEP_DURATION_MS,
   TICK_DELAY_MS,
@@ -51,6 +52,12 @@ describe("RSVP confirmation timing", () => {
   it("keeps the dwell short enough that the sheet never feels stuck", () => {
     expect(SAVED_DWELL_MS).toBeLessThanOrEqual(1500);
   });
+
+  it("flips the label's ink while the fill is still travelling, never after it lands", () => {
+    // Past the sweep, the flip would read as a second, late change rather than
+    // as the fill arriving under the text.
+    expect(INK_FLIP_DELAY_MS).toBeLessThan(SWEEP_DURATION_MS);
+  });
 });
 
 describe("tick keyframe (global.css)", () => {
@@ -88,6 +95,19 @@ describe("tick keyframe (global.css)", () => {
     expect(keyframes).not.toBeNull();
     expect(keyframes![0]).toMatch(/from\s*\{[^}]*stroke-dashoffset:\s*20/);
     expect(keyframes![0]).toMatch(/to\s*\{[^}]*stroke-dashoffset:\s*0/);
+  });
+
+  it("actually clamps BOTH transitions and animations under reduced motion", () => {
+    // The negative assertion below (tick-draw is not exempted) proves nothing
+    // on its own — it passes just as happily if the block stopped clamping.
+    // This branch's whole reduced-motion story is that the sweep (a transition)
+    // and the tick (an animation) both land on their end state instantly, so
+    // both properties have to be covered, on the universal selector.
+    const reduced = GLOBAL_CSS.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*$/);
+    expect(reduced).not.toBeNull();
+    expect(reduced![0]).toMatch(/\*,/);
+    expect(reduced![0]).toMatch(/animation-duration:\s*0\.01ms\s*!important/);
+    expect(reduced![0]).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
   });
 
   it("leaves the tick to the global reduced-motion clamp rather than opting out", () => {

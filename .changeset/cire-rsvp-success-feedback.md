@@ -72,10 +72,46 @@ The dwell timer is cleared on unmount, so a guest who dismisses the confirmation
 early (Escape, the close chip, a backdrop tap) can't have `onClose` fired a
 second time on a disposed component.
 
+**The pre-PR review round found a real bug in the above.** The confirmed state
+keeps focus on the submit button (deliberately) while also disabling Cancel for
+the dwell — and Cancel is the target of the C-L2 focus rescue. If the deadline
+flipped inside the 900ms window, `<Show when={!props.closed}>` unmounted the
+focused submit button, the rescue called `.focus()` on a disabled control (a
+no-op), and focus was stranded on `<body>` outside an `aria-modal` dialog: the
+exact failure C-L2 exists to prevent, reintroduced by the new state. Reproduced
+with a failing test first, then fixed by never disabling that button once
+`props.closed` is true — past the deadline it relabels to "Close" and is the
+sheet's only control, so it must always be reachable.
+
+Four hardening items from the same round, all fixed here: the resubmit guard now
+covers `loading()` as well as `saved()`, since `disabled` only stops paths that
+route through the button and a dispatched `submit` would otherwise orphan the
+first request's `AbortController` (S-L1); the dwell timer is registered before
+the rows are handed up, so a parent that unmounts on `onSubmitted` can't leave a
+timer to fire on a disposed instance (S-L2); the three success-path signal
+writes share one `batch()`, halving the attribute churn on the frame the sweep
+starts (P-I1); and the two tests that waited out the real 900ms dwell now use
+fake timers (P-I2) — the suite got *faster* despite eight new tests, 7.8s → 6.3s.
+
+Coverage closed alongside: a failed submit must leave the sheet fully
+re-submittable (every existing error test asserted only the message, so a
+confirmed state leaking into a `finally` would have passed all of them); the
+parent's mid-confirmation `existingRsvps` write-back is now exercised against
+the real component rather than resting on a comment; the label's ink-flip delay
+joined the timing contract as `INK_FLIP_DELAY_MS`; and `rsvp-saved.test.ts` now
+asserts the reduced-motion block *actually clamps* both durations, rather than
+only that the tick isn't exempted from it.
+
+Reviewed security-neutral otherwise — no new network call, payload field,
+dependency, DOM sink, or auth/session/consent boundary change, and the C-H2
+dietary gate is byte-identical and slightly tightened. Performance-neutral and
+compositor-correct: measured +193 B gzip CSS and ~+405 B gzip JS, absorbed into
+the existing chunk.
+
 Verified in a real browser as well as in the suite, since none of the visual
 half is observable to jsdom: the fill reaches 202px of the button's 204px with
 `transform-origin` at the left edge, `transition-property` resolving to
 `transform, translate, scale, rotate` (Tailwind v4's `scale-*` sets the
 standalone `scale` property, so a `transition-transform` that didn't list it
 would animate nothing), the label flipping to `--color-bg` on gold, and the tick
-path fully drawn. cire/web 728 → 740 tests.
+path fully drawn. cire/web 728 → 748 tests.

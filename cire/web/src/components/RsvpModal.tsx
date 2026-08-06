@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -181,7 +182,16 @@ export function RsvpModal(props: RsvpModalProps) {
     // keep focus (disabling the focused control drops focus to `<body>`,
     // outside this `aria-modal` dialog — the C-L2 failure below), which leaves
     // the guard here as the thing that actually stops the resubmit.
-    if (saved()) return;
+    //
+    // `loading()` is guarded here too (S-L1), even though the button carries a
+    // real `disabled` in that state. The attribute only stops paths that route
+    // through the button — a programmatic `form.requestSubmit()` or a dispatched
+    // `submit` event reaches this handler regardless, and a second concurrent
+    // POST would overwrite `inFlight`, orphaning the first request's
+    // AbortController so unmount could no longer cancel it. Guarding both states
+    // here makes this function the single authority on when a submit may run,
+    // rather than splitting that between JS and browser behaviour.
+    if (saved() || loading()) return;
 
     // Past the deadline there is no submit button to press; a form-level Enter
     // could still fire this, and the server would refuse it anyway.
@@ -249,16 +259,33 @@ export function RsvpModal(props: RsvpModalProps) {
 
       if (res.status === 200) {
         const data = (await res.json()) as { rsvps: RsvpSummary[] };
-        // Hand the fresh rows up IMMEDIATELY rather than when the sheet closes,
-        // so the events section behind the confirmation is already showing the
-        // new answer by the time the sheet lifts off it. `initialResponses` is
-        // a signal initialiser, not a memo, so the resulting `existingRsvps`
-        // change cannot disturb the state this sheet is confirming.
-        props.onSubmitted?.(data.rsvps);
+        // All three writes in one `batch` (P-I1). We are past an `await`, so
+        // without it each is its own synchronous graph walk: `locked()` is a
+        // plain accessor rather than a memo, so every `disabled={locked()}`
+        // site subscribes individually — both toggles per member, the dietary
+        // field, the consent box, Cancel, and the submit button's own
+        // disabled/aria-disabled/classList. Unbatched, `setLoading(false)`
+        // re-enables all of them and `setSaved(true)` immediately locks them
+        // again: double the attribute writes, and a fully-unlocked intermediate
+        // state, on the exact frame the 500ms sweep starts.
+        //
+        // Order inside the batch is load-bearing (S-L2): `enterSavedState`
+        // registers the dwell timer BEFORE `onSubmitted` hands rows to the
+        // parent. A parent that responded by unmounting this sheet would
+        // otherwise run `onCleanup` first and leave the timer to be registered
+        // afterwards — never cleared, firing `onClose` on a disposed instance
+        // ~900ms later. Registering first keeps the timer's lifetime strictly
+        // inside the component's, whatever the parent does.
+        //
         // `onClose` is not called here — `enterSavedState` holds the sheet open
-        // for the confirmation and then closes it.
-        setLoading(false);
-        enterSavedState();
+        // for the confirmation and then closes it. The rows still reach the
+        // page immediately, so the events section behind the confirmation is
+        // already showing the new answer when the sheet lifts off it.
+        batch(() => {
+          setLoading(false);
+          enterSavedState();
+          props.onSubmitted?.(data.rsvps);
+        });
         return;
       }
 
@@ -464,7 +491,18 @@ export function RsvpModal(props: RsvpModalProps) {
             // Nothing left to cancel once the reply is in and the sheet is
             // closing itself — and an early `onClose` here would race the
             // dwell timer for the same call.
-            disabled={loading() || saved()}
+            //
+            // `&& !props.closed` is load-bearing, not defensive (T-M2). Past the
+            // deadline this button relabels to "Close" and becomes the sheet's
+            // ONLY control — and it is the target of the C-L2 focus rescue
+            // above, which calls `.focus()` on it. `.focus()` is a no-op on a
+            // disabled button. The deadline can flip INSIDE the 900ms dwell,
+            // unmounting the focused submit button; without this clause the
+            // rescue would fire into a disabled control and strand focus on
+            // `<body>`, outside an `aria-modal` dialog with no keyboard way
+            // back in. That is exactly the failure C-L2 exists to prevent, so
+            // the confirmed state must not be able to reintroduce it.
+            disabled={(loading() || saved()) && !props.closed}
           >
             {/* Past the deadline there is nothing to cancel — the sheet is a
                 view, so its one button says so. */}

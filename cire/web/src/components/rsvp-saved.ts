@@ -56,6 +56,19 @@ export const TICK_DELAY_MS = 180;
 export const TICK_DURATION_MS = 340;
 
 /**
+ * How long the label waits before flipping to the on-gold ink colour, so it
+ * changes as the fill reaches the text rather than before the sweep sets off.
+ * Must equal the `delay-200` utility on the label span in `RsvpModal`.
+ *
+ * Part of the contract for the same reason as the rest (T-M3): losing the flip
+ * leaves gold text and a gold-stroked tick painted on the gold fill — the
+ * confirmation goes low-contrast at exactly the moment it has to be read — and
+ * letting the delay drift past the sweep lands the flip after the fill has
+ * already arrived.
+ */
+export const INK_FLIP_DELAY_MS = 200;
+
+/**
  * How long the confirmed state holds before the sheet closes itself, measured
  * from the moment the server's 200 lands (not from the end of the animation),
  * so the total wait after a successful submit is a fixed, predictable beat.

@@ -2,7 +2,7 @@ import { render, cleanup, fireEvent, waitFor, within } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
-import { SAVED_DWELL_MS, SWEEP_DURATION_MS } from "./rsvp-saved";
+import { INK_FLIP_DELAY_MS, SAVED_DWELL_MS, SWEEP_DURATION_MS } from "./rsvp-saved";
 import { RsvpModal } from "./RsvpModal";
 import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
 
@@ -61,6 +61,9 @@ function fieldsetFor(name: string): HTMLElement {
 describe("RsvpModal", () => {
   afterEach(() => {
     cleanup();
+    // `restoreAllMocks` does not cover the timer mock, and a leaked fake clock
+    // would silently freeze every later test that waits on one.
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -157,6 +160,10 @@ describe("RsvpModal", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const onSubmitted = vi.fn();
     const onClose = vi.fn();
+    // Fake clock from the outset (P-I2): the dwell is a real `setTimeout`, so it
+    // has to be mocked BEFORE the submit registers it. Waiting it out for real
+    // cost ~900ms of pure sleep in every suite run.
+    vi.useFakeTimers();
 
     const { getByText } = render(() => (
       <RsvpModal
@@ -180,7 +187,9 @@ describe("RsvpModal", () => {
 
     fireEvent.click(getByText("Save"));
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    // Flushes the fetch promise chain without letting the dwell elapse.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy).toHaveBeenCalled();
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("https://api.test/api/rsvp");
@@ -211,12 +220,11 @@ describe("RsvpModal", () => {
 
     // The fresh rows reach the page as soon as the server confirms them, so the
     // events section behind the sheet is already correct while the confirmation
-    // is still on screen. The close comes later, on its own timer — asserted
-    // with an explicit budget rather than `waitFor`'s 1000ms default, which the
-    // dwell would otherwise sit inside by a margin thin enough to flake.
-    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(updatedRsvps));
+    // is still on screen. The close comes later, on its own timer.
+    expect(onSubmitted).toHaveBeenCalledWith(updatedRsvps);
     expect(onClose).not.toHaveBeenCalled();
-    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: SAVED_DWELL_MS + 750 });
+    await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+    expect(onClose).toHaveBeenCalled();
   });
 
   async function submitOnce(): Promise<void> {
@@ -542,10 +550,12 @@ describe("RsvpModal", () => {
       />
     ));
 
+    vi.useFakeTimers();
     fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
     fireEvent.click(getByText("Save"));
 
-    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: SAVED_DWELL_MS + 750 });
+    await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+    expect(onClose).toHaveBeenCalled();
     // The deliberate no-op: nothing left the browser and nothing was "saved".
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(onSubmitted).not.toHaveBeenCalled();
@@ -747,7 +757,7 @@ describe("RsvpModal", () => {
      */
 
     /** Stub a 200 and answer for Priya, leaving the sheet mid-confirmation. */
-    async function confirmOnce(props: Partial<{ onClose: () => void }> = {}) {
+    async function confirmOnce(props: Partial<{ onClose: () => void; withDietary: boolean }> = {}) {
       const rsvps: RsvpSummary[] = [
         { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
       ];
@@ -769,6 +779,13 @@ describe("RsvpModal", () => {
       ));
 
       fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      if (props.withDietary) {
+        const fs = fieldsetFor("Priya");
+        fireEvent.input(within(fs).getByPlaceholderText(/Vegetarian/), {
+          target: { value: "Vegetarian" },
+        });
+        fireEvent.click(within(fs).getByRole("checkbox"));
+      }
       const save = view.getByRole("button", { name: "Save" });
       save.focus();
       fireEvent.click(save);
@@ -810,6 +827,9 @@ describe("RsvpModal", () => {
       expect(fill).toBeTruthy();
       expect(fill.className).toContain("scale-x-0");
       expect(fill.className).toContain("transition-transform");
+      // The tick is the one part that IS conditional — a permanent tick on an
+      // unpressed Save button would claim a reply that was never sent.
+      expect(submit.querySelector("svg")).toBeNull();
     });
 
     it("draws a tick that the reduced-motion clamp can land instantly", async () => {
@@ -877,12 +897,189 @@ describe("RsvpModal", () => {
       expect((getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
     });
 
+    it("locks the dietary field and its C-H2 consent box too", async () => {
+      // Both are gated on the same `locked()` accessor as the toggles, and both
+      // carry special-category data — they must not stay live on a sheet whose
+      // reply can no longer be sent.
+      await confirmOnce({ withDietary: true });
+      const fs = fieldsetFor("Priya");
+      expect((within(fs).getByPlaceholderText(/Vegetarian/) as HTMLInputElement).disabled).toBe(
+        true,
+      );
+      expect((within(fs).getByRole("checkbox") as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it("flips the label's ink onto the fill, on the delay the contract states", async () => {
+      // Losing `text-bg` leaves gold text and a gold-stroked tick on the gold
+      // fill — the confirmation goes near-invisible exactly when it must be
+      // read. The delay is pinned with it so the flip can't drift past the
+      // sweep and land after the fill has already arrived.
+      const { getByRole } = await confirmOnce();
+      const submit = getByRole("button", { name: "Saved" });
+      const label = submit.querySelector("span:not([aria-hidden])") as HTMLElement;
+      expect(label.className).toContain("text-bg");
+      expect(label.className).toContain(`delay-${INK_FLIP_DELAY_MS}`);
+    });
+
+    it("does not tint the label before the reply lands", () => {
+      render(() => (
+        <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={() => {}} />
+      ));
+      const submit = document.querySelector("button[type='submit']") as HTMLElement;
+      const label = submit.querySelector("span:not([aria-hidden])") as HTMLElement;
+      expect(label.className).not.toContain("text-bg");
+    });
+
     it("never wears the in-flight fade while confirming", async () => {
       // The confirmed button is the one state that must look most alive, so it
       // must not inherit the 40% fade the in-flight state uses.
       await confirmOnce();
       const submit = document.querySelector("button[type='submit']") as HTMLElement;
       expect(submit.className).not.toContain("opacity-40");
+    });
+
+    it("still rescues focus if the deadline passes DURING the confirmation (C-L2)", async () => {
+      // The confirmed state deliberately keeps focus on the submit button. If
+      // the deadline flips inside the dwell, `<Show when={!props.closed}>`
+      // unmounts that focused button and focus reverts to <body>, so the C-L2
+      // rescue has to fire. It can only do that if the dismiss button is still
+      // focusable — `.focus()` is a no-op on a disabled one, and the dwell
+      // would otherwise have disabled it.
+      const [closed, setClosed] = createSignal(false);
+      const rsvps: RsvpSummary[] = [
+        { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ rsvps }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const { getByRole, findByText } = render(() => (
+        <RsvpModal
+          event={event}
+          members={[priya]}
+          apiUrl="https://api.test"
+          closed={closed()}
+          onClose={() => {}}
+        />
+      ));
+
+      fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      const save = getByRole("button", { name: "Save" });
+      save.focus();
+      fireEvent.click(save);
+      await findByText("Saved");
+      expect(document.activeElement).toBe(save);
+
+      setClosed(true);
+
+      await waitFor(() => expect(document.querySelector("button[type='submit']")).toBeNull());
+      expect(document.activeElement).not.toBe(document.body);
+      expect((document.activeElement as HTMLElement).textContent).toContain("Close");
+    });
+
+    it("leaves the sheet fully re-submittable when the server refuses", async () => {
+      // The nastiest possible regression here is the confirmed state leaking
+      // out of the 200 branch — into a `finally`, say. The guest would then see
+      // a gold tick and "Saved", every control locked, and the sheet close
+      // itself, with nothing written. Every existing error-path test asserts
+      // only the message text, so all of them would still pass.
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("{}", { status: 500 }))
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              rsvps: [
+                { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+      const onClose = vi.fn();
+
+      const { getByRole, findByText } = render(() => (
+        <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={onClose} />
+      ));
+
+      fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      fireEvent.click(getByRole("button", { name: "Save" }));
+      await findByText("Something went wrong. Please try again.");
+
+      // Assert the NEGATIVE of every signal the confirmed state owns.
+      const save = getByRole("button", { name: "Save" });
+      expect(save.getAttribute("aria-disabled")).toBeNull();
+      const fill = save.querySelector("span[aria-hidden='true']") as HTMLElement;
+      expect(fill.className).toContain("scale-x-0");
+      expect(fill.className).not.toContain("scale-x-100");
+      expect(save.querySelector("svg")).toBeNull();
+      const fs = fieldsetFor("Priya");
+      expect((within(fs).getByText("Attending") as HTMLButtonElement).disabled).toBe(false);
+      expect((getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(onClose).not.toHaveBeenCalled();
+
+      // And the lock genuinely released: a retry goes through to a confirmation.
+      fireEvent.click(getByRole("button", { name: "Save" }));
+      await findByText("Saved");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("is undisturbed when the parent feeds the fresh rows back mid-confirmation", async () => {
+      // `onSubmitted` now fires ~900ms before the sheet closes, so the parent's
+      // `setClaimResult` lands while this component is still mounted and
+      // confirming — the real wiring in both InvitePage packs, which stub the
+      // modal out and so never exercise it. The sheet's safety rests on
+      // `initialResponses` being a signal initialiser rather than a memo; turn
+      // it into one, or add an effect re-seeding from `existingRsvps`, and the
+      // confirmation would reset to "Save" mid-sweep with nothing to catch it.
+      const [rsvps, setRsvps] = createSignal<RsvpSummary[]>([]);
+      const updated: RsvpSummary[] = [
+        { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ rsvps: updated }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+      const onClose = vi.fn();
+
+      const { getByRole, findByText } = render(() => (
+        <RsvpModal
+          event={event}
+          members={[priya]}
+          existingRsvps={rsvps()}
+          apiUrl="https://api.test"
+          onClose={onClose}
+          onSubmitted={setRsvps}
+        />
+      ));
+
+      fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      fireEvent.click(getByRole("button", { name: "Save" }));
+      await findByText("Saved");
+
+      // The parent really did write back.
+      expect(rsvps()).toEqual(updated);
+      // And the confirmation is untouched by it.
+      const save = getByRole("button", { name: "Saved" });
+      expect((save.querySelector("span[aria-hidden='true']") as HTMLElement).className).toContain(
+        "scale-x-100",
+      );
+      expect(save.querySelector("svg path")).toBeTruthy();
+      expect(within(fieldsetFor("Priya")).getByText("Attending").getAttribute("aria-pressed")).toBe(
+        "true",
+      );
     });
 
     it("drops the dwell timer if the guest dismisses the confirmation early", async () => {
