@@ -20,6 +20,17 @@ set -euo pipefail
 # True when this one path ships inside no versioned package.
 is_allowed() {
   local f="$1"
+
+  # A `*` glob matches across `/`, so `scripts/*` would also match
+  # `scripts/../osn/api/routes.ts` — a path that names a file the allowlist
+  # does not cover. `git diff --name-only` cannot emit such a path (git rejects
+  # `..` components, and a symlink is reported under its resolved path), so this
+  # is unreachable from the one caller. Guard anyway: the point of a gate is not
+  # having to re-derive who feeds it.
+  case "$f" in
+    /* | ../* | */../* | */.. | ./* | */./* | */.) return 1 ;;
+  esac
+
   case "$f" in
     */*) ;; # has a directory component — checked below
     .gitignore) return 0 ;;

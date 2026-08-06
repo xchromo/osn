@@ -55,6 +55,15 @@ osn/api/src/index.ts'
 
 run_case "empty diff" skip ''
 
+# A `*` glob spans `/`, so an allowlisted prefix followed by `..` would
+# otherwise escape it. Unreachable via `git diff --name-only`, guarded anyway.
+run_case "dot-dot escape from an allowed prefix" required \
+  'scripts/../osn/api/src/routes/graph.ts'
+
+run_case "dot-dot escape to a root file" required 'wiki/../bun.lock'
+run_case "absolute path" required '/etc/passwd'
+run_case "single-dot segment" required 'wiki/./TODO.md'
+
 echo
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
