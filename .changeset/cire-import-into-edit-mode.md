@@ -50,6 +50,29 @@ rather than a border, and that the global reduced-motion clamp silences it. Run
 with `bun run --cwd cire/organiser test:browser`; CI already runs the tier for
 every package that has one.
 
+Pre-PR review fixed five things in the above, and the first is a real bug:
+
+- **A standing diff preview survived picking a different file.** Preview sheet A,
+  then re-pick sheet B on the same input, and the diff plus its "Apply import"
+  button stayed on screen holding A's `importId` — which is what Apply posts. The
+  plan behind it can reconcile away a whole half of the wedding, so re-picking
+  after a mis-pick was a way to write the wrong sheet under a plausible diff. The
+  panel's own `clearFile()` documented that invariant and held it for Remove
+  only. Every change of selection now drops the preview.
+- **The glow animated `box-shadow`**, the one property Chromium won't composite,
+  on the open guide — the tallest box on screen — for 7.8s while the organiser is
+  scrolling it. The ring is now static on an `::after` and only its `opacity`
+  animates: rastered once, composited on the GPU, visually identical.
+- The panel now refuses an oversized file before reading it (the 1 MB cap was
+  only discovered server-side, after the tab had materialised the file twice),
+  and the pre-Apply reassurance is read off the server's echoed scope rather than
+  the client's assumption, which is what its comment already claimed.
+- The edit-mode hints moved out of `title` (unreachable on touch and by
+  keyboard) into real text wired with `aria-describedby`.
+- `PANEL_LOADERS` is typed `Partial<Record<\`${Module}:${string}\`, …>>`, so the
+  next module rename can't silently kill the hover prefetch — the lookup swallows
+  a miss, so the only symptom would be every Edit click paying a full round trip.
+
 The `schedule` module id becomes `events` everywhere (routes, nav, sub-tab
 labels, chunk-prefetch keys, Overview's jump targets), with its read sub-tab
 relabelled `List`. No legacy alias — nothing links to the old hash.

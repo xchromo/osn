@@ -53,11 +53,26 @@ const InviteBuilder = lazy(loadInviteBuilder);
  * painting. The module registry dedupes, so warming twice costs nothing and
  * warming a chunk that is already in costs nothing either.
  */
-const PANEL_LOADERS: Record<string, () => Promise<unknown>> = {
+/**
+ * Keyed `module:sub`, and TYPED so a stale module segment fails `tsc` rather
+ * than going quiet (T-U2 / P-I3). The lookup below is `?.()` over a swallowed
+ * rejection, so a key naming a module that no longer exists produces no error,
+ * no warning and no failing test — the only symptom is that hovering the tab
+ * stops warming the chunk and every click pays the full round trip behind
+ * `PanelLoading`, which is precisely the "first-load win turned into a
+ * first-interaction stall" this map exists to prevent. The `events`-for-
+ * `schedule` rename this file just went through is exactly that hazard. The
+ * template-literal type catches half of it here; `ModuleShell.test.tsx` pins the
+ * sub half, which types can't reach.
+ */
+const PANEL_LOADERS: Partial<Record<`${Module}:${string}`, () => Promise<unknown>>> = {
   "events:edit": loadEventsEditor,
   "guests:edit": loadGuestsEditor,
   "invite:design": loadInviteBuilder,
 };
+
+/** The map's keys, for the drift guard in `ModuleShell.test.tsx`. */
+export const PANEL_LOADER_KEYS = Object.keys(PANEL_LOADERS);
 
 function warmPanel(module: Module, sub: string): void {
   // Fire and forget: a failed prefetch is not an error, it just means the real

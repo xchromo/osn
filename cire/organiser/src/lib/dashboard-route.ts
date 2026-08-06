@@ -47,8 +47,10 @@ export function isModule(value: string): value is Module {
  * The valid sub-views per module. The FIRST entry is the module's default sub
  * (left implicit in the canonical URL). A module with a single implicit view
  * uses the sentinel `"index"`. Sub-routes that are role-gated (invite/codes is
- * owner-only, guests/import is editor-only) still parse here — the parser can't
- * see the caller's role; the shell resolves the visible sub when it renders.
+ * owner-only; the `edit` subs are editor-only) still parse here — the parser
+ * can't see the caller's role; the shell resolves the visible sub when it
+ * renders. (There is no `guests/import` sub: the CSV import lives INSIDE each
+ * module's `edit` sub, not on a route of its own.)
  */
 export const MODULE_SUBS: Record<Module, readonly string[]> = {
   overview: ["index"],

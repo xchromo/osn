@@ -117,6 +117,29 @@ describe("EditWorkspace", () => {
     unregister();
   });
 
+  it("explains each mode in text an AT can resolve, not a hover tooltip", () => {
+    // C-L1 — the hints used to live only in `title`: unreachable on touch,
+    // unreachable by keyboard, inconsistently announced. Each control now points
+    // at a real paragraph, and BOTH ids must resolve even though only the active
+    // hint is shown — an `aria-describedby` pointing at nothing is no
+    // description at all.
+    mount();
+    for (const name of [/web editor/i, /spreadsheet import/i]) {
+      const control = mode(name);
+      expect(control.getAttribute("title")).toBeNull();
+      const described = document.getElementById(control.getAttribute("aria-describedby")!);
+      expect(described, `${name} has an unresolvable aria-describedby`).toBeTruthy();
+      expect(described!.textContent).toBeTruthy();
+    }
+    // Only the active one is on screen.
+    const active = document.getElementById(mode(/web editor/i).getAttribute("aria-describedby")!)!;
+    const inactive = document.getElementById(
+      mode(/spreadsheet import/i).getAttribute("aria-describedby")!,
+    )!;
+    expect(active.hidden).toBe(false);
+    expect(inactive.hidden).toBe(true);
+  });
+
   it("re-clicking the current mode is a no-op", () => {
     const confirm = stubConfirm(false);
     const unregister = registerUnsavedGuard(() => true);

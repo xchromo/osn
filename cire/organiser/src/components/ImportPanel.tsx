@@ -134,11 +134,27 @@ const KIND: Record<
   },
 };
 
+/** The API's per-import payload cap (`cire/api/src/routes/organiser-changes.ts`).
+ *  Mirrored so the panel can refuse before reading; the server stays the
+ *  authority. */
+const ONE_MB = 1 * 1024 * 1024;
+
 function readFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("read failed")));
+    // A deliberate message rather than `reader.error`: that is a `DOMException`,
+    // whose `instanceof Error` result varies by engine — so the catch upstream
+    // would surface either a cryptic `NotReadableError` or the generic "Preview
+    // failed.", neither of which says the FILE was the problem (deleted, moved,
+    // or permission revoked between picking and submitting).
+    reader.addEventListener("error", () =>
+      reject(
+        new Error(
+          `${file.name} couldn't be read. It may have been moved or deleted since you chose it — pick it again.`,
+        ),
+      ),
+    );
     reader.readAsText(file);
   });
 }
@@ -185,6 +201,18 @@ export default function ImportPanel(props: { weddingId: string; kind: ImportKind
     if (!chosen) {
       haptic("reject");
       return setError(`Choose a ${copy().fileName} file.`);
+    }
+    // Refuse an oversized file HERE rather than after reading it (S-L1). The
+    // server is still the authority (it 413s on Content-Length, then again on
+    // the parsed bytes) — but reaching that answer costs the tab a full read of
+    // the file into a JS string plus a `JSON.stringify` of the same bytes again,
+    // and then an upload of the result. A `.csv` that is really a database dump
+    // or a renamed video stalls the organiser's own browser for all of it. Same
+    // wording the 413 would produce, so the limit reads identically wherever it
+    // is hit.
+    if (chosen.size > ONE_MB) {
+      haptic("reject");
+      return setError(formatImportError(413, {}));
     }
 
     setBusy(true);
@@ -237,7 +265,12 @@ export default function ImportPanel(props: { weddingId: string; kind: ImportKind
       haptic("commit");
       setApplied(data.summary);
       setPreview(null);
-      clearFile();
+      // Deliberately NOT `clearFile()` — that path also drops the applied
+      // summary (a summary from a previous upload isn't about a newly chosen
+      // file), which is exactly the thing just set on the line above. Reset the
+      // control by hand instead.
+      setFile(null);
+      if (fileInput) fileInput.value = "";
       // An apply can create/update/remove events, so the cached events list for
       // this wedding is now stale — drop it so the Events tab refetches fresh
       // rows on its next mount (rather than reusing the pre-import cache).
@@ -268,14 +301,32 @@ export default function ImportPanel(props: { weddingId: string; kind: ImportKind
     setError(null);
   }
 
+  /**
+   * Point the panel at a different sheet — or at none.
+   *
+   * The `setPreview(null)` is the load-bearing line, and it belongs to EVERY
+   * change of selection, not just to Remove (S-M1). A standing preview holds the
+   * `importId` of the plan the server computed for the OLD bytes, and Apply
+   * commits that id — so a panel that keeps the diff on screen while the control
+   * names a different file is offering to apply the wrong sheet, with a
+   * plausible-looking diff above the button. The plan can reconcile away a whole
+   * half of the wedding, so "picked the wrong file, re-picked the right one" must
+   * not be a way to write the wrong one.
+   */
+  function selectFile(next: File | null) {
+    setFile(next);
+    setPreview(null);
+    // The applied summary describes the PREVIOUS upload, so it isn't about this
+    // file either. (The apply path sets it and resets the control by hand, so it
+    // deliberately doesn't come through here.)
+    setApplied(null);
+    if (next === null && fileInput) fileInput.value = "";
+  }
+
   /** Drop the chosen sheet — both our signal and the native input's selection. */
   function clearFile() {
     haptic("dismiss");
-    setFile(null);
-    if (fileInput) fileInput.value = "";
-    // A pending preview was computed for the old file — drop it so Apply can
-    // never commit a plan that no longer matches what's selected.
-    setPreview(null);
+    selectFile(null);
   }
 
   /**
@@ -348,7 +399,7 @@ export default function ImportPanel(props: { weddingId: string; kind: ImportKind
                 type="file"
                 accept=".csv,text/csv"
                 ref={fileInput}
-                onChange={(e) => setFile(e.currentTarget.files?.[0] ?? null)}
+                onChange={(e) => selectFile(e.currentTarget.files?.[0] ?? null)}
                 class="font-body text-text file:border-border file:bg-bg file:font-body file:text-text hover:file:border-gold text-[0.82rem] file:mr-3 file:rounded-sm file:border file:px-3 file:py-1.5 file:text-[0.82rem]"
               />
             )}
@@ -406,10 +457,25 @@ export default function ImportPanel(props: { weddingId: string; kind: ImportKind
         {(p) => (
           <div class="border-border bg-bg/40 flex flex-col gap-4 rounded-sm border p-4">
             <h3 class="font-display text-gold-ink text-[1.1rem]">Diff preview</h3>
-            {/* The server echoes the scope it decoded, so the confirmation
-                reflects what the API will actually manage, not what the local
-                file input happens to hold now. */}
-            <p class="text-text-muted text-[0.82rem]">{copy().scopeHint}</p>
+            {/* The reassurance under a destructive confirm is read off the
+                SERVER's echoed scope, not off what this panel believes it sent
+                (S-L2). Today they cannot disagree — one key goes out, and the API
+                derives scope from which keys are present — but "your events won't
+                be touched" is the sentence an organiser trusts before applying a
+                plan that can reconcile away a whole half of the wedding, and a
+                sentence like that should not be a client-side guess. If the
+                echoed scope is ever anything but this module's, say so loudly
+                rather than reassuring about a half this change does manage. */}
+            <Show
+              when={p().scope !== undefined && p().scope !== props.kind}
+              fallback={<p class="text-text-muted text-[0.82rem]">{copy().scopeHint}</p>}
+            >
+              <Notice tone="error" alert>
+                This change covers more than your {copy().eyebrow.toLowerCase()} — the server
+                reports a scope of “{p().scope}”. Check the counts below before applying; nothing is
+                saved until you do.
+              </Notice>
+            </Show>
             <PlanCounts plan={p().plan} />
             <Show when={p().plan.warnings.length > 0}>
               <ul class="text-text-muted flex flex-col gap-1 text-[0.82rem]">

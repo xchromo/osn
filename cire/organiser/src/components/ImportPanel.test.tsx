@@ -26,6 +26,28 @@ vi.mock("../lib/api", () => ({
   redirectToLogin: redirectToLoginMock,
 }));
 
+const invalidateEventsMock = vi.hoisted(() => vi.fn());
+const invalidateGuestsMock = vi.hoisted(() => vi.fn());
+const invalidateHouseholdsMock = vi.hoisted(() => vi.fn());
+
+// Spied, not stubbed wholesale: the apply path's own comment calls dropping ONE
+// of the three the thing that "leaves a stale household in an id-authoritative
+// draft", i.e. a destructive remove+create on the next editor save. Import and
+// the editor now sit one radio click apart inside the same EditWorkspace, over
+// the same weddingId-keyed caches, so that no longer needs a navigation to bite.
+vi.mock("../lib/events-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateEvents: invalidateEventsMock,
+}));
+vi.mock("../lib/guests-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateGuests: invalidateGuestsMock,
+}));
+vi.mock("../lib/households-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateHouseholds: invalidateHouseholdsMock,
+}));
+
 import { resetImportHelpSeen } from "../lib/import-help";
 import { authFetchMock, resetOrganiserMocks } from "../test-support/mocks";
 import ImportPanel from "./ImportPanel";
@@ -60,6 +82,9 @@ afterEach(() => {
   cleanup();
   resetOrganiserMocks();
   redirectToLoginMock.mockReset();
+  invalidateEventsMock.mockReset();
+  invalidateGuestsMock.mockReset();
+  invalidateHouseholdsMock.mockReset();
   URL.createObjectURL = realCreate;
   URL.revokeObjectURL = realRevoke;
 });
@@ -343,6 +368,62 @@ describe("ImportPanel — single-sheet uploads", () => {
     expect(previewButton().disabled).toBe(true);
   });
 
+  it("drops a standing preview when a DIFFERENT file is picked (S-M1)", async () => {
+    // The bug this pins: preview file A, then re-pick file B on the same input.
+    // The diff and its "Apply import" button stayed on screen holding A's
+    // importId, so Apply committed A — a bulk reconcile of one half of the
+    // wedding — while the control named B. `clearFile` documented the invariant
+    // and held it for Remove only; re-selection is the commoner gesture.
+    authFetchMock.mockResolvedValueOnce(previewResponse("guests"));
+    render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+    choose(csvFile("guests-old.csv"));
+    fireEvent.click(previewButton());
+    await waitFor(() => expect(screen.getByText(/diff preview/i)).toBeTruthy());
+
+    choose(csvFile("guests-new.csv"));
+    expect(screen.queryByText(/diff preview/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /apply import/i })).toBeNull();
+    // Still armed for the NEW file — dropping the plan must not disable Preview.
+    expect(previewButton().disabled).toBe(false);
+  });
+
+  it("refuses an oversized file before reading or uploading it (S-L1)", () => {
+    render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+    const tooBig = csvFile("huge.csv");
+    // A real 1MB+ File would make the suite allocate it; the panel reads `.size`.
+    Object.defineProperty(tooBig, "size", { value: 2 * 1024 * 1024 });
+    choose(tooBig);
+    fireEvent.click(previewButton());
+
+    expect(screen.getByText(/limit is 1 MB per import/i)).toBeTruthy();
+    // The point of the guard: nothing was read and nothing was sent.
+    expect(authFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails before the network when the file can't be read (T-S3)", async () => {
+    // `reader.error` is a DOMException, whose `instanceof Error` result varies by
+    // engine — so without a deliberate message this surfaces either a cryptic
+    // `NotReadableError` or a bare "Preview failed.". What must never happen is
+    // posting an empty body, because an empty sheet means "delete everything".
+    const RealFileReader = globalThis.FileReader;
+    class FailingReader extends RealFileReader {
+      override readAsText() {
+        setTimeout(() => this.dispatchEvent(new Event("error")), 0);
+      }
+    }
+    vi.stubGlobal("FileReader", FailingReader);
+    try {
+      render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+      choose(csvFile("guests.csv"));
+      fireEvent.click(previewButton());
+
+      await waitFor(() => expect(screen.getByText(/couldn't be read/i)).toBeTruthy());
+      expect(authFetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("errors when no sheet is chosen", () => {
     render(() => <ImportPanel weddingId="wed_a" kind="events" />);
     // The submit button is disabled with nothing chosen, so submit the form
@@ -486,6 +567,14 @@ describe("ImportPanel — surfacing import failures", () => {
     await waitFor(() => expect(document.body.textContent).toMatch(/applied/i));
     expect(document.body.textContent).toContain("families: +2 / ~1 / -0");
     expect(document.body.textContent).not.toContain("undefined");
+
+    // T-S2 — all THREE caches, not two. The source comment names the failure:
+    // "a stale household in an id-authoritative draft is a destructive
+    // remove+create", and the editor is now one radio click away over the very
+    // same weddingId-keyed stores.
+    expect(invalidateEventsMock).toHaveBeenCalledWith("wed_a");
+    expect(invalidateGuestsMock).toHaveBeenCalledWith("wed_a");
+    expect(invalidateHouseholdsMock).toHaveBeenCalledWith("wed_a");
   });
 
   it("falls back to ~0 families updated when an older API omits the field", async () => {
@@ -542,6 +631,57 @@ describe("ImportPanel — surfacing import failures", () => {
     fireEvent.click(screen.getByRole("button", { name: /apply import/i }));
     await waitFor(() => expect(document.body.textContent).toMatch(/applied/i));
     expect(document.body.textContent).toContain("families: +1 / ~0 / -0");
+  });
+
+  it("bounces an expired token on PREVIEW to login rather than rendering it (T-S1)", async () => {
+    // Access JWTs live 5 minutes, and this is the portal's longest-dwell surface:
+    // pick a file, read the guide, preview, re-read the diff, apply. These two
+    // calls are the likeliest in the portal to meet an expired token, and the
+    // failure mode is a raw error string in a Notice with the panel looking
+    // broken rather than a redirect.
+    authFetchMock.mockRejectedValueOnce(new Error("AuthExpiredError"));
+    render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+    choose(csvFile("guests.csv"));
+    fireEvent.click(previewButton());
+
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("bounces an expired token on APPLY too (T-S1)", async () => {
+    authFetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            importId: "chg_1",
+            scope: "guests",
+            warnings: [],
+            plan: {
+              eventCreates: [],
+              eventUpdates: [],
+              eventRemoves: [],
+              familyCreates: [],
+              familyRemoves: [],
+              guestCreates: [],
+              guestUpdates: [],
+              guestRemoves: [],
+              eventLinkCreates: [],
+              eventLinkRemoves: [],
+              warnings: [],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockRejectedValueOnce(new Error("AuthExpiredError"));
+
+    render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+    choose(csvFile("guests.csv"));
+    fireEvent.click(previewButton());
+    await waitFor(() => expect(screen.getByText(/diff preview/i)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /apply import/i }));
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
   });
 
   it("names the offending column on a 422 missing-column failure", async () => {

@@ -95,6 +95,14 @@ const mandatoryChip = () =>
 const optionalChip = () =>
   [...document.querySelectorAll("code")].find((c) => (c.textContent ?? "").trim() === "Location")!;
 
+/** The `@keyframes` rule by name, straight off the generated stylesheet. */
+function keyframeRule(name: string): CSSKeyframesRule | undefined {
+  const rules = [...document.styleSheets].flatMap((sheet) => Array.from(sheet.cssRules));
+  return rules.find(
+    (rule): rule is CSSKeyframesRule => rule instanceof CSSKeyframesRule && rule.name === name,
+  );
+}
+
 const helpDisclosure = () =>
   [...document.querySelectorAll("details")].find((d) =>
     /csv format/i.test(d.querySelector("summary")?.textContent ?? ""),
@@ -173,41 +181,62 @@ describe("ImportPanel — mandatory column chips, as painted", () => {
 describe("ImportPanel — the first-run glow, as animated", () => {
   it("runs a real, finite animation on the guide's first appearance", () => {
     render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
-    const style = getComputedStyle(helpDisclosure());
+    // The animation lives on the `::after` ring, not the box — see the
+    // compositor note in `global.css`. `getComputedStyle(el, "::after")` is the
+    // only way to see it, and it is a thing happy-dom cannot report at all.
+    const ring = getComputedStyle(helpDisclosure(), "::after");
 
     // The name proves `@utility attention-glow` emitted CSS and matched — a
     // renamed utility leaves the class in the DOM and the animation absent.
-    expect(style.animationName).toBe("attention-glow");
-    expect(Number.parseFloat(style.animationDuration)).toBeGreaterThan(0);
+    expect(ring.animationName).toBe("attention-glow");
+    expect(Number.parseFloat(ring.animationDuration)).toBeGreaterThan(0);
     // Finite on purpose: a permanent pulse stops being a signal.
-    expect(style.animationIterationCount).toBe("3");
+    expect(ring.animationIterationCount).toBe("3");
+  });
+
+  it("animates opacity ONLY — the property the compositor can take", () => {
+    // The whole point of the pseudo-element (P-W1): an animated `box-shadow`
+    // re-paints and re-rasters the open guide — the tallest box on screen —
+    // every frame for 7.8s, on the same thread that has to scroll it. A static
+    // shadow faded by `opacity` is rastered once and composited on the GPU. If
+    // a future edit moves the shadow back into the keyframes this fails.
+    render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
+    const keyframes = keyframeRule("attention-glow")!;
+    expect(keyframes).toBeTruthy();
+    expect(keyframes.cssText).toContain("opacity");
+    expect(keyframes.cssText).not.toContain("box-shadow");
+
+    // And the ring itself must be out of the layout and untouchable, or it would
+    // shift the guide and eat its clicks.
+    const ring = getComputedStyle(helpDisclosure(), "::after");
+    expect(ring.position).toBe("absolute");
+    expect(ring.pointerEvents).toBe("none");
   });
 
   it("emits a shadow rather than a border or an outline", () => {
     // Load-bearing choice: a box-shadow can't fight the element's own border
     // utility, doesn't move anything, and leaves the focus ring's space free.
     render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
-    const before = getComputedStyle(helpDisclosure(), null);
-    expect(before.outlineStyle).toBe("none");
-    // The keyframes hold the shadow, so read it off the rule rather than the
-    // element's resting frame.
-    const rules = [...document.styleSheets].flatMap((sheet) => Array.from(sheet.cssRules));
-    const keyframes = rules.find(
-      (rule) => rule instanceof CSSKeyframesRule && rule.name === "attention-glow",
-    );
-    expect(keyframes).toBeTruthy();
-    expect((keyframes as CSSKeyframesRule).cssText).toContain("box-shadow");
+    expect(getComputedStyle(helpDisclosure()).outlineStyle).toBe("none");
+    const ring = getComputedStyle(helpDisclosure(), "::after");
+    expect(ring.boxShadow).not.toBe("none");
+    // Zero WIDTH, not `border-style: none` — Tailwind's preflight sets
+    // `border-style: solid` on `*, ::before, ::after` and zeroes the width, so
+    // the style alone says nothing about whether a border is drawn.
+    expect(Number.parseFloat(ring.borderTopWidth)).toBe(0);
   });
 
   it("is silenced by prefers-reduced-motion", async () => {
     await commands.emulateMedia({ reducedMotion: "reduce" });
     render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
-    const style = getComputedStyle(helpDisclosure());
+    // The clamp targets `*::after` as well as `*`, which is exactly why the ring
+    // could be moved into a pseudo-element without losing it.
+    const ring = getComputedStyle(helpDisclosure(), "::after");
 
     // The global clamp in `global.css` — one iteration, effectively zero
     // duration. The guide is still expanded, which is the actual affordance.
-    expect(Number.parseFloat(style.animationDuration)).toBeLessThan(0.001);
-    expect(style.animationIterationCount).toBe("1");
+    expect(Number.parseFloat(ring.animationDuration)).toBeLessThan(0.001);
+    expect(ring.animationIterationCount).toBe("1");
     expect(helpDisclosure().open).toBe(true);
   });
 
@@ -215,6 +244,10 @@ describe("ImportPanel — the first-run glow, as animated", () => {
     render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
     cleanup();
     render(() => <ImportPanel weddingId="wed_a" kind="guests" />);
-    expect(getComputedStyle(helpDisclosure()).animationName).toBe("none");
+    // No `attention-glow` class ⇒ no `::after` rule ⇒ no ring at all, rather
+    // than a ring sitting at opacity 0 waiting to be revealed by a stray style.
+    const ring = getComputedStyle(helpDisclosure(), "::after");
+    expect(ring.animationName).toBe("none");
+    expect(ring.content).toBe("none");
   });
 });

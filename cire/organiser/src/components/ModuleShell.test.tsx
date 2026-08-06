@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-lib
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Module } from "../lib/dashboard-route";
+import { isModule, isSubOf, type Module } from "../lib/dashboard-route";
 
 /**
  * ModuleShell is the IA replacement for the flat tab bar: a left module rail
@@ -98,7 +98,7 @@ vi.mock("./EnquiriesView", () => ({
   default: (p: { weddingId: string }) => <div data-testid="enquiries-view">{p.weddingId}</div>,
 }));
 
-import ModuleShell from "./ModuleShell";
+import ModuleShell, { PANEL_LOADER_KEYS } from "./ModuleShell";
 
 /** Render with controllable module + sub signals so a test can drive the
  *  parent's "active view" the way OrganiserApp would on a hash change. */
@@ -283,6 +283,26 @@ describe("ModuleShell", () => {
    * visible symptom when they break: that Edit offers the choice at all, and that
    * each module's import is scoped to its OWN sheet.
    */
+  describe("chunk prefetch map", () => {
+    it("keys PANEL_LOADERS on module:sub pairs that actually exist", () => {
+      // `warmPanel` looks these up as `${module}:${sub}` and swallows a miss
+      // (`?.()` + `.catch(() => {})`), so a key naming a module or sub that no
+      // longer exists is invisible: no error, no failing test, just the hover
+      // prefetch quietly dead and `PanelLoading` flashing on every Edit click.
+      // The `schedule` → `events` rename is exactly that hazard, and this is the
+      // same drift-guard shape the root CLAUDE.md prescribes for any constant
+      // that has to agree with a string somewhere else.
+      expect(PANEL_LOADER_KEYS.length).toBeGreaterThan(0);
+      for (const key of PANEL_LOADER_KEYS) {
+        const [module, sub] = key.split(":");
+        expect(isModule(module!), `${key}: "${module}" is not a module`).toBe(true);
+        expect(isSubOf(module as Module, sub!), `${key}: "${sub}" is not a sub of ${module}`).toBe(
+          true,
+        );
+      }
+    });
+  });
+
   describe("edit sub — web editor or spreadsheet import", () => {
     const importMode = () => screen.getByRole("radio", { name: /spreadsheet import/i });
 
