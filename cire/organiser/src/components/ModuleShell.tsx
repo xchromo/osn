@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, lazy, Show, Suspense } from "solid-js";
 
 import { createAutoSize } from "../lib/auto-size";
 import { peekCachedBudget } from "../lib/budget-store";
@@ -9,13 +9,10 @@ import BudgetView from "./BudgetView";
 import ChecklistView from "./ChecklistView";
 import DirectoryBrowseView from "./DirectoryBrowseView";
 import EnquiriesView from "./EnquiriesView";
-import EventsEditor from "./EventsEditor";
 import EventTable from "./EventTable";
-import GuestsEditor from "./GuestsEditor";
 import GuestTable from "./GuestTable";
 import HostsPanel from "./HostsPanel";
 import ImportPanel from "./ImportPanel";
-import InviteBuilder from "./InviteBuilder";
 import ModuleSidebar from "./ModuleSidebar";
 import Overview from "./Overview";
 import RemintPanel from "./RemintPanel";
@@ -23,6 +20,35 @@ import RsvpView from "./RsvpView";
 import SettingsPanel from "./SettingsPanel";
 import UpsellPanel from "./UpsellPanel";
 import VendorsView from "./VendorsView";
+
+/**
+ * The three big write surfaces, split out of the first load.
+ *
+ * The portal is one `client:only` island, so everything a module might show
+ * used to arrive before the Overview could paint — including the invite builder
+ * (its own tree plus every design in `@cire/invite-designs`) and the events
+ * editor (which drags in solid-dnd). None of the three is on the path to the
+ * page an organiser actually lands on, and two of them are closed to a viewer
+ * entirely. They now arrive when the sub-tab that shows them is chosen.
+ *
+ * The rest stay eager on purpose: they are the read views, they are small, and
+ * a rail click that pauses is a worse trade than the bytes.
+ */
+const EventsEditor = lazy(() => import("./EventsEditor"));
+const GuestsEditor = lazy(() => import("./GuestsEditor"));
+const InviteBuilder = lazy(() => import("./InviteBuilder"));
+
+/** What a panel shows while its chunk is in flight. Deliberately a line of text
+ *  rather than a skeleton: the chunk is local and the wait is a frame or two on
+ *  anything but a cold, slow connection, and a skeleton that flashes reads as a
+ *  fault. `aria-busy` is what tells a screen reader the panel is still coming. */
+function PanelLoading() {
+  return (
+    <p class="font-body text-text-muted py-8 text-[0.85rem]" aria-busy="true">
+      Loading…
+    </p>
+  );
+}
 
 interface ModuleShellProps {
   weddingId: string;
@@ -297,7 +323,9 @@ export default function ModuleShell(props: ModuleShellProps) {
                 {/* Interactive events editor (E6) — a pure write surface, editor-gated
               (the API also gates changes/* with weddingEditor()). */}
                 <Show when={active() === "edit" && props.canEdit}>
-                  <EventsEditor weddingId={props.weddingId} />
+                  <Suspense fallback={<PanelLoading />}>
+                    <EventsEditor weddingId={props.weddingId} />
+                  </Suspense>
                 </Show>
               </Show>
 
@@ -362,7 +390,9 @@ export default function ModuleShell(props: ModuleShellProps) {
                 {/* Interactive editor (E5) — a pure write surface, editor-gated (the
               API also gates changes/* with weddingEditor()). */}
                 <Show when={active() === "edit" && props.canEdit}>
-                  <GuestsEditor weddingId={props.weddingId} />
+                  <Suspense fallback={<PanelLoading />}>
+                    <GuestsEditor weddingId={props.weddingId} />
+                  </Suspense>
                 </Show>
                 <Show when={active() === "rsvps"}>
                   <RsvpView weddingId={props.weddingId} canEdit={props.canEdit} />
@@ -384,11 +414,13 @@ export default function ModuleShell(props: ModuleShellProps) {
                       </p>
                     }
                   >
-                    <InviteBuilder
-                      weddingId={props.weddingId}
-                      weddingSlug={props.weddingSlug}
-                      entitlements={props.entitlements}
-                    />
+                    <Suspense fallback={<PanelLoading />}>
+                      <InviteBuilder
+                        weddingId={props.weddingId}
+                        weddingSlug={props.weddingSlug}
+                        entitlements={props.entitlements}
+                      />
+                    </Suspense>
                   </Show>
                 </Show>
                 <Show when={active() === "codes" && props.canManage}>

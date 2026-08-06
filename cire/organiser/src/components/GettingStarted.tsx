@@ -3,6 +3,7 @@ import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { isHeroEmpty, isStoryEmpty } from "../lib/invite-emptiness";
+import Meter from "./ui/Meter";
 
 /** localStorage key for "this organiser dismissed the getting-started checklist
  *  for this wedding". Per-wedding so dismissing one wedding's guide leaves the
@@ -249,20 +250,9 @@ export default function GettingStarted(props: {
           </div>
 
           {/* A thin progress rail — a single calm indicator of how far along the
-            couple are. Pure CSS width transition, no library. */}
-          <div
-            class="bg-bg/60 h-1 w-full overflow-hidden rounded-full"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={total()}
-            aria-valuenow={completed()}
-            aria-label="Setup progress"
-          >
-            <div
-              class="bg-gold h-full rounded-full transition-[width] duration-500 ease-out"
-              style={{ width: `${total() > 0 ? (completed() / total()) * 100 : 0}%` }}
-            />
-          </div>
+            couple are. The shared Meter, so this bar and the Overview's read the
+            same and animate on a transform rather than a width. */}
+          <Meter value={completed()} max={total()} label="Setup progress" />
 
           <ol class="auto-grid [--auto-grid-gap:0.625rem] [--auto-grid-min:18rem]">
             <For each={steps()}>
