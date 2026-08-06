@@ -65,3 +65,15 @@ type errors in test files that had never been checked, all fixed: a
 spreads into fixed-arity mocks. The CSP drops `fonts.googleapis.com` and
 `fonts.gstatic.com` from `style-src`/`font-src` now that nothing links them, and
 `headers.test.ts` asserts their absence rather than their presence.
+
+**Review fixes.** The account menu is the package's only Kobalte consumer — 87 KB
+raw / 28 KB gzip — and porting it eagerly would have put that on a `client:only`
+island's critical path for a menu most sessions never open. It is `lazy()` now,
+behind an avatar placeholder that shares the real trigger's class and contents so
+the swap moves nothing, warmed on idle and on pointer-enter/focus, with a click
+routed through `autoOpen` so a press landing before the chunk is not swallowed.
+Measured after the change: `ProfileMenu` is its own 28.0 KB gz chunk and the
+`VendorApp` entry contains no Kobalte at all. The three page shells also preload
+only the `latin` subset — `<link rel=preload as=font>` bypasses `unicode-range`,
+so the bare form was downloading `latin-ext` unconditionally to render chrome
+that is English.

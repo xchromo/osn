@@ -12,8 +12,8 @@ import { THEME_BOOT_SCRIPT } from '../lib/theme-boot'
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sign in — Vendor — Cire</title>
     <script is:inline set:html={THEME_BOOT_SCRIPT}></script>
-    <Font cssVariable="--font-ui" preload />
-    <Font cssVariable="--font-flair" preload />
+    <Font cssVariable="--font-ui" preload={[{ subset: "latin" }]} />
+    <Font cssVariable="--font-flair" preload={[{ subset: "latin" }]} />
   </head>
   <!--
     No island owns this page's chrome, so the theme is whatever the boot script

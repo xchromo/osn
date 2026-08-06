@@ -1,8 +1,22 @@
 import type { RpSession } from "@shared/rp-auth";
-import { onMount } from "solid-js";
+import { createSignal, lazy, onCleanup, onMount, Show, Suspense } from "solid-js";
 
-import ProfileMenu from "./ProfileMenu";
+import AccountAvatar, { AVATAR_TRIGGER_CLASS } from "./AccountAvatar";
 import ViewTabs, { type VendorView } from "./ViewTabs";
+
+/**
+ * Deferred because it is the package's only Kobalte consumer, and Kobalte's
+ * dropdown-menu measures 86 KB raw / 28.6 KB gzip — about 80% of what the
+ * dashboard bundle would otherwise grow by, for a menu most sessions never
+ * open. The island is `client:only`, so anything on this path blocks the first
+ * real frame; a vendor opens the portal to read an enquiry, not to change
+ * their theme.
+ *
+ * The host portal pays nothing for this import — it already has Kobalte in the
+ * graph for its dialogs, command palette and nav sheet — which is why the same
+ * component is eager there and lazy here. A port is not always a port.
+ */
+const ProfileMenu = lazy(() => import("./ProfileMenu"));
 
 /**
  * The portal's only chrome.
@@ -41,6 +55,57 @@ export default function TopBar(props: {
   // a frame and never both go missing.
   onMount(() => document.getElementById("boot-chrome")?.remove());
 
+  // Whether the real menu has been asked for. Once true it stays true.
+  const [wantMenu, setWantMenu] = createSignal(false);
+  // Set only by a click on the placeholder, so the menu opens itself on arrival
+  // and the press is not swallowed.
+  const [autoOpen, setAutoOpen] = createSignal(false);
+
+  // Warm the chunk when the browser is otherwise idle, so by the time anyone
+  // reaches for the avatar it has already landed and there is nothing to wait
+  // for. This is a prefetch, not a render — it does not mount Kobalte, and the
+  // placeholder stays until something actually wants the menu.
+  onMount(() => {
+    const warm = () => void import("./ProfileMenu");
+    // Safari still has no requestIdleCallback, and Safari is most of this
+    // traffic — the timer is the real path, not the fallback.
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(warm, { timeout: 3000 });
+      onCleanup(() => cancelIdleCallback(id));
+      return;
+    }
+    const id = setTimeout(warm, 1500);
+    onCleanup(() => clearTimeout(id));
+  });
+
+  /**
+   * The avatar button, without the menu behind it.
+   *
+   * Stands in twice: before anything has asked for the menu, and again for the
+   * Suspense window while the chunk is in flight. Same class and same contents
+   * as the real Kobalte trigger, so neither swap moves a pixel.
+   *
+   * Pointer-enter and focus ask for the menu ahead of the click, covering the
+   * case where the idle warm has not fired. A click asks for it *and* opens it,
+   * so a press that lands first is never swallowed.
+   */
+  const AccountPlaceholder = () => (
+    <button
+      type="button"
+      aria-label="Account menu"
+      aria-haspopup="menu"
+      class={AVATAR_TRIGGER_CLASS}
+      onPointerEnter={() => setWantMenu(true)}
+      onFocus={() => setWantMenu(true)}
+      onClick={() => {
+        setAutoOpen(true);
+        setWantMenu(true);
+      }}
+    >
+      <AccountAvatar session={props.session} />
+    </button>
+  );
+
   return (
     <header class="border-border bg-bg/85 sticky top-0 z-30 border-b backdrop-blur-md">
       <div class="page-frame flex h-14 items-center gap-2 @2xl/frame:h-16">
@@ -72,7 +137,34 @@ export default function TopBar(props: {
         <ViewTabs value={props.view} onChange={props.onView} />
 
         <div class="ml-auto flex shrink-0 items-center gap-2">
-          <ProfileMenu session={props.session} onSignOut={props.onSignOut} />
+          {/*
+            The placeholder wears the same class and the same contents as the
+            real trigger (`AccountAvatar`), so the swap moves nothing and there
+            is no flash to see. It is a real button with the real accessible
+            name — not a decorative circle — because it is reachable by keyboard
+            during the window it is up, and a focusable thing that announces
+            nothing is worse than the wait it covers.
+
+            Pointer-enter and focus ask for the menu before the click arrives,
+            which covers the case where the idle warm has not fired yet. A click
+            asks for it *and* opens it, so the press is never swallowed.
+          */}
+          <Show when={wantMenu()} fallback={<AccountPlaceholder />}>
+            {/*
+              The same placeholder covers the Suspense window. It must be the
+              *button*, not a decorative circle: a keyboard user who focused the
+              placeholder is the reason the chunk is loading at all, and swapping
+              their focused element for a non-focusable one drops focus to
+              `<body>` mid-interaction.
+            */}
+            <Suspense fallback={<AccountPlaceholder />}>
+              <ProfileMenu
+                session={props.session}
+                onSignOut={props.onSignOut}
+                autoOpen={autoOpen()}
+              />
+            </Suspense>
+          </Show>
         </div>
       </div>
     </header>

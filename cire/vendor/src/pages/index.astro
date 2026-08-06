@@ -18,9 +18,18 @@ import { THEME_BOOT_SCRIPT } from '../lib/theme-boot'
     <script is:inline set:html={THEME_BOOT_SCRIPT}></script>
     <!-- Self-hosted; see the `fonts` block in astro.config.mjs. Both faces are
          preloaded because both are above the fold — the wordmark is Cormorant
-         and everything beside it is Schibsted. -->
-    <Font cssVariable="--font-ui" preload />
-    <Font cssVariable="--font-flair" preload />
+         and everything beside it is Schibsted.
+
+         The `latin` filter is load-bearing, not tidiness. A subsetted
+         @font-face carries a `unicode-range` and is only fetched when the page
+         uses a codepoint in it — but `<link rel=preload as=font>` bypasses
+         `unicode-range` and fetches unconditionally, at the top priority band.
+         Bare `preload` emits one link per subset per family, so `latin-ext`
+         would download on every cold load to render chrome that is English.
+         It stays in the CSS and still loads on demand for an organisation name
+         that needs it. -->
+    <Font cssVariable="--font-ui" preload={[{ subset: "latin" }]} />
+    <Font cssVariable="--font-flair" preload={[{ subset: "latin" }]} />
   </head>
   <body>
     <!--

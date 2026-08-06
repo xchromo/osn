@@ -1,6 +1,6 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import type { RpSession } from "@shared/rp-auth";
-import { For, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 
 import { haptic, hapticsAvailable } from "../lib/haptics";
 import { OSN_ACCOUNT_URL } from "../lib/osn";
@@ -11,6 +11,7 @@ import {
   type ThemePreference,
   themePreference,
 } from "../lib/theme";
+import AccountAvatar, { accountName, AVATAR_TRIGGER_CLASS } from "./AccountAvatar";
 
 /**
  * The top bar's account affordance: an avatar button opening a menu with
@@ -54,9 +55,30 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 export default function ProfileMenu(props: {
   session: RpSession | null | undefined;
   onSignOut: () => void;
+  /**
+   * Open as soon as this mounts.
+   *
+   * Set by `TopBar` when the vendor clicked the placeholder before this chunk
+   * had landed. Without it that click is simply swallowed — the button they
+   * pressed is replaced by a different button that is not open — and a control
+   * that ignores the first press is worse than one that took a moment to arrive.
+   */
+  autoOpen?: boolean;
 }) {
-  const name = () =>
-    props.session?.displayName ?? props.session?.handle ?? props.session?.email ?? "Your account";
+  // Controlled, so `autoOpen` has something to open.
+  const [open, setOpen] = createSignal(false);
+
+  // Deliberately a frame late rather than seeded true. The click that set
+  // `autoOpen` is still propagating when this mounts, and Kobalte installs its
+  // dismissable-layer listeners on mount — so a menu that is already open reads
+  // its own opening click as an interaction *outside* itself and closes again.
+  // One frame puts the open after the event that caused it.
+  onMount(() => {
+    if (!props.autoOpen) return;
+    requestAnimationFrame(() => setOpen(true));
+  });
+
+  const name = () => accountName(props.session);
   // The secondary line — skipped when it would only repeat the primary one.
   const detail = () => {
     const s = props.session;
@@ -64,37 +86,11 @@ export default function ProfileMenu(props: {
     if (s.displayName) return s.handle ? `@${s.handle}` : s.email;
     return s.handle ? s.email : null;
   };
-  const initial = () => name().charAt(0).toUpperCase();
-
-  // The avatar URL rides in from the OIDC `picture` claim with no validation at
-  // any earlier hop, so the sink enforces the scheme: render only an absolute
-  // https URL, else fall back to the initial. Same guard as the host portal's.
-  const httpsAvatarUrl = () => {
-    const raw = props.session?.avatarUrl;
-    if (!raw) return null;
-    try {
-      return new URL(raw).protocol === "https:" ? raw : null;
-    } catch {
-      return null;
-    }
-  };
 
   return (
-    <DropdownMenu placement="bottom-end" gutter={8}>
-      <DropdownMenu.Trigger
-        aria-label="Account menu"
-        class="border-border bg-surface/40 hover:border-gold-dim flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border transition-colors duration-(--dur-fast)"
-      >
-        <Show
-          when={httpsAvatarUrl()}
-          fallback={
-            <span aria-hidden="true" class="font-display text-gold text-[0.95rem] leading-none">
-              {initial()}
-            </span>
-          }
-        >
-          {(url) => <img src={url()} alt="" class="h-full w-full rounded-full object-cover" />}
-        </Show>
+    <DropdownMenu placement="bottom-end" gutter={8} open={open()} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger aria-label="Account menu" class={AVATAR_TRIGGER_CLASS}>
+        <AccountAvatar session={props.session} />
       </DropdownMenu.Trigger>
 
       <DropdownMenu.Portal>

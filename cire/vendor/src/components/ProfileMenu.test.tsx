@@ -114,4 +114,52 @@ describe("ProfileMenu", () => {
 
     await waitFor(() => expect(onSignOut).toHaveBeenCalled());
   });
+
+  // ── Haptics (T-U1) ────────────────────────────────────────────────────────
+
+  it("offers a haptics switch at all, and defaults it on", async () => {
+    // Whether a *stored* preference is honoured is `readHapticsPreference`'s
+    // contract and is covered in `lib/theme.test.ts`, which re-imports the
+    // module per case — the signal here is initialised once at module load, so
+    // writing localStorage from this file could not affect it anyway.
+    //
+    // What this pins is the part only the menu can break: that the row is
+    // rendered (it is gated on `hapticsAvailable()`, whose whole point is to
+    // stay true on iOS, where the Vibration API check says no and the
+    // switch-element fallback says yes) and that the default is on.
+    render(() => <ProfileMenu session={SESSION} onSignOut={() => {}} />);
+    openMenu();
+    const row = await screen.findByRole("menuitemcheckbox", { name: /haptics/i });
+    expect(row).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("remembers the switch being turned off", async () => {
+    render(() => <ProfileMenu session={SESSION} onSignOut={() => {}} />);
+    openMenu();
+    const row = await screen.findByRole("menuitemcheckbox", { name: /haptics/i });
+    // Defaults to on, so the first press is a disable.
+    expect(row).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.pointerDown(row, { button: 0 });
+    fireEvent.pointerUp(row, { button: 0 });
+    fireEvent.click(row);
+
+    await waitFor(() => expect(localStorage.getItem("cire.vendor.haptics")).toBe("off"));
+  });
+
+  it("stays open when the switch is used, so it can be tried twice", async () => {
+    render(() => <ProfileMenu session={SESSION} onSignOut={() => {}} />);
+    openMenu();
+    const row = await screen.findByRole("menuitemcheckbox", { name: /haptics/i });
+
+    fireEvent.pointerDown(row, { button: 0 });
+    fireEvent.pointerUp(row, { button: 0 });
+    fireEvent.click(row);
+
+    // `closeOnSelect={false}` — a setting you feel is one you try, feel, and
+    // try again; closing the menu each time makes that a three-click job.
+    await waitFor(() =>
+      expect(screen.getByRole("menuitemcheckbox", { name: /haptics/i })).toBeInTheDocument(),
+    );
+  });
 });

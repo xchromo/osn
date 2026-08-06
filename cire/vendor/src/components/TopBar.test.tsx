@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import TopBar from "./TopBar";
@@ -154,5 +154,127 @@ describe("TopBar", () => {
     // which put "leave" one mis-click from "switch view".
     expect(screen.queryByRole("button", { name: /sign out/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /account menu/i })).toBeInTheDocument();
+  });
+
+  // ── The deferred account menu (P-W1) ──────────────────────────────────────
+  //
+  // Kobalte's dropdown-menu is the package's only consumer of the library and
+  // is ~28.6 KB gzip, so it is behind a `lazy()`. What has to stay true is that
+  // deferring it costs the vendor nothing they can perceive: the placeholder is
+  // named, it is a real control, and a press on it is not swallowed.
+
+  // `waitFor`'s default timeout is 1000 ms, and the *first* cold `import()` in
+  // this file is slower than that: vitest transforms `ProfileMenu` and the whole
+  // Kobalte graph on demand, measured at 1–2 s. Production serves a prebuilt
+  // chunk, so this budget is a property of the harness, not of the code.
+  const CHUNK = { timeout: 5000 };
+
+  const renderBar = (onSignOut = () => {}) =>
+    render(() => (
+      <TopBar
+        session={session}
+        view="listings"
+        onView={() => {}}
+        onHome={() => {}}
+        onSignOut={onSignOut}
+      />
+    ));
+
+  it("does not pull Kobalte onto the first frame", () => {
+    renderBar();
+    // The placeholder is a plain button. The real trigger is a Kobalte one and
+    // carries `aria-expanded`; its absence is what proves the library has not
+    // been mounted yet.
+    const trigger = screen.getByRole("button", { name: /account menu/i });
+    expect(trigger).not.toHaveAttribute("aria-expanded");
+  });
+
+  it("names the placeholder, so the wait is not a mystery to a screen reader", () => {
+    renderBar();
+    const trigger = screen.getByRole("button", { name: /account menu/i });
+    // Reachable by keyboard while it is up, so it must announce what it is and
+    // that it opens something.
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger.tagName).toBe("BUTTON");
+  });
+
+  it("shows the same avatar before and after the swap, so nothing flashes", async () => {
+    renderBar();
+    const before = screen.getByRole("button", { name: /account menu/i });
+    // "Acme Florals" → "A", the same initial the real trigger renders.
+    expect(before.textContent).toBe("A");
+    const boxBefore = before.className;
+
+    fireEvent.pointerEnter(before);
+
+    await waitFor(
+      () =>
+        expect(screen.getByRole("button", { name: /account menu/i })).toHaveAttribute(
+          "aria-expanded",
+        ),
+      CHUNK,
+    );
+    const after = screen.getByRole("button", { name: /account menu/i });
+    expect(after.textContent).toBe("A");
+    // Same box, so the swap moves nothing.
+    expect(after.className).toBe(boxBefore);
+  });
+
+  it("loads the menu on focus, before a click can arrive", async () => {
+    renderBar();
+    fireEvent.focus(screen.getByRole("button", { name: /account menu/i }));
+    await waitFor(
+      () =>
+        expect(screen.getByRole("button", { name: /account menu/i })).toHaveAttribute(
+          "aria-expanded",
+        ),
+      CHUNK,
+    );
+  });
+
+  it("does not swallow a click that lands before the chunk does", async () => {
+    // The failure this guards: the button you pressed is replaced by a
+    // different button that is not open, and your press did nothing.
+    renderBar();
+    fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+
+    // Asserted on the menu's contents rather than the trigger's
+    // `aria-expanded`: Kobalte's menu is modal, so while it is open the trigger
+    // is outside the accessible tree and a role query cannot reach it. The
+    // items being reachable is the stronger claim anyway — it is what "the
+    // click was not swallowed" actually means.
+    expect(await screen.findByRole("menuitem", { name: /sign out/i }, CHUNK)).toBeInTheDocument();
+  });
+
+  it("leaves the menu closed when it was merely warmed, not pressed", async () => {
+    renderBar();
+    fireEvent.pointerEnter(screen.getByRole("button", { name: /account menu/i }));
+
+    await waitFor(
+      () =>
+        expect(screen.getByRole("button", { name: /account menu/i })).toHaveAttribute(
+          "aria-expanded",
+        ),
+      CHUNK,
+    );
+    // Hovering is not asking for it to open.
+    expect(screen.getByRole("button", { name: /account menu/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByRole("menuitem", { name: /sign out/i })).not.toBeInTheDocument();
+  });
+
+  it("signs out through the loaded menu", async () => {
+    const onSignOut = vi.fn();
+    renderBar(onSignOut);
+    fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+
+    const item = await screen.findByRole("menuitem", { name: /sign out/i }, CHUNK);
+    fireEvent.pointerDown(item, { button: 0 });
+    fireEvent.pointerUp(item, { button: 0 });
+    fireEvent.click(item);
+
+    await waitFor(() => expect(onSignOut).toHaveBeenCalled());
   });
 });
