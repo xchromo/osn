@@ -46,6 +46,16 @@ export default defineConfig({
           environment: "node",
           include: ["src/**/*.test.{ts,tsx}"],
           exclude: ["**/node_modules/**", "**/dist/**", "**/*.browser.test.{ts,tsx}"],
+          // A NON-UTC runner zone, deliberately. Several tests assert that a new
+          // event is seeded with "the organiser's own zone" by comparing against
+          // `Intl.DateTimeFormat().resolvedOptions().timeZone` — under a UTC
+          // runner that string is "UTC", which is also `browserTimeZone`'s
+          // hardcoded fallback, so a `browserTimeZone` rewritten as `() => "UTC"`
+          // passed them all. Pinning a real zone makes those assertions
+          // falsifiable. Scoped to this project: `env` sets the variable in the
+          // NODE process, and a browser test's `Intl` reads the browser's zone,
+          // not the runner's — see the note on the browser project below.
+          env: { TZ: "Australia/Sydney" },
         },
       },
       {
@@ -66,6 +76,10 @@ export default defineConfig({
             // Lets a test flip `prefers-color-scheme` / `prefers-reduced-motion`
             // for itself instead of running the whole suite once per preference.
             commands: { emulateMedia },
+            // No `TZ` counterpart here: the test body runs inside Chromium, so
+            // its `Intl` resolves the BROWSER's zone and a runner env var can't
+            // reach it. Nothing in the browser tier asserts a zone today; a test
+            // that needs one should set `contextOptions.timezoneId` instead.
           },
         },
       },
