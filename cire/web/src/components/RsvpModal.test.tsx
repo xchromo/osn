@@ -811,11 +811,18 @@ describe("RsvpModal", () => {
       expect(submit.querySelector("svg")).toBeNull();
     });
 
-    it("fires onConfirmed the instant the reply is recorded — before the dwell, not after", async () => {
-      // `onConfirmed` is the events section's cue to start ITS confirmation
-      // behind this sheet, so it needs to fire immediately, not after the
-      // ~900ms dwell that holds this sheet open.
+    it("holds onConfirmed until the sheet actually closes, so the celebration is not spent behind it", async () => {
+      // The regression this guards. `onConfirmed` cues a ~1400ms celebration
+      // (`TOTAL_DURATION_MS`) on the Respond button BEHIND this sheet, and the
+      // sheet sits over that button for `SAVED_DWELL_MS` (~900ms) after a
+      // reply is recorded. Firing the cue at `setSaved` — as this did when the
+      // confirmation first moved off the Save button — burns the sweep-in, the
+      // tick draw and the entire hold while the button is still covered, so the
+      // guest is uncovered onto the 500ms fade-out alone: green draining off a
+      // button they never saw fill, which reads as nothing having happened.
+      // The cue therefore has to land WITH the close, not at the top of the dwell.
       const onConfirmed = vi.fn();
+      const onClose = vi.fn();
       const rsvps: RsvpSummary[] = [
         { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
       ];
@@ -828,18 +835,30 @@ describe("RsvpModal", () => {
           }),
         ),
       );
+      // Fake clock before the submit registers the dwell (P-I2, as above).
+      vi.useFakeTimers();
       render(() => (
         <RsvpModal
           event={event}
           members={[priya]}
           apiUrl="https://api.test"
-          onClose={() => {}}
+          onClose={onClose}
           onConfirmed={onConfirmed}
         />
       ));
       fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
       fireEvent.click(document.querySelector("button[type='submit']") as HTMLElement);
-      await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1));
+
+      // Flush the fetch chain so the sheet is confirmed, without letting the
+      // dwell elapse: the sheet is up and still covering the Respond button.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(document.querySelector("button[type='submit']")!.textContent).toContain("Saved");
+      expect(onConfirmed).not.toHaveBeenCalled();
+
+      // Landing the dwell uncovers the button and cues the celebration together.
+      await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+      expect(onConfirmed).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("fires onConfirmed for a host preview too, without ever calling onSubmitted", async () => {
@@ -850,6 +869,9 @@ describe("RsvpModal", () => {
       const onSubmitted = vi.fn();
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
+      // Fake clock: since the cue moved to the close, waiting it out for real
+      // would sleep the full `SAVED_DWELL_MS` and sit on `waitFor`'s deadline.
+      vi.useFakeTimers();
       render(() => (
         <RsvpModal
           event={event}
@@ -863,7 +885,8 @@ describe("RsvpModal", () => {
       ));
       fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
       fireEvent.click(document.querySelector("button[type='submit']") as HTMLElement);
-      await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+      expect(onConfirmed).toHaveBeenCalledTimes(1);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(onSubmitted).not.toHaveBeenCalled();
     });

@@ -159,6 +159,22 @@ describe("TopBar", () => {
     expect(screen.getByTestId("preview").textContent).toBe("wed_1");
   });
 
+  it("gates the preview on nothing but having a wedding open — no width hides it", () => {
+    // The regression: the preview used to sit inside `hidden @2xl/frame:inline`,
+    // so on a phone the guest preview had no entry point anywhere in the portal
+    // (the palette lists modules, weddings and account — never preview).
+    // Collapsing to a glyph is the button's own business; the bar must not
+    // decide the control does not exist at some widths.
+    mount();
+    for (
+      let node: HTMLElement | null = screen.getByTestId("preview");
+      node && node !== document.body;
+      node = node.parentElement
+    ) {
+      expect(node.className).not.toContain("hidden");
+    }
+  });
+
   it("routes the account menu's actions", async () => {
     const { onSecurity, onSignOut } = mount();
     const account = screen.getByRole("button", { name: /account menu/i });
