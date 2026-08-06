@@ -3,6 +3,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import TopBar from "./TopBar";
+// Side-effect import, deliberately unused. `TopBar` pulls `ProfileMenu` through
+// `lazy()`, and vitest transforms it and the whole Kobalte graph on demand — a
+// multi-second cost that balloons under a concurrent `turbo run test`. Paying it
+// here puts it in the module-load phase, where vitest does not impose a timeout;
+// doing it in a `beforeAll` instead capped it at 10s and failed the whole file
+// (12 tests skipped) the moment the machine was busy. Production serves a
+// prebuilt chunk, so this latency was never the thing under test — the swap is.
+import "./ProfileMenu";
 import ViewTabs from "./ViewTabs";
 
 /**
@@ -163,10 +171,9 @@ describe("TopBar", () => {
   // deferring it costs the vendor nothing they can perceive: the placeholder is
   // named, it is a real control, and a press on it is not swallowed.
 
-  // `waitFor`'s default timeout is 1000 ms, and the *first* cold `import()` in
-  // this file is slower than that: vitest transforms `ProfileMenu` and the whole
-  // Kobalte graph on demand, measured at 1–2 s. Production serves a prebuilt
-  // chunk, so this budget is a property of the harness, not of the code.
+  // Generous because Suspense settling and Kobalte mounting are not instant,
+  // but no longer covering a module transform — see the static import at the
+  // top of this file.
   const CHUNK = { timeout: 5000 };
 
   const renderBar = (onSignOut = () => {}) =>
