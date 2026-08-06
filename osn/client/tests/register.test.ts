@@ -163,6 +163,34 @@ describe("createRegistrationClient", () => {
         client.completeRegistration({ email: "alice@example.com", code: "000000" }),
       ).rejects.toThrow("invalid_request");
     });
+
+    /**
+     * The refresh token exists ONLY as the `Set-Cookie` on this response — the
+     * assertion just above pins that the body has no `refreshToken`. The issuer
+     * is a different origin from every app that calls it, and a cross-origin
+     * fetch on the default `same-origin` credentials mode discards `Set-Cookie`
+     * outright. So without this header registration finished with an in-memory
+     * access token and no session at all: a reload signed the brand-new account
+     * back out, and an OIDC `prompt=create` journey bounced back to the consent
+     * screen's sign-up panel, because `/authorize/context` still saw a
+     * signed-out browser.
+     */
+    it("sends credentials so the refresh cookie survives the cross-origin hop", async () => {
+      const { calls } = stubFetch(() =>
+        jsonResponse(
+          {
+            profileId: "usr_abc",
+            handle: "alice",
+            email: "alice@example.com",
+            session: { access_token: "acc_999", token_type: "Bearer", expires_in: 3600 },
+          },
+          { status: 201 },
+        ),
+      );
+      await client.completeRegistration({ email: "alice@example.com", code: "123456" });
+
+      expect(calls[0].init?.credentials).toBe("include");
+    });
   });
 
   describe("passkeyRegisterBegin / passkeyRegisterComplete (access-token-gated)", () => {
