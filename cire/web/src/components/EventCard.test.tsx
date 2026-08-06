@@ -405,6 +405,74 @@ describe("EventCard", () => {
       }
     });
 
+    it("restarts the choreography from the top when a re-submit lands mid-celebration", async () => {
+      // Documented behaviour in `playCelebration`: an edited, re-submitted
+      // reply arriving while the previous celebration is still fading must
+      // restart from the sweep-in, not layer a second pair of timers over the
+      // first (which would fire `onCelebrated` twice, once early).
+      vi.useFakeTimers();
+      try {
+        const onCelebrated = vi.fn();
+        const [justResponded, setJustResponded] = createSignal(false);
+        const { container } = render(() => (
+          <EventCard
+            event={baseEvent}
+            responded
+            justResponded={justResponded()}
+            onCelebrated={onCelebrated}
+            onRespond={noop}
+            onDetails={noop}
+          />
+        ));
+        const button = respondButton(container);
+        const fill = () => button.querySelector("span[aria-hidden='true']") as HTMLElement;
+
+        setJustResponded(true);
+        expect(fill().className).toContain("scale-x-100");
+
+        // Well into the hold — mid-celebration, nowhere near the end.
+        await vi.advanceTimersByTimeAsync(HOLD_MS / 2);
+        expect(fill().className).toContain("scale-x-100");
+
+        // The edited reply: a fresh false→true transition before the first
+        // celebration has finished. NOT batched — in production these are two
+        // separate calls at two separate times (`onCelebrated` resetting to
+        // null, then a LATER `onConfirmed` setting it again), never one atomic
+        // write the effect could coalesce away.
+        setJustResponded(false);
+        setJustResponded(true);
+        expect(fill().className).toContain("scale-x-100");
+
+        // If the restart failed to cancel the FIRST celebration's timers, the
+        // original hold would have expired by now (HOLD_MS/2 + HOLD_MS/2) and
+        // faded the fill despite the restart.
+        await vi.advanceTimersByTimeAsync(HOLD_MS / 2);
+        expect(fill().className).toContain("scale-x-100");
+
+        // The restarted celebration completes on its OWN full timeline,
+        // measured from the restart point (HOLD_MS/2 in) — exactly one
+        // `onCelebrated`, not the original (already-elapsed) one.
+        await vi.advanceTimersByTimeAsync(TOTAL_DURATION_MS - HOLD_MS / 2);
+        expect(onCelebrated).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the permanent tick visible on the closed, outlined RSVPs-closed button too", () => {
+      // The tick and `rsvpClosed` gate independent parts of the markup — a
+      // household that answered before the deadline should still see their
+      // tick after RSVPs shut, on the relabelled secondary-styled button.
+      const { container } = render(() => (
+        <EventCard event={baseEvent} rsvpClosed responded onRespond={noop} onDetails={noop} />
+      ));
+      const button = respondButton(container);
+      expect(button.textContent).toBe("RSVPs closed");
+      const path = button.querySelector("svg path") as SVGPathElement;
+      expect(path).toBeTruthy();
+      expect(path.closest("svg")!.getAttribute("class")).toContain("text-success");
+    });
+
     it("clears its timers on unmount mid-celebration", async () => {
       // A surviving timer firing `onCelebrated` on a disposed instance is the
       // same class of bug `RsvpModal`'s dwell timer guards against.
