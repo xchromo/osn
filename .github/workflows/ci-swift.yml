@@ -13,10 +13,12 @@ jobs:
   # workflows), so this job computes the equivalent itself from `git diff`
   # against the two commits GitHub already gives us for each event type.
   #
-  # `swift-test` is gated the same way for a different reason: no job in this
-  # repo has ever run on a runner image with a Swift toolchain, so if
-  # `ubuntu-latest` ships no `swift` the failure should land on Swift PRs
-  # only, not on every PR to main.
+  # Everything Swift shares one macOS job. `swift test` cannot run on Linux:
+  # SwiftUI ships only in Apple SDKs, and `swift test` builds *every* target,
+  # so `OSNUI` fails with `no such module 'SwiftUI'` before any test runs —
+  # the same package-level-`platforms:` fact that forces the macOS-purity rule.
+  # One job rather than two also means one checkout and one runner spin-up, and
+  # a failing shared package skips a build that would only fail again.
   changes:
     name: detect Swift/Xcode changes
     runs-on: ubuntu-latest
@@ -58,33 +60,28 @@ jobs:
             echo "ios=true" >> "$GITHUB_OUTPUT"
           fi
 
-  swift-test:
-    name: swift test (OSNShared)
-    needs: changes
-    if: needs.changes.outputs.ios == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Swift toolchain info
-        run: swift --version
-
-      - name: swift test
-        working-directory: shared/swift/OSNShared
-        run: swift test
-
-  ios-build:
-    name: xcodegen + xcodebuild (Pulse)
+  swift:
+    name: swift test + xcodebuild (Pulse)
     needs: changes
     if: needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Xcode / SDK info
+      - name: Toolchain / SDK info
         run: |
+          swift --version
           xcodebuild -version
           xcodebuild -showsdks | head
+
+      - name: swift test
+        working-directory: shared/swift/OSNShared
+        run: swift test
+
+      # Not on the runner image. XcodeGen is the only reason `.xcodeproj` can
+      # stay out of git, so the install is part of the deal, not an extra.
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       - name: xcodegen generate
         working-directory: pulse/ios
