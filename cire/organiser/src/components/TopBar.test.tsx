@@ -171,7 +171,13 @@ describe("TopBar", () => {
       node && node !== document.body;
       node = node.parentElement
     ) {
-      expect(node.className).not.toContain("hidden");
+      // Class TOKENS, not a substring of the class string: `overflow-hidden` on
+      // the sticky blurred header is an entirely plausible future addition, and
+      // matching it here would fail this test with a message about the preview
+      // button. `hidden` bare or as any variant's target (`@2xl/frame:hidden`,
+      // `md:hidden`) is what actually removes the control.
+      const gates = [...node.classList].filter((c) => c === "hidden" || c.endsWith(":hidden"));
+      expect(gates).toEqual([]);
     }
   });
 

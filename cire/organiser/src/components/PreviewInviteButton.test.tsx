@@ -74,7 +74,11 @@ describe("PreviewInviteButton", () => {
     // name. Container queries do not resolve under happy-dom, so this pins the
     // class contract; the painted widths belong to the browser tier.
     render(() => <PreviewInviteButton weddingId="wed_bootstrap" />);
-    const button = screen.getByRole("button", { name: /Preview invite/i });
+    // The STRING form, not a regex: testing-library matches a string exactly
+    // (after normalisation) and a regex as a substring, so `/Preview invite/i`
+    // would be satisfied by "◎ Preview invite" — precisely the name you get if
+    // `aria-hidden` came off the glyph, which is the failure this asserts against.
+    const button = screen.getByRole("button", { name: "Preview invite" });
 
     // The label collapses with `sr-only`, never `hidden`: on the narrow width
     // it is the only thing naming the control, so it must stay in the tree.
@@ -84,8 +88,8 @@ describe("PreviewInviteButton", () => {
     expect(label.className).not.toContain("hidden");
 
     // The glyph is decoration standing in for the label, so it must never
-    // reach the accessible name — which `getByRole` above already proves it
-    // doesn't, since that name matched the label alone.
+    // reach the accessible name — which the exact-string `getByRole` above
+    // proves, since an unhidden glyph would prepend to that name.
     const glyph = button.querySelector("span[aria-hidden='true']") as HTMLElement;
     expect(glyph.textContent?.trim()).toBe("◎");
     expect(glyph.className).toContain("@2xl/frame:hidden");

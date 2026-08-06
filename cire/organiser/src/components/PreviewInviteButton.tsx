@@ -7,7 +7,9 @@ import { CIRE_WEB_URL } from "../lib/osn";
 
 /**
  * "Preview invite" button. Provisions (or fetches) the wedding's host preview
- * code via the owner-gated `/preview-code` endpoint, then opens the guest
+ * code via the member-gated `/preview-code` endpoint — any wedding role,
+ * including a read-only `viewer`, may mint one, because seeing the invite as a
+ * guest sees it is part of the read experience — then opens the guest
  * invite in a new tab with `?code=<publicId>` so the organiser sees every
  * event exactly as a guest would. The host code is preview-only — the API
  * blocks it from submitting RSVPs.
