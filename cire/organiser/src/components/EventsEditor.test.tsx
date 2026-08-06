@@ -208,6 +208,69 @@ describe("EventsEditor", () => {
     await waitFor(() => expect(screen.getByText(/saved on apply/i)).toBeTruthy());
   });
 
+  // ── Start/End date + timezone ────────────────────────────────────────────
+  //
+  // The drawer reads each date back out of the ISO string it just wrote, so a
+  // join that dropped a date lacking a time made the picker a silent no-op on
+  // exactly the events that need it most — every newly-added one. These pin the
+  // date surviving on its own, and the zone (not a hand-picked UTC offset)
+  // deciding what offset the finished timestamp carries.
+
+  it("keeps a start date picked before any time is typed", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /Add event/i }));
+    await waitFor(() => expect(screen.getByText(/saved on apply/i)).toBeTruthy());
+
+    // A brand-new event has no time, so this is the exact case that used to
+    // bounce straight back to the placeholder.
+    fireEvent.click(screen.getByLabelText(/Start date, no date set/i));
+    const grid = await waitFor(() => screen.getAllByRole("grid")[0]!);
+    const today = grid.querySelector<HTMLButtonElement>('[aria-current="date"]')!;
+    const pickedLabel = today.getAttribute("aria-label")!;
+    fireEvent.click(today);
+
+    // The trigger now shows the picked day rather than "Pick a date…".
+    await waitFor(() => expect(screen.getByLabelText(`Start date: ${pickedLabel}`)).toBeTruthy());
+    // …and it is a blocking partial, not an invented midnight.
+    expect(screen.getByText(/Start time is required/i)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /Save changes/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("offers a timezone dropdown seeded with the organiser's own zone, not a UTC offset", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /Add event/i }));
+    const zone = (await waitFor(() => screen.getByLabelText("Timezone"))) as HTMLSelectElement;
+    expect(zone.tagName).toBe("SELECT");
+    expect(zone.value).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    // The raw-offset pickers are gone — an offset is a fact about a zone on a
+    // date, not a second thing to ask for.
+    expect(screen.queryByLabelText(/UTC offset/i)).toBeNull();
+  });
+
+  it("derives the offset from the chosen zone and the event's own date", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    // Ceremony is 2026-11-14T15:00+11:00 in Sydney. Re-homing it to Brisbane
+    // (no DST) must restamp the offset to +10:00 without touching the wall
+    // clock — the organiser moved the wedding, not the ceremony's start time.
+    fireEvent.click(screen.getAllByRole("button", { name: /^Edit$/i })[0]!);
+    const zone = (await waitFor(() => screen.getByLabelText("Timezone"))) as HTMLSelectElement;
+    fireEvent.change(zone, { target: { value: "Australia/Brisbane" } });
+
+    await waitFor(() => expect(screen.getByText(/2026-11-14T15:00:00\+10:00/)).toBeTruthy());
+    expect((screen.getByLabelText("Start time") as HTMLInputElement).value).toBe("15:00");
+  });
+
   it("runs the save flow: preview → shared modal → apply → toast", async () => {
     primeLoad();
     render(() => <EventsEditor weddingId="wed_a" />);

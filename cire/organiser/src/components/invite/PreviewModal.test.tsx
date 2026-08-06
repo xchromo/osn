@@ -14,6 +14,7 @@ vi.mock("../../lib/api", () => ({ apiUrl: (path: string) => `https://api.test${p
 const previewProps: PreviewPaneProps = {
   tokens: {},
   toneSurface: () => "var(--color-bg)",
+  design: "classic",
   hero: {
     shown: true,
     imageUrl: null,

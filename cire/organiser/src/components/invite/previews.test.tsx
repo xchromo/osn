@@ -258,3 +258,94 @@ describe("HeroSample", () => {
     expect(title.className).not.toContain("font-light");
   });
 });
+
+/**
+ * The samples follow the wedding's DESIGN PACK, not just its scheme. This is
+ * the half that was missing: colours, fonts and copy were exact and the layout
+ * was a fiction, so switching Classic → Gala changed the radio card and nothing
+ * else in the preview. What's asserted here is the class contract for each
+ * pack's structural moves — see `design-layout.ts` for what each one traces
+ * back to in `cire/web/src/designs/<id>/`.
+ */
+describe("design-aware shape", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const hero = {
+    imageUrl: null,
+    title: "Anita & Ben",
+    heroBlur: 28,
+    backdropOpacity: 0,
+    backdropBlur: 0,
+    surface: "var(--color-bg)",
+  };
+  const section = {
+    surface: "var(--color-bg)",
+    eyebrow: "Celebrate With Us",
+    heading: "Your Events",
+    body: "Your events, from the spreadsheet import.",
+  };
+
+  it("centres classic's hero title and anchors gala's bottom-left", () => {
+    const classic = render(() => <HeroSample {...hero} design="classic" />);
+    expect(classic.container.firstElementChild?.className).toContain("items-center");
+    cleanup();
+
+    const gala = render(() => <HeroSample {...hero} design="gala" />);
+    const frame = gala.container.firstElementChild!.className;
+    // `items-start justify-end` — the editorial hero the pack is named for.
+    expect(frame).toContain("items-start");
+    expect(frame).toContain("justify-end");
+    expect(frame).not.toContain("items-center");
+    expect(screen.getByText("Anita & Ben").className).toContain("text-left");
+  });
+
+  it("previews an unknown or absent design as the default pack, never as nothing", () => {
+    const { container } = render(() => <HeroSample {...hero} design="not-a-design" />);
+    expect(container.firstElementChild?.className).toContain("items-center");
+    cleanup();
+    // No `design` at all (the inline callers before a load resolves).
+    const bare = render(() => <HeroSample {...hero} />);
+    expect(bare.container.firstElementChild?.className).toContain("items-center");
+  });
+
+  it("centres classic's section copy and left-aligns gala's", () => {
+    const classic = render(() => <SectionSample {...section} design="classic" />);
+    expect(classic.container.querySelector(".text-center")).toBeTruthy();
+    cleanup();
+
+    const gala = render(() => <SectionSample {...section} design="gala" />);
+    expect(gala.container.querySelector(".text-left")).toBeTruthy();
+    expect(gala.container.querySelector(".text-center")).toBeNull();
+  });
+
+  it("draws the events hairline only for the pack that has one", () => {
+    // The flag is the CALLER saying "this is the events section"; the pack
+    // decides whether that section carries a rule.
+    const classic = render(() => <SectionSample {...section} design="classic" rule />);
+    expect(classic.container.querySelector("hr")).toBeNull();
+    cleanup();
+
+    const gala = render(() => <SectionSample {...section} design="gala" rule />);
+    expect(gala.container.querySelector("hr")).toBeTruthy();
+    cleanup();
+
+    // …and a gala section that isn't the events one gets no rule either.
+    const galaStory = render(() => <SectionSample {...section} design="gala" />);
+    expect(galaStory.container.querySelector("hr")).toBeNull();
+  });
+
+  it("insets gala's code-entry block as a panel, leaving classic's a full band", () => {
+    const classic = render(() => <SectionSample {...section} design="classic" panel />);
+    const classicBlock = classic.container.querySelector(".p-4")!;
+    expect(classicBlock.className).not.toContain("border");
+    cleanup();
+
+    const gala = render(() => <SectionSample {...section} design="gala" panel />);
+    const galaBlock = gala.container.querySelector(".rounded-sm")!;
+    expect(galaBlock.className).toContain("border");
+    expect(galaBlock.className).toContain("m-4");
+  });
+});

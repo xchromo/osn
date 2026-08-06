@@ -38,6 +38,10 @@ vi.mock("@cire/invite-designs", () => ({
     { id: "test-premium", name: "Test Premium", tier: "premium" },
     { id: "gala", name: "Gala", tier: "free" },
   ],
+  // Same value as the real catalog's. The builder reads it for the "no design
+  // saved yet" fallback, and `design-layout.ts` for an unrecognised id — a mock
+  // missing it fails at import, not at an assertion.
+  DEFAULT_DESIGN_ID: "classic",
 }));
 
 // Stand-in for the lazy-loaded cropperjs editor: cropperjs v2 web components
@@ -1043,6 +1047,38 @@ describe("design selector", () => {
     fireEvent.click(galaLink!);
     expect(authFetchMock.mock.calls.some((c) => String(c[0]).endsWith("/design"))).toBe(false);
     expect(authFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-shapes the live preview when the design changes, not just the radio card", async () => {
+    authFetchMock.mockResolvedValueOnce(json(EMPTY_CUSTOMISATION)); // initial load
+    authFetchMock.mockResolvedValueOnce(json({ ...EMPTY_CUSTOMISATION, designId: "gala" }));
+
+    render(() => <InviteBuilder weddingId="wed_1" weddingSlug="anita-ben" entitlements={[]} />);
+
+    // Both preview layers mount while the builder's width is unmeasurable (see
+    // `previewLayer`), so the composed pane is reachable here.
+    await waitFor(() =>
+      expect(screen.getAllByLabelText("Invite preview").length).toBeGreaterThan(0),
+    );
+    const pane = () => screen.getAllByLabelText("Invite preview")[0]!;
+    // Classic: every section's copy sits on the column's own axis, and the
+    // events header runs straight into the cards.
+    expect(pane().querySelector(".text-center")).toBeTruthy();
+    expect(pane().querySelector("hr")).toBeNull();
+    expect(screen.getAllByTestId("preview-design")[0]!.textContent).toContain("Classic");
+
+    fireEvent.click(screen.getByRole("radio", { name: /Gala/ }));
+
+    // Gala: left-aligned copy and the events hairline. The miniature used to be
+    // pixel-identical either side of this click.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("preview-design")[0]!.textContent).toContain("Gala"),
+    );
+    // (The remaining `text-center` boxes are the hidden-section strips, which
+    // are builder chrome rather than pack layout. `previews.test.tsx` pins the
+    // per-sample alignment contract exactly.)
+    expect(pane().querySelector(".text-left")).toBeTruthy();
+    expect(pane().querySelector("hr")).toBeTruthy();
   });
 
   it("a failed design save keeps the current selection and toasts the error", async () => {

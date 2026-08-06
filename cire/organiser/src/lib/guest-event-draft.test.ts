@@ -414,14 +414,53 @@ describe("createGuestEventDraft — event editing (E6)", () => {
 });
 
 describe("validateDraft — event field rules (E6)", () => {
-  it("flags a blank name / start / timezone on a new event", () => {
+  it("flags a blank name + start on a new event", () => {
     createRoot((dispose) => {
       const store = loaded();
-      store.addEvent(); // all-blank
+      store.addEvent(); // all-blank except the seeded zone
       const errors = validateDraft(store.draft);
       expect(errors.some((e) => e.message.includes("Event name is required"))).toBe(true);
       expect(errors.some((e) => e.message.includes("Start date & time is required"))).toBe(true);
+      dispose();
+    });
+  });
+
+  it("seeds a new event with the organiser's own zone, so it isn't a blank required field", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      const key = store.addEvent();
+      expect(store.draft.events.find((e) => e.key === key)!.timezone).toBe(
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
+      expect(
+        validateDraft(store.draft).some((e) => e.message.includes("Timezone is required")),
+      ).toBe(false);
+      dispose();
+    });
+  });
+
+  it("still flags a zone cleared by hand", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      const key = store.addEvent();
+      store.updateEvent(key, { timezone: "" });
+      const errors = validateDraft(store.draft);
       expect(errors.some((e) => e.message.includes("Timezone is required"))).toBe(true);
+      dispose();
+    });
+  });
+
+  it("names the missing half of a half-filled Start/End, rather than calling it malformed", () => {
+    createRoot((dispose) => {
+      const store = loaded();
+      const key = store.addEvent();
+      // What the drawer writes when a day is picked but no time typed yet.
+      store.updateEvent(key, { name: "Party", startAt: "2026-11-14", endAt: "2026-11-15" });
+      const errors = validateDraft(store.draft).map((e) => e.message);
+      expect(errors).toContain("Start time is required.");
+      expect(errors).toContain("End time is required.");
+      // Still blocking — a partial must never reach the wire as a midnight.
+      expect(errors.length).toBeGreaterThan(0);
       dispose();
     });
   });

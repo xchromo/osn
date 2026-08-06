@@ -14,7 +14,7 @@ import { Portal } from "solid-js/web";
 import { toast } from "solid-toast";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
-import { joinIso, OFFSET_OPTIONS, splitIso } from "../lib/event-datetime";
+import { type DateTimeParts, joinIso, splitIso } from "../lib/event-datetime";
 import {
   ensureEventsLoaded,
   type EventRow,
@@ -35,6 +35,7 @@ import {
   invalidateHouseholds,
   type OrganiserHouseholdRow,
 } from "../lib/households-store";
+import { describeTimeZone, timeZoneGroups, zoneOffset } from "../lib/timezones";
 import { registerUnsavedGuard } from "../lib/unsaved-guard";
 import ChangePreview, { type ChangePlan } from "./ChangePreview";
 import ColorPicker from "./ColorPicker";
@@ -699,15 +700,47 @@ function EventDrawer(props: {
   const start = () => splitIso(props.event.startAt);
   const end = () => splitIso(props.event.endAt);
 
-  const setStart = (part: "date" | "time" | "offset", value: string | null) => {
+  /** Stamp the offset the event's ZONE is on for this wall-clock date + time.
+   *  The organiser never types an offset any more — it is a fact about the zone
+   *  on that day, so it's derived (DST and all). Falls back to whatever offset
+   *  the stored value already carried when the zone can't be resolved (an
+   *  imported free-text zone this browser's tz database doesn't know), so an
+   *  edit elsewhere in the drawer can't silently rewrite an imported time. */
+  const stamped = (parts: DateTimeParts, zone: string): DateTimeParts => ({
+    ...parts,
+    offset: zoneOffset(zone, parts.date, parts.time) ?? parts.offset,
+  });
+
+  const setStart = (part: "date" | "time", value: string | null) => {
     const next = { ...start(), [part]: value ?? "" };
-    props.onPatch({ startAt: joinIso(next) });
+    props.onPatch({ startAt: joinIso(stamped(next, props.event.timezone)) });
   };
-  const setEnd = (part: "date" | "time" | "offset", value: string | null) => {
-    // An end with a cleared date/time collapses to "" (open-ended), which the
+  const setEnd = (part: "date" | "time", value: string | null) => {
+    // An end with a cleared date collapses to "" (open-ended), which the
     // validator + parser accept as "no stated end".
     const next = { ...end(), [part]: value ?? "" };
-    props.onPatch({ endAt: joinIso(next) });
+    props.onPatch({ endAt: joinIso(stamped(next, props.event.timezone)) });
+  };
+
+  /** Changing the zone re-stamps BOTH timestamps in ONE patch — one undo step,
+   *  and no window in which Start is in the new zone and End still in the old. */
+  const setTimezone = (zone: string) => {
+    props.onPatch({
+      timezone: zone,
+      startAt: joinIso(stamped(start(), zone)),
+      endAt: joinIso(stamped(end(), zone)),
+    });
+  };
+
+  /** The zone spelled out with its abbreviation and the offset it is actually
+   *  on for this event's own start date — the number the drawer no longer asks
+   *  for, shown where it's a fact rather than a question. */
+  const zoneHint = () => {
+    const zone = props.event.timezone.trim();
+    if (zone.length === 0) return "Pick the zone the event's times are in.";
+    const described = describeTimeZone(zone, start().date || null);
+    const offset = zoneOffset(zone, start().date, start().time || "12:00");
+    return offset ? `${described} — UTC${offset} on this date.` : described;
   };
 
   const addSwatch = () =>
@@ -766,7 +799,33 @@ function EventDrawer(props: {
               )}
             </Field>
 
-            {/* Start: date + time + offset. */}
+            {/* Timezone FIRST — it governs both the Start and the End below, and
+                it is the one field a new event arrives with already answered
+                (the organiser's own zone). The UTC offset each timestamp carries
+                is derived from this, never typed: an offset is a fact about a
+                zone on a particular date, so asking for it separately only
+                created a way for the two to disagree. */}
+            <Field label="Timezone" hint={zoneHint()}>
+              {(field) => (
+                <Select
+                  {...field}
+                  value={props.event.timezone}
+                  onChange={(e) => setTimezone(e.currentTarget.value)}
+                >
+                  <For each={timeZoneGroups(props.event.timezone)}>
+                    {(group) => (
+                      <optgroup label={group.label}>
+                        <For each={group.zones}>
+                          {(zone) => <option value={zone}>{zone}</option>}
+                        </For>
+                      </optgroup>
+                    )}
+                  </For>
+                </Select>
+              )}
+            </Field>
+
+            {/* Start: date + time, in the zone above. */}
             <Fieldset legend="Start">
               <DatePicker
                 label="Start date"
@@ -788,18 +847,6 @@ function EventDrawer(props: {
                       aria-label="Start time"
                       onInput={(e) => setStart("time", e.currentTarget.value)}
                     />
-                  )}
-                </Field>
-                <Field label="UTC offset">
-                  {(field) => (
-                    <Select
-                      {...field}
-                      value={start().offset}
-                      aria-label="Start UTC offset"
-                      onChange={(e) => setStart("offset", e.currentTarget.value)}
-                    >
-                      <For each={OFFSET_OPTIONS}>{(o) => <option value={o}>{o}</option>}</For>
-                    </Select>
                   )}
                 </Field>
               </div>
@@ -824,31 +871,8 @@ function EventDrawer(props: {
                     />
                   )}
                 </Field>
-                <Field label="UTC offset">
-                  {(field) => (
-                    <Select
-                      {...field}
-                      value={end().offset}
-                      aria-label="End UTC offset"
-                      onChange={(e) => setEnd("offset", e.currentTarget.value)}
-                    >
-                      <For each={OFFSET_OPTIONS}>{(o) => <option value={o}>{o}</option>}</For>
-                    </Select>
-                  )}
-                </Field>
               </div>
             </Fieldset>
-
-            <Field label="Timezone (IANA name)">
-              {(field) => (
-                <Input
-                  {...field}
-                  value={props.event.timezone}
-                  placeholder="Australia/Sydney"
-                  onInput={(e) => props.onPatch({ timezone: e.currentTarget.value })}
-                />
-              )}
-            </Field>
 
             <Field label="Address">
               {(field) => (
