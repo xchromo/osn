@@ -20,8 +20,10 @@ describe("formatImportError — malformed spreadsheet", () => {
     expect(msg).toContain("events sheet");
     expect(msg).toContain("row 4");
     expect(msg).toContain("column 2");
-    // And an example of the shape actually wanted, not just the format's name.
-    expect(msg).toContain("2026-11-14T15:00+11:00");
+    // And an example of the shape actually wanted, not just the format's name —
+    // a LOCAL time, with no offset to work out.
+    expect(msg).toContain("2026-11-14T15:00");
+    expect(msg).not.toContain("2026-11-14T15:00+");
   });
 
   it("warns that spreadsheet apps rewrite date cells (the most likely cause)", () => {
