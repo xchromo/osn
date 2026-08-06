@@ -34,17 +34,54 @@ import VendorsView from "./VendorsView";
  * The rest stay eager on purpose: they are the read views, they are small, and
  * a rail click that pauses is a worse trade than the bytes.
  */
-const EventsEditor = lazy(() => import("./EventsEditor"));
-const GuestsEditor = lazy(() => import("./GuestsEditor"));
-const InviteBuilder = lazy(() => import("./InviteBuilder"));
+const loadEventsEditor = () => import("./EventsEditor");
+const loadGuestsEditor = () => import("./GuestsEditor");
+const loadInviteBuilder = () => import("./InviteBuilder");
+
+const EventsEditor = lazy(loadEventsEditor);
+const GuestsEditor = lazy(loadGuestsEditor);
+const InviteBuilder = lazy(loadInviteBuilder);
+
+/**
+ * Which sub-tab hides which chunk, so pointing at one can start its fetch.
+ *
+ * Deferring the bytes is the point of the split; paying for them on the click
+ * rather than on the intent is what would turn a first-load win into a
+ * first-interaction stall. A hover or a keyboard focus on the sub-tab is enough
+ * warning to cover the round trip, and by the time the click lands the module is
+ * usually resolved — so the panel mounts without the fallback below ever
+ * painting. The module registry dedupes, so warming twice costs nothing and
+ * warming a chunk that is already in costs nothing either.
+ */
+const PANEL_LOADERS: Record<string, () => Promise<unknown>> = {
+  "schedule:edit": loadEventsEditor,
+  "guests:edit": loadGuestsEditor,
+  "invite:design": loadInviteBuilder,
+};
+
+function warmPanel(module: Module, sub: string): void {
+  // Fire and forget: a failed prefetch is not an error, it just means the real
+  // mount pays the cost it would have paid anyway.
+  void PANEL_LOADERS[`${module}:${sub}`]?.().catch(() => {});
+}
 
 /** What a panel shows while its chunk is in flight. Deliberately a line of text
- *  rather than a skeleton: the chunk is local and the wait is a frame or two on
- *  anything but a cold, slow connection, and a skeleton that flashes reads as a
- *  fault. `aria-busy` is what tells a screen reader the panel is still coming. */
+ *  rather than a skeleton: a skeleton that flashes reads as a fault, and with
+ *  the prefetch above this is usually not painted at all.
+ *
+ *  The min-height is not decoration. This sits inside the auto-sized frame, so a
+ *  fallback of its natural height (one line) would collapse the panel to ~40px,
+ *  animate down, then snap back up when the chunk lands — two layout passes and
+ *  two visible jumps where an eager panel had none. Holding roughly a panel's
+ *  worth of height keeps the swap reading as one movement.
+ *
+ *  `aria-busy` is what tells a screen reader the panel is still coming. */
 function PanelLoading() {
   return (
-    <p class="font-body text-text-muted py-8 text-[0.85rem]" aria-busy="true">
+    <p
+      class="font-body text-text-muted flex min-h-[20rem] items-start py-8 text-[0.85rem]"
+      aria-busy="true"
+    >
       Loading…
     </p>
   );
@@ -270,6 +307,8 @@ export default function ModuleShell(props: ModuleShellProps) {
                         aria-selected={active() === subTab.id}
                         tabindex={active() === subTab.id ? 0 : -1}
                         onKeyDown={(event) => onTabKeyDown(event, index())}
+                        onPointerEnter={() => warmPanel(props.module, subTab.id)}
+                        onFocus={() => warmPanel(props.module, subTab.id)}
                         onClick={() => props.onSub(subTab.id)}
                         class={`font-body relative flex items-center gap-2 rounded-sm px-3.5 py-1.5 text-[0.74rem] tracking-[0.12em] whitespace-nowrap uppercase transition-colors duration-(--dur-fast) ease-(--ease-out) ${
                           active() === subTab.id

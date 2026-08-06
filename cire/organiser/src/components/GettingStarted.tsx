@@ -241,10 +241,10 @@ export default function GettingStarted(props: {
                 )}
               </Show>
             </div>
-            <span
-              class="font-body text-gold-dim shrink-0 text-[0.78rem] tracking-[0.12em] uppercase tabular-nums"
-              aria-hidden
-            >
+            {/* Read out, not hidden. The rail beneath used to carry the count in
+              its own `aria-valuenow`; the shared Meter reports a percentage
+              instead, so "two of four" now lives here or nowhere. */}
+            <span class="font-body text-gold-dim shrink-0 text-[0.78rem] tracking-[0.12em] uppercase tabular-nums">
               {completed()} / {total()} done
             </span>
           </div>
