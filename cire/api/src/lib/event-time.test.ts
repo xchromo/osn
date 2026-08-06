@@ -1,6 +1,12 @@
 import { describe, it, expect } from "bun:test";
 
-import { formatWallTime, parseWallTime, stampEventOffset, zoneOffsetAt } from "./event-time";
+import {
+  formatWallTime,
+  isKnownTimeZone,
+  parseWallTime,
+  stampEventOffset,
+  zoneOffsetAt,
+} from "./event-time";
 
 /**
  * An event's time is a wall clock + an IANA zone. These pin the three moves that
@@ -56,6 +62,32 @@ describe("parseWallTime", () => {
       time: "10:00",
       seconds: "00",
     });
+  });
+});
+
+describe("isKnownTimeZone", () => {
+  it("accepts real IANA zones, including uncommon casing", () => {
+    for (const zone of ["Australia/Sydney", "UTC", "Asia/Kolkata", "australia/sydney"]) {
+      expect(isKnownTimeZone(zone)).toBe(true);
+    }
+  });
+
+  it("rejects abbreviations, bare cities and fixed offsets — the exact things", () => {
+    for (const bad of ["AEST", "Sydney", "Australia/Nowhere", "+10:00", "UTC+10"]) {
+      expect(isKnownTimeZone(bad)).toBe(false);
+    }
+  });
+
+  it("is stable across repeated calls (P-C1: memoized, but must stay correct)", () => {
+    // Not a call-count assertion (that would pin an implementation detail) —
+    // this pins the OUTCOME the cache must never break: hammering the same
+    // zone repeatedly, and interleaving a rejection between hits, can't flip
+    // a cached answer or leak across keys.
+    for (let i = 0; i < 5; i++) {
+      expect(isKnownTimeZone("Australia/Sydney")).toBe(true);
+      expect(isKnownTimeZone("Not/AZone")).toBe(false);
+    }
+    expect(zoneOffsetAt("Australia/Sydney", "2026-11-14", "15:00")).toBe("+11:00");
   });
 });
 

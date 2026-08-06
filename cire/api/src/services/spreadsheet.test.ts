@@ -213,7 +213,7 @@ describe("parseEventsCsv", () => {
 
   // A raw offset is missing from this list on purpose: "+11:00" starts with a
   // formula marker, so the injection guard rejects that row before the zone is
-  // ever looked at. It is still not a zone — see `isValidTimeZone`, which drops
+  // ever looked at. It is still not a zone — see `isKnownTimeZone`, which drops
   // the fixed-offset spellings `Intl` resolves.
   for (const bad of ["AEST", "Sydney", "Australia/Nowhere", "UTC+11"]) {
     it(`rejects a Timezone that isn't a real IANA zone (${JSON.stringify(bad)})`, async () => {

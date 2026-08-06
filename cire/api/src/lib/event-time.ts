@@ -126,6 +126,42 @@ function formatOffsetMinutes(minutes: number): string {
 }
 
 /**
+ * `canonicalTimeZone`, memoized per raw input string — the events-import loop
+ * (`services/spreadsheet.ts`) resolves the SAME zone up to three times per row
+ * (once to validate the `Timezone` cell, twice more inside the Start/End
+ * `stampEventOffset` calls), and `canonicalTimeZone` itself is deliberately
+ * uncached: its other call site is the RSVP-deadline settings write, a rare
+ * one-shot lookup where a cache would only grow a map for nothing. An events
+ * sheet has no such luxury — `MAX_ROWS` rows at three fresh
+ * `Intl.DateTimeFormat` constructions apiece (~75µs each) is real CPU against a
+ * Workers request budget, for a value that is usually the SAME zone on every
+ * row of one wedding's schedule.
+ *
+ * ONLY SUCCESSFUL resolutions are cached, matching `offsetFormatters` below: a
+ * miss costs one throwaway construction and stores nothing, so a hostile sheet
+ * of near-misses can't grow the map, and the keys that do land are bounded by
+ * the real IANA spellings (+ casing variants) a spreadsheet app might actually
+ * produce.
+ */
+const canonicalZoneCache = new Map<string, string>();
+
+function resolveTimeZone(zone: string): string | null {
+  const cached = canonicalZoneCache.get(zone);
+  if (cached) return cached;
+  const canonical = canonicalTimeZone(zone);
+  if (canonical !== null) canonicalZoneCache.set(zone, canonical);
+  return canonical;
+}
+
+/** Is `zone` a real IANA zone this runtime can resolve? The memoized twin of
+ *  `lib/rsvp-deadline.ts`'s `isValidTimeZone`, for this module's hot import
+ *  path — see {@link resolveTimeZone}. Also rejects the fixed-offset spellings
+ *  `Intl` accepts ("+10:00", "UTC+10"), which never apply DST. */
+export function isKnownTimeZone(zone: string): boolean {
+  return resolveTimeZone(zone) !== null;
+}
+
+/**
  * The UTC offset (`+HH:MM` / `-HH:MM`) that `zone` is on for a given WALL-CLOCK
  * date + time — the answer to "the ceremony is at 3pm in Sydney on 14 November;
  * what offset does that timestamp carry?". Null when the date/time is malformed
@@ -146,7 +182,7 @@ function formatOffsetMinutes(minutes: number): string {
  *    rejected or landing an hour out.
  */
 export function zoneOffsetAt(zone: string, date: string, time: string): string | null {
-  const canonical = canonicalTimeZone(zone);
+  const canonical = resolveTimeZone(zone);
   if (canonical === null) return null;
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
   const t = /^(\d{2}):(\d{2})/.exec(time.trim());

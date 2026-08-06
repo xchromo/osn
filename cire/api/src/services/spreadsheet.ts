@@ -1,7 +1,6 @@
 import { Effect, Data } from "effect";
 
-import { parseWallTime, stampEventOffset } from "../lib/event-time";
-import { isValidTimeZone } from "../lib/rsvp-deadline";
+import { isKnownTimeZone, parseWallTime, stampEventOffset } from "../lib/event-time";
 import {
   EVENT_ID_HEADER,
   EVENT_SHEET_REQUIRED_HEADERS,
@@ -483,10 +482,14 @@ export function parseEventsCsv(
       // offset derived from it — and a zone that doesn't resolve is a broken
       // event regardless: the guest site formats every event time with
       // `timeZone: event.timezone`, which throws on an unknown identifier.
-      // `isValidTimeZone` also rejects the fixed-offset spellings `Intl` accepts
-      // ("+10:00", "UTC+10"), which never apply DST — the exact bug the
-      // wall-clock model exists to end.
-      if (!isValidTimeZone(timezone)) {
+      // `isKnownTimeZone` also rejects the fixed-offset spellings `Intl`
+      // accepts ("+10:00", "UTC+10"), which never apply DST — the exact bug the
+      // wall-clock model exists to end. It's the memoized twin of
+      // `rsvp-deadline.ts`'s `isValidTimeZone` (P-C1): this loop re-resolves
+      // the SAME zone up to 3x per row (here, then twice more inside
+      // `stampEventOffset` below), and an uncached `Intl.DateTimeFormat`
+      // construction per lookup is real CPU across a large sheet.
+      if (!isKnownTimeZone(timezone)) {
         return yield* Effect.fail(
           new MalformedSpreadsheet({
             reason: "Timezone must be an IANA timezone name",
