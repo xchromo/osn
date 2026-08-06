@@ -58,13 +58,16 @@ hop to get past. The panel below animates between content heights
 - A rejected save left its message only in a toast that had since faded; the
   listing form and the enquiry thread now keep it on the surface too.
 
-**Hardening.** `astro check` now runs on this package (added as a `check`
-script, so CI's `bun run check` covers it) — which immediately surfaced five
-type errors in test files that had never been checked, all fixed: a
-`RpAuthConfig` that was given a non-existent `issuerUrl` key, and four unsound
-spreads into fixed-arity mocks. The CSP drops `fonts.googleapis.com` and
-`fonts.gstatic.com` from `style-src`/`font-src` now that nothing links them, and
-`headers.test.ts` asserts their absence rather than their presence.
+**Hardening.** The CSP drops `fonts.googleapis.com` and `fonts.gstatic.com`
+from `style-src`/`font-src` now that nothing links them, and `headers.test.ts`
+asserts their *absence* rather than their presence — so re-adding a `<link>`
+without re-adding the origin fails the suite instead of silently falling back to
+Georgia under enforcement.
+
+This branch also put `astro check` on the package and fixed the type errors it
+had been hiding — but `cire-vendor-type-check` landed the same thing on main
+first, in parallel, down to the same `apiBase` value. That work is main's, not
+this branch's; what survives here is the larger surface for the gate to cover.
 
 **Review fixes.** The account menu is the package's only Kobalte consumer — 87 KB
 raw / 28 KB gzip — and porting it eagerly would have put that on a `client:only`

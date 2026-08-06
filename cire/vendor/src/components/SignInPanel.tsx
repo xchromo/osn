@@ -2,7 +2,6 @@ import {
   clearAuthError,
   readAuthError,
   resumeSession,
-  startCreateAccount,
   startSignIn,
   type RpAuthConfig,
 } from "@shared/rp-auth";
@@ -26,15 +25,16 @@ const ERROR_COPY: Record<string, string> = {
  * OIDC start leg, which sends the vendor to the identity app and takes the
  * code back in exchange for a cire session cookie.
  *
- * Both buttons leave for the same issuer and end in the same place — a signed-
- * in vendor on the dashboard. The second only adds `prompt=create`, which asks
- * the identity app to open on its sign-up screen instead of its sign-in one.
- * That is worth a button of its own: someone here for the first time has no
- * passkey to offer, and a screen demanding one is a dead end rather than an
- * invitation.
+ * **One button, not two.** There used to be a second — "Create account with
+ * musubi", which added `prompt=create` so the identity app opened on its
+ * sign-up screen. It is gone because the choice was never cire's to offer: both
+ * buttons left for the same issuer and ended in the same place, and the issuer
+ * is the only side that knows whether this person already has an account. Its
+ * sign-in screen carries its own "No account yet? Create one", so someone
+ * arriving without a passkey is not stranded — they just make the account one
+ * screen later, on the surface that owns account creation.
  *
- * The page does not leave for the issuer on its own. It used to, back when
- * there was nothing to choose; now there is. It does still ask cire/api, in
+ * The page does not leave for the issuer on its own. It does ask cire/api, in
  * the background, whether this browser already holds a cire session — someone
  * who is signed in already wants the dashboard, not a second sign-in. That
  * question only reaches as far as cire's own cookie: a session at musubi is
@@ -48,7 +48,6 @@ export default function SignInPanel() {
   // signed-in vendor straight off again.
   const home = () => new URL("/", window.location.origin).toString();
   const signIn = () => startSignIn(authConfig, home());
-  const createAccount = () => startCreateAccount(authConfig, home());
 
   onMount(() => {
     const marker = readAuthError();
@@ -80,15 +79,13 @@ export default function SignInPanel() {
         sees it.
       </p>
 
-      <div class="flex flex-col gap-3">
-        <Button variant="primary" onClick={signIn} class="w-full">
-          Continue with musubi
-        </Button>
+      <Button variant="primary" onClick={signIn} class="w-full">
+        Continue with musubi
+      </Button>
 
-        <Button variant="outline" onClick={createAccount} class="w-full">
-          Create account with musubi
-        </Button>
-      </div>
+      <p class="font-body text-text-muted text-[0.88rem] leading-relaxed">
+        No musubi account yet? You can create one on the next screen.
+      </p>
     </div>
   );
 }

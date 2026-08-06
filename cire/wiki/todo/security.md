@@ -392,11 +392,12 @@ malformed string — now in `AccountAvatar.httpsAvatarUrl`, with `ProfileMenu.te
 `window.opener` to musubi. Both point at `PUBLIC_OSN_ACCOUNT_URL`, which is build-time config, not
 user data.
 
-Also worth recording because it is invisible in the diff: **`astro check` now runs on this package**, and the
-first run found five type errors in test files that had never been checked — including an `AuthProvider`
-handed a non-existent `issuerUrl` key instead of `apiBase`. That one is not exploitable (the suites mock
-`useAuth`, so the value was never read), but it is exactly the shape of thing that stops being harmless the
-day a test stops mocking.
+Also worth recording: **`astro check` covers this package now**, though that landed on main independently as
+`cire-vendor-type-check` while this branch was open — both arrived at the same script and, bar one, the same
+fixes. The error worth naming is an `AuthProvider` handed a non-existent `issuerUrl` key instead of
+`apiBase`. Not exploitable (the suites mock `useAuth`, so the value was never read), but exactly the shape of
+thing that stops being harmless the day a test stops mocking — and it sat there for as long as the package
+was outside the gate.
 
 - [ ] **VP-T-S1..S4** (test coverage, deferred) — from the same review round. Not security findings, recorded
   here so they are not lost: `Chip`'s four tones are not asserted distinct (its siblings all pin their variant

@@ -6,9 +6,9 @@
     "dev": "astro dev --port 4326",
     "build": "astro build",
     "preview": "astro preview",
+    "check": "bunx --bun astro check",
     "test": "bunx --bun vitest",
-    "test:run": "bunx --bun vitest run",
-    "check": "bunx --bun astro check"
+    "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
     "@astrojs/solid-js": "^7.0.1",
