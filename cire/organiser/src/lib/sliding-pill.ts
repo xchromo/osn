@@ -1,5 +1,4 @@
-import { createEffect, type JSX, onCleanup, onMount } from "solid-js";
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, type JSX, onCleanup, onMount } from "solid-js";
 
 /**
  * One indicator that moves between items, instead of one border per item.
