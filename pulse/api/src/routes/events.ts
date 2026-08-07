@@ -527,12 +527,17 @@ export const createEventsRoutes = (
             set.status = 404;
             return { message: "Event not found" };
           }
-          return { event: result };
+          return { event: serializeEvent(result) };
         },
         {
           params: t.Object({
             id: t.String(),
           }),
+          response: {
+            200: t.Object({ event: eventResponseSchema }),
+            404: messageResponse,
+          },
+          detail: { operationId: "getEventById" },
         },
       )
       .post(
@@ -570,7 +575,7 @@ export const createEventsRoutes = (
           );
           if ("error" in result) return result;
           set.status = 201;
-          return { event: result };
+          return { event: serializeEvent(result) };
         },
         {
           body: t.Object({
@@ -593,6 +598,13 @@ export const createEventsRoutes = (
             priceAmount: priceAmountSchema,
             priceCurrency: priceCurrencySchema,
           }),
+          response: {
+            201: t.Object({ event: eventResponseSchema }),
+            401: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "createEvent", security: [{ bearerAuth: [] }] },
         },
       )
       .patch(
@@ -634,7 +646,7 @@ export const createEventsRoutes = (
           }
           if ("error" in result) return result;
           if ("message" in result) return result;
-          return { event: result };
+          return { event: serializeEvent(result) };
         },
         {
           params: t.Object({ id: t.String() }),
@@ -658,6 +670,15 @@ export const createEventsRoutes = (
             priceAmount: priceAmountSchema,
             priceCurrency: priceCurrencySchema,
           }),
+          response: {
+            200: t.Object({ event: eventResponseSchema }),
+            401: messageResponse,
+            403: messageResponse,
+            404: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "updateEvent", security: [{ bearerAuth: [] }] },
         },
       )
       .delete(
@@ -693,6 +714,13 @@ export const createEventsRoutes = (
         },
         {
           params: t.Object({ id: t.String() }),
+          response: {
+            204: t.Void(),
+            401: messageResponse,
+            403: messageResponse,
+            404: messageResponse,
+          },
+          detail: { operationId: "deleteEvent", security: [{ bearerAuth: [] }] },
         },
       )
       // ── RSVPs ────────────────────────────────────────────────────────────
