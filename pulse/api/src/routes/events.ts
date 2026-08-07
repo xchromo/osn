@@ -1,4 +1,4 @@
-import type { Event } from "@pulse/db/schema";
+import type { Event, EventRsvp } from "@pulse/db/schema";
 import { DbLive, type Db } from "@pulse/db/service";
 import { extractClaims } from "@shared/osn-auth-client/verify";
 import {
@@ -189,6 +189,65 @@ const calendarEntryResponseSchema = t.Object({
   event: eventResponseSchema,
   myStatus: t.Union([t.Literal("going"), t.Literal("maybe"), t.Null()]),
   isHost: t.Boolean(),
+});
+
+const rsvpResponseSchema = t.Object({
+  id: t.String(),
+  eventId: t.String(),
+  profileId: t.String(),
+  status: t.Union([
+    t.Literal("going"),
+    t.Literal("maybe"),
+    t.Literal("not_going"),
+    t.Literal("invited"),
+  ]),
+  invitedByProfileId: t.Nullable(t.String()),
+  isCloseFriend: t.Boolean(),
+  createdAt: t.String({ format: "date-time" }),
+  profile: t.Nullable(
+    t.Object({
+      id: t.String(),
+      handle: t.String(),
+      displayName: t.Nullable(t.String()),
+      avatarUrl: t.Nullable(t.String()),
+    }),
+  ),
+});
+
+const rsvpCountsResponseSchema = t.Object({
+  going: t.Number(),
+  maybe: t.Number(),
+  not_going: t.Number(),
+  invited: t.Number(),
+});
+
+// `upsertRsvp` returns the raw `event_rsvps` row — no `profile` join, no
+// `isCloseFriend` stamp. Distinct shape from `serializeRsvp`/`rsvpResponseSchema`.
+const serializeRawRsvp = (row: EventRsvp) => ({
+  ...row,
+  createdAt: row.createdAt.toISOString(),
+  shareSourceFirstSeenAt: row.shareSourceFirstSeenAt
+    ? row.shareSourceFirstSeenAt.toISOString()
+    : null,
+  shareSourceLastSeenAt: row.shareSourceLastSeenAt ? row.shareSourceLastSeenAt.toISOString() : null,
+});
+
+const rawRsvpResponseSchema = t.Object({
+  id: t.String(),
+  eventId: t.String(),
+  profileId: t.String(),
+  status: t.Union([
+    t.Literal("going"),
+    t.Literal("maybe"),
+    t.Literal("not_going"),
+    t.Literal("invited"),
+  ]),
+  invitedByProfileId: t.Nullable(t.String()),
+  shareSourceFirst: t.Nullable(t.String()),
+  shareSourceFirstSeenAt: t.Nullable(t.String({ format: "date-time" })),
+  shareSourceLast: t.Nullable(t.String()),
+  shareSourceLastSeenAt: t.Nullable(t.String({ format: "date-time" })),
+  createdAt: t.String({ format: "date-time" }),
 });
 
 // Currency union for the discover route's query string. Separate from the
@@ -788,6 +847,15 @@ export const createEventsRoutes = (
             status: t.Optional(rsvpFilterStatusEnum),
             limit: t.Optional(t.String()),
           }),
+          response: {
+            200: t.Object({
+              rsvps: t.Array(rsvpResponseSchema),
+              canViewAttendees: t.Boolean(),
+            }),
+            404: messageResponse,
+            500: errorResponse,
+          },
+          detail: { operationId: "listEventRsvps" },
         },
       )
       .get(
@@ -823,7 +891,14 @@ export const createEventsRoutes = (
           }
           return { counts: result };
         },
-        { params: t.Object({ id: t.String() }) },
+        {
+          params: t.Object({ id: t.String() }),
+          response: {
+            200: t.Object({ counts: rsvpCountsResponseSchema }),
+            404: messageResponse,
+          },
+          detail: { operationId: "getEventRsvpCounts" },
+        },
       )
       .get(
         "/:id/rsvps/latest",
@@ -874,6 +949,15 @@ export const createEventsRoutes = (
         {
           params: t.Object({ id: t.String() }),
           query: t.Object({ limit: t.Optional(t.String()) }),
+          response: {
+            200: t.Object({
+              rsvps: t.Array(rsvpResponseSchema),
+              canViewAttendees: t.Boolean(),
+            }),
+            404: messageResponse,
+            500: errorResponse,
+          },
+          detail: { operationId: "listLatestEventRsvps" },
         },
       )
       .post(
@@ -913,7 +997,7 @@ export const createEventsRoutes = (
             return { message: "Event not found" } as const;
           }
           if ("message" in result || "error" in result) return result;
-          return { rsvp: result };
+          return { rsvp: serializeRawRsvp(result) };
         },
         {
           params: t.Object({ id: t.String() }),
@@ -921,6 +1005,15 @@ export const createEventsRoutes = (
             status: rsvpStatusEnum,
             shareSource: t.Optional(shareSourceTypeBox),
           }),
+          response: {
+            200: t.Object({ rsvp: rawRsvpResponseSchema }),
+            401: messageResponse,
+            403: messageResponse,
+            404: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "rsvpToEvent", security: [{ bearerAuth: [] }] },
         },
       )
       // ── Share-attribution telemetry ─────────────────────────────────────
