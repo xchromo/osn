@@ -124,7 +124,7 @@ const statusEnum = t.Optional(
  * `cancelledAt`/`hardDeleteAt` are plain unix-second integers, not
  * timestamp columns, so they pass through unchanged.
  */
-const serializeEvent = (e: Event) => ({
+export const serializeEvent = (e: Event) => ({
   ...e,
   startTime: e.startTime.toISOString(),
   endTime: e.endTime ? e.endTime.toISOString() : null,
@@ -135,7 +135,7 @@ const serializeEvent = (e: Event) => ({
 const messageResponse = t.Object({ message: t.String() });
 const errorResponse = t.Object({ error: t.String() });
 
-const eventResponseSchema = t.Object({
+export const eventResponseSchema = t.Object({
   id: t.String(),
   title: t.String(),
   description: t.Nullable(t.String()),
@@ -769,7 +769,7 @@ export const createEventsRoutes = (
           }
           if (result != null && "message" in result) return result;
           set.status = 204;
-          return null;
+          return;
         },
         {
           params: t.Object({ id: t.String() }),
@@ -1048,7 +1048,7 @@ export const createEventsRoutes = (
           }
           metricShareInvoked(body.source as ShareSource, "event_detail");
           set.status = 204;
-          return null;
+          return;
         },
         {
           params: t.Object({ id: t.String() }),
@@ -1087,11 +1087,11 @@ export const createEventsRoutes = (
           // analytics — same rule as the RSVP attribution short-circuit.
           if (claims?.profileId && claims.profileId === meta.createdByProfileId) {
             set.status = 204;
-            return null;
+            return;
           }
           metricShareExposure(body.source as ShareSource, "event_detail");
           set.status = 204;
-          return null;
+          return;
         },
         {
           params: t.Object({ id: t.String() }),

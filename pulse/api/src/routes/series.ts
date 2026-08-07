@@ -1,3 +1,4 @@
+import type { EventSeries } from "@pulse/db/schema";
 import { DbLive, type Db } from "@pulse/db/service";
 import { extractClaims } from "@shared/osn-auth-client/verify";
 import type { RateLimiterBackend } from "@shared/rate-limit";
@@ -14,6 +15,7 @@ import {
   listInstances,
   updateSeries,
 } from "../services/series";
+import { eventResponseSchema, serializeEvent } from "./events";
 
 const visibilityEnum = t.Optional(t.Union([t.Literal("public"), t.Literal("private")]));
 const guestListVisibilityEnum = t.Optional(
@@ -23,6 +25,65 @@ const joinPolicyEnum = t.Optional(t.Union([t.Literal("open"), t.Literal("guest_l
 const commsChannelsSchema = t.Optional(
   t.Array(t.Union([t.Literal("sms"), t.Literal("email")]), { minItems: 1, maxItems: 2 }),
 );
+
+const messageResponse = t.Object({ message: t.String() });
+const errorResponse = t.Object({ error: t.String() });
+
+/**
+ * Converts a raw `event_series` row (drizzle hydrates `timestamp` columns to
+ * `Date`) into its wire shape — same rationale as `serializeEvent` in
+ * `routes/events.ts`: the `response:` schema validates the pre-serialisation
+ * value, so `t.String({ format: "date-time" })` needs an actual string.
+ */
+const serializeSeries = (s: EventSeries) => ({
+  ...s,
+  dtstart: s.dtstart.toISOString(),
+  until: s.until ? s.until.toISOString() : null,
+  materializedThrough: s.materializedThrough.toISOString(),
+  createdAt: s.createdAt.toISOString(),
+  updatedAt: s.updatedAt.toISOString(),
+});
+
+const seriesResponseSchema = t.Object({
+  id: t.String(),
+  title: t.String(),
+  description: t.Nullable(t.String()),
+  location: t.Nullable(t.String()),
+  venue: t.Nullable(t.String()),
+  latitude: t.Nullable(t.Number()),
+  longitude: t.Nullable(t.Number()),
+  category: t.Nullable(t.String()),
+  imageUrl: t.Nullable(t.String()),
+  durationMinutes: t.Nullable(t.Number()),
+  visibility: t.Union([t.Literal("public"), t.Literal("private")]),
+  guestListVisibility: t.Union([
+    t.Literal("public"),
+    t.Literal("connections"),
+    t.Literal("private"),
+  ]),
+  joinPolicy: t.Union([t.Literal("open"), t.Literal("guest_list")]),
+  allowInterested: t.Boolean(),
+  commsChannels: t.String(),
+  rrule: t.String(),
+  dtstart: t.String({ format: "date-time" }),
+  until: t.Nullable(t.String({ format: "date-time" })),
+  materializedThrough: t.String({ format: "date-time" }),
+  timezone: t.String(),
+  status: t.Union([t.Literal("active"), t.Literal("ended"), t.Literal("cancelled")]),
+  chatId: t.Nullable(t.String()),
+  createdByProfileId: t.String(),
+  createdByName: t.Nullable(t.String()),
+  createdByAvatar: t.Nullable(t.String()),
+  createdAt: t.String({ format: "date-time" }),
+  updatedAt: t.String({ format: "date-time" }),
+});
+
+const rruleInvalidReasonEnum = t.Union([
+  t.Literal("unsupported_freq"),
+  t.Literal("too_many_instances"),
+  t.Literal("missing_termination"),
+  t.Literal("parse_error"),
+]);
 
 export const createSeriesRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
@@ -85,7 +146,10 @@ export const createSeriesRoutes = (
         );
         if ("error" in result) return result;
         set.status = 201;
-        return result;
+        return {
+          series: serializeSeries(result.series),
+          instances: result.instances.map(serializeEvent),
+        };
       },
       {
         body: t.Object({
@@ -107,6 +171,16 @@ export const createSeriesRoutes = (
           dtstart: t.String({ format: "date-time" }),
           timezone: t.Optional(t.String({ maxLength: 100 })),
         }),
+        response: {
+          201: t.Object({ series: seriesResponseSchema, instances: t.Array(eventResponseSchema) }),
+          401: messageResponse,
+          422: t.Union([
+            errorResponse,
+            t.Object({ error: t.String(), reason: rruleInvalidReasonEnum }),
+          ]),
+          429: errorResponse,
+        },
+        detail: { operationId: "createSeries", security: [{ bearerAuth: [] }] },
       },
     )
     .get(
@@ -154,9 +228,16 @@ export const createSeriesRoutes = (
           }
         }
 
-        return { series };
+        return { series: serializeSeries(series) };
       },
-      { params: t.Object({ id: t.String() }) },
+      {
+        params: t.Object({ id: t.String() }),
+        response: {
+          200: t.Object({ series: seriesResponseSchema }),
+          404: messageResponse,
+        },
+        detail: { operationId: "getSeries" },
+      },
     )
     .get(
       "/:id/instances",
@@ -176,7 +257,7 @@ export const createSeriesRoutes = (
           set.status = 404;
           return { message: "Series not found" } as const;
         }
-        return { instances: result };
+        return { instances: result.map(serializeEvent) };
       },
       {
         params: t.Object({ id: t.String() }),
@@ -184,6 +265,11 @@ export const createSeriesRoutes = (
           scope: t.Optional(t.Union([t.Literal("past"), t.Literal("upcoming"), t.Literal("all")])),
           limit: t.Optional(t.String()),
         }),
+        response: {
+          200: t.Object({ instances: t.Array(eventResponseSchema) }),
+          404: messageResponse,
+        },
+        detail: { operationId: "listSeriesInstances" },
       },
     )
     .patch(
@@ -223,7 +309,7 @@ export const createSeriesRoutes = (
           return { message: "Series not found" } as const;
         }
         if ("error" in result || "message" in result) return result;
-        return result;
+        return { series: serializeSeries(result.series), updated: result.updated };
       },
       {
         params: t.Object({ id: t.String() }),
@@ -245,6 +331,15 @@ export const createSeriesRoutes = (
           scope: t.Optional(t.Union([t.Literal("this_and_following"), t.Literal("all_future")])),
           from: t.Optional(t.String()),
         }),
+        response: {
+          200: t.Object({ series: seriesResponseSchema, updated: t.Number() }),
+          401: messageResponse,
+          403: messageResponse,
+          404: messageResponse,
+          422: errorResponse,
+          429: errorResponse,
+        },
+        detail: { operationId: "updateSeries", security: [{ bearerAuth: [] }] },
       },
     )
     .delete(
@@ -276,6 +371,15 @@ export const createSeriesRoutes = (
         if ("message" in result) return result;
         return result;
       },
-      { params: t.Object({ id: t.String() }) },
+      {
+        params: t.Object({ id: t.String() }),
+        response: {
+          200: t.Object({ cancelled: t.Number() }),
+          401: messageResponse,
+          403: messageResponse,
+          404: messageResponse,
+        },
+        detail: { operationId: "cancelSeries", security: [{ bearerAuth: [] }] },
+      },
     );
 };
