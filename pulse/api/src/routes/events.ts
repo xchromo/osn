@@ -1053,6 +1053,12 @@ export const createEventsRoutes = (
         {
           params: t.Object({ id: t.String() }),
           body: t.Object({ source: shareSourceTypeBox }),
+          response: {
+            204: t.Void(),
+            404: messageResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "recordEventShare" },
         },
       )
       .post(
@@ -1090,6 +1096,12 @@ export const createEventsRoutes = (
         {
           params: t.Object({ id: t.String() }),
           body: t.Object({ source: shareSourceTypeBox }),
+          response: {
+            204: t.Void(),
+            404: messageResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "recordEventExposure" },
         },
       )
       .post(
@@ -1135,6 +1147,15 @@ export const createEventsRoutes = (
           body: t.Object({
             profileIds: t.Array(t.String(), { minItems: 1, maxItems: MAX_EVENT_GUESTS }),
           }),
+          response: {
+            200: t.Object({ invited: t.Number() }),
+            401: messageResponse,
+            403: messageResponse,
+            404: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "inviteEventGuests", security: [{ bearerAuth: [] }] },
         },
       )
       // ── Add to calendar ─────────────────────────────────────────────────
