@@ -56,6 +56,7 @@ export const createSettingsRoutes = (
       };
     },
     {
+      parse: "application/json",
       body: t.Object({
         attendanceVisibility: t.Optional(t.Union([t.Literal("connections"), t.Literal("no_one")])),
       }),

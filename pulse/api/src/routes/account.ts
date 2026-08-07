@@ -127,6 +127,7 @@ export const createAccountRoutes = (
         }
       },
       {
+        parse: "application/json",
         // accountId is derived server-to-server from the step-up verify
         // response's verified `sub` claim (S-H2); it is intentionally
         // absent from access tokens (P6) and from this request body.

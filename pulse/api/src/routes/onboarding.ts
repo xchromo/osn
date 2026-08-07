@@ -237,6 +237,7 @@ export const createOnboardingRoutes = (
         return toWire(result.status);
       },
       {
+        parse: "application/json",
         body: t.Object({
           interests: t.Array(interestLiteral, { maxItems: 8 }),
           notificationsOptIn: t.Boolean(),

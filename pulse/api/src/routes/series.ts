@@ -152,6 +152,7 @@ export const createSeriesRoutes = (
         };
       },
       {
+        parse: "application/json",
         body: t.Object({
           title: t.String({ minLength: 1, maxLength: 200 }),
           description: t.Optional(t.String({ maxLength: 5000 })),
@@ -312,6 +313,7 @@ export const createSeriesRoutes = (
         return { series: serializeSeries(result.series), updated: result.updated };
       },
       {
+        parse: "application/json",
         params: t.Object({ id: t.String() }),
         body: t.Object({
           title: t.Optional(t.String({ minLength: 1, maxLength: 200 })),

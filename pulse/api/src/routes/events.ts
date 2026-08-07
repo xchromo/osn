@@ -637,6 +637,7 @@ export const createEventsRoutes = (
           return { event: serializeEvent(result) };
         },
         {
+          parse: "application/json",
           body: t.Object({
             title: t.String(),
             description: t.Optional(t.String()),
@@ -708,6 +709,7 @@ export const createEventsRoutes = (
           return { event: serializeEvent(result) };
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({
             title: t.Optional(t.String()),
@@ -1000,6 +1002,7 @@ export const createEventsRoutes = (
           return { rsvp: serializeRawRsvp(result) };
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({
             status: rsvpStatusEnum,
@@ -1051,6 +1054,7 @@ export const createEventsRoutes = (
           return;
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({ source: shareSourceTypeBox }),
           response: {
@@ -1094,6 +1098,7 @@ export const createEventsRoutes = (
           return;
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({ source: shareSourceTypeBox }),
           response: {
@@ -1143,6 +1148,7 @@ export const createEventsRoutes = (
           return result;
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({
             profileIds: t.Array(t.String(), { minItems: 1, maxItems: MAX_EVENT_GUESTS }),
@@ -1358,6 +1364,7 @@ export const createEventsRoutes = (
           };
         },
         {
+          parse: "application/json",
           params: t.Object({ id: t.String() }),
           body: t.Object({
             channels: t.Array(t.Union([t.Literal("sms"), t.Literal("email")]), {
