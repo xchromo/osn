@@ -1,3 +1,4 @@
+import type { Event } from "@pulse/db/schema";
 import { DbLive, type Db } from "@pulse/db/service";
 import { extractClaims } from "@shared/osn-auth-client/verify";
 import {
@@ -113,6 +114,82 @@ const statusEnum = t.Optional(
     t.Literal("cancelled"),
   ]),
 );
+
+/**
+ * Converts a raw `events` row (drizzle hydrates `timestamp` columns to
+ * `Date`) into its wire shape. Wire-identical to the prior behaviour —
+ * `JSON.stringify` already rendered `Date` as an ISO string — but Elysia's
+ * `response:` schema validates the pre-serialisation value, so `t.String({
+ * format: "date-time" })` needs an actual string here, not a `Date`.
+ * `cancelledAt`/`hardDeleteAt` are plain unix-second integers, not
+ * timestamp columns, so they pass through unchanged.
+ */
+const serializeEvent = (e: Event) => ({
+  ...e,
+  startTime: e.startTime.toISOString(),
+  endTime: e.endTime ? e.endTime.toISOString() : null,
+  createdAt: e.createdAt.toISOString(),
+  updatedAt: e.updatedAt.toISOString(),
+});
+
+const messageResponse = t.Object({ message: t.String() });
+const errorResponse = t.Object({ error: t.String() });
+
+const eventResponseSchema = t.Object({
+  id: t.String(),
+  title: t.String(),
+  description: t.Nullable(t.String()),
+  location: t.Nullable(t.String()),
+  venue: t.Nullable(t.String()),
+  venueId: t.Nullable(t.String()),
+  latitude: t.Nullable(t.Number()),
+  longitude: t.Nullable(t.Number()),
+  category: t.Nullable(t.String()),
+  startTime: t.String({ format: "date-time" }),
+  endTime: t.Nullable(t.String({ format: "date-time" })),
+  status: t.Union([
+    t.Literal("upcoming"),
+    t.Literal("ongoing"),
+    t.Literal("maybe_finished"),
+    t.Literal("finished"),
+    t.Literal("cancelled"),
+  ]),
+  imageUrl: t.Nullable(t.String()),
+  priceAmount: t.Nullable(t.Number()),
+  priceCurrency: t.Nullable(t.String()),
+  visibility: t.Union([t.Literal("public"), t.Literal("private")]),
+  guestListVisibility: t.Union([
+    t.Literal("public"),
+    t.Literal("connections"),
+    t.Literal("private"),
+  ]),
+  joinPolicy: t.Union([t.Literal("open"), t.Literal("guest_list")]),
+  allowInterested: t.Boolean(),
+  // Raw JSON-encoded text column — only `GET /:id/comms` decodes this into
+  // an actual array (via `parseCommsChannels`); everywhere else the event
+  // row carries the undecoded string.
+  commsChannels: t.String(),
+  chatId: t.Nullable(t.String()),
+  seriesId: t.Nullable(t.String()),
+  instanceOverride: t.Boolean(),
+  createdByProfileId: t.String(),
+  createdByName: t.Nullable(t.String()),
+  createdByAvatar: t.Nullable(t.String()),
+  // Unix seconds, not timestamp columns — no `.toISOString()`.
+  cancelledAt: t.Nullable(t.Number()),
+  hardDeleteAt: t.Nullable(t.Number()),
+  cancellationReason: t.Nullable(
+    t.Union([t.Literal("host_left"), t.Literal("organiser"), t.Literal("admin")]),
+  ),
+  createdAt: t.String({ format: "date-time" }),
+  updatedAt: t.String({ format: "date-time" }),
+});
+
+const calendarEntryResponseSchema = t.Object({
+  event: eventResponseSchema,
+  myStatus: t.Union([t.Literal("going"), t.Literal("maybe"), t.Null()]),
+  isHost: t.Boolean(),
+});
 
 // Currency union for the discover route's query string. Separate from the
 // body schema above because query params don't need the `Nullable` wrapper
@@ -273,7 +350,7 @@ export const createEventsRoutes = (
           const result = await runtime.runPromise(
             listEvents({ ...query, viewerId: claims?.profileId ?? null }),
           );
-          return { events: result };
+          return { events: result.map(serializeEvent) };
         },
         {
           query: t.Object({
@@ -281,12 +358,21 @@ export const createEventsRoutes = (
             category: t.Optional(t.String()),
             limit: t.Optional(t.String()),
           }),
+          response: { 200: t.Object({ events: t.Array(eventResponseSchema) }) },
+          detail: { operationId: "listEvents" },
         },
       )
-      .get("/today", async () => {
-        const result = await runtime.runPromise(listTodayEvents);
-        return { events: result };
-      })
+      .get(
+        "/today",
+        async () => {
+          const result = await runtime.runPromise(listTodayEvents);
+          return { events: result.map(serializeEvent) };
+        },
+        {
+          response: { 200: t.Object({ events: t.Array(eventResponseSchema) }) },
+          detail: { operationId: "listTodayEvents" },
+        },
+      )
       .get(
         "/calendar",
         async ({ query, headers, set }) => {
@@ -313,9 +399,19 @@ export const createEventsRoutes = (
             set.status = 500;
             return { error: "Failed to load calendar" } as const;
           }
-          return { entries: result };
+          return {
+            entries: result.map((entry) => ({ ...entry, event: serializeEvent(entry.event) })),
+          };
         },
-        { query: t.Object({ limit: t.Optional(t.String()) }) },
+        {
+          query: t.Object({ limit: t.Optional(t.String()) }),
+          response: {
+            200: t.Object({ entries: t.Array(calendarEntryResponseSchema) }),
+            401: messageResponse,
+            500: errorResponse,
+          },
+          detail: { operationId: "listMyCalendarEvents", security: [{ bearerAuth: [] }] },
+        },
       )
       .get(
         "/discover",
@@ -370,9 +466,8 @@ export const createEventsRoutes = (
             ),
           );
           if ("error" in result) return result;
-          if ("message" in result) return result;
           return {
-            events: result.events,
+            events: result.events.map(serializeEvent),
             nextCursor: result.nextCursor,
             series: result.series,
           };
@@ -393,6 +488,21 @@ export const createEventsRoutes = (
             cursorId: t.Optional(t.String()),
             limit: t.Optional(t.Numeric({ minimum: 1, maximum: 50 })),
           }),
+          response: {
+            200: t.Object({
+              events: t.Array(eventResponseSchema),
+              nextCursor: t.Nullable(
+                t.Object({ startTime: t.String({ format: "date-time" }), id: t.String() }),
+              ),
+              series: t.Record(t.String(), t.Object({ id: t.String(), title: t.String() })),
+            }),
+            401: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+            500: errorResponse,
+            502: errorResponse,
+          },
+          detail: { operationId: "discoverEvents" },
         },
       )
       .get(
