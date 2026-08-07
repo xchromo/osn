@@ -439,4 +439,79 @@ describe("GuestTable", () => {
     // The row is NOT muted (no optimistic flip on failure).
     expect(screen.queryByText(/Deactivated — code disabled/i)).toBeNull();
   });
+
+  it("filters the list to a household matching the search text", async () => {
+    primeLoad();
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
+    expect(screen.getByText("Jones")).toBeTruthy();
+
+    fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "Jones" } });
+
+    expect(screen.queryByText("Sharma")).toBeNull();
+    expect(screen.getByText("Jones")).toBeTruthy();
+  });
+
+  it("filters by a member's name even when the household name doesn't match", async () => {
+    primeLoad();
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
+
+    fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "ada" } });
+
+    expect(screen.getByText("Sharma")).toBeTruthy();
+    expect(screen.getByText("Ada Sharma")).toBeTruthy();
+    expect(screen.queryByText("Jones")).toBeNull();
+  });
+
+  it("filters by a family code substring", async () => {
+    primeLoad();
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
+
+    fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "77q2" } });
+
+    expect(screen.getByText("Jones")).toBeTruthy();
+    expect(screen.queryByText("Sharma")).toBeNull();
+  });
+
+  it("shows a no-matches message when nothing in the roster matches", async () => {
+    primeLoad();
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
+
+    fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "zzzznotfound" } });
+
+    expect(screen.queryByText("Sharma")).toBeNull();
+    expect(screen.queryByText("Jones")).toBeNull();
+    expect(screen.getByText(/No guests match/i)).toBeTruthy();
+  });
 });
