@@ -455,7 +455,8 @@ describe("GuestTable", () => {
 
     fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "Jones" } });
 
-    expect(screen.queryByText("Sharma")).toBeNull();
+    // The filter is debounced (P-W1) — it only applies once typing pauses.
+    await waitFor(() => expect(screen.queryByText("Sharma")).toBeNull());
     expect(screen.getByText("Jones")).toBeTruthy();
   });
 
@@ -473,9 +474,9 @@ describe("GuestTable", () => {
 
     fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "ada" } });
 
+    await waitFor(() => expect(screen.queryByText("Jones")).toBeNull());
     expect(screen.getByText("Sharma")).toBeTruthy();
     expect(screen.getByText("Ada Sharma")).toBeTruthy();
-    expect(screen.queryByText("Jones")).toBeNull();
   });
 
   it("shows only the matching member of a household, not the whole roster", async () => {
@@ -503,11 +504,11 @@ describe("GuestTable", () => {
 
     fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "ada" } });
 
+    // …but only Ada's row does, not her non-matching housemate Zoe's.
+    await waitFor(() => expect(screen.queryByText("Zoe Sharma")).toBeNull());
     // The household header still shows (a member matched)…
     expect(screen.getByText("Sharma")).toBeTruthy();
-    // …but only Ada's row does, not her non-matching housemate Zoe's.
     expect(screen.getByText("Ada Sharma")).toBeTruthy();
-    expect(screen.queryByText("Zoe Sharma")).toBeNull();
   });
 
   it("restores the full roster when the search box is cleared", async () => {
@@ -524,13 +525,13 @@ describe("GuestTable", () => {
 
     const searchBox = screen.getByLabelText("Search guests");
     fireEvent.input(searchBox, { target: { value: "Jones" } });
-    expect(screen.queryByText("Sharma")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Sharma")).toBeNull());
 
     // Clearing back to a whitespace-only query is the same as clearing it
     // entirely — both must fall through the `query.trim()` guard.
     fireEvent.input(searchBox, { target: { value: "   " } });
 
-    expect(screen.getByText("Sharma")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
     expect(screen.getByText("Jones")).toBeTruthy();
   });
 
@@ -548,8 +549,8 @@ describe("GuestTable", () => {
 
     fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "77q2" } });
 
+    await waitFor(() => expect(screen.queryByText("Sharma")).toBeNull());
     expect(screen.getByText("Jones")).toBeTruthy();
-    expect(screen.queryByText("Sharma")).toBeNull();
   });
 
   it("shows a no-matches message when nothing in the roster matches", async () => {
@@ -566,8 +567,8 @@ describe("GuestTable", () => {
 
     fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "zzzznotfound" } });
 
+    await waitFor(() => expect(screen.getByText(/No guests match/i)).toBeTruthy());
     expect(screen.queryByText("Sharma")).toBeNull();
     expect(screen.queryByText("Jones")).toBeNull();
-    expect(screen.getByText(/No guests match/i)).toBeTruthy();
   });
 });
