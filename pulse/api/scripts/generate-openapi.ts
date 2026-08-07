@@ -23,7 +23,7 @@ function sortKeys(value: unknown): unknown {
   }
   if (value !== null && typeof value === "object") {
     const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    for (const key of Object.keys(value as Record<string, unknown>).toSorted()) {
       sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
     }
     return sorted;
@@ -43,4 +43,5 @@ const output = `${JSON.stringify(sortKeys(doc), null, 2)}\n`;
 await mkdir(dirname(OUTPUT_PATH), { recursive: true });
 await writeFile(OUTPUT_PATH, output, "utf-8");
 
+// eslint-disable-next-line no-console -- CLI script output
 console.log(`Wrote ${OUTPUT_PATH}`);
