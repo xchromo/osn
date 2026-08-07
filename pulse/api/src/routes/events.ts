@@ -1218,7 +1218,37 @@ export const createEventsRoutes = (
           set.headers["content-disposition"] = `attachment; filename="${event.id}.ics"`;
           return ics;
         },
-        { params: t.Object({ id: t.String() }) },
+        {
+          params: t.Object({ id: t.String() }),
+          detail: {
+            operationId: "getEventIcs",
+            responses: {
+              "200": {
+                description: "iCalendar event file",
+                content: {
+                  "text/calendar": {
+                    schema: { type: "string" },
+                  },
+                },
+              },
+              "304": {
+                description: "Not modified — client's cached copy is current",
+              },
+              "404": {
+                description: "Event not found",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: { message: { type: "string" } },
+                      required: ["message"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       )
       // ── Comms (stubbed) ─────────────────────────────────────────────────
       .get(
@@ -1259,7 +1289,26 @@ export const createEventsRoutes = (
             })),
           };
         },
-        { params: t.Object({ id: t.String() }) },
+        {
+          params: t.Object({ id: t.String() }),
+          response: {
+            200: t.Object({
+              channels: t.Array(t.Union([t.Literal("sms"), t.Literal("email")])),
+              blasts: t.Array(
+                t.Object({
+                  id: t.String(),
+                  channel: t.Union([t.Literal("sms"), t.Literal("email")]),
+                  body: t.String(),
+                  sentByProfileId: t.String(),
+                  sentAt: t.Nullable(t.String({ format: "date-time" })),
+                  createdAt: t.String({ format: "date-time" }),
+                }),
+              ),
+            }),
+            404: messageResponse,
+          },
+          detail: { operationId: "getEventComms" },
+        },
       )
       .post(
         "/:id/comms/blasts",
@@ -1317,6 +1366,24 @@ export const createEventsRoutes = (
             }),
             body: t.String({ minLength: 1, maxLength: 1600 }),
           }),
+          response: {
+            201: t.Object({
+              blasts: t.Array(
+                t.Object({
+                  id: t.String(),
+                  channel: t.Union([t.Literal("sms"), t.Literal("email")]),
+                  body: t.String(),
+                  sentAt: t.Nullable(t.String({ format: "date-time" })),
+                }),
+              ),
+            }),
+            401: messageResponse,
+            403: messageResponse,
+            404: messageResponse,
+            422: errorResponse,
+            429: errorResponse,
+          },
+          detail: { operationId: "sendEventCommsBlast", security: [{ bearerAuth: [] }] },
         },
       )
   );
