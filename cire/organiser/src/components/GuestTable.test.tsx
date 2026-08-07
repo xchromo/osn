@@ -478,6 +478,62 @@ describe("GuestTable", () => {
     expect(screen.queryByText("Jones")).toBeNull();
   });
 
+  it("shows only the matching member of a household, not the whole roster", async () => {
+    // A household with two members lets us tell "show the whole household
+    // because a member matched" apart from "show only the matching member" —
+    // the single-member fixtures above can't distinguish the two.
+    const multiMember = [
+      GUESTS[0],
+      { ...GUESTS[0], firstName: "Zoe", lastName: "Sharma" },
+      GUESTS[1],
+    ];
+    authFetchMock
+      .mockResolvedValueOnce(json(multiMember))
+      .mockResolvedValueOnce(json(EVENTS))
+      .mockResolvedValueOnce(json({ inviteMessage: null }));
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Zoe Sharma")).toBeTruthy());
+
+    fireEvent.input(screen.getByLabelText("Search guests"), { target: { value: "ada" } });
+
+    // The household header still shows (a member matched)…
+    expect(screen.getByText("Sharma")).toBeTruthy();
+    // …but only Ada's row does, not her non-matching housemate Zoe's.
+    expect(screen.getByText("Ada Sharma")).toBeTruthy();
+    expect(screen.queryByText("Zoe Sharma")).toBeNull();
+  });
+
+  it("restores the full roster when the search box is cleared", async () => {
+    primeLoad();
+    render(() => (
+      <GuestTable
+        weddingId="wed_a"
+        canManage
+        weddingName="Nadia & Sam"
+        weddingSlug="nadia-sam-abc123"
+      />
+    ));
+    await waitFor(() => expect(screen.getByText("Sharma")).toBeTruthy());
+
+    const searchBox = screen.getByLabelText("Search guests");
+    fireEvent.input(searchBox, { target: { value: "Jones" } });
+    expect(screen.queryByText("Sharma")).toBeNull();
+
+    // Clearing back to a whitespace-only query is the same as clearing it
+    // entirely — both must fall through the `query.trim()` guard.
+    fireEvent.input(searchBox, { target: { value: "   " } });
+
+    expect(screen.getByText("Sharma")).toBeTruthy();
+    expect(screen.getByText("Jones")).toBeTruthy();
+  });
+
   it("filters by a family code substring", async () => {
     primeLoad();
     render(() => (
