@@ -19,6 +19,15 @@ exactly one is ever present: layering them relied on Tailwind's emitted utility
 order, which resolves conflicts by stylesheet position and could invert under a
 version bump.
 
+The sweep now marks the *crossing* into a complete response rather than every
+save that happens to leave the party complete: `RsvpModal` compares the party's
+completeness before and after the save (reusing `hasHouseholdResponded` against
+the pre-save rows) and cues the celebration only when it changes. Editing an
+already-complete reply gets the toast and nothing else — re-running the sweep
+there would animate a transition into a state the button is already in. Every
+successful save still raises a toast saying a response was captured, whether it
+is partial, completing, or an edit.
+
 The `<Toaster>` moves from inside the events section to the page root, on a new
 `Z_LAYER.TOAST` above the modal layers. Inside the section it was unusable: the
 section is gated on non-preview mode, so host preview had no toaster mounted at

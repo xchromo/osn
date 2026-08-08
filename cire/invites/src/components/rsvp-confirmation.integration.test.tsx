@@ -112,11 +112,14 @@ function fieldsetFor(name: string): HTMLElement {
  * prefills what was already answered — the same wiring `InvitePage` itself
  * does with `claimResult().rsvps`.
  */
-function Harness(props: { members?: FamilyMember[] } = {}) {
+function Harness(props: { members?: FamilyMember[]; startingRsvps?: RsvpSummary[] } = {}) {
   const members = props.members ?? [priya];
   const [open, setOpen] = createSignal(false);
   const [justResponded, setJustResponded] = createSignal(false);
-  const [rsvps, setRsvps] = createSignal<RsvpSummary[]>([]);
+  // `startingRsvps` stands in for a household that already has rows on file
+  // when the page loads — the precondition for the "edit an already-complete
+  // reply" case, which must NOT re-run the celebration.
+  const [rsvps, setRsvps] = createSignal<RsvpSummary[]>(props.startingRsvps ?? []);
 
   return (
     <>
@@ -257,6 +260,41 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
     expect(svg!.getAttribute("class")).toContain("text-bg");
     const path = svg!.querySelector("path") as SVGPathElement;
     expect(path.hasAttribute("stroke-dasharray")).toBe(false);
+  });
+
+  it("plays nothing on an edit to an already-complete reply, and keeps the mark", async () => {
+    // The sweep marks the CROSSING into a complete response, so a household
+    // that comes back to change an answer gets the toast and no animation — and
+    // critically, the mark it already earned does not blink off to be re-earned.
+    stubOkFetch();
+    vi.useFakeTimers();
+    // Mount with Priya's reply already on file: the party (just Priya) is
+    // complete before this sheet ever opens.
+    render(() => <Harness startingRsvps={[savedRow]} />);
+
+    // Already marked from the recorded rows.
+    expect(fillIsUp()).toBe(true);
+
+    await submit();
+
+    // Advance ONLY the dwell. This is the frame a celebration would begin on,
+    // and the only window in which its absence is observable — assert after
+    // `TOTAL_DURATION_MS` as well and a celebration that ran and finished looks
+    // identical to one that never started.
+    await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+
+    expect(sheet()).toBeNull();
+    // Toast yes, celebration no: the tick is the settled one, not being drawn.
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(fillIsUp()).toBe(true);
+    const path = respondButton().querySelector("svg path") as SVGPathElement;
+    expect(path.hasAttribute("stroke-dasharray")).toBe(false);
+    expect(path.getAttribute("class") ?? "").not.toContain("animate-tick-draw");
+
+    // And the mark is still there once every timer has run out.
+    await vi.advanceTimersByTimeAsync(TOTAL_DURATION_MS);
+    expect(fillIsUp()).toBe(true);
+    expect(respondButton().querySelector("svg")).toBeTruthy();
   });
 
   it("only sweeps the fill once every invited member has answered — a partial save gets the toast, not the celebration", async () => {

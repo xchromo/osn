@@ -449,11 +449,23 @@ version bump from a fill that never appeared at all.
 **Partial saves.** A household no longer has to answer for everybody in one
 sitting: `RsvpModal` sends whichever members have an answer and leaves the
 rest untouched (the API accepts any subset and returns the whole family's
-rows). Every successful save — partial or complete — raises a toast; only a
-save that leaves EVERY invited member of that event answered earns the
-Respond-button sweep. A partial save therefore shows no mark on the button at
-all, which is deliberate: `hasHouseholdResponded` is all-or-nothing, and a
-half-filled button would claim more than the household has actually said.
+rows). Every successful save raises a toast, and the toast says only that a
+response was captured — it is the same message for a partial save, a completing
+save and a later edit.
+
+The sweep is much narrower: it marks the **crossing** into a complete response,
+so it plays at most once per household per event. `RsvpModal.handleSubmit`
+compares `nowComplete` (every invited member answered in the form) against
+`wasComplete` (`hasHouseholdResponded` over the rows as they stood when the
+sheet opened) and cues `onConfirmed` only when the two differ. An edit to an
+already-complete reply therefore gets the toast alone — animating a transition
+into a state the button is already in reads as the reply being re-earned. Host
+preview is unaffected because its synthetic `kind: "host"` family is barred from
+RSVP and so has no rows for `wasComplete` to be true from.
+
+A partial save shows no mark on the button at all, which is deliberate:
+`hasHouseholdResponded` is all-or-nothing, and a half-filled button would claim
+more than the household has actually said.
 
 **The `<Toaster>` lives at the page root**, not in the events section. Inside
 that section it was broken two ways at once: the section is
