@@ -299,27 +299,24 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
 
   it("only sweeps the fill once every invited member has answered — a partial save gets the toast, not the celebration", async () => {
     vi.useFakeTimers();
+    // A fresh `Response` per call, not `mockResolvedValue(oneResponse)`: a body
+    // can only be read once, so a reused instance makes the third submit throw
+    // inside `res.json()` and surface as a connection error.
+    const rajRow = { guestId: "guest-raj", eventId: "event-1", status: "declined", dietary: "" };
+    let call = 0;
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ rsvps: [savedRow] }), {
+      vi.fn(() => {
+        call += 1;
+        // First save answers Priya alone; every later save has the whole party.
+        const rows = call === 1 ? [savedRow] : [savedRow, rajRow];
+        return Promise.resolve(
+          new Response(JSON.stringify({ rsvps: rows }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
-        )
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              rsvps: [
-                savedRow,
-                { guestId: "guest-raj", eventId: "event-1", status: "declined", dietary: "" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        ),
+        );
+      }),
     );
     render(() => <Harness members={[priya, raj]} />);
 
@@ -345,5 +342,31 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
 
     expect(fillIsUp()).toBe(true);
     expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(2);
+    // Drawing, i.e. this save really did celebrate.
+    expect(
+      (respondButton().querySelector("svg path") as SVGPathElement).getAttribute("class"),
+    ).toContain("animate-tick-draw");
+
+    // Let the celebration finish so `onCelebrated` clears `justResponded`.
+    // Mandatory, not tidiness: leave the cue stuck true and the third save
+    // below would be a no-op transition, and the test would pass for the wrong
+    // reason — it would prove nothing about the `celebrate` gate.
+    await vi.advanceTimersByTimeAsync(TOTAL_DURATION_MS);
+
+    // THIRD save, same session: reopen and edit Raj's answer. The party was
+    // already complete — and complete from rows THIS session wrote back through
+    // `onSubmitted`, which is the only path that exercises `wasComplete` against
+    // anything other than mount-time props. Toast, no celebration, mark intact.
+    fireEvent.click(respondButton());
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.click(within(fieldsetFor("Raj")).getByText("Attending"));
+    fireEvent.click(document.querySelector("button[type='submit']") as HTMLElement);
+    await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(3);
+    expect(fillIsUp()).toBe(true);
+    const path = respondButton().querySelector("svg path") as SVGPathElement;
+    expect(path.hasAttribute("stroke-dasharray")).toBe(false);
+    expect(path.getAttribute("class") ?? "").not.toContain("animate-tick-draw");
   });
 });

@@ -143,11 +143,15 @@ function fieldsetFor(name: string): HTMLElement {
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Long enough for the sheet's dwell AND the sweep that starts when it leaves —
- * `SAVED_DWELL_MS` + `SWEEP_DURATION_MS` with room to spare. On real timers a
- * tighter wait catches the sweep mid-travel (~0.97) and reads as a failure.
+ * `vi.waitFor` options for the settled confirmation, in place of a fixed sleep.
+ * The sweep cannot START until the sheet's `SAVED_DWELL_MS` has elapsed and then
+ * runs for `SWEEP_DURATION_MS`, so a sleep sized to their sum has only its slack
+ * to absorb one long task and otherwise samples the sweep mid-travel (~0.97).
+ * The state being waited for is permanent, so waiting longer can never
+ * overshoot, and `waitFor` returns the moment it holds. The default 1000ms
+ * timeout is too short for a ~1400ms choreography, hence the explicit one.
  */
-const SETTLED_MS = SAVED_DWELL_MS + SWEEP_DURATION_MS + 300;
+const SETTLED = { timeout: SAVED_DWELL_MS + SWEEP_DURATION_MS + 3000, interval: 50 };
 
 /** Click "Attending" for one member, by name. */
 function answer(name: string) {
@@ -186,15 +190,20 @@ describe("RSVP confirmation, end to end and painted", () => {
     save();
 
     // The sheet dwells over the button with the reply already recorded. Nothing
-    // may be animating underneath it yet.
-    await wait(100);
+    // may be animating underneath it yet. Anchored to the label flip rather than
+    // to a 100ms sleep: this is a CEILING, and a long stall would let the dwell
+    // fire first, making the sheet gone and the assertion meaningless.
+    await vi.waitFor(() =>
+      expect(document.querySelector("button[type='submit']")!.textContent).toContain("Saved"),
+    );
     expect(sheet()).toBeTruthy();
     expect(scaleX(fill())).toBe(0);
 
     // Sheet gone, sweep played.
-    await wait(SETTLED_MS);
-    expect(sheet()).toBeNull();
-    expect(scaleX(fill())).toBe(1);
+    await vi.waitFor(() => {
+      expect(sheet()).toBeNull();
+      expect(scaleX(fill())).toBe(1);
+    }, SETTLED);
 
     // Seconds past every timer in `rsvp-responded.ts` — the beat the guest
     // complaint is actually about. Kept to +2000 rather than a showier margin:
@@ -232,7 +241,7 @@ describe("RSVP confirmation, end to end and painted", () => {
     await wait(0);
     answer("Priya");
     save();
-    await wait(SETTLED_MS);
+    await vi.waitFor(() => expect(sheet()).toBeNull(), SETTLED);
 
     // A partial save is saved — but the button says nothing, because the
     // household has not finished answering for this event.
@@ -245,9 +254,7 @@ describe("RSVP confirmation, end to end and painted", () => {
     await wait(0);
     answer("Raj");
     save();
-    await wait(SETTLED_MS);
-
-    expect(scaleX(fill())).toBe(1);
+    await vi.waitFor(() => expect(scaleX(fill())).toBe(1), SETTLED);
     await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
     expect(respondButton().querySelector("svg")).not.toBeNull();

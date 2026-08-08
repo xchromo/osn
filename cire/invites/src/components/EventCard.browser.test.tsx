@@ -106,14 +106,33 @@ describe("EventCard — the Respond confirmation, painted", () => {
     setResponded(true);
     setJustResponded(true);
 
-    // Mid-sweep: travelling, not jumped. This is what proves the transition is
-    // wired to the property Tailwind actually writes.
-    await wait(SWEEP_DURATION_MS / 2);
+    // Mid-sweep: travelling, not jumped. This is the assertion that proves the
+    // transition is wired to the standalone `scale` property Tailwind v4 writes
+    // — the mechanism whose failure mode is silent — so it must not be flaky.
+    //
+    // Driven through the Web Animations API rather than a `wait(250)`: a sleep
+    // against a 500ms transition has a hard UPPER bound, and one 250ms long task
+    // (a full-stylesheet recalc, GC, a co-scheduled browser file) reads it as
+    // already landed. Pausing the CSSTransition and setting `currentTime`
+    // measures the same guest-visible fact with no dependence on the scheduler.
+    const sweep = fill.getAnimations()[0];
+    expect(
+      sweep,
+      "no transition on the fill — is `transition-transform` still listing `scale`?",
+    ).toBeTruthy();
+    // Asserted before the sample so a clamped transition (the reduced-motion
+    // block sets 0.01ms) fails on its cause rather than as a confusing
+    // `scale === 1`. Doubles as a precondition check against media emulation
+    // leaking in from a sibling browser file.
+    expect(getComputedStyle(fill).transitionDuration).toBe(`${SWEEP_DURATION_MS / 1000}s`);
+    sweep!.pause();
+    sweep!.currentTime = SWEEP_DURATION_MS / 2;
     const midway = scaleX(fill);
     expect(midway).toBeGreaterThan(0);
     expect(midway).toBeLessThan(1);
 
     // Landed.
+    sweep!.play();
     await wait(SWEEP_DURATION_MS);
     expect(scaleX(fill)).toBe(1);
     expect(getComputedStyle(fill).backgroundColor).toBe(bloom(container));

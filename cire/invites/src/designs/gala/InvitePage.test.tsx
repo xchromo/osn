@@ -1121,8 +1121,16 @@ describe("gala InvitePage", () => {
         fireEvent.click(respond);
         await vi.advanceTimersByTimeAsync(0);
         confirmAndClose();
-        fill = respond.querySelector("span[aria-hidden='true']") as HTMLElement;
-        expect(fill.className).toContain("scale-x-100");
+
+        // Asserted on the tick's DRAW, not on the fill. `confirmed` is monotone
+        // — already true from the first celebration — so `scale-x-100` holds
+        // here whatever happens, including if the reset regressed. `drawing` is
+        // the only observable that separates "celebrated again" from "still
+        // marked from last time". Re-query the path: the `<Show when={drawing()}>`
+        // swaps the node rather than mutating it.
+        const redrawn = respond.querySelector("svg path") as SVGPathElement;
+        expect(redrawn.getAttribute("stroke-dasharray")).toBe("20");
+        expect(redrawn.getAttribute("class")).toContain("animate-tick-draw");
       } finally {
         vi.useRealTimers();
       }

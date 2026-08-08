@@ -1,14 +1,15 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import "../../styles/global.css";
-import { noteClaimed } from "../../components/claim-session";
-import { SWEEP_DURATION_MS, TOTAL_DURATION_MS } from "../../components/rsvp-responded";
-import { SAVED_DWELL_MS } from "../../components/rsvp-saved";
-import type { ClaimResult } from "../../components/types";
-import { Z_LAYER } from "../../lib/z-index";
-import { noSession, withSession } from "../../test-support/claim-fetch";
-import InvitePage from "./InvitePage";
+import "../styles/global.css";
+import { noteClaimed } from "../components/claim-session";
+import { SWEEP_DURATION_MS, TOTAL_DURATION_MS } from "../components/rsvp-responded";
+import { SAVED_DWELL_MS } from "../components/rsvp-saved";
+import type { ClaimResult } from "../components/types";
+import { Z_LAYER } from "../lib/z-index";
+import { noSession, withSession } from "../test-support/claim-fetch";
+import classicInvitePage from "./classic/InvitePage";
+import galaInvitePage from "./gala/InvitePage";
 
 /**
  * The whole invite page, in a real browser, with a real RSVP save measured on
@@ -27,7 +28,7 @@ import InvitePage from "./InvitePage";
  * and the toast touch is the real thing.
  */
 
-vi.mock("../../components/PulseAccountLink", () => ({
+vi.mock("../components/PulseAccountLink", () => ({
   PulseAccountLink: () => <div data-testid="pulse-account-link-stub" />,
 }));
 
@@ -165,15 +166,23 @@ function fixedContainingBlockAncestor(el: HTMLElement): HTMLElement | null {
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const SETTLED_MS = SAVED_DWELL_MS + SWEEP_DURATION_MS + 300;
 
+/**
+ * `vi.waitFor` options for the settled confirmation. The default 1000ms is too
+ * short on purpose-built grounds: the sweep does not START until the sheet's
+ * `SAVED_DWELL_MS` (900ms) has elapsed and then runs for `SWEEP_DURATION_MS`
+ * (500ms), so the earliest it can be settled is ~1400ms. The generous ceiling
+ * costs nothing when the assertion passes — `waitFor` returns as soon as it
+ * does — and the state it waits for is permanent, so it can never overshoot.
+ */
+const SETTLED = { timeout: SAVED_DWELL_MS + SWEEP_DURATION_MS + 3000, interval: 50 };
 /**
  * A returning guest: the session restores, so the invite opens with no unlock
  * choreography to wait through. Two preconditions `createSessionRestore`
  * enforces and it is easy to miss — the `cire_claimed` cookie hint
  * (`noteClaimed()`), and a `slug`, without which it skips the request entirely.
  */
-function openRestored(rsvpResponses: Response[]) {
+function openRestored(Pack: typeof classicInvitePage, rsvpResponses: Response[]) {
   noteClaimed();
   let call = 0;
   const inner = ((input: Parameters<typeof fetch>[0]) => {
@@ -186,7 +195,7 @@ function openRestored(rsvpResponses: Response[]) {
     return Promise.resolve(json({}, 404));
   }) as typeof fetch;
   vi.stubGlobal("fetch", withSession(claim, inner));
-  return render(() => <InvitePage apiUrl="https://api.test" slug="cire-wedding" />);
+  return render(() => <Pack apiUrl="https://api.test" slug="cire-wedding" />);
 }
 
 /**
@@ -198,7 +207,7 @@ function openRestored(rsvpResponses: Response[]) {
  * context — so anything fixed that lives inside that section (the `<Toaster>`
  * does) stops being positioned against the viewport.
  */
-async function openByCode(rsvpResponses: Response[]) {
+async function openByCode(Pack: typeof classicInvitePage, rsvpResponses: Response[]) {
   let call = 0;
   const inner = ((input: Parameters<typeof fetch>[0]) => {
     const url = typeof input === "string" ? input : (input as Request).url;
@@ -211,7 +220,7 @@ async function openByCode(rsvpResponses: Response[]) {
   }) as typeof fetch;
   // No `cire_claimed` hint and no session: the code form is the way in.
   vi.stubGlobal("fetch", noSession(inner));
-  const view = render(() => <InvitePage apiUrl="https://api.test" slug="cire-wedding" />);
+  const view = render(() => <Pack apiUrl="https://api.test" slug="cire-wedding" />);
 
   const input = view.getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement;
   fireEvent.input(input, { target: { value: "SHARMA-JOY-RK97" } });
@@ -228,14 +237,31 @@ async function openByCode(rsvpResponses: Response[]) {
   return view;
 }
 
-describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
+/**
+ * Run every case against BOTH design packs.
+ *
+ * The confirmation itself lives in `EventCard` and is pack-independent, so
+ * duplicating these into a second file would be waste. What is NOT
+ * pack-independent is the tree the toast assertions walk: gala nests its cards
+ * two wrappers deeper than classic and its reveal (`gala/UnlockReveal.motion.ts`)
+ * leaves inline transforms on different nodes at different times. Since the
+ * containing-block trap is invisible to happy-dom by construction, a gala-only
+ * wrapper that ever gains a `filter` or `will-change: transform` would put the
+ * toast back behind the sheet with the fast tier still green — on the pack with
+ * no measurement. `describe.each` buys the pack-specific half without
+ * duplicating the pack-independent half.
+ */
+describe.each([
+  ["classic", classicInvitePage],
+  ["gala", galaInvitePage],
+])("InvitePage (%s) — the RSVP confirmation in the page it ships in", (_name, Pack) => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
   });
 
   it("keeps the Respond fill painted after a complete save", async () => {
-    openRestored([json({ rsvps: [row("guest-priya"), row("guest-raj")] })]);
+    openRestored(Pack, [json({ rsvps: [row("guest-priya"), row("guest-raj")] })]);
     await waitFor(() => expect(respondButton()).toBeTruthy(), { timeout: 3000 });
 
     expect(scaleX(fill())).toBe(0);
@@ -246,9 +272,14 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
     answer("Raj");
     save();
 
-    await wait(SETTLED_MS);
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(scaleX(fill())).toBe(1);
+    // `waitFor`, not a fixed sleep: the end state is permanent, so waiting
+    // LONGER can never overshoot it, while a sleep sized to
+    // `SAVED_DWELL_MS + SWEEP_DURATION_MS` has only its slack to absorb one long
+    // task and otherwise reads the sweep mid-travel.
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(scaleX(fill())).toBe(1);
+    }, SETTLED);
 
     // The complaint, stated as an assertion: still filled seconds later.
     // +2000 is well past the 1400ms choreography; these are real sleeps, so the
@@ -259,7 +290,7 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
   });
 
   it("shows the save toast where a guest can actually see it", async () => {
-    openRestored([json({ rsvps: [row("guest-priya")] })]);
+    openRestored(Pack, [json({ rsvps: [row("guest-priya")] })]);
     await waitFor(() => expect(respondButton()).toBeTruthy(), { timeout: 3000 });
 
     respondButton().click();
@@ -267,13 +298,23 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
     answer("Priya");
     save();
 
-    // The toast fires the moment the save lands, while the sheet is still up for
-    // its dwell — so it has to survive both the sheet's stacking context and its
-    // backdrop.
-    await wait(150);
-    const toast = toastFor("Your RSVP for Mehndi has been recorded.");
-    expect(toast, "no toast element in the DOM at all").toBeTruthy();
-    const { el, container } = toast!;
+    // A ceiling, so anchor it to the state that opens the window rather than to
+    // the clock: the toast fires the moment the save lands, and the sheet's
+    // label flipping to "Saved" is that same moment. `waitFor` on the toast's
+    // geometry then absorbs solid-toast's enter animation without assuming a
+    // duration for it.
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[role="dialog"] button[type="submit"]')!.textContent,
+      ).toContain("Saved"),
+    );
+    const { el, container } = await vi.waitFor(() => {
+      const found = toastFor("Your RSVP for Mehndi has been recorded.");
+      expect(found, "no toast element in the DOM at all").toBeTruthy();
+      // Settled into the viewport, not still animating in from above it.
+      expect(found!.el.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+      return found!;
+    });
 
     // The mechanism, first: nothing between the toast and <body> may establish a
     // containing block, or it is positioned against that ancestor and stacked
@@ -299,7 +340,7 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
   });
 
   it("keeps the fill painted on the first-visit path, after the reveal has run", async () => {
-    await openByCode([json({ rsvps: [row("guest-priya"), row("guest-raj")] })]);
+    await openByCode(Pack, [json({ rsvps: [row("guest-priya"), row("guest-raj")] })]);
 
     respondButton().click();
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeTruthy());
@@ -307,8 +348,7 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
     answer("Raj");
     save();
 
-    await wait(SETTLED_MS);
-    expect(scaleX(fill())).toBe(1);
+    await vi.waitFor(() => expect(scaleX(fill())).toBe(1), SETTLED);
     await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
   });
@@ -317,17 +357,25 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
     // The path the restored test cannot cover: `unlockRevealSequence` has run,
     // so the events section carries Motion One's inline transform and anything
     // fixed inside it is no longer positioned against the viewport.
-    await openByCode([json({ rsvps: [row("guest-priya")] })]);
+    await openByCode(Pack, [json({ rsvps: [row("guest-priya")] })]);
 
     respondButton().click();
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeTruthy());
     answer("Priya");
     save();
-    await wait(150);
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[role="dialog"] button[type="submit"]')!.textContent,
+      ).toContain("Saved"),
+    );
 
-    const toast = toastFor("Your RSVP for Mehndi has been recorded.");
-    expect(toast, "no toast element in the DOM at all").toBeTruthy();
-    const { el, container } = toast!;
+    const { el, container } = await vi.waitFor(() => {
+      const found = toastFor("Your RSVP for Mehndi has been recorded.");
+      expect(found, "no toast element in the DOM at all").toBeTruthy();
+      // Settled into the viewport, not still animating in from above it.
+      expect(found!.el.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+      return found!;
+    });
 
     // The mechanism, first: nothing between the toast and <body> may establish a
     // containing block, or it is positioned against that ancestor and stacked

@@ -97,9 +97,23 @@ export function RsvpModal(props: RsvpModalProps) {
     props.members.filter((m) => m.eventIds.includes(props.event.id)),
   );
 
+  /**
+   * The household's rows as they stood when this sheet opened, captured ONCE.
+   *
+   * Both the per-member prefill (`initialResponses`) and the celebration gate
+   * (`handleSubmit`'s `wasComplete`) read from this rather than from the live
+   * prop, so the two are provably the same data. Reading the live prop at submit
+   * time was safe only by way of three unrelated invariants — the confirmed
+   * state being terminal, `AnimatedModal`'s focus trap keeping the cards behind
+   * the backdrop unreachable, and the parent's `<Show when={rsvpEvent()}>` being
+   * unkeyed so an event swap remounts rather than reuses this instance. A
+   * snapshot is cheaper than that reasoning and cannot drift from the prefill.
+   */
+  const priorRsvps = props.existingRsvps ?? [];
+
   function initialResponses(): Record<string, MemberState> {
     const map: Record<string, MemberState> = {};
-    const prior = props.existingRsvps ?? [];
+    const prior = priorRsvps;
     for (const m of eventMembers()) {
       const existing = prior.find((r) => r.guestId === m.guestId && r.eventId === props.event.id);
       let attending: Attending = null;
@@ -269,14 +283,10 @@ export function RsvpModal(props: RsvpModalProps) {
     const nowComplete = answered.length === visible.length;
     // …and whether the party was ALREADY complete when this sheet opened.
     // Reuses `hasHouseholdResponded`, the same all-or-nothing rule that drives
-    // the permanent mark on Respond, against the rows as they stood BEFORE this
-    // save (`existingRsvps` is what `initialResponses` prefilled from, and the
-    // confirmed state is terminal, so it cannot have moved under us).
-    const wasComplete = hasHouseholdResponded(
-      props.event,
-      props.members,
-      props.existingRsvps ?? [],
-    );
+    // the permanent mark on Respond, against `priorRsvps` — the snapshot the
+    // prefill above was built from, so the gate and the form can never disagree
+    // about what was already on file.
+    const wasComplete = hasHouseholdResponded(props.event, props.members, priorRsvps);
     // The sweep marks the moment a whole response is captured, so it belongs to
     // the save that CROSSES that line — not to every save that happens to leave
     // the party complete. An edit to an already-complete reply captures nothing
