@@ -8,7 +8,7 @@ related:
 packages:
   - "@cire/invites"
   - "@cire/host"
-last-reviewed: 2026-08-07
+last-reviewed: 2026-08-08
 ---
 
 # Browser Tests
@@ -183,12 +183,30 @@ nothing.
 | `@cire/invites` | `src/lib/z-index.browser.test.tsx` | Every `Z_CLASS` entry emits real CSS; a modal-launched popover hit-tests **above** the modal (#203); no ancestor traps it in a stacking context; the modal blocks page content beneath it |
 | `@cire/invites` | `src/components/RsvpModal.browser.test.tsx` | The sticky action bar sits on the scrollport's bottom edge, stays put while content scrolls under it, runs full-bleed to the panel's content box, and both buttons are the topmost element at their own centre |
 | `@cire/invites` | `src/styles/reduced-motion.browser.test.tsx` | The clamp applies to transitions *and* animations, `animate-spin` keeps its documented exemption, and a clamped transition still lands on its end state and fires `transitionend` |
+| `@cire/invites` | `src/components/EventCard.browser.test.tsx` | The RSVP confirmation fill **travels** (mid-sweep scale strictly between 0 and 1, so the transition is wired to the property Tailwind actually writes), lands on the `bloom` token, and is still painted seconds past `TOTAL_DURATION_MS`; a reply already on file paints filled on the first frame; the two `scale-x-*` utilities never coexist |
+| `@cire/invites` | `src/components/rsvp-confirmation.browser.test.tsx` | The same fill, driven through the real `RsvpModal` → `EventCard` seam on real timers: nothing shows while the sheet still covers the button, a partial save leaves it plain, and a completing save's fill survives 5s+ |
+| `@cire/invites` | `src/designs/classic/InvitePage.browser.test.tsx` | The confirmation and the save toast inside the page they ship in — including the first-visit path, where Motion One's reveal has left its inline `transform` on the events section. The toast must have no fixed-position containing block between it and `<body>`, stack above `Z_LAYER.MODAL`, and be anchored to the viewport |
 | `@cire/host` | `src/components/ImportPanel.browser.test.tsx` | The mandatory-column chip's ink clears WCAG against the composited stack it actually sits on; the first-run `attention-glow` exists, animates `opacity` only, and honours the reduced-motion clamp |
 | `@cire/host` | `src/components/PreviewInviteButton.browser.test.tsx` | "Preview invite" is genuinely painted at phone width with its label clipped to the 1×1 `sr-only` box rather than `display: none`, and swaps to the written label — glyph gone — once the `frame` container passes 42rem |
 
-Two of these were verified against the bug rather than merely written green. The
-#203 test fails when the popover is put back at `z-90`. The
+Three of these were verified against the bug rather than merely written green.
+The #203 test fails when the popover is put back at `z-90`. The
 `PreviewInviteButton` test fails when its label is put back to
 `hidden @2xl/frame:inline`, the exact class pair that left the invite preview
 with no entry point on a phone — the failure is the narrow-width case, which is
-the one a class-string assertion in the fast tier cannot distinguish.
+the one a class-string assertion in the fast tier cannot distinguish. The
+`InvitePage` toast test fails when the `<Toaster>` is put back inside the events
+section: on the first-visit path it reports the section itself as the toast's
+containing block, which is precisely why the toast was painting behind the RSVP
+sheet.
+
+The `EventCard` pair exists because of a **two-PR miss**. The RSVP
+confirmation's fill was reported as reverting twice in a row while every test in
+the repo stayed green, because every assertion about it was class-presence in
+happy-dom — the fill's whole job is a painted colour a second later, and nothing
+measured that. Note also what the browser tier does NOT relieve you of: the
+`elementFromPoint` trick used elsewhere on this page is useless against a
+`solid-toast` container, which is deliberately `pointer-events: none` and so
+hit-tests as transparent even when painted perfectly. Assert the mechanism
+(containing block, stacking context, computed `z-index`) in that case, not the
+hit test.

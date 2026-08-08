@@ -124,6 +124,11 @@ function Harness(props: { members?: FamilyMember[] } = {}) {
         event={event}
         responded={hasHouseholdResponded(event, members, rsvps())}
         justResponded={justResponded()}
+        // Mirrors `InvitePage`: while the sheet is open it covers this button,
+        // so the card must not put its mark up yet. Without this the reply is
+        // recorded (`responded` true) `SAVED_DWELL_MS` before the sheet closes
+        // and the fill sweeps in behind it, unseen.
+        covered={open()}
         onCelebrated={() => setJustResponded(false)}
         onRespond={() => setOpen(true)}
         onDetails={() => {}}
@@ -224,28 +229,34 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
     expect(path.hasAttribute("stroke-dasharray")).toBe(false);
   });
 
-  it("keeps the recorded tick but plays nothing when the guest dismisses mid-dwell", async () => {
+  it("still marks the button when the guest dismisses mid-dwell, just without the draw", async () => {
     stubOkFetch();
     vi.useFakeTimers();
     render(() => <Harness />);
     await submit();
 
     // Escape during the dwell unmounts the sheet, which clears the dwell timer
-    // before it can cue anything. The reply is already written, so the card
-    // must still carry its permanent mark — the tick comes from the recorded
-    // rows (`responded`), never from the celebration.
+    // before it can cue the celebration. The reply is already written, so the
+    // card must still end up fully marked: `covered` goes false as the sheet
+    // leaves, and the card syncs its mark from the recorded rows (`responded`).
+    //
+    // This is the case #396 got half-right — it showed the tick but left the
+    // fill off, so the button carried a bloom tick on plain gold until a reload
+    // happened to re-seed it. The mark is one state now, so there is no such
+    // in-between: a guest who dismisses early and one who watches the animation
+    // land on the identical button.
     fireEvent.keyDown(document, { key: "Escape" });
     await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS + TOTAL_DURATION_MS);
 
     expect(sheet()).toBeNull();
-    expect(fillIsUp()).toBe(false);
+    expect(fillIsUp()).toBe(true);
     const svg = respondButton().querySelector("svg");
     expect(svg).toBeTruthy();
-    // The tick's ink is the `text-bloom` fallback here, not the on-fill
-    // `text-bg` — `filled` never latched true (no celebration played), so the
-    // tick is sitting on the plain gold button, not the bloom fill.
-    expect(svg!.getAttribute("class")).toContain("text-bloom");
-    expect(svg!.getAttribute("class")).not.toContain("text-bg");
+    // Sitting on the fill, so the on-fill ink — and never animated, since no
+    // celebration was ever cued.
+    expect(svg!.getAttribute("class")).toContain("text-bg");
+    const path = svg!.querySelector("path") as SVGPathElement;
+    expect(path.hasAttribute("stroke-dasharray")).toBe(false);
   });
 
   it("only sweeps the fill once every invited member has answered — a partial save gets the toast, not the celebration", async () => {
