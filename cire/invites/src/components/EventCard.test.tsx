@@ -304,7 +304,7 @@ describe("EventCard", () => {
       expect(respondButton(container).querySelector("svg")).toBeNull();
     });
 
-    it("shows a permanent green tick when responded, with no fill and no draw animation", () => {
+    it("shows a permanent bloom tick when responded, with no fill and no draw animation", () => {
       const { container } = render(() => (
         <EventCard event={baseEvent} responded onRespond={noop} onDetails={noop} />
       ));
@@ -317,7 +317,7 @@ describe("EventCard", () => {
       expect(path.hasAttribute("stroke-dasharray")).toBe(false);
       expect(path.getAttribute("class") ?? "").not.toContain("animate-tick-draw");
       const svg = path.closest("svg") as SVGElement;
-      expect(svg.getAttribute("class")).toContain("text-success");
+      expect(svg.getAttribute("class")).toContain("text-bloom");
       expect(svg.getAttribute("class")).not.toContain("text-bg");
     });
 
@@ -350,7 +350,7 @@ describe("EventCard", () => {
       ) as HTMLElement;
       expect(fill).toBeTruthy();
       expect(fill.className).toContain("scale-x-0");
-      expect(fill.className).toContain("bg-success");
+      expect(fill.className).toContain("bg-bloom");
       expect(fill.className).toContain("transition-transform");
     });
 
@@ -410,7 +410,7 @@ describe("EventCard", () => {
         expect(fill.className).not.toContain("scale-x-100");
         path = button.querySelector("svg path") as SVGPathElement;
         svg = path.closest("svg") as SVGElement;
-        expect(svg.getAttribute("class")).toContain("text-success");
+        expect(svg.getAttribute("class")).toContain("text-bloom");
         expect(onCelebrated).not.toHaveBeenCalled();
 
         // Celebration over: the tick stays, now undrawn (no dash trick), and
@@ -490,7 +490,7 @@ describe("EventCard", () => {
       expect(button.textContent).toBe("RSVPs closed");
       const path = button.querySelector("svg path") as SVGPathElement;
       expect(path).toBeTruthy();
-      expect(path.closest("svg")!.getAttribute("class")).toContain("text-success");
+      expect(path.closest("svg")!.getAttribute("class")).toContain("text-bloom");
     });
 
     it("clears its timers on unmount mid-celebration", async () => {

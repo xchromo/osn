@@ -332,7 +332,9 @@ describe("residual contrast warnings", () => {
     // happened AND a real problem survived it, so both notices are true at
     // once. The prose tokens are NOT among the survivors: every surface here
     // sits on the same side of the midpoint, which is the case their
-    // three-surface walk settles.
+    // three-surface walk settles. `gilt` and `bloom` are walked identically
+    // (against `ground` only, at the UI floor), so a near-white seed for
+    // either lands the same way on `raised`.
     const warnings = paletteContrastWarnings(
       derivePalette({
         ground: "#ffffff",
@@ -342,7 +344,11 @@ describe("residual contrast warnings", () => {
         bloom: "#fdfdfd",
       }),
     );
-    expect(warnings.map((w) => w.id)).toEqual(["text-on-raised", "gilt-on-raised"]);
+    expect(warnings.map((w) => w.id)).toEqual([
+      "text-on-raised",
+      "gilt-on-raised",
+      "bloom-on-raised",
+    ]);
     for (const warning of warnings) expect(warning.ratio).toBeLessThan(warning.required);
     expect(warnings.find((w) => w.id === "text-on-raised")!.ratio).toBeLessThan(WCAG_TEXT_MIN);
   });
@@ -460,6 +466,7 @@ describe("residual contrast warnings", () => {
         "muted-on-ground",
         "muted-on-surface",
         "gilt-on-raised",
+        "bloom-on-raised",
         "gilt-ink-on-raised",
         "gilt-ink-on-surface",
       ].toSorted(),
@@ -494,22 +501,27 @@ describe("residual contrast warnings", () => {
     expect(reported.ratio).toBeCloseTo(onRaised, 1);
   });
 
-  test("says nothing about bloom, which the guest site paints nowhere", () => {
-    // `--color-bloom` is a defined token with no render site in `cire/invites`, so
-    // a warning about it would be about a colour no guest can see. Deliberate
-    // omission, not an oversight — this fails if a bloom pair is added without
-    // the guest site gaining one.
-    const invisibleBloom = derivePalette({
+  test("warns about bloom on the card surface it actually paints", () => {
+    // `--color-bloom` paints the RSVP confirmation button's sweep fill and
+    // permanent tick, both on `EventCard` (`--color-surface-raised`). It is
+    // derived the same way `gilt` is — walked against `ground` only, at the
+    // UI floor — so the same `raisedOnly` scheme that catches `gilt-on-raised`
+    // above should catch `bloom-on-raised` too.
+    const raisedOnly = derivePalette({
       ground: "#101010",
-      card: "#101010",
+      card: "#f2f2f2",
       ink: "#eeeeee",
       gilt: "#d4af37",
-      // Near-identical to the page: any bloom pair would fire on this.
-      bloom: "#141414",
+      bloom: "#e74c3c",
     });
-    expect(paletteContrastWarnings(invisibleBloom).every((w) => !w.id.includes("bloom"))).toBe(
-      true,
-    );
+    const ids = paletteContrastWarnings(raisedOnly).map((w) => w.id);
+    expect(ids).toContain("bloom-on-raised");
+    const onRaised = contrastRatio(
+      raisedOnly["--color-bloom"]!,
+      raisedOnly["--color-surface-raised"]!,
+    )!;
+    const reported = paletteContrastWarnings(raisedOnly).find((w) => w.id === "bloom-on-raised")!;
+    expect(reported.ratio).toBeCloseTo(onRaised, 1);
   });
 
   test("an unparseable or missing token is skipped, not reported as a failure", () => {
