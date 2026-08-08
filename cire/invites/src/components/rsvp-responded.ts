@@ -2,11 +2,19 @@ import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
 
 /**
  * True once every member of the household invited to this event has an RSVP
- * row on file for it. RSVP submission is atomic per event — `RsvpModal`
- * requires every visible member to be answered before it will submit, and
- * sends them in one request — so "all invited members have a row" and "any
- * invited member has a row" are the same fact in practice; checking all of
- * them is the one that stays correct if that ever stops being true.
+ * row on file for it. RSVP submission is no longer atomic per event —
+ * `RsvpModal` lets a household save with only SOME visible members answered,
+ * sending just that subset — so this is the check that has to run the full
+ * `.every(...)` walk rather than trusting any one row to stand in for the
+ * whole party.
+ *
+ * `RsvpModal` computes the equivalent fact for itself (`handleSubmit`'s
+ * `nowComplete` — every visible member's LOCAL form state is non-null,
+ * counting a prior reply prefilled by `initialResponses` as answered) rather
+ * than calling this function, since it needs the answer synchronously from
+ * form state before a submit round-trips; a save only earns the
+ * Respond-button celebration, on top of the toast every save gets, once that
+ * check comes back true.
  *
  * An event nobody in the household is invited to reports `false` — there is
  * nothing to have responded to, so a permanent tick would be a lie.
