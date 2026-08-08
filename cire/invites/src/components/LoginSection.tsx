@@ -2,7 +2,7 @@ import { Show, For } from "solid-js";
 
 import { createClaimCode } from "./claim-code";
 import { filterThemeVars } from "./invite-theme";
-import { TurnstileWidget, turnstileEnabled } from "./TurnstileWidget";
+import { TurnstileWidget, turnstileEnabled, type TurnstileControls } from "./TurnstileWidget";
 import type { ClaimResult } from "./types";
 
 interface LoginSectionProps {
@@ -40,10 +40,14 @@ interface LoginSectionProps {
   /**
    * Lets a claimed household step back to the code form — a shared device, or
    * a mistyped code that happened to match someone else's invite. Owns
-   * resetting `result`/`revealed` in the parent; this component only clears
-   * its own code field so the form doesn't reopen pre-filled with the code
-   * that was just claimed. Absent ⇒ no escape hatch is rendered, since without
-   * a handler the button would have nothing to swap the view back with.
+   * resetting `result`/`revealed` in the parent; this component resets its own
+   * form state (code, error, loading, Turnstile token) and moves focus.
+   * Absent ⇒ no escape hatch is rendered, since without a handler the button
+   * would have nothing to swap the view back with.
+   *
+   * NOT a sign-out: the household's `cire_session` cookie is untouched, so a
+   * reload re-opens the same invite via the on-mount session restore. The copy
+   * is worded around that deliberately — see the S-H1 note on the button.
    */
   onUseDifferentCode?: () => void;
 }
@@ -75,11 +79,27 @@ export function LoginSection(props: LoginSectionProps) {
     return m.nickname?.trim() ? m.nickname.trim() : m.firstName;
   };
 
+  let codeInputRef: HTMLInputElement | undefined;
+  let turnstile: TurnstileControls | undefined;
+
   function handleUseDifferentCode() {
-    // Blank the field before the form reappears — otherwise it would come
-    // back pre-filled with the code that just succeeded.
-    claim.setCode("");
+    // Return the form to a submittable state: blank field (it would otherwise
+    // reappear pre-filled with the code that just succeeded), no stale error,
+    // no stuck `loading`, no spent Turnstile token.
+    claim.reset();
+    // Re-challenge so a fresh single-use token can replace the one the
+    // previous claim redeemed. No-op when Turnstile is unconfigured.
+    turnstile?.reset();
+    // Let the parent swap the view back BEFORE focusing — the form is
+    // `display: none` until it does, and `focus()` on a hidden element is
+    // silently dropped.
     props.onUseDifferentCode?.();
+    // C-L1: the click removes the focused button from the accessibility tree,
+    // which would drop focus to `<body>` and leave a keyboard or screen-reader
+    // user at the top of the document with no signal that the form is back.
+    // The code input is both the announcement (it has an accessible name) and
+    // the obvious next action.
+    codeInputRef?.focus();
   }
 
   return (
@@ -114,6 +134,7 @@ export function LoginSection(props: LoginSectionProps) {
                 never truncated. The server still validates the code. */}
             <input
               type="text"
+              ref={codeInputRef}
               // A border tint alone is too quiet to mark focus on the page's
               // one input; the ring keeps keyboard users oriented. Text cursor
               // on a text field — the pointer belongs on buttons only.
@@ -164,7 +185,11 @@ export function LoginSection(props: LoginSectionProps) {
             </Show>
             {/* Turnstile challenge — renders only when a sitekey is configured;
                 otherwise this is nothing and the form is unchanged. */}
-            <TurnstileWidget onToken={claim.setTurnstileToken} class="flex justify-center" />
+            <TurnstileWidget
+              onToken={claim.setTurnstileToken}
+              controls={(handle) => (turnstile = handle)}
+              class="flex justify-center"
+            />
             <button
               type="submit"
               class="border-gold font-body text-gold-ink hover:bg-gold hover:text-bg disabled:hover:text-gold-ink rounded-sm border bg-transparent px-6 py-3.5 text-[0.88rem] tracking-[0.12em] uppercase transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"

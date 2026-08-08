@@ -567,7 +567,132 @@ describe("InvitePage", () => {
     await waitFor(() => expect(getByText("Enter Your Code")).toBeTruthy());
     expect(queryByText(/Dear Priya/)).toBeNull();
     expect(queryByText("Mehndi")).toBeNull();
-    expect((getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement).value).toBe("");
+
+    // S-M1: the returned form must be USABLE, not merely present. `submitCode`
+    // clears `loading` on every failure branch but not on success, so before
+    // this was fixed the form came back with a disabled input and a submit
+    // button stuck reading "Checking…" — the escape hatch led nowhere. The
+    // original version of this test asserted only that the field was blank,
+    // which is exactly why it passed against a dead form.
+    const input = getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(false);
+    const submit = getByText("Open Invitation") as HTMLButtonElement;
+    // Disabled right now only because the field is empty — the normal
+    // pre-claim state, not the stuck one. Typing must re-enable it; before the
+    // fix the label read "Checking…" and no amount of typing helped.
+    expect(submit.textContent).toBe("Open Invitation");
+    expect(submit.disabled).toBe(true);
+    fireEvent.input(input, { target: { value: "OKAFOR-LILY-AB12CD" } });
+    expect(submit.disabled).toBe(false);
+
+    // C-L1: focus lands on the code input rather than falling to <body>, so a
+    // keyboard or screen-reader user is told the form is back and is already
+    // on the control they need.
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("can actually claim a second, different household after the reset", async () => {
+    // The end-to-end proof that the escape hatch works. A form that merely
+    // *looks* restored is not the feature — this drives a real second claim
+    // and asserts the new household's invite opens.
+    const otherClaim: ClaimResult = {
+      ...claim,
+      publicId: "OKAFOR-LILY-AB12CD",
+      familyName: "Okafor",
+      members: [
+        { guestId: "guest-9", firstName: "Chidi", lastName: "Okafor", eventIds: ["event-1"] },
+      ],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(claim), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValue(
+        new Response(JSON.stringify(otherClaim), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", noSession(fetchMock));
+
+    const { getByText, getByPlaceholderText } = render(() => (
+      <InvitePage apiUrl="https://api.test" />
+    ));
+
+    fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "SHARMA-JOY-RK97" } });
+    fireEvent.click(getByText("Open Invitation"));
+    await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
+
+    fireEvent.click(getByText("Use a different claim code"));
+    await waitFor(() => expect(getByText("Enter Your Code")).toBeTruthy());
+
+    fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "OKAFOR-LILY-AB12CD" } });
+    fireEvent.click(getByText("Open Invitation"));
+
+    await waitFor(() => expect(getByText(/Dear Chidi/)).toBeTruthy(), { timeout: 2000 });
+    // The second POST carried the second code — not a stale or blank one.
+    const claimPosts = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/claim"));
+    expect(claimPosts).toHaveLength(2);
+    expect(JSON.parse((claimPosts[1]![1] as RequestInit).body as string)).toEqual({
+      publicId: "OKAFOR-LILY-AB12CD",
+    });
+  });
+
+  it("P-W2: a reset during the unlock choreography is not undone by its trailing setRevealed", async () => {
+    // `onFormHidden` makes the button visible at the end of step 1, then the
+    // sequence runs on for ~200ms. A click in that gap used to be clobbered by
+    // handleClaimed's unconditional `finally { setRevealed(true) }`, leaving the
+    // form hidden with claimResult null — the welcome banner rendering from
+    // nothing, unrecoverable without a reload.
+    const { unlockRevealSequence } = await import("./UnlockReveal.motion");
+    let releaseSequence: (() => void) | undefined;
+    vi.mocked(unlockRevealSequence).mockImplementationOnce(
+      async (_form: unknown, _welcome: unknown, _events: unknown, hooks?: unknown) => {
+        (hooks as { onFormHidden?: () => void } | undefined)?.onFormHidden?.();
+        // Stand in for the ~200ms tail the real sequence still has to run.
+        await new Promise<void>((resolve) => (releaseSequence = resolve));
+      },
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      noSession(
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(claim), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      ),
+    );
+
+    const { getByText, getByPlaceholderText, queryByText } = render(() => (
+      <InvitePage apiUrl="https://api.test" />
+    ));
+
+    fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "SHARMA-JOY-RK97" } });
+    fireEvent.click(getByText("Open Invitation"));
+
+    // Wait for the sequence to have STARTED and parked — i.e. `onFormHidden`
+    // has fired and we are inside the window the guard protects. Deliberately
+    // not `waitFor(getByText("Use a different claim code"))`: `getByText` also
+    // matches `display: none` nodes, so that resolves instantly, before the
+    // claim has even landed, and the click would test nothing.
+    await waitFor(() => expect(releaseSequence).toBeDefined(), { timeout: 2000 });
+    expect(getByText(/Dear Priya/)).toBeTruthy();
+    fireEvent.click(getByText("Use a different claim code"));
+
+    // Now let the choreography finish — its trailing write must not resurrect
+    // the welcome half over a null claim.
+    releaseSequence?.();
+    await waitFor(() => expect(getByText("Enter Your Code")).toBeTruthy());
+    expect(queryByText(/Dear Priya/)).toBeNull();
+    expect((getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement).disabled).toBe(false);
   });
 
   it("hides the Pulse account-link affordance in preview mode", async () => {

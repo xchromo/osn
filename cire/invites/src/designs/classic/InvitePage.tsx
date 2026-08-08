@@ -280,7 +280,17 @@ export default function InvitePage(props: InvitePageProps) {
       // a missing ref or a throw mid-sequence must never leave the code form
       // sitting on top of an invite this guest has already claimed. Idempotent —
       // the happy path has normally set it already, from `onFormHidden`.
-      setRevealed(true);
+      //
+      // Conditional on the claim still being current (P-W2). `onFormHidden`
+      // fires at the end of step 1 and the sequence then runs on for ~200ms
+      // more, so "Use a different claim code" is already on screen and
+      // clickable while this await is still pending. An unconditional write
+      // here would land AFTER that reset and re-hide the form with
+      // `claimResult` back at null — the welcome banner rendering from
+      // nothing, and no in-page way back, since nothing else writes
+      // `revealed`. Guarding on the claim keeps the failed-choreography
+      // guarantee while letting the later reset win.
+      if (claimResult()) setRevealed(true);
     }
   }
 
@@ -291,6 +301,20 @@ export default function InvitePage(props: InvitePageProps) {
   // Submitting a different code overwrites the cookie via `/api/claim`'s
   // Set-Cookie, same as any first claim.
   function handleUseDifferentCode() {
+    // T-U1: the unlock sequence fades the form out with Motion, which leaves
+    // its END STATE as inline styles on this wrapper (`opacity: 0; transform:
+    // translateY(-12px)`). Solid's binding on the element owns only `display`, so
+    // nothing ever clears them — the restored form would return to the layout
+    // fully transparent, i.e. a blank panel with no way back but a reload.
+    // jsdom cannot see this (no CSS, no layout) and the unit tier mocks the
+    // animation away, so it is pinned in the browser tier instead.
+    //
+    // Writing these two is safe for the same reason `display` would not be:
+    // Solid does not manage them, so there is no binding to desynchronise.
+    if (loginFormRef) {
+      loginFormRef.style.opacity = "";
+      loginFormRef.style.transform = "";
+    }
     batch(() => {
       setRevealed(false);
       setRestoredSession(false);
