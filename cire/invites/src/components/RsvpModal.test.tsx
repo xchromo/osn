@@ -195,6 +195,9 @@ describe("RsvpModal", () => {
     // Respond-button celebration — only every invited member answering earns
     // that.
     expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      `Your RSVP for ${event.name} has been recorded.`,
+    );
     await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
     expect(onConfirmed).not.toHaveBeenCalled();
   });

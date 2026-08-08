@@ -239,7 +239,13 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
 
     expect(sheet()).toBeNull();
     expect(fillIsUp()).toBe(false);
-    expect(respondButton().querySelector("svg")).toBeTruthy();
+    const svg = respondButton().querySelector("svg");
+    expect(svg).toBeTruthy();
+    // The tick's ink is the `text-bloom` fallback here, not the on-fill
+    // `text-bg` — `filled` never latched true (no celebration played), so the
+    // tick is sitting on the plain gold button, not the bloom fill.
+    expect(svg!.getAttribute("class")).toContain("text-bloom");
+    expect(svg!.getAttribute("class")).not.toContain("text-bg");
   });
 
   it("only sweeps the fill once every invited member has answered — a partial save gets the toast, not the celebration", async () => {

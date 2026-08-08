@@ -326,6 +326,19 @@ describe("residual contrast warnings", () => {
     ).toBeGreaterThanOrEqual(WCAG_UI_MIN);
   });
 
+  test("chapel's bloom clears the raised surface with the same headroom fog needed", () => {
+    // `chapel` had the identical thin-margin problem as `fog` above — its
+    // original 60%-lightness bloom seed cleared `bloom-on-raised` at only
+    // 3.18:1, barely past the 3:1 floor. Moved to 50% alongside `fog`'s
+    // re-tune (~4.83:1). Only the blanket "every curated preset is clean"
+    // sweep covered this before, which only proves the floor clears by SOME
+    // margin — a partial revert landing just over 3:1 would pass it silently.
+    const chapel = derivePalette(PALETTE_PRESETS.chapel);
+    expect(
+      contrastRatio(chapel["--color-bloom"] as string, chapel["--color-surface-raised"] as string),
+    ).toBeGreaterThanOrEqual(WCAG_UI_MIN);
+  });
+
   test("the two notices describe different things, neither derivable from the other", () => {
     // A straddling scheme — near-black page, near-white cards. The seed-level
     // report names what it MOVED (ink, bloom); the warning names what survived
