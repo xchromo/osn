@@ -37,6 +37,11 @@
  * also be mounted at the page root rather than inside the events section, whose
  * Motion One transform makes it a stacking context that no `z-index` can escape.
  *
+ * It must ALSO sit below consent, i.e. `TOAST < CONSENT`. That half is easy to
+ * lose because the library's own default (9999) satisfies the lower bound while
+ * violating the upper one, so `InvitePage.browser.test.tsx` asserts the measured
+ * value against BOTH bounds rather than just "above the modal".
+ *
  * The consent layers sit above EVERYTHING, deliberately and with a wide gap.
  * The banner is the guest's only route to granting — or later withdrawing —
  * permission for third-party content, and the gated embeds themselves live
@@ -72,7 +77,16 @@ export const Z_LAYER = {
    * MODAL: the RSVP save toast fires the instant the reply lands, while the
    * sheet is still up for its dwell, so a toast below the modal is painted
    * behind the sheet's backdrop and the guest never sees the one confirmation
-   * a partial save gets.
+   * a partial save gets. Must also stay < CONSENT — see the invariants below.
+   *
+   * **This one cannot be applied as a class.** solid-toast spreads its own
+   * `defaultContainerStyle` onto the container's inline `style`, and that
+   * carries a hardcoded `z-index: 9999`; inline style beats a Tailwind utility,
+   * so `containerClassName={Z_CLASS.TOAST}` is silently inert and the toast
+   * lands at 9999 — above the consent layers. Pass
+   * `containerStyle={{ "z-index": String(Z_LAYER.TOAST) }}` instead, which is
+   * merged after the defaults in the same spread. (`Z_CLASS.TOAST` still
+   * exists so the layer table stays total, and for any non-toast consumer.)
    */
   TOAST: 150,
   /** Site-wide consent banner. Above every page overlay, including modals. */

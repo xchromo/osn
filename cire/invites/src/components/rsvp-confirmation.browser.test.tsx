@@ -196,8 +196,11 @@ describe("RSVP confirmation, end to end and painted", () => {
     expect(sheet()).toBeNull();
     expect(scaleX(fill())).toBe(1);
 
-    // Five seconds later — the beat the guest complaint is actually about.
-    await wait(TOTAL_DURATION_MS + 5000);
+    // Seconds past every timer in `rsvp-responded.ts` — the beat the guest
+    // complaint is actually about. Kept to +2000 rather than a showier margin:
+    // these are fixed sleeps in a real browser and the browser tier pays them in
+    // wall clock, so buy only the headroom the assertion needs.
+    await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
     expect(respondButton().querySelector("svg")).not.toBeNull();
   });
@@ -245,7 +248,7 @@ describe("RSVP confirmation, end to end and painted", () => {
     await wait(SETTLED_MS);
 
     expect(scaleX(fill())).toBe(1);
-    await wait(TOTAL_DURATION_MS + 3000);
+    await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
     expect(respondButton().querySelector("svg")).not.toBeNull();
   });

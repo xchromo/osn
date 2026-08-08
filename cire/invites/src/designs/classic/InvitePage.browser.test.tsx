@@ -251,7 +251,9 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
     expect(scaleX(fill())).toBe(1);
 
     // The complaint, stated as an assertion: still filled seconds later.
-    await wait(TOTAL_DURATION_MS + 4000);
+    // +2000 is well past the 1400ms choreography; these are real sleeps, so the
+    // margin is sized to the assertion rather than to rhetoric.
+    await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
     expect(respondButton().querySelector("svg")).not.toBeNull();
   });
@@ -280,10 +282,13 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
       fixedContainingBlockAncestor(container!),
       "the toast is trapped inside a transformed ancestor's stacking context",
     ).toBeNull();
-    expect(
-      Number.parseInt(getComputedStyle(container!).zIndex, 10),
-      "the toast stacks below the RSVP sheet",
-    ).toBeGreaterThan(Z_LAYER.MODAL);
+    // Two-sided on purpose. `> MODAL` alone is satisfied by solid-toast's own
+    // hardcoded inline `z-index: 9999`, which is what the layer prop has to
+    // override — so a one-sided assertion passes while the toast sits ABOVE the
+    // consent banner and dialog, the one thing that must never be buried.
+    const painted = Number.parseInt(getComputedStyle(container!).zIndex, 10);
+    expect(painted, "the toast stacks below the RSVP sheet").toBeGreaterThan(Z_LAYER.MODAL);
+    expect(painted, "the toast stacks above the consent layers").toBeLessThan(Z_LAYER.CONSENT);
 
     // Painted, on screen, and anchored where `top-center` says.
     const rect = el.getBoundingClientRect();
@@ -304,7 +309,7 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
 
     await wait(SETTLED_MS);
     expect(scaleX(fill())).toBe(1);
-    await wait(TOTAL_DURATION_MS + 4000);
+    await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
   });
 
@@ -331,10 +336,13 @@ describe("InvitePage — the RSVP confirmation in the page it ships in", () => {
       fixedContainingBlockAncestor(container!),
       "the toast is trapped inside a transformed ancestor's stacking context",
     ).toBeNull();
-    expect(
-      Number.parseInt(getComputedStyle(container!).zIndex, 10),
-      "the toast stacks below the RSVP sheet",
-    ).toBeGreaterThan(Z_LAYER.MODAL);
+    // Two-sided on purpose. `> MODAL` alone is satisfied by solid-toast's own
+    // hardcoded inline `z-index: 9999`, which is what the layer prop has to
+    // override — so a one-sided assertion passes while the toast sits ABOVE the
+    // consent banner and dialog, the one thing that must never be buried.
+    const painted = Number.parseInt(getComputedStyle(container!).zIndex, 10);
+    expect(painted, "the toast stacks below the RSVP sheet").toBeGreaterThan(Z_LAYER.MODAL);
+    expect(painted, "the toast stacks above the consent layers").toBeLessThan(Z_LAYER.CONSENT);
 
     // Painted, on screen, and anchored where `top-center` says.
     const rect = el.getBoundingClientRect();

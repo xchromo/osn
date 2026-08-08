@@ -30,7 +30,7 @@ import { deadlineNotice, formatDeadlineDay, RSVP_NOTICE_ID } from "../../compone
 import { hasHouseholdResponded } from "../../components/rsvp-responded";
 import { RsvpModal } from "../../components/RsvpModal";
 import type { ClaimResult, EventSummary, RsvpSummary } from "../../components/types";
-import { Z_CLASS } from "../../lib/z-index";
+import { Z_LAYER } from "../../lib/z-index";
 
 /** Events ("details") section header copy. `null` ⇒ the built-in defaults. */
 export interface DetailsCopy {
@@ -471,13 +471,23 @@ export default function InvitePage(props: InvitePageProps) {
           stacking context for the `position: fixed` toaster inside it — so the
           toast was positioned against the section rather than the viewport and
           painted BELOW the `z-100` RSVP sheet it fires underneath. Out here it
-          is a sibling of the modals and its own layer (`Z_CLASS.TOAST`) wins.
+          is a sibling of the modals and its own layer (`Z_LAYER.TOAST`) wins.
 
           `top-center`, not bottom: the toast is raised while the RSVP sheet is
           still open, and that sheet's sticky action bar owns the bottom edge. */}
       <Toaster
         position="top-center"
-        containerClassName={Z_CLASS.TOAST}
+        // The layer goes on as an inline STYLE, not via `containerClassName`:
+        // solid-toast spreads its own `defaultContainerStyle` — which carries a
+        // hardcoded `z-index: 9999` — onto this same div's `style`, and inline
+        // style beats a Tailwind class, so `containerClassName={Z_CLASS.TOAST}`
+        // was silently inert and the toast actually sat above the consent
+        // layers. `containerStyle` is merged AFTER the defaults in that spread,
+        // so it is the only override that wins. The library also injects
+        // `.sldt-active{z-index:9999}` for the per-toast wrapper, but that is
+        // scoped inside this container's own stacking context and cannot escape
+        // it. Two-sided bound asserted in `InvitePage.browser.test.tsx`.
+        containerStyle={{ "z-index": String(Z_LAYER.TOAST) }}
         toastOptions={{
           className:
             "!bg-surface-raised !text-text !border-border !font-body !border !text-[0.85rem]",
