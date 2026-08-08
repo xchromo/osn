@@ -399,7 +399,7 @@ describe.each([
     expect(rect.bottom, "toast is below the fold").toBeLessThanOrEqual(window.innerHeight);
     expect(rect.top, "toast is not anchored to the viewport top").toBeLessThan(200);
   });
-  it("T-U1: the code form comes back PAINTED after 'Use a different claim code'", async () => {
+  it("T-U1: the code form comes back PAINTED after sign-out", async () => {
     // The unit tier mocks `UnlockReveal.motion` and `motion` away, so it asserts
     // the form is back in the layout and never that it is visible. The real
     // sequence fades the form out with Motion, which leaves its end state as
@@ -410,10 +410,13 @@ describe.each([
     // they were trying to leave.
     await openByCode(Pack, []);
 
-    const button = [...document.querySelectorAll("button")].find(
-      (b) => b.textContent === "Use a different claim code",
+    const button = [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes("Sign out"),
     ) as HTMLButtonElement;
-    expect(button, "the escape hatch is not rendered").toBeTruthy();
+    expect(button, "the sign-out control is not rendered").toBeTruthy();
+    // The copy names the household it ends, so it cannot read as a generic
+    // "start over" — this fixture has two members, so it is the family name.
+    expect(button.textContent).toBe("Not Sharma? Sign out");
     button.click();
 
     const input = document.querySelector("input[aria-label='Invitation code']") as HTMLInputElement;

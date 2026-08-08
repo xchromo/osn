@@ -13,7 +13,7 @@ import {
 import { Toaster } from "solid-toast";
 
 import { createClaimCode } from "../../components/claim-code";
-import { createSessionRestore, noteClaimed } from "../../components/claim-session";
+import { createSessionRestore, noteClaimed, signOut } from "../../components/claim-session";
 import { createRsvpClosed } from "../../components/createRsvpClosed";
 import { DetailsModal } from "../../components/DetailsModal";
 import { EventCard } from "../../components/EventCard";
@@ -318,13 +318,22 @@ export default function InvitePage(props: InvitePageProps) {
     return m.nickname?.trim() ? m.nickname.trim() : m.firstName;
   };
 
-  // Lets a claimed household step back to the code form — a shared device, or
-  // a code that matched the wrong family. Local UI only: the `cire_session`
-  // cookie this household already holds is untouched, so reloading without
-  // submitting a new code restores the same household exactly as before.
-  // Submitting a different code overwrites the cookie via `/api/claim`'s
-  // Set-Cookie, same as any first claim.
-  function handleUseDifferentCode() {
+  // "Not the Okafor family? Sign out" — names the household the control ends.
+  const signOutLabel = () => {
+    const name = isIndividual() ? individualName() : claimResult()?.familyName;
+    return name?.trim() ? `Not ${name.trim()}? Sign out` : "Sign out";
+  };
+
+  // Ends the household session — see the note in classic's InvitePage. A REAL
+  // sign-out: revokes `cire_session` server-side and drops the local restore
+  // hint. Fire-and-forget so the local reset never waits on the network.
+  function handleSignOut() {
+    // Revoke `cire_session` server-side and drop the local restore hint.
+    // Fire-and-forget on purpose: the local reset must not wait on the
+    // network, or a guest on a borrowed phone tapping this watches the
+    // household's invite sit there through a timeout. The request carries its
+    // own cookie, so nothing below depends on its result.
+    void signOut(props.apiUrl);
     // T-U1: the unlock sequence fades the form out with Motion, which leaves
     // its END STATE as inline styles on this wrapper (`opacity: 0; transform:
     // translateY(-8px)`). Solid's binding on the element owns only `display`, so
@@ -483,10 +492,10 @@ export default function InvitePage(props: InvitePageProps) {
               </Show>
               <button
                 type="button"
-                onClick={handleUseDifferentCode}
+                onClick={handleSignOut}
                 class="font-body text-text-muted hover:text-gold-ink focus-visible:ring-gold/60 rounded-sm text-[0.78rem] underline underline-offset-2 transition-colors duration-200 focus:outline-none focus-visible:ring-2"
               >
-                Use a different claim code
+                {signOutLabel()}
               </button>
             </div>
           </div>

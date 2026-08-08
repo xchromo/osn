@@ -159,31 +159,31 @@ describe("LoginSection form/welcome swap", () => {
   });
 });
 
-describe("LoginSection 'Use a different claim code'", () => {
+describe("LoginSection sign-out control", () => {
   it("is absent without a handler", () => {
     const { queryByText } = render(() => (
       <LoginSection apiUrl="http://x" result={result([member("Chidi")])} onClaimed={noop} />
     ));
-    expect(queryByText("Use a different claim code")).toBeNull();
+    expect(queryByText(/Sign out/)).toBeNull();
   });
 
-  it("clears the code field and calls the handler on click", () => {
-    const onUseDifferentCode = vi.fn();
+  it("clears the code field and calls the sign-out handler on click", () => {
+    const onSignOut = vi.fn();
     const { getByText, getByLabelText } = render(() => (
       <LoginSection
         apiUrl="http://x"
         result={result([member("Chidi")])}
         onClaimed={noop}
-        onUseDifferentCode={onUseDifferentCode}
+        onSignOut={onSignOut}
       />
     ));
 
     const input = getByLabelText("Invitation code") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "OKAFOR-LILY-AB12CD" } });
 
-    fireEvent.click(getByText("Use a different claim code"));
+    fireEvent.click(getByText(/Sign out/));
 
-    expect(onUseDifferentCode).toHaveBeenCalledTimes(1);
+    expect(onSignOut).toHaveBeenCalledTimes(1);
     expect(input.value).toBe("");
   });
 });

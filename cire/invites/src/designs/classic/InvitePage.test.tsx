@@ -538,7 +538,7 @@ describe("InvitePage", () => {
     });
   });
 
-  it("'Use a different claim code' returns to the code form and clears the claimed invite", async () => {
+  it("'Sign out' returns to the code form and clears the claimed invite", async () => {
     vi.stubGlobal(
       "fetch",
       noSession(
@@ -560,7 +560,7 @@ describe("InvitePage", () => {
 
     await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
 
-    fireEvent.click(getByText("Use a different claim code"));
+    fireEvent.click(getByText(/Sign out/));
 
     // The code form is back, the previously claimed household's events are
     // gone, and the field the household typed into is blank again.
@@ -590,6 +590,49 @@ describe("InvitePage", () => {
     // keyboard or screen-reader user is told the form is back and is already
     // on the control they need.
     expect(document.activeElement).toBe(input);
+  });
+
+  it("signs out for real: POSTs /api/claim/signout and drops the restore hint", async () => {
+    // The contract that makes this a sign-out rather than a local reset. The
+    // `cire_session` cookie is HttpOnly and host-scoped to the API origin, so
+    // the browser cannot clear it — only this call can. Without it a guest on
+    // a shared device who "signs out" leaves a live credential behind, and the
+    // on-mount restore silently re-opens the household on the next visit.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(claim), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", noSession(fetchMock));
+    // Stand in for the hint a real claim leaves behind.
+    noteClaimed();
+    expect(document.cookie).toContain("cire_claimed=");
+
+    const { getByText, getByPlaceholderText } = render(() => (
+      <InvitePage apiUrl="https://api.test" />
+    ));
+
+    fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "SHARMA-JOY-RK97" } });
+    fireEvent.click(getByText("Open Invitation"));
+    await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
+
+    fireEvent.click(getByText(/Sign out/));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/claim/signout"));
+      expect(call, "no sign-out request was sent").toBeTruthy();
+      // `credentials: "include"` is load-bearing: the issuer is a different
+      // origin from the guest site, and a cross-origin fetch on the default
+      // `same-origin` mode sends no cookie — the server would have nothing to
+      // revoke and would answer 204 anyway, so this fails silently without it.
+      expect((call![1] as RequestInit).method).toBe("POST");
+      expect((call![1] as RequestInit).credentials).toBe("include");
+    });
+
+    // The local restore hint is gone, so the next visit shows the code form
+    // instead of spending a request re-opening the household.
+    expect(document.cookie).not.toContain("cire_claimed=1");
   });
 
   it("can actually claim a second, different household after the reset", async () => {
@@ -628,7 +671,7 @@ describe("InvitePage", () => {
     fireEvent.click(getByText("Open Invitation"));
     await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
 
-    fireEvent.click(getByText("Use a different claim code"));
+    fireEvent.click(getByText(/Sign out/));
     await waitFor(() => expect(getByText("Enter Your Code")).toBeTruthy());
 
     fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "OKAFOR-LILY-AB12CD" } });
@@ -680,12 +723,12 @@ describe("InvitePage", () => {
 
     // Wait for the sequence to have STARTED and parked — i.e. `onFormHidden`
     // has fired and we are inside the window the guard protects. Deliberately
-    // not `waitFor(getByText("Use a different claim code"))`: `getByText` also
+    // not `waitFor(getByText(/Sign out/))`: `getByText` also
     // matches `display: none` nodes, so that resolves instantly, before the
     // claim has even landed, and the click would test nothing.
     await waitFor(() => expect(releaseSequence).toBeDefined(), { timeout: 2000 });
     expect(getByText(/Dear Priya/)).toBeTruthy();
-    fireEvent.click(getByText("Use a different claim code"));
+    fireEvent.click(getByText(/Sign out/));
 
     // Now let the choreography finish — its trailing write must not resurrect
     // the welcome half over a null claim.

@@ -38,18 +38,16 @@ interface LoginSectionProps {
    */
   welcomeMessage?: string | null;
   /**
-   * Lets a claimed household step back to the code form — a shared device, or
-   * a mistyped code that happened to match someone else's invite. Owns
-   * resetting `result`/`revealed` in the parent; this component resets its own
-   * form state (code, error, loading, Turnstile token) and moves focus.
-   * Absent ⇒ no escape hatch is rendered, since without a handler the button
-   * would have nothing to swap the view back with.
+   * Ends the household session — a shared device, or a code that opened the
+   * wrong family's invite. The PARENT owns the actual sign-out: revoking
+   * `cire_session` server-side and resetting `result`/`revealed`. This
+   * component only resets its own form state (code, error, loading, Turnstile
+   * token) and moves focus, so the returned form is immediately usable.
    *
-   * NOT a sign-out: the household's `cire_session` cookie is untouched, so a
-   * reload re-opens the same invite via the on-mount session restore. The copy
-   * is worded around that deliberately — see the S-H1 note on the button.
+   * Absent ⇒ no control is rendered, since without a handler it would have
+   * nothing to swap the view back with.
    */
-  onUseDifferentCode?: () => void;
+  onSignOut?: () => void;
 }
 
 // The built-in post-claim greeting, used when the organiser hasn't overridden it.
@@ -79,10 +77,18 @@ export function LoginSection(props: LoginSectionProps) {
     return m.nickname?.trim() ? m.nickname.trim() : m.firstName;
   };
 
+  // "Not the Okafor family? Sign out" when we know who they are, so the control
+  // names the household it ends rather than describing a mechanism. Falls back
+  // to the plain label when the payload has no usable name.
+  const signOutLabel = () => {
+    const name = isIndividual() ? individualName() : props.result?.familyName;
+    return name?.trim() ? `Not ${name.trim()}? Sign out` : "Sign out";
+  };
+
   let codeInputRef: HTMLInputElement | undefined;
   let turnstile: TurnstileControls | undefined;
 
-  function handleUseDifferentCode() {
+  function handleSignOut() {
     // Return the form to a submittable state: blank field (it would otherwise
     // reappear pre-filled with the code that just succeeded), no stale error,
     // no stuck `loading`, no spent Turnstile token.
@@ -90,10 +96,10 @@ export function LoginSection(props: LoginSectionProps) {
     // Re-challenge so a fresh single-use token can replace the one the
     // previous claim redeemed. No-op when Turnstile is unconfigured.
     turnstile?.reset();
-    // Let the parent swap the view back BEFORE focusing — the form is
-    // `display: none` until it does, and `focus()` on a hidden element is
-    // silently dropped.
-    props.onUseDifferentCode?.();
+    // Let the parent revoke the session and swap the view back BEFORE
+    // focusing — the form is `display: none` until it does, and `focus()` on a
+    // hidden element is silently dropped.
+    props.onSignOut?.();
     // C-L1: the click removes the focused button from the accessibility tree,
     // which would drop focus to `<body>` and leave a keyboard or screen-reader
     // user at the top of the document with no signal that the form is back.
@@ -250,13 +256,13 @@ export function LoginSection(props: LoginSectionProps) {
               {props.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE}
             </p>
           </Show>
-          <Show when={props.onUseDifferentCode}>
+          <Show when={props.onSignOut}>
             <button
               type="button"
-              onClick={handleUseDifferentCode}
+              onClick={handleSignOut}
               class="font-body text-text-muted hover:text-gold-ink focus-visible:ring-gold/60 rounded-sm text-[0.78rem] underline underline-offset-2 transition-colors duration-200 focus:outline-none focus-visible:ring-2"
             >
-              Use a different claim code
+              {signOutLabel()}
             </button>
           </Show>
         </div>

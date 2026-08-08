@@ -324,7 +324,7 @@ describe("gala InvitePage", () => {
     });
   });
 
-  it("'Use a different claim code' returns to the code form and clears the claimed invite", async () => {
+  it("'Sign out' returns to the code form and clears the claimed invite", async () => {
     vi.stubGlobal(
       "fetch",
       noSession(
@@ -346,7 +346,7 @@ describe("gala InvitePage", () => {
 
     await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
 
-    fireEvent.click(getByText("Use a different claim code"));
+    fireEvent.click(getByText(/Sign out/));
 
     // The claim panel is back, the previously claimed household's events are
     // gone, and the field the household typed into is blank again.
