@@ -284,7 +284,7 @@ describe.each([
     }, SETTLED);
 
     // The complaint, stated as an assertion: still filled seconds later.
-    // +2000 is well past the 1400ms choreography; these are real sleeps, so the
+    // +2000 is well past `TOTAL_DURATION_MS`; these are real sleeps, so the
     // margin is sized to the assertion rather than to rhetoric.
     await wait(TOTAL_DURATION_MS + 2000);
     expect(scaleX(fill())).toBe(1);
@@ -305,11 +305,18 @@ describe.each([
     // label flipping to "Saved" is that same moment. `waitFor` on the toast's
     // geometry then absorbs solid-toast's enter animation without assuming a
     // duration for it.
-    await vi.waitFor(() =>
-      expect(
-        document.querySelector('[role="dialog"] button[type="submit"]')!.textContent,
-      ).toContain("Saved"),
-    );
+    await vi.waitFor(() => {
+      const submit = document.querySelector('[role="dialog"] button[type="submit"]');
+      // Null once the dwell has already closed the sheet — which also means the
+      // save landed, so it satisfies this wait exactly as well as the label
+      // does. Reading `.textContent` off null instead throws inside the
+      // predicate, and a predicate that can never again succeed retries to the
+      // deadline and fails hard rather than degrading (T-E1). The window that
+      // has to contain the first poll shrank with the dwell, and this
+      // assertion is a clock ANCHOR for the toast checks below, not a claim
+      // about how long the sheet stays up.
+      expect(submit === null || submit.textContent!.includes("Saved")).toBe(true);
+    });
     const { el, container } = await vi.waitFor(() => {
       const found = toastFor("Your RSVP for Mehndi has been recorded.");
       expect(found, "no toast element in the DOM at all").toBeTruthy();
@@ -365,11 +372,18 @@ describe.each([
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeTruthy());
     answer("Priya");
     save();
-    await vi.waitFor(() =>
-      expect(
-        document.querySelector('[role="dialog"] button[type="submit"]')!.textContent,
-      ).toContain("Saved"),
-    );
+    await vi.waitFor(() => {
+      const submit = document.querySelector('[role="dialog"] button[type="submit"]');
+      // Null once the dwell has already closed the sheet — which also means the
+      // save landed, so it satisfies this wait exactly as well as the label
+      // does. Reading `.textContent` off null instead throws inside the
+      // predicate, and a predicate that can never again succeed retries to the
+      // deadline and fails hard rather than degrading (T-E1). The window that
+      // has to contain the first poll shrank with the dwell, and this
+      // assertion is a clock ANCHOR for the toast checks below, not a claim
+      // about how long the sheet stays up.
+      expect(submit === null || submit.textContent!.includes("Saved")).toBe(true);
+    });
 
     const { el, container } = await vi.waitFor(() => {
       const found = toastFor("Your RSVP for Mehndi has been recorded.");

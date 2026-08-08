@@ -31,8 +31,20 @@
  *
  * The fix is to stop treating the network wait as free. `savedDwellMs` spends a
  * total time-on-screen budget measured from the CLICK, so a slow reply eats
- * into the dwell rather than stacking on top of it, and the sheet closes at
- * roughly `SAVED_DWELL_MS` after the click however long the server took.
+ * into the dwell rather than stacking on top of it.
+ *
+ * Be precise about how far that goes, because the floor below bounds it. Up to
+ * the KNEE — a reply of `SAVED_DWELL_MS - SAVED_DWELL_MIN_MS` — the budget is
+ * spent exactly and click-to-close is flat at `SAVED_DWELL_MS`. Past the knee
+ * the floor takes over and the total is `request + SAVED_DWELL_MIN_MS`, which
+ * grows with the network again. With the floor sized for the announcement (see
+ * below) the knee is small, so most real saves land past it and what they
+ * actually get is the floor rather than the budget — `900 → 500` of dwell, a
+ * flat saving, rather than the constant click-to-close the first paragraph
+ * might suggest. The budget still does the work it can: it compresses fast
+ * replies and it caps nothing at more than `SAVED_DWELL_MS`. `rsvp-saved.test.ts`
+ * pins the knee as a relationship between the two constants so this stays true
+ * of whatever they are retuned to.
  *
  * The floor is what keeps that from collapsing into the original bug. A guest
  * whose reply took longer than the whole budget must still SEE the confirmed
@@ -40,6 +52,29 @@
  * so the hold never drops below `SAVED_DWELL_MIN_MS` no matter how slow the
  * round-trip was. Below that floor the label swap reads as a flicker and the
  * sheet is back to vanishing.
+ *
+ * ## Why the floor is 500 and not something snappier
+ *
+ * The floor is sized by the SPOKEN confirmation, not the visible one. The
+ * sheet's `sr-only role="status"` region is the reliable announcement path (the
+ * toast's own region is created together with its content, which assistive tech
+ * routinely misses), and the dwell timer calls `props.onClose()` directly — no
+ * `modalExit` grace period — so the parent unmounts that region on the same
+ * tick the dwell expires, while `AnimatedModal` returns focus to the Respond
+ * button. A polite region mutated and then destroyed a few hundred ms later,
+ * against a competing focus utterance, is at the edge of what iOS VoiceOver
+ * reliably speaks (WCAG 2.2 SC 4.1.3) — and this is a phone-first invite, so
+ * VoiceOver is the primary AT. Note the floor is the COMMON case, not the tail:
+ * it binds for any reply slower than `SAVED_DWELL_MS - SAVED_DWELL_MIN_MS`, and
+ * the RSVP POST is six serialised D1 round-trips.
+ *
+ * So this number is an accessibility floor wearing a timing constant's clothes,
+ * and the ~100ms it costs a fast save is the price of the announcement being
+ * heard. The way to get it back is NOT to lower it: it is to stop the
+ * announcement's lifetime depending on the dwell at all, by hoisting the live
+ * region to the page root beside the `<Toaster>` (which was relocated there for
+ * a structurally identical reason). Filed as C-L1 in `wiki/todo/security.md`;
+ * once that lands the floor answers only to the label swap and can drop.
  *
  * Nothing downstream is timed against these numbers: the Respond-button
  * celebration is measured from the moment the sheet uncovers that button (see
@@ -61,11 +96,11 @@ export const SAVED_DWELL_MS = 600;
 
 /**
  * The floor under {@link savedDwellMs} — the shortest the confirmed state is
- * ever held, applied when the request alone outran the budget above. Long
- * enough for the "Saved" label swap and the sheet's `role="status"` line to
- * register as a state rather than a flicker.
+ * ever held, applied when the request alone outran the budget above. Sized by
+ * the sheet's `role="status"` announcement rather than by the "Saved" label
+ * swap, which would be legible in half the time; see the module doc.
  */
-export const SAVED_DWELL_MIN_MS = 300;
+export const SAVED_DWELL_MIN_MS = 500;
 
 /**
  * How long to hold the confirmed state, given how long the submit itself took.

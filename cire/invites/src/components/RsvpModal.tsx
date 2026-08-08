@@ -255,7 +255,12 @@ export function RsvpModal(props: RsvpModalProps) {
     // between is synchronous validation, and what the dwell budget is spending
     // is the wait a guest actually perceives after pressing Save. See
     // `savedDwellMs`.
-    const submittedAt = Date.now();
+    //
+    // `performance.now()`, not `Date.now()`: this is a DURATION, and a
+    // monotonic clock cannot step backwards mid-request the way wall-clock can
+    // under an NTP correction. `savedDwellMs` clamps a negative anyway, but the
+    // clamp should be insurance rather than the thing holding the invariant up.
+    const submittedAt = performance.now();
 
     // The confirmed state is terminal — the sheet is already closing itself and
     // a second POST would rewrite the same rows. The Save button advertises
@@ -380,7 +385,7 @@ export function RsvpModal(props: RsvpModalProps) {
         // parent. A parent that responded by unmounting this sheet would
         // otherwise run `onCleanup` first and leave the timer to be registered
         // afterwards — never cleared, firing `onClose` on a disposed instance
-        // ~900ms later. Registering first keeps the timer's lifetime strictly
+        // one dwell later. Registering first keeps the timer's lifetime strictly
         // inside the component's, whatever the parent does.
         //
         // `onClose` is not called here — `enterSavedState` holds the sheet open
@@ -389,7 +394,7 @@ export function RsvpModal(props: RsvpModalProps) {
         // already showing the new answer when the sheet lifts off it.
         batch(() => {
           setLoading(false);
-          enterSavedState(celebrate, Date.now() - submittedAt);
+          enterSavedState(celebrate, performance.now() - submittedAt);
           props.onSubmitted?.(data.rsvps);
         });
         return;
@@ -604,7 +609,7 @@ export function RsvpModal(props: RsvpModalProps) {
             // deadline this button relabels to "Close" and becomes the sheet's
             // ONLY control — and it is the target of the C-L2 focus rescue
             // above, which calls `.focus()` on it. `.focus()` is a no-op on a
-            // disabled button. The deadline can flip INSIDE the 900ms dwell,
+            // disabled button. The deadline can flip INSIDE the dwell,
             // unmounting the focused submit button; without this clause the
             // rescue would fire into a disabled control and strand focus on
             // `<body>`, outside an `aria-modal` dialog with no keyboard way

@@ -151,7 +151,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * to absorb one long task and otherwise samples the sweep mid-travel (~0.97).
  * The state being waited for is permanent, so waiting longer can never
  * overshoot, and `waitFor` returns the moment it holds. The default 1000ms
- * timeout is too short for a ~1400ms choreography, hence the explicit one.
+ * timeout is too short for the dwell plus the choreography, hence the explicit one.
  */
 const SETTLED = { timeout: SAVED_DWELL_MS + SWEEP_DURATION_MS + 3000, interval: 50 };
 
@@ -195,11 +195,18 @@ describe("RSVP confirmation, end to end and painted", () => {
     // may be animating underneath it yet. Anchored to the label flip rather than
     // to a 100ms sleep: this is a CEILING, and a long stall would let the dwell
     // fire first, making the sheet gone and the assertion meaningless.
-    await vi.waitFor(() =>
-      expect(document.querySelector("button[type='submit']")!.textContent).toContain("Saved"),
-    );
-    expect(sheet()).toBeTruthy();
-    expect(scaleX(fill())).toBe(0);
+    //
+    // All three sampled inside ONE `waitFor` predicate, so they are read in a
+    // single task. Asserted after the wait instead, they can straddle the
+    // dwell's expiry — the poll sees "Saved", the runner stalls, and the sheet
+    // is gone by the time the next line runs. That margin shrank with the dwell
+    // (T-E1), and the assertion is about ORDERING, not duration, so it should
+    // not have been leaning on the dwell being long in the first place.
+    await vi.waitFor(() => {
+      expect(document.querySelector("button[type='submit']")!.textContent).toContain("Saved");
+      expect(sheet()).toBeTruthy();
+      expect(scaleX(fill())).toBe(0);
+    });
 
     // Sheet gone, sweep played.
     await vi.waitFor(() => {
