@@ -170,10 +170,12 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
  * `vi.waitFor` options for the settled confirmation. The default 1000ms is too
  * short on purpose-built grounds: the sweep does not START until the sheet's
- * `SAVED_DWELL_MS` (900ms) has elapsed and then runs for `SWEEP_DURATION_MS`
- * (500ms), so the earliest it can be settled is ~1400ms. The generous ceiling
- * costs nothing when the assertion passes — `waitFor` returns as soon as it
- * does — and the state it waits for is permanent, so it can never overshoot.
+ * dwell has elapsed and then runs for `SWEEP_DURATION_MS` (500ms). The dwell is
+ * a budget measured from the click (`savedDwellMs`), so `SAVED_DWELL_MS` is its
+ * ceiling and this timeout stays an upper bound however fast the stubbed reply
+ * lands. The generous ceiling costs nothing when the assertion passes —
+ * `waitFor` returns as soon as it does — and the state it waits for is
+ * permanent, so it can never overshoot.
  */
 const SETTLED = { timeout: SAVED_DWELL_MS + SWEEP_DURATION_MS + 3000, interval: 50 };
 /**

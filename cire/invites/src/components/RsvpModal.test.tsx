@@ -3,7 +3,7 @@ import { createSignal, Show } from "solid-js";
 import { toast } from "solid-toast";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
-import { SAVED_DWELL_MS } from "./rsvp-saved";
+import { SAVED_DWELL_MIN_MS, SAVED_DWELL_MS } from "./rsvp-saved";
 import { RsvpModal } from "./RsvpModal";
 import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
 
@@ -1065,6 +1065,83 @@ describe("RsvpModal", () => {
       expect(onConfirmed.mock.invocationCallOrder[0]!).toBeLessThan(
         onClose.mock.invocationCallOrder[0]!,
       );
+    });
+
+    /**
+     * Open the sheet with a fetch the test controls, answer for Priya and
+     * submit. Returns the resolver, so the test decides how long the reply
+     * takes — the whole point of the dwell budget.
+     */
+    function submitWithPendingReply(onClose: () => void) {
+      let land!: (r: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              land = resolve;
+            }),
+        ),
+      );
+      vi.useFakeTimers();
+      render(() => (
+        <RsvpModal event={event} members={[priya]} apiUrl="https://api.test" onClose={onClose} />
+      ));
+      fireEvent.click(within(fieldsetFor("Priya")).getByText("Attending"));
+      fireEvent.click(document.querySelector("button[type='submit']") as HTMLElement);
+      const rsvps: RsvpSummary[] = [
+        { guestId: "guest-priya", eventId: "event-1", status: "attending", dietary: "" },
+      ];
+      return () =>
+        land(
+          new Response(JSON.stringify({ rsvps }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+    }
+
+    it("charges a slow reply against the dwell instead of stacking on top of it", async () => {
+      // The reported bug: the sheet used to hold a flat 900ms measured from the
+      // moment the server answered, so a guest waited `round-trip + 900ms` and
+      // the slower the network the longer the sheet sat there having already
+      // finished its job. The wait is now a budget measured from the CLICK.
+      const onClose = vi.fn();
+      const land = submitWithPendingReply(onClose);
+
+      // A reply that outruns the entire budget on its own.
+      await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS + 400);
+      expect(onClose).not.toHaveBeenCalled();
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(document.querySelector("button[type='submit']")!.textContent).toContain("Saved");
+
+      // It still gets the floor — "Saving…" is not a confirmation, so the
+      // confirmed state must be seen even when the budget is long gone…
+      await vi.advanceTimersByTimeAsync(SAVED_DWELL_MIN_MS - 1);
+      expect(onClose).not.toHaveBeenCalled();
+      // …and nothing beyond it. Landing on exactly the floor rather than
+      // somewhere under the budget is what proves the request time was
+      // deducted, not ignored.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes a fast reply out at the budget, not the budget plus the round-trip", async () => {
+      const onClose = vi.fn();
+      const land = submitWithPendingReply(onClose);
+
+      const requestMs = 200;
+      await vi.advanceTimersByTimeAsync(requestMs);
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Total click-to-close is the budget, whatever share of it the network
+      // took: the remaining dwell is exactly what is left over.
+      await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS - requestMs - 1);
+      expect(onClose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("skips the celebration when the guest dismisses the sheet mid-dwell", async () => {

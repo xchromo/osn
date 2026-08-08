@@ -5,12 +5,23 @@ related:
   - "[[index]]"
   - "[[review-findings]]"
   - "[[host-portal-layout]]"
-last-reviewed: 2026-08-07
+last-reviewed: 2026-08-08
 ---
 
 # Performance Backlog
 
 See [[review-findings]] for severity prefix conventions.
+
+### RSVP save latency (`claude/rsvp-modal-close-delay-d8sqnd`, 2026-08-08)
+
+Surfaced while fixing the reported "quite a delay for the form to close after you click save" (see `[[web]]`). The client half — a flat 900ms dwell that stacked on top of the round-trip instead of absorbing it — is fixed on that branch. The server half is filed, not fixed.
+
+- [ ] **P-W1** — **`POST /api/rsvp` is five SEQUENTIAL D1 round-trips on the guest's one hot write path.** In order: the family⋈wedding join (deadline + `kind`), the family's guest ids, the `guest_events` invitation set, the upsert batch, then `getRsvpsForFamily` for the response body. Each is a separate Workers↔D1 hop, so the whole thing is five serialised network latencies before the sheet can even say "Saved" — and this is the *minimum*, paid identically by a one-guest one-event reply and by a whole household's. It is the entire reason the dwell had to become a budget rather than a fixed hold: the fixed part of the wait was never the dwell, it was this. Three separate reductions exist and each has a catch worth stating before anyone reaches for it:
+  - **Queries 1 and 2 are independently keyed on the authenticated `familyId`** and can run concurrently (`Effect.all`) for a clean −1 hop with no semantic change. The cheapest of the three.
+  - **Query 3 must NOT join them.** It reads `guest_events` for guest ids taken straight off the request body, and today it deliberately runs *after* the ownership check in query 2 has validated them. Hoisting it into the same concurrent group to save a hop would issue reads for arbitrary caller-supplied ids before ownership is established — no data leaks (the result is only ever used for a set-membership test, and the gates still evaluate in the same order for the same status codes), but it hands an authenticated household a read-amplification primitive over ids it does not own. Not worth one round-trip.
+  - **Queries 4 and 5 could be ONE `db.batch([...upserts, select])`** — D1 batches run sequentially and atomically and return a result per statement, so the read-back would see the writes. `commitBatch` returns `void` and is shared with the importer, the retention sweep and code rotation, so this needs a new result-returning helper plus a `bun:sqlite` fallback (which has no `.batch()` and awaits sequentially in-process). −1 hop, the largest single win, the most code.
+
+  Filed rather than fixed because the reported symptom was resolved on the client without touching a security-sensitive route, and because the middle bullet is the kind of reordering that looks free in a diff.
 
 ### RSVP confirmation timing + mobile invite preview (`claude/pr388-deploy-mobile-invite-jlz8in`, 2026-08-06)
 

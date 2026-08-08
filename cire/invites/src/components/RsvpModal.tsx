@@ -12,7 +12,7 @@ import { toast } from "solid-toast";
 
 import { AnimatedModal } from "./AnimatedModal";
 import { hasHouseholdResponded } from "./rsvp-responded";
-import { SAVED_DWELL_MS } from "./rsvp-saved";
+import { savedDwellMs } from "./rsvp-saved";
 import type { EventSummary, FamilyMember, RsvpSummary } from "./types";
 
 interface RsvpModalProps {
@@ -173,8 +173,14 @@ export function RsvpModal(props: RsvpModalProps) {
    * Deliberately does NOT call `onSubmitted` — the host preview reaches this
    * too, and a preview must show the guest's confirmation without ever claiming
    * data was written. The real success path calls `onSubmitted` itself.
+   *
+   * `requestMs` is how long the guest has ALREADY been waiting — click to reply
+   * — and is deducted from the dwell rather than added to it, so the sheet
+   * closes a roughly fixed time after the click however slow the round-trip
+   * was. `savedDwellMs` holds a floor under that so a slow reply still gets a
+   * readable confirmed state. Preview passes 0: it never leaves the browser.
    */
-  function enterSavedState(celebrate: boolean) {
+  function enterSavedState(celebrate: boolean, requestMs: number) {
     setSaved(true);
     toast.success(`Your RSVP for ${props.event.name} has been recorded.`);
     dwellTimer = setTimeout(() => {
@@ -182,14 +188,15 @@ export function RsvpModal(props: RsvpModalProps) {
       // Fired WITH the close, not at the top of the dwell. The celebration this
       // cues plays on the Respond button *behind* this sheet, so starting it
       // here — on the frame the sheet stops covering that button — is what
-      // makes it visible. Cueing it at `setSaved` instead spends the sweep-in,
-      // the tick draw and the whole hold under a sheet that is still up
-      // (`SAVED_DWELL_MS` 900ms vs `TOTAL_DURATION_MS` 1400ms), leaving the
-      // guest only the 500ms fade-out — green draining off a button they never
-      // saw fill, which reads as nothing having happened at all.
+      // makes it visible. Cueing it at `setSaved` instead spends the sweep-in
+      // and the tick draw under a sheet that is still up — the dwell is a
+      // sizeable fraction of `TOTAL_DURATION_MS`, so the guest is uncovered
+      // onto a celebration already most of the way through, which reads as
+      // nothing having happened at all. Shortening the dwell reduces how much
+      // of the celebration that mistake would burn; it does not make it safe.
       if (celebrate) props.onConfirmed?.();
       props.onClose();
-    }, SAVED_DWELL_MS);
+    }, savedDwellMs(requestMs));
   }
 
   function setAttending(guestId: string, attending: Attending) {
@@ -243,6 +250,12 @@ export function RsvpModal(props: RsvpModalProps) {
   async function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
     setError(null);
+
+    // The guest's clock starts HERE, not when the fetch is issued: everything
+    // between is synchronous validation, and what the dwell budget is spending
+    // is the wait a guest actually perceives after pressing Save. See
+    // `savedDwellMs`.
+    const submittedAt = Date.now();
 
     // The confirmed state is terminal — the sheet is already closing itself and
     // a second POST would rewrite the same rows. The Save button advertises
@@ -318,7 +331,7 @@ export function RsvpModal(props: RsvpModalProps) {
     // feels; a preview that skipped straight to a closed sheet would hide the
     // one piece of feedback this change exists to add.
     if (props.preview) {
-      enterSavedState(celebrate);
+      enterSavedState(celebrate, 0);
       return;
     }
 
@@ -376,7 +389,7 @@ export function RsvpModal(props: RsvpModalProps) {
         // already showing the new answer when the sheet lifts off it.
         batch(() => {
           setLoading(false);
-          enterSavedState(celebrate);
+          enterSavedState(celebrate, Date.now() - submittedAt);
           props.onSubmitted?.(data.rsvps);
         });
         return;
@@ -612,7 +625,7 @@ export function RsvpModal(props: RsvpModalProps) {
                 `rsvp-responded.ts`), which is still on screen once this sheet
                 closes and this one is not. What stays here is the label swap
                 and the lock, so the sheet still visibly holds its result for
-                `SAVED_DWELL_MS` rather than just vanishing. */}
+                the dwell (`savedDwellMs`) rather than just vanishing. */}
             <button
               type="submit"
               class="border-gold font-body text-gold-ink hover:bg-gold hover:text-bg disabled:hover:text-gold-ink flex-1 rounded-sm border bg-transparent px-4 py-3 text-[0.82rem] tracking-[0.1em] uppercase transition-colors duration-200 disabled:cursor-not-allowed disabled:hover:bg-transparent"
