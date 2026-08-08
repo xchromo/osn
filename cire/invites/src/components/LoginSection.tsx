@@ -37,6 +37,15 @@ interface LoginSectionProps {
    * or guest name. Absent/null ⇒ the built-in default greeting.
    */
   welcomeMessage?: string | null;
+  /**
+   * Lets a claimed household step back to the code form — a shared device, or
+   * a mistyped code that happened to match someone else's invite. Owns
+   * resetting `result`/`revealed` in the parent; this component only clears
+   * its own code field so the form doesn't reopen pre-filled with the code
+   * that was just claimed. Absent ⇒ no escape hatch is rendered, since without
+   * a handler the button would have nothing to swap the view back with.
+   */
+  onUseDifferentCode?: () => void;
 }
 
 // The built-in post-claim greeting, used when the organiser hasn't overridden it.
@@ -65,6 +74,13 @@ export function LoginSection(props: LoginSectionProps) {
     if (!m) return "";
     return m.nickname?.trim() ? m.nickname.trim() : m.firstName;
   };
+
+  function handleUseDifferentCode() {
+    // Blank the field before the form reappears — otherwise it would come
+    // back pre-filled with the code that just succeeded.
+    claim.setCode("");
+    props.onUseDifferentCode?.();
+  }
 
   return (
     <section
@@ -208,6 +224,15 @@ export function LoginSection(props: LoginSectionProps) {
             <p class="text-text-muted mb-8 text-[0.92rem] leading-[1.6] font-light">
               {props.welcomeMessage ?? DEFAULT_WELCOME_MESSAGE}
             </p>
+          </Show>
+          <Show when={props.onUseDifferentCode}>
+            <button
+              type="button"
+              onClick={handleUseDifferentCode}
+              class="font-body text-text-muted hover:text-gold-ink focus-visible:ring-gold/60 rounded-sm text-[0.78rem] underline underline-offset-2 transition-colors duration-200 focus:outline-none focus-visible:ring-2"
+            >
+              Use a different claim code
+            </button>
           </Show>
         </div>
       </div>

@@ -283,6 +283,20 @@ export default function InvitePage(props: InvitePageProps) {
     }
   }
 
+  // Lets a claimed household step back to the code form — a shared device, or
+  // a code that matched the wrong family. Local UI only: the `cire_session`
+  // cookie this household already holds is untouched, so reloading without
+  // submitting a new code restores the same household exactly as before.
+  // Submitting a different code overwrites the cookie via `/api/claim`'s
+  // Set-Cookie, same as any first claim.
+  function handleUseDifferentCode() {
+    batch(() => {
+      setRevealed(false);
+      setRestoredSession(false);
+      setClaimResult(null);
+    });
+  }
+
   return (
     <>
       <LoginSection
@@ -294,6 +308,7 @@ export default function InvitePage(props: InvitePageProps) {
         welcomeRef={(el) => (welcomeRef = el)}
         themeVars={welcomeVars()}
         welcomeMessage={liveInvite().welcomeMessage}
+        onUseDifferentCode={handleUseDifferentCode}
       />
 
       <Show when={claimResult()}>

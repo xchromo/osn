@@ -304,6 +304,23 @@ export default function InvitePage(props: InvitePageProps) {
     return m.nickname?.trim() ? m.nickname.trim() : m.firstName;
   };
 
+  // Lets a claimed household step back to the code form — a shared device, or
+  // a code that matched the wrong family. Local UI only: the `cire_session`
+  // cookie this household already holds is untouched, so reloading without
+  // submitting a new code restores the same household exactly as before.
+  // Submitting a different code overwrites the cookie via `/api/claim`'s
+  // Set-Cookie, same as any first claim.
+  function handleUseDifferentCode() {
+    // Blank the field before the form reappears — otherwise it would come
+    // back pre-filled with the code that just succeeded.
+    claim.setCode("");
+    batch(() => {
+      setRevealed(false);
+      setRestoredSession(false);
+      setClaimResult(null);
+    });
+  }
+
   return (
     <>
       {/* Claim panel — a narrow bordered object sitting on the page, not a
@@ -422,6 +439,13 @@ export default function InvitePage(props: InvitePageProps) {
                   {welcomeMessage()}
                 </p>
               </Show>
+              <button
+                type="button"
+                onClick={handleUseDifferentCode}
+                class="font-body text-text-muted hover:text-gold-ink focus-visible:ring-gold/60 rounded-sm text-[0.78rem] underline underline-offset-2 transition-colors duration-200 focus:outline-none focus-visible:ring-2"
+              >
+                Use a different claim code
+              </button>
             </div>
           </div>
         </div>

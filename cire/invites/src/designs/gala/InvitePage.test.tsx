@@ -318,6 +318,38 @@ describe("gala InvitePage", () => {
     });
   });
 
+  it("'Use a different claim code' returns to the code form and clears the claimed invite", async () => {
+    vi.stubGlobal(
+      "fetch",
+      noSession(
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(claim), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      ),
+    );
+
+    const { getByText, getByPlaceholderText, queryByText } = render(() => (
+      <InvitePage apiUrl="https://api.test" />
+    ));
+
+    fireEvent.input(getByPlaceholderText(/PATEL-JOY/), { target: { value: "SHARMA-JOY-RK97" } });
+    fireEvent.click(getByText("Open Invitation"));
+
+    await waitFor(() => expect(getByText(/Dear Priya/)).toBeTruthy(), { timeout: 2000 });
+
+    fireEvent.click(getByText("Use a different claim code"));
+
+    // The claim panel is back, the previously claimed household's events are
+    // gone, and the field the household typed into is blank again.
+    await waitFor(() => expect(getByText("Enter Your Code")).toBeTruthy());
+    expect(queryByText(/Dear Priya/)).toBeNull();
+    expect(queryByText("Mehndi")).toBeNull();
+    expect((getByPlaceholderText(/PATEL-JOY/) as HTMLInputElement).value).toBe("");
+  });
+
   it("hides the Pulse account-link affordance in preview mode", async () => {
     vi.stubGlobal(
       "fetch",
