@@ -310,6 +310,20 @@ describe("residual contrast warnings", () => {
     }
   });
 
+  test("fog's bloom clears the raised surface, not just ground", () => {
+    // `bloom-on-raised` is the pair the RSVP confirmation fill/tick added
+    // (see the RESIDUAL_PAIRS entry). It caught a real failure here: `fog`'s
+    // near-white `card`/`raised` (99.2% L) needs more headroom than `ground`
+    // (96.5% L), so the original 63%-lightness bloom seed cleared `ground`
+    // (bloom is only walked against `ground` at derivation time) but landed
+    // at 2.88:1 on `raised` — under the 3:1 floor. Assert the property, not
+    // the literal, so a future re-tune only has to keep clearing this bar.
+    const fog = derivePalette(PALETTE_PRESETS.fog);
+    expect(
+      contrastRatio(fog["--color-bloom"] as string, fog["--color-surface-raised"] as string),
+    ).toBeGreaterThanOrEqual(WCAG_UI_MIN);
+  });
+
   test("the two notices describe different things, neither derivable from the other", () => {
     // A straddling scheme — near-black page, near-white cards. The seed-level
     // report names what it MOVED (ink, bloom); the warning names what survived

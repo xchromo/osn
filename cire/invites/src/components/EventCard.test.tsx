@@ -345,13 +345,17 @@ describe("EventCard", () => {
       const { container } = render(() => (
         <EventCard event={baseEvent} onRespond={noop} onDetails={noop} />
       ));
-      const fill = respondButton(container).querySelector(
-        "span[aria-hidden='true']",
-      ) as HTMLElement;
+      const button = respondButton(container);
+      const fill = button.querySelector("span[aria-hidden='true']") as HTMLElement;
       expect(fill).toBeTruthy();
       expect(fill.className).toContain("scale-x-0");
       expect(fill.className).toContain("bg-bloom");
       expect(fill.className).toContain("transition-transform");
+      // The fill is a sweep OVER the button, not a replacement of its base
+      // colour — `bg-gold` (and the rest of the open-state classes) must
+      // still be on the button itself, not renamed alongside the accent swap.
+      expect(button.className).toContain("bg-gold");
+      expect(button.className).not.toContain("bg-bloom");
     });
 
     it("does not celebrate on mount even if justResponded starts true", () => {
