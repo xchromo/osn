@@ -36,20 +36,18 @@ export function hasHouseholdResponded(
  * so keep `TOTAL_DURATION_MS` and the dwell independent: the celebration is
  * measured from the moment the button becomes visible, not from the submit.
  *
- * Three phases, driven entirely inside `EventCard` from a single
+ * Two phases, driven entirely inside `EventCard` from a single
  * `justResponded` transition (see the component for the state machine):
  *
  * 1. **Sweep-in** (0 → `SWEEP_DURATION_MS`): the button's fill sweeps from
  *    gold to `bg-bloom` left-to-right, and a tick draws into it — the same
  *    `--animate-tick-draw` keyframe `rsvp-saved.ts` used to document,
  *    unmoved in `global.css`.
- * 2. **Hold** (→ `HOLD_MS`): the filled, ticked button sits still long enough
- *    to actually read.
- * 3. **Fade** (→ `TOTAL_DURATION_MS`): the fill sweeps back out over another
- *    `SWEEP_DURATION_MS`, and the tick — which stays mounted throughout —
- *    switches from the on-fill ink to a permanent `text-bloom` accent. That
- *    switch is what survives: the fill is gone at the end of this phase, the
- *    tick is not, and nothing further ever un-shows it for this event.
+ * 2. **Hold** (→ `HOLD_MS` = `TOTAL_DURATION_MS`): the filled, ticked button
+ *    sits still long enough to actually read, then stays exactly as it is —
+ *    there is no fade-out. The fill and the tick are both permanent once the
+ *    sweep-in has played: a guest who reopens the invite tomorrow sees the
+ *    same filled, ticked button a guest who just submitted settles into.
  */
 
 /** The fill's sweep, in either direction — must equal the `duration-500` utility on the fill layer. */
@@ -65,11 +63,16 @@ export const TICK_DURATION_MS = 340;
 export const TICK_DRAW_END_MS = TICK_DELAY_MS + TICK_DURATION_MS;
 
 /**
- * How long the filled, ticked state holds before fading back out. Comfortably
- * past `TICK_DRAW_END_MS` so the hold is a readable beat, not the animation's
- * last frame wearing a different name.
+ * How long the filled, ticked state holds before settling. Comfortably past
+ * `TICK_DRAW_END_MS` so the hold is a readable beat, not the animation's last
+ * frame wearing a different name.
  */
 export const HOLD_MS = 900;
 
-/** When the whole celebration is over and `EventCard` reports it via `onCelebrated`. */
-export const TOTAL_DURATION_MS = HOLD_MS + SWEEP_DURATION_MS;
+/**
+ * When the whole celebration is over and `EventCard` reports it via
+ * `onCelebrated` — equal to `HOLD_MS`, since there is no fade-out sweep to
+ * wait through: the fill and tick are already in their permanent state once
+ * the hold ends.
+ */
+export const TOTAL_DURATION_MS = HOLD_MS;

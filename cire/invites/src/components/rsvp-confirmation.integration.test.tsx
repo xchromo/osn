@@ -187,7 +187,7 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
     expect(path.getAttribute("class")).toContain("animate-tick-draw");
   });
 
-  it("settles to a permanent tick with the fill gone once the celebration ends", async () => {
+  it("settles to a permanent fill and tick once the celebration ends", async () => {
     stubOkFetch();
     vi.useFakeTimers();
     render(() => <Harness />);
@@ -195,7 +195,7 @@ describe("RSVP confirmation — RsvpModal ↔ EventCard", () => {
     await vi.advanceTimersByTimeAsync(SAVED_DWELL_MS);
     await vi.advanceTimersByTimeAsync(TOTAL_DURATION_MS);
 
-    expect(fillIsUp()).toBe(false);
+    expect(fillIsUp()).toBe(true);
     const path = respondButton().querySelector("svg path") as SVGPathElement;
     expect(path).toBeTruthy();
     // Drawn, not animating: the settled mark a returning guest also sees.

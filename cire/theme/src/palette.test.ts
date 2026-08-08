@@ -316,8 +316,10 @@ describe("residual contrast warnings", () => {
     // near-white `card`/`raised` (99.2% L) needs more headroom than `ground`
     // (96.5% L), so the original 63%-lightness bloom seed cleared `ground`
     // (bloom is only walked against `ground` at derivation time) but landed
-    // at 2.88:1 on `raised` — under the 3:1 floor. Assert the property, not
-    // the literal, so a future re-tune only has to keep clearing this bar.
+    // at 2.88:1 on `raised` — under the 3:1 floor. The first fix (60%) only
+    // just cleared it at 3.24:1; the seed now sits at 50% for real headroom
+    // (~4.92:1). Assert the property, not the literal, so a future re-tune
+    // only has to keep clearing this bar.
     const fog = derivePalette(PALETTE_PRESETS.fog);
     expect(
       contrastRatio(fog["--color-bloom"] as string, fog["--color-surface-raised"] as string),
