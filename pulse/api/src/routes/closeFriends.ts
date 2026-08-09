@@ -1,9 +1,9 @@
 import { DbLive, type Db } from "@pulse/db/service";
-import { extractClaims } from "@shared/osn-auth-client/verify";
 import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
+import { makeCallerResolver } from "../lib/caller";
 import { DEFAULT_JWKS_URL } from "../lib/jwks";
 import { checkWriteRateLimit, createDefaultWriteRateLimiter } from "../lib/rate-limit";
 import {
@@ -36,14 +36,12 @@ export const createCloseFriendsRoutes = (
 ) => {
   // Layer graph built once per factory (convention: see osn/api/src/lib/route-runtime.ts) — not per request.
   const runtime = ManagedRuntime.make(dbLayer);
+  const resolveCaller = makeCallerResolver({ runtime, jwksUrl, testKey: _testKey });
   return new Elysia({ prefix: "/close-friends" })
     .get(
       "/",
       async ({ headers, set }) => {
-        const claims = await extractClaims(headers["authorization"], jwksUrl, {
-          testKey: _testKey as CryptoKey,
-          audience: "osn-access",
-        });
+        const claims = await resolveCaller(headers);
         if (!claims) {
           set.status = 401;
           return { message: "Unauthorized" } as const;
@@ -91,10 +89,7 @@ export const createCloseFriendsRoutes = (
     .post(
       "/:friendId",
       async ({ params, headers, set }) => {
-        const claims = await extractClaims(headers["authorization"], jwksUrl, {
-          testKey: _testKey as CryptoKey,
-          audience: "osn-access",
-        });
+        const claims = await resolveCaller(headers);
         if (!claims) {
           set.status = 401;
           return { message: "Unauthorized" } as const;
@@ -145,10 +140,7 @@ export const createCloseFriendsRoutes = (
     .delete(
       "/:friendId",
       async ({ params, headers, set }) => {
-        const claims = await extractClaims(headers["authorization"], jwksUrl, {
-          testKey: _testKey as CryptoKey,
-          audience: "osn-access",
-        });
+        const claims = await resolveCaller(headers);
         if (!claims) {
           set.status = 401;
           return { message: "Unauthorized" } as const;
@@ -195,10 +187,7 @@ export const createCloseFriendsRoutes = (
     .get(
       "/:friendId/check",
       async ({ params, headers, set }) => {
-        const claims = await extractClaims(headers["authorization"], jwksUrl, {
-          testKey: _testKey as CryptoKey,
-          audience: "osn-access",
-        });
+        const claims = await resolveCaller(headers);
         if (!claims) {
           set.status = 401;
           return { message: "Unauthorized" } as const;
