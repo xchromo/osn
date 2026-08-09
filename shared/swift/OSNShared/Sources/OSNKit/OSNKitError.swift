@@ -40,6 +40,18 @@ public enum OSNKitError: Error, Sendable, Equatable {
     /// documented shape, or a status/body this client doesn't recognize at
     /// all. Never treat an unrecognized response as success.
     case refreshResponseMalformed(status: Int)
+
+    /// `SecItemAdd` failed while storing an access token.
+    case keychainWriteFailed(status: OSStatus)
+
+    /// `SecItemCopyMatching` returned data that wasn't a UTF-8 string, or
+    /// failed for a reason other than "no item" (that case returns `nil`,
+    /// not an error).
+    case keychainReadFailed(status: OSStatus)
+
+    /// `SecItemDelete` failed for a reason other than "no item" (that case
+    /// is treated as already-deleted, not an error).
+    case keychainDeleteFailed(status: OSStatus)
 }
 
 extension OSNKitError: CustomStringConvertible {
@@ -57,6 +69,12 @@ extension OSNKitError: CustomStringConvertible {
             return "POST /token returned invalid_grant: \(message). The session is gone; sign the user out."
         case .refreshResponseMalformed(let status):
             return "POST /token returned an unrecognized response (status \(status)). Refusing to treat it as success."
+        case .keychainWriteFailed(let status):
+            return "Keychain write failed (OSStatus \(status)) while storing the access token."
+        case .keychainReadFailed(let status):
+            return "Keychain read failed (OSStatus \(status)) while loading the access token."
+        case .keychainDeleteFailed(let status):
+            return "Keychain delete failed (OSStatus \(status)) while clearing the access token."
         }
     }
 }
