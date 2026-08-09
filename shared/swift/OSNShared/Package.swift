@@ -41,14 +41,7 @@ let package = Package(
                 .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
             ],
-            plugins: ["PulseAPIGeneratorPlugin"]
-        ),
-        .plugin(
-            name: "PulseAPIGeneratorPlugin",
-            capability: .buildTool(),
-            dependencies: [
-                .product(name: "swift-openapi-generator", package: "swift-openapi-generator")
-            ]
+            plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
         .testTarget(name: "PulseAPITests", dependencies: ["PulseAPI", "OSNKit", "OSNTesting"]),
         .target(name: "PulseFeature", dependencies: ["OSNKit", "OSNAuth", "OSNUI", "PulseAPI"]),

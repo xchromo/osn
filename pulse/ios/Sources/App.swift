@@ -35,7 +35,7 @@ struct PulseApp: App {
     /// `PresentationAnchorProvider` without also supplying the key
     /// `UIWindow` itself — `PulseFeature` can't `import UIKit` (must build
     /// on the macOS host), so this one lookup stays in the app target.
-    @Sendable
+    @MainActor
     private static func keyWindowAnchor() -> ASPresentationAnchor {
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }

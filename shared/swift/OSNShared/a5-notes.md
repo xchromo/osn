@@ -39,6 +39,23 @@ Never previously exercised: `a3-notes.md` and `a4-notes.md` both have zero menti
 
 No fix attempted beyond diagnosis: the plugin (`Plugins/PulseAPIGeneratorPlugin/plugin.swift`) predates this session and is out of this brief's scope, and restructuring how `swift-openapi-generator` is consumed (e.g. switching to a prebuilt binary target, or patching the upstream package) is an infrastructure decision, not something to invent unauthorized per the brief's rules. Flagging for whoever owns CI/pulse-ios tooling next.
 
+### Resolved afterwards — the custom plugin was the cause
+
+Reproduced independently, then fixed. Three things the diagnosis above was missing:
+
+1. **`_OpenAPIGeneratorCore` is a public library product** of `swift-openapi-generator`, and upstream deliberately declares `.iOS(.v13)` etc. on the package "to allow the generator to emit a more descriptive compiler error". That is why Xcode is *able* to build it for the simulator at all.
+2. **The dependency edge decided the platform.** `PulseAPIGeneratorPlugin` depended on the generator's **executable product** across a package boundary; Xcode materialised that product's graph for the destination platform. The unquiet log is explicit — `_OpenAPIGeneratorCore` compiled `-sdk .../iPhoneSimulator26.5.sdk -target arm64-apple-ios13.0-simulator` into `Debug-iphonesimulator`, while `ArgumentParser` in the same build compiled host-correctly for `arm64-apple-macos10.13`. Upstream's own `OpenAPIGenerator` plugin instead depends on the executable **target**, in-package, which Xcode resolves host-only.
+3. **The destination form is not the trigger.** A concrete `platform=iOS Simulator,id=DB521367-…` (iPhone 17 Pro, OS 26.5) with `~/Library/Developer/Xcode/DerivedData/Pulse-*` deleted first fails identically — so this is not the `-sdk` artifact of apple/swift-openapi-generator#527.
+
+The fix, applied here: drop the custom plugin entirely and use the official one. `Sources/PulseAPI/openapi.json` is a **relative symlink** to `../../../../openapi/pulse.json` — the spec being outside the package was the whole reason a custom plugin existed, and a symlink satisfies the official plugin's same-directory discovery without a second copy that can drift. `Sources/PulseAPI/openapi-generator-config.yaml` carries the flags the custom plugin passed on the command line (`types`, `client`, `public`, `idiomatic`), so the generated code is unchanged.
+
+Two follow-on facts, both real, neither optional:
+
+- CI now needs **`-skipPackagePluginValidation`**. A plugin from a *remote* package is a trust decision in Xcode; headless it hard-fails with `Validate plug-in "OpenAPIGenerator" in package "swift-openapi-generator"`. Version is pinned in `Package.resolved`, so consenting on the runner doesn't widen what can run. Commented at the call site in `.github/workflows/ci-swift.yml`.
+- With the generator error out of the way the gate exposed a **real** Swift 6 error underneath it, which had never been reachable before: `App.swift:38:5: error: main actor-isolated synchronous static method 'keyWindowAnchor()' cannot be marked as '@Sendable'`. The provider can only ever be answered by a main-actor key-window lookup, and `PasskeyCeremony.perform` and every `OSNAuth` client entry point are already `@MainActor`, so `PresentationAnchorProvider` is now `@MainActor @Sendable () -> ASPresentationAnchor` and the app's static method is `@MainActor` instead of `@Sendable`.
+
+Verified after the change: `swift build` clean, `swift test` `Test run with 40 tests in 7 suites passed`, and the exact CI command (plus `-skipPackagePluginValidation`) exits 0 with zero `error:` lines.
+
 ## DoD 3 — every Pulse call through `makePulseClient`
 
 Satisfied by construction: `PulseSession.api` is the only source of an `APIProtocol` handed to `ExploreViewModel`/`EventDetailViewModel`/`SignInView`, and it's built once via `makePulseClient` in `PulseSession.init`. No view or view model constructs a client itself.
