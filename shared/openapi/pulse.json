@@ -296,8 +296,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "displayName": {
                             "anyOf": [
@@ -307,8 +306,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "handle": {
                             "anyOf": [
@@ -318,8 +316,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "profileId": {
                             "type": "string"
@@ -725,8 +722,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "cancelledAt": {
                             "anyOf": [
@@ -736,8 +732,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "category": {
                             "anyOf": [
@@ -747,8 +742,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "chatId": {
                             "anyOf": [
@@ -758,8 +752,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "commsChannels": {
                             "type": "string"
@@ -776,8 +769,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -787,8 +779,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByProfileId": {
                             "type": "string"
@@ -801,8 +792,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -813,8 +803,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "guestListVisibility": {
                             "enum": [
@@ -832,8 +821,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -846,8 +834,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "instanceOverride": {
                             "type": "boolean"
@@ -867,8 +854,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "location": {
                             "anyOf": [
@@ -878,8 +864,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -889,8 +874,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -900,8 +884,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -911,8 +894,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "seriesId": {
                             "anyOf": [
@@ -922,8 +904,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -954,8 +935,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "venueId": {
                             "anyOf": [
@@ -965,8 +945,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "visibility": {
                             "enum": [
@@ -1098,8 +1077,7 @@
                       {
                         "type": "null"
                       }
-                    ],
-                    "nullable": true
+                    ]
                   },
                   "priceCurrency": {
                     "anyOf": [
@@ -1134,8 +1112,7 @@
                       {
                         "type": "null"
                       }
-                    ],
-                    "nullable": true
+                    ]
                   },
                   "startTime": {
                     "format": "date-time",
@@ -1207,8 +1184,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "cancelledAt": {
                           "anyOf": [
@@ -1218,8 +1194,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "category": {
                           "anyOf": [
@@ -1229,8 +1204,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -1240,8 +1214,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -1258,8 +1231,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -1269,8 +1241,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -1283,8 +1254,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "endTime": {
                           "anyOf": [
@@ -1295,8 +1265,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -1314,8 +1283,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "id": {
                           "type": "string"
@@ -1328,8 +1296,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "instanceOverride": {
                           "type": "boolean"
@@ -1349,8 +1316,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -1360,8 +1326,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -1371,8 +1336,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceAmount": {
                           "anyOf": [
@@ -1382,8 +1346,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceCurrency": {
                           "anyOf": [
@@ -1393,8 +1356,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "seriesId": {
                           "anyOf": [
@@ -1404,8 +1366,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "startTime": {
                           "format": "date-time",
@@ -1436,8 +1397,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "venueId": {
                           "anyOf": [
@@ -1447,8 +1407,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -1613,8 +1572,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "cancelledAt": {
                                 "anyOf": [
@@ -1624,8 +1582,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "category": {
                                 "anyOf": [
@@ -1635,8 +1592,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "chatId": {
                                 "anyOf": [
@@ -1646,8 +1602,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "commsChannels": {
                                 "type": "string"
@@ -1664,8 +1619,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "createdByName": {
                                 "anyOf": [
@@ -1675,8 +1629,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "createdByProfileId": {
                                 "type": "string"
@@ -1689,8 +1642,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "endTime": {
                                 "anyOf": [
@@ -1701,8 +1653,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "guestListVisibility": {
                                 "enum": [
@@ -1720,8 +1671,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "id": {
                                 "type": "string"
@@ -1734,8 +1684,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "instanceOverride": {
                                 "type": "boolean"
@@ -1755,8 +1704,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "location": {
                                 "anyOf": [
@@ -1766,8 +1714,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "longitude": {
                                 "anyOf": [
@@ -1777,8 +1724,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "priceAmount": {
                                 "anyOf": [
@@ -1788,8 +1734,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "priceCurrency": {
                                 "anyOf": [
@@ -1799,8 +1744,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "seriesId": {
                                 "anyOf": [
@@ -1810,8 +1754,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "startTime": {
                                 "format": "date-time",
@@ -1842,8 +1785,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "venueId": {
                                 "anyOf": [
@@ -1853,8 +1795,7 @@
                                   {
                                     "type": "null"
                                   }
-                                ],
-                                "nullable": true
+                                ]
                               },
                               "visibility": {
                                 "enum": [
@@ -2222,8 +2163,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "cancelledAt": {
                             "anyOf": [
@@ -2233,8 +2173,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "category": {
                             "anyOf": [
@@ -2244,8 +2183,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "chatId": {
                             "anyOf": [
@@ -2255,8 +2193,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "commsChannels": {
                             "type": "string"
@@ -2273,8 +2210,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -2284,8 +2220,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByProfileId": {
                             "type": "string"
@@ -2298,8 +2233,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -2310,8 +2244,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "guestListVisibility": {
                             "enum": [
@@ -2329,8 +2262,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -2343,8 +2275,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "instanceOverride": {
                             "type": "boolean"
@@ -2364,8 +2295,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "location": {
                             "anyOf": [
@@ -2375,8 +2305,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -2386,8 +2315,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -2397,8 +2325,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -2408,8 +2335,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "seriesId": {
                             "anyOf": [
@@ -2419,8 +2345,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -2451,8 +2376,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "venueId": {
                             "anyOf": [
@@ -2462,8 +2386,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "visibility": {
                             "enum": [
@@ -2531,8 +2454,7 @@
                         {
                           "type": "null"
                         }
-                      ],
-                      "nullable": true
+                      ]
                     },
                     "series": {
                       "patternProperties": {
@@ -2695,8 +2617,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "cancelledAt": {
                             "anyOf": [
@@ -2706,8 +2627,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "category": {
                             "anyOf": [
@@ -2717,8 +2637,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "chatId": {
                             "anyOf": [
@@ -2728,8 +2647,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "commsChannels": {
                             "type": "string"
@@ -2746,8 +2664,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -2757,8 +2674,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByProfileId": {
                             "type": "string"
@@ -2771,8 +2687,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -2783,8 +2698,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "guestListVisibility": {
                             "enum": [
@@ -2802,8 +2716,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -2816,8 +2729,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "instanceOverride": {
                             "type": "boolean"
@@ -2837,8 +2749,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "location": {
                             "anyOf": [
@@ -2848,8 +2759,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -2859,8 +2769,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -2870,8 +2779,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -2881,8 +2789,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "seriesId": {
                             "anyOf": [
@@ -2892,8 +2799,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -2924,8 +2830,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "venueId": {
                             "anyOf": [
@@ -2935,8 +2840,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "visibility": {
                             "enum": [
@@ -3011,9 +2915,6 @@
         ],
         "responses": {
           "204": {
-            "content": {
-              "type": "void"
-            },
             "description": "Response for status 204"
           },
           "401": {
@@ -3121,8 +3022,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "cancelledAt": {
                           "anyOf": [
@@ -3132,8 +3032,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "category": {
                           "anyOf": [
@@ -3143,8 +3042,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -3154,8 +3052,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -3172,8 +3069,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -3183,8 +3079,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -3197,8 +3092,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "endTime": {
                           "anyOf": [
@@ -3209,8 +3103,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -3228,8 +3121,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "id": {
                           "type": "string"
@@ -3242,8 +3134,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "instanceOverride": {
                           "type": "boolean"
@@ -3263,8 +3154,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -3274,8 +3164,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -3285,8 +3174,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceAmount": {
                           "anyOf": [
@@ -3296,8 +3184,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceCurrency": {
                           "anyOf": [
@@ -3307,8 +3194,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "seriesId": {
                           "anyOf": [
@@ -3318,8 +3204,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "startTime": {
                           "format": "date-time",
@@ -3350,8 +3235,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "venueId": {
                           "anyOf": [
@@ -3361,8 +3245,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -3520,8 +3403,7 @@
                       {
                         "type": "null"
                       }
-                    ],
-                    "nullable": true
+                    ]
                   },
                   "priceCurrency": {
                     "anyOf": [
@@ -3556,8 +3438,7 @@
                       {
                         "type": "null"
                       }
-                    ],
-                    "nullable": true
+                    ]
                   },
                   "startTime": {
                     "format": "date-time",
@@ -3625,8 +3506,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "cancelledAt": {
                           "anyOf": [
@@ -3636,8 +3516,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "category": {
                           "anyOf": [
@@ -3647,8 +3526,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -3658,8 +3536,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -3676,8 +3553,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -3687,8 +3563,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -3701,8 +3576,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "endTime": {
                           "anyOf": [
@@ -3713,8 +3587,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -3732,8 +3605,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "id": {
                           "type": "string"
@@ -3746,8 +3618,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "instanceOverride": {
                           "type": "boolean"
@@ -3767,8 +3638,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -3778,8 +3648,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -3789,8 +3658,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceAmount": {
                           "anyOf": [
@@ -3800,8 +3668,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "priceCurrency": {
                           "anyOf": [
@@ -3811,8 +3678,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "seriesId": {
                           "anyOf": [
@@ -3822,8 +3688,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "startTime": {
                           "format": "date-time",
@@ -3854,8 +3719,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "venueId": {
                           "anyOf": [
@@ -3865,8 +3729,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -4067,8 +3930,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "sentByProfileId": {
                             "type": "string"
@@ -4205,8 +4067,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           }
                         },
                         "required": [
@@ -4369,9 +4230,6 @@
         },
         "responses": {
           "204": {
-            "content": {
-              "type": "void"
-            },
             "description": "Response for status 204"
           },
           "404": {
@@ -4679,8 +4537,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "isCloseFriend": {
                             "type": "boolean"
@@ -4697,8 +4554,7 @@
                                       {
                                         "type": "null"
                                       }
-                                    ],
-                                    "nullable": true
+                                    ]
                                   },
                                   "displayName": {
                                     "anyOf": [
@@ -4708,8 +4564,7 @@
                                       {
                                         "type": "null"
                                       }
-                                    ],
-                                    "nullable": true
+                                    ]
                                   },
                                   "handle": {
                                     "type": "string"
@@ -4729,8 +4584,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "profileId": {
                             "type": "string"
@@ -4881,8 +4735,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "profileId": {
                           "type": "string"
@@ -4895,8 +4748,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "shareSourceFirstSeenAt": {
                           "anyOf": [
@@ -4907,8 +4759,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "shareSourceLast": {
                           "anyOf": [
@@ -4918,8 +4769,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "shareSourceLastSeenAt": {
                           "anyOf": [
@@ -4930,8 +4780,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "status": {
                           "enum": [
@@ -5189,8 +5038,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "isCloseFriend": {
                             "type": "boolean"
@@ -5207,8 +5055,7 @@
                                       {
                                         "type": "null"
                                       }
-                                    ],
-                                    "nullable": true
+                                    ]
                                   },
                                   "displayName": {
                                     "anyOf": [
@@ -5218,8 +5065,7 @@
                                       {
                                         "type": "null"
                                       }
-                                    ],
-                                    "nullable": true
+                                    ]
                                   },
                                   "handle": {
                                     "type": "string"
@@ -5239,8 +5085,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "profileId": {
                             "type": "string"
@@ -5361,9 +5206,6 @@
         },
         "responses": {
           "204": {
-            "content": {
-              "type": "void"
-            },
             "description": "Response for status 204"
           },
           "404": {
@@ -5423,8 +5265,7 @@
                         {
                           "type": "null"
                         }
-                      ],
-                      "nullable": true
+                      ]
                     },
                     "eventRemindersOptIn": {
                       "type": "boolean"
@@ -5627,8 +5468,7 @@
                         {
                           "type": "null"
                         }
-                      ],
-                      "nullable": true
+                      ]
                     },
                     "eventRemindersOptIn": {
                       "type": "boolean"
@@ -6011,8 +5851,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "cancelledAt": {
                             "anyOf": [
@@ -6022,8 +5861,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "category": {
                             "anyOf": [
@@ -6033,8 +5871,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "chatId": {
                             "anyOf": [
@@ -6044,8 +5881,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "commsChannels": {
                             "type": "string"
@@ -6062,8 +5898,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -6073,8 +5908,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByProfileId": {
                             "type": "string"
@@ -6087,8 +5921,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -6099,8 +5932,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "guestListVisibility": {
                             "enum": [
@@ -6118,8 +5950,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -6132,8 +5963,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "instanceOverride": {
                             "type": "boolean"
@@ -6153,8 +5983,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "location": {
                             "anyOf": [
@@ -6164,8 +5993,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -6175,8 +6003,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -6186,8 +6013,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -6197,8 +6023,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "seriesId": {
                             "anyOf": [
@@ -6208,8 +6033,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -6240,8 +6064,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "venueId": {
                             "anyOf": [
@@ -6251,8 +6074,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "visibility": {
                             "enum": [
@@ -6312,8 +6134,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -6323,8 +6144,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -6341,8 +6161,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -6352,8 +6171,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -6366,8 +6184,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "dtstart": {
                           "format": "date-time",
@@ -6381,8 +6198,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -6403,8 +6219,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "joinPolicy": {
                           "enum": [
@@ -6421,8 +6236,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -6432,8 +6246,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -6443,8 +6256,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "materializedThrough": {
                           "format": "date-time",
@@ -6476,8 +6288,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "updatedAt": {
                           "format": "date-time",
@@ -6491,8 +6302,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -6766,8 +6576,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -6777,8 +6586,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -6795,8 +6603,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -6806,8 +6613,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -6820,8 +6626,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "dtstart": {
                           "format": "date-time",
@@ -6835,8 +6640,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -6857,8 +6661,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "joinPolicy": {
                           "enum": [
@@ -6875,8 +6678,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -6886,8 +6688,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -6897,8 +6698,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "materializedThrough": {
                           "format": "date-time",
@@ -6930,8 +6730,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "updatedAt": {
                           "format": "date-time",
@@ -6945,8 +6744,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -7146,8 +6944,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "chatId": {
                           "anyOf": [
@@ -7157,8 +6954,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "commsChannels": {
                           "type": "string"
@@ -7175,8 +6971,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByName": {
                           "anyOf": [
@@ -7186,8 +6981,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdByProfileId": {
                           "type": "string"
@@ -7200,8 +6994,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "dtstart": {
                           "format": "date-time",
@@ -7215,8 +7008,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "guestListVisibility": {
                           "enum": [
@@ -7237,8 +7029,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "joinPolicy": {
                           "enum": [
@@ -7255,8 +7046,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "location": {
                           "anyOf": [
@@ -7266,8 +7056,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -7277,8 +7066,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "materializedThrough": {
                           "format": "date-time",
@@ -7310,8 +7098,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "updatedAt": {
                           "format": "date-time",
@@ -7325,8 +7112,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "visibility": {
                           "enum": [
@@ -7546,8 +7332,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "cancelledAt": {
                             "anyOf": [
@@ -7557,8 +7342,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "category": {
                             "anyOf": [
@@ -7568,8 +7352,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "chatId": {
                             "anyOf": [
@@ -7579,8 +7362,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "commsChannels": {
                             "type": "string"
@@ -7597,8 +7379,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -7608,8 +7389,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByProfileId": {
                             "type": "string"
@@ -7622,8 +7402,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -7634,8 +7413,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "guestListVisibility": {
                             "enum": [
@@ -7653,8 +7431,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -7667,8 +7444,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "instanceOverride": {
                             "type": "boolean"
@@ -7688,8 +7464,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "location": {
                             "anyOf": [
@@ -7699,8 +7474,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -7710,8 +7484,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -7721,8 +7494,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -7732,8 +7504,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "seriesId": {
                             "anyOf": [
@@ -7743,8 +7514,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -7775,8 +7545,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "venueId": {
                             "anyOf": [
@@ -7786,8 +7555,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "visibility": {
                             "enum": [
@@ -7885,8 +7653,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "capacity": {
                             "anyOf": [
@@ -7896,8 +7663,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "city": {
                             "anyOf": [
@@ -7907,8 +7673,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "country": {
                             "anyOf": [
@@ -7918,8 +7683,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdAt": {
                             "format": "date-time",
@@ -7933,8 +7697,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "handle": {
                             "type": "string"
@@ -7947,8 +7710,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "hours": {
                             "anyOf": [
@@ -7958,8 +7720,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -7972,8 +7733,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "kind": {
                             "type": "string"
@@ -7986,8 +7746,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "longitude": {
                             "anyOf": [
@@ -7997,8 +7756,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "name": {
                             "type": "string"
@@ -8021,8 +7779,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           }
                         },
                         "required": [
@@ -8118,8 +7875,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "capacity": {
                           "anyOf": [
@@ -8129,8 +7885,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "city": {
                           "anyOf": [
@@ -8140,8 +7895,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "country": {
                           "anyOf": [
@@ -8151,8 +7905,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "createdAt": {
                           "format": "date-time",
@@ -8166,8 +7919,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "handle": {
                           "type": "string"
@@ -8180,8 +7932,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "hours": {
                           "anyOf": [
@@ -8191,8 +7942,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "id": {
                           "type": "string"
@@ -8205,8 +7955,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "kind": {
                           "type": "string"
@@ -8219,8 +7968,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "longitude": {
                           "anyOf": [
@@ -8230,8 +7978,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         },
                         "name": {
                           "type": "string"
@@ -8254,8 +8001,7 @@
                             {
                               "type": "null"
                             }
-                          ],
-                          "nullable": true
+                          ]
                         }
                       },
                       "required": [
@@ -8402,8 +8148,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "createdByName": {
                             "anyOf": [
@@ -8413,8 +8158,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "description": {
                             "anyOf": [
@@ -8424,8 +8168,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "endTime": {
                             "anyOf": [
@@ -8436,8 +8179,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "id": {
                             "type": "string"
@@ -8450,8 +8192,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceAmount": {
                             "anyOf": [
@@ -8461,8 +8202,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "priceCurrency": {
                             "anyOf": [
@@ -8472,8 +8212,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           },
                           "startTime": {
                             "format": "date-time",
@@ -8500,8 +8239,7 @@
                               {
                                 "type": "null"
                               }
-                            ],
-                            "nullable": true
+                            ]
                           }
                         },
                         "required": [
