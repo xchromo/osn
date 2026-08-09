@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "OSNUI", targets: ["OSNUI"]),
         .library(name: "OSNTesting", targets: ["OSNTesting"]),
         .library(name: "PulseAPI", targets: ["PulseAPI"]),
+        .library(name: "PulseFeature", targets: ["PulseFeature"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
@@ -50,5 +51,7 @@ let package = Package(
             ]
         ),
         .testTarget(name: "PulseAPITests", dependencies: ["PulseAPI", "OSNKit", "OSNTesting"]),
+        .target(name: "PulseFeature", dependencies: ["OSNKit", "OSNAuth", "OSNUI", "PulseAPI"]),
+        .testTarget(name: "PulseFeatureTests", dependencies: ["PulseFeature", "OSNTesting"]),
     ]
 )
