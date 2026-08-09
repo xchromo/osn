@@ -61,12 +61,22 @@ public actor TokenRefresher {
 
     /// Cookie-only, idempotent, always 200 per the server contract — nothing
     /// here is inferred from the response. Clears the locally cached access
-    /// token regardless of network outcome propagation.
+    /// token unconditionally: a network failure must not leave a token
+    /// cached locally for a session the server may have already destroyed.
+    /// A network error is still surfaced, but only after that cleanup runs.
     public func logout() async throws {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("logout"))
         request.httpMethod = "POST"
-        _ = try await session.data(for: request)
+        var networkError: Error?
+        do {
+            _ = try await session.data(for: request)
+        } catch {
+            networkError = error
+        }
         try KeychainAccessTokenStore.delete()
+        if let networkError {
+            throw networkError
+        }
     }
 
     private func performRefresh() async throws -> TokenGrant {
