@@ -432,10 +432,7 @@ export const createEventsRoutes = (
           // Same optional-viewer shape as `GET /events`: the feed stays
           // public, but who is asking decides which private events belong
           // in it. Anonymous callers see public events only.
-          const claims = await extractClaims(headers["authorization"], jwksUrl, {
-            testKey: _testKey as CryptoKey,
-            audience: "osn-access",
-          });
+          const claims = await resolveCaller(headers);
           const result = await runtime.runPromise(listTodayEvents(claims?.profileId ?? null));
           return { events: result.map(serializeEvent) };
         },
