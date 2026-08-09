@@ -124,7 +124,9 @@ export const createCloseFriendsRoutes = (
               displayName: p.displayName,
               avatarUrl: p.avatarUrl,
             }))
-            .sort((a, b) => (a.displayName ?? a.handle).localeCompare(b.displayName ?? b.handle)),
+            .toSorted((a, b) =>
+              (a.displayName ?? a.handle).localeCompare(b.displayName ?? b.handle),
+            ),
         };
       },
       {
