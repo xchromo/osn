@@ -2,8 +2,8 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { Step5Notifications } from "../../../src/components/onboarding/Step5Notifications";
 import type { PermOutcome } from "../../../src/lib/onboarding";
-import { Step5Notifications } from "../../../src/pages/onboarding/Step5Notifications";
 
 function setup(perm: PermOutcome, remindersOptIn = false) {
   const onPrimary = vi.fn();

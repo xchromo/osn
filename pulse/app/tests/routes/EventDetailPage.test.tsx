@@ -75,7 +75,7 @@ vi.mock("../../src/lib/api", () => ({
   },
 }));
 
-import { EventDetailPage } from "../../src/pages/EventDetailPage";
+import { EventDetailPage } from "../../src/routes/events/[id]";
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

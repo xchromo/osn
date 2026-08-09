@@ -35,7 +35,7 @@ vi.mock("../../src/lib/onboarding", () => ({
 // Stub the stepper to a tiny harness that exposes the `onCompleted`
 // callback as a clickable button — that's the only seam this suite
 // needs to verify WelcomePage's completion handler.
-vi.mock("../../src/pages/onboarding/OnboardingStepper", () => ({
+vi.mock("../../src/components/onboarding/OnboardingStepper", () => ({
   OnboardingStepper: (props: { displayName: string | null; onCompleted: () => void }) => (
     <div data-testid="stepper">
       stepper:{props.displayName ?? "anon"}
@@ -52,7 +52,7 @@ vi.mock("../../src/lib/utils", () => ({
   getDisplayNameFromToken: (token: string | null) => (token ? "Sarah" : null),
 }));
 
-import { WelcomePage } from "../../src/pages/WelcomePage";
+import { WelcomePage } from "../../src/routes/welcome";
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

@@ -95,3 +95,5 @@ export function SettingsPage() {
     </main>
   );
 }
+
+export default SettingsPage;

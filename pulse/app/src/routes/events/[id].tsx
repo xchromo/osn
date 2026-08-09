@@ -4,17 +4,17 @@ import { Card } from "@osn/ui/ui/card";
 import { A, useParams, useSearchParams } from "@solidjs/router";
 import { createEffect, createResource, createSignal, on, untrack, Show } from "solid-js";
 
-import { AddToCalendarButton } from "../components/AddToCalendarButton";
-import { CommsSummary } from "../components/CommsSummary";
-import { EventChatPlaceholder } from "../components/EventChatPlaceholder";
-import { MapPreview } from "../components/MapPreview";
-import { RsvpSection } from "../components/RsvpSection";
-import { ShareEventButton } from "../components/ShareEventButton";
-import { api } from "../lib/api";
-import { formatPrice } from "../lib/formatPrice";
-import { apiBaseUrl, recordShareExposure } from "../lib/rsvps";
-import { coerceShareSource, type ShareSource } from "../lib/shareSource";
-import { formatTime, getProfileIdFromToken } from "../lib/utils";
+import { AddToCalendarButton } from "../../components/AddToCalendarButton";
+import { CommsSummary } from "../../components/CommsSummary";
+import { EventChatPlaceholder } from "../../components/EventChatPlaceholder";
+import { MapPreview } from "../../components/MapPreview";
+import { RsvpSection } from "../../components/RsvpSection";
+import { ShareEventButton } from "../../components/ShareEventButton";
+import { api } from "../../lib/api";
+import { formatPrice } from "../../lib/formatPrice";
+import { apiBaseUrl, recordShareExposure } from "../../lib/rsvps";
+import { coerceShareSource, type ShareSource } from "../../lib/shareSource";
+import { formatTime, getProfileIdFromToken } from "../../lib/utils";
 
 interface EventDetail {
   id: string;
@@ -211,3 +211,5 @@ export function EventDetailPage() {
     </main>
   );
 }
+
+export default EventDetailPage;

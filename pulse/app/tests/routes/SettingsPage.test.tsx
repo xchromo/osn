@@ -35,7 +35,7 @@ vi.mock("../../src/lib/rsvps", () => ({
   updateMySettings: (...args: unknown[]) => mockUpdate(...args),
 }));
 
-import { SettingsPage } from "../../src/pages/SettingsPage";
+import { SettingsPage } from "../../src/routes/settings";
 
 // SettingsPage uses `<A>` from @solidjs/router so it needs a Router context.
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>

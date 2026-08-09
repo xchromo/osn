@@ -73,7 +73,7 @@ vi.mock("../../src/lib/venues", async () => {
   };
 });
 
-const { ExplorePage } = await import("../../src/explore/ExplorePage");
+const { ExplorePage } = await import("../../src/routes/index");
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

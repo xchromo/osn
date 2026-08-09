@@ -39,7 +39,7 @@ vi.mock("../../../src/lib/onboarding", async () => {
   };
 });
 
-import { OnboardingStepper } from "../../../src/pages/onboarding/OnboardingStepper";
+import { OnboardingStepper } from "../../../src/components/onboarding/OnboardingStepper";
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

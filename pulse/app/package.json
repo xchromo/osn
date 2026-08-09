@@ -5,7 +5,7 @@
   "description": "Pulse - Events platform for OSN",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 1420",
+    "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
@@ -18,9 +18,12 @@
     "@osn/ui": "workspace:*",
     "@pulse/api": "workspace:*",
     "@simplewebauthn/browser": "^13.3.0",
+    "@solidjs/meta": "^0.29.4",
     "@solidjs/router": "^0.16.2",
+    "@solidjs/start": "^2.0.0",
     "@tailwindcss/vite": "^4.3.3",
     "leaflet": "^1.9.4",
+    "nitro": "^3.0.260610-beta",
     "solid-js": "^1.9.14",
     "solid-toast": "^0.5.0",
     "tailwindcss": "^4.3.3"

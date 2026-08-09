@@ -3,22 +3,22 @@ import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import { CreateEventForm } from "../components/CreateEventForm";
 import { Icon } from "../components/Icon";
-import { api } from "../lib/api";
-import { showCreateForm, setShowCreateForm } from "../lib/createEventSignal";
-import type { EventItem } from "../lib/types";
-import { fetchAllVenues } from "../lib/venues";
 import {
   DiscoveryFilters,
   emptyFilters,
   hasActiveFilters,
   type DiscoveryFilterValues,
-} from "./DiscoveryFilters";
-import { ExploreCard } from "./ExploreCard";
-import { ExploreMap } from "./ExploreMap";
-import { ExploreNav } from "./ExploreNav";
-import { FilterRail } from "./FilterRail";
+} from "../explore/DiscoveryFilters";
+import { ExploreCard } from "../explore/ExploreCard";
+import { ExploreMap } from "../explore/ExploreMap";
+import { ExploreNav } from "../explore/ExploreNav";
+import { FilterRail } from "../explore/FilterRail";
+import { api } from "../lib/api";
+import { showCreateForm, setShowCreateForm } from "../lib/createEventSignal";
+import type { EventItem } from "../lib/types";
+import { fetchAllVenues } from "../lib/venues";
 
-import "./explore.css";
+import "../explore/explore.css";
 
 // Default currency for the "Free" filter / price bounds until the Pulse
 // user currency preference ships. Free-events filter uses `priceMax=0`
@@ -346,3 +346,5 @@ export function ExplorePage() {
     </div>
   );
 }
+
+export default ExplorePage;

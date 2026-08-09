@@ -2,8 +2,8 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { Step3Interests } from "../../../src/components/onboarding/Step3Interests";
 import type { InterestCategory } from "../../../src/lib/onboarding";
-import { Step3Interests } from "../../../src/pages/onboarding/Step3Interests";
 
 function setup(initial: ReadonlySet<InterestCategory> = new Set()) {
   const selected = new Set<InterestCategory>(initial);

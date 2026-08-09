@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Step2Value } from "../../../src/pages/onboarding/Step2Value";
+import { Step2Value } from "../../../src/components/onboarding/Step2Value";
 
 describe("Step2Value", () => {
   afterEach(() => cleanup());

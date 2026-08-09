@@ -28,7 +28,7 @@ vi.mock("../../src/lib/venues", async () => {
   };
 });
 
-import { VenueDetailPage } from "../../src/pages/VenueDetailPage";
+import { VenueDetailPage } from "../../src/routes/venues/[orgHandle]/[venueHandle]";
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

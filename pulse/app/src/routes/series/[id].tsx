@@ -4,9 +4,9 @@ import { Card } from "@osn/ui/ui/card";
 import { A, useParams } from "@solidjs/router";
 import { createResource, createSignal, For, Show } from "solid-js";
 
-import { fetchSeries, fetchSeriesInstances } from "../lib/series";
-import type { SeriesInstance, SeriesSummary } from "../lib/series";
-import { formatTime } from "../lib/utils";
+import { fetchSeries, fetchSeriesInstances } from "../../lib/series";
+import type { SeriesInstance, SeriesSummary } from "../../lib/series";
+import { formatTime } from "../../lib/utils";
 
 /**
  * Summarises a reduced-grammar RRULE for human display.
@@ -204,3 +204,5 @@ export function SeriesDetailPage() {
     </main>
   );
 }
+
+export default SeriesDetailPage;

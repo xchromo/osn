@@ -31,7 +31,7 @@ vi.mock("../../src/lib/closeFriends", () => ({
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
 
-import { CloseFriendsPage } from "../../src/pages/CloseFriendsPage";
+import { CloseFriendsPage } from "../../src/routes/close-friends";
 
 const render: typeof _baseRender = ((factory: () => JSX.Element) =>
   _baseRender(wrapRouter(factory))) as unknown as typeof _baseRender;

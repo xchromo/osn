@@ -2,8 +2,8 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { Step4Location } from "../../../src/components/onboarding/Step4Location";
 import type { PermOutcome } from "../../../src/lib/onboarding";
-import { Step4Location } from "../../../src/pages/onboarding/Step4Location";
 
 function setup(perm: PermOutcome) {
   const onPrimary = vi.fn();

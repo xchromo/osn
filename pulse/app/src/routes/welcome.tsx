@@ -2,9 +2,9 @@ import { useAuth } from "@osn/client/solid";
 import { useNavigate } from "@solidjs/router";
 import { createMemo, Show } from "solid-js";
 
+import { OnboardingStepper } from "../components/onboarding/OnboardingStepper";
 import { markOnboardingResolvedThisSession } from "../lib/onboarding";
 import { getDisplayNameFromToken } from "../lib/utils";
-import { OnboardingStepper } from "./onboarding/OnboardingStepper";
 
 /**
  * Route component for `/welcome`. The first-run gate in `App.tsx` is what
@@ -51,3 +51,5 @@ export function WelcomePage() {
     </Show>
   );
 }
+
+export default WelcomePage;

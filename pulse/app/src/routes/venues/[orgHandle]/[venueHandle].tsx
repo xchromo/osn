@@ -2,9 +2,9 @@ import { Card } from "@osn/ui/ui/card";
 import { A, useParams } from "@solidjs/router";
 import { createMemo, createResource, For, Show } from "solid-js";
 
-import { Icon } from "../components/Icon";
-import { VenueEventCarousel } from "../components/VenueEventCarousel";
-import { VenueLineupTimeline } from "../components/VenueLineupTimeline";
+import { Icon } from "../../../components/Icon";
+import { VenueEventCarousel } from "../../../components/VenueEventCarousel";
+import { VenueLineupTimeline } from "../../../components/VenueLineupTimeline";
 import {
   computeOpenStatus,
   fetchEventLineup,
@@ -14,9 +14,9 @@ import {
   safeHttpUrl,
   venueMapsUrl,
   type VenueEvent,
-} from "../lib/venues";
+} from "../../../lib/venues";
 
-import "./venue.css";
+import "../venue.css";
 
 const WEEKDAY_LABEL: Record<string, string> = {
   "1": "Mon",
@@ -298,3 +298,5 @@ export function VenueDetailPage() {
     </main>
   );
 }
+
+export default VenueDetailPage;
