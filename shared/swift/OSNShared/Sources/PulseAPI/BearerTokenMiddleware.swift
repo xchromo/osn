@@ -36,6 +36,15 @@ public struct BearerTokenMiddleware: ClientMiddleware {
             return (response, responseBody)
         }
 
+        // A `.single` body has already been consumed by the call above and
+        // cannot be iterated a second time, so replaying it would trap rather
+        // than retry. Every body the generated client produces is encoded from
+        // `Data` and is therefore `.multiple`, but a hand-built streaming body
+        // would not be — hand the 401 back instead of retrying it.
+        if let body, body.iterationBehavior == .single {
+            return (response, responseBody)
+        }
+
         let freshToken = try await tokenRefresher.refresh().accessToken
         request.headerFields[.authorization] = "Bearer \(freshToken)"
         return try await next(request, body, baseURL)

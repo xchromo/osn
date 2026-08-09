@@ -183,4 +183,38 @@ struct BearerTokenMiddlewareTests {
         #expect(await nextCallCount.value == 2)
         #expect(await authorizationsSeen.values == ["Bearer looks-valid", "Bearer rotated-token"])
     }
+
+    @Test func doesNotRetryWhenTheBodyCannotBeReplayed() async throws {
+        try KeychainAccessTokenStore.delete()
+        try KeychainAccessTokenStore.save("looks-valid", expiresIn: 300)
+
+        let session = makeTestSession()
+        let refresher = TokenRefresher(session: session, environment: .local)
+        let middleware = BearerTokenMiddleware(tokenRefresher: refresher)
+
+        // A body built from an async sequence of unknown length is `.single`:
+        // consumed by the first attempt, so a replay would trap.
+        let singleUseBody = HTTPBody(
+            AsyncStream<ArraySlice<UInt8>> { continuation in
+                continuation.yield(ArraySlice(Data("{}".utf8)))
+                continuation.finish()
+            },
+            length: .unknown
+        )
+        #expect(singleUseBody.iterationBehavior == .single)
+
+        let nextCallCount = Counter()
+        let (response, _) = try await middleware.intercept(
+            HTTPRequest(method: .post, scheme: "https", authority: "localhost", path: "/events"),
+            body: singleUseBody,
+            baseURL: URL(string: "http://localhost:4000")!,
+            operationID: "createEvent"
+        ) { _, _, _ in
+            await nextCallCount.increment()
+            return (HTTPResponse(status: .unauthorized), nil)
+        }
+
+        #expect(response.status.code == 401)
+        #expect(await nextCallCount.value == 1)
+    }
 }
