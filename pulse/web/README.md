@@ -1,4 +1,4 @@
-# @pulse/app
+# @pulse/web
 
 Pulse frontend — a SolidJS browser SPA.
 
@@ -15,9 +15,9 @@ instances built once in `src/lib/authClients.ts` and injected as props.
 ## Run
 
 ```bash
-bun run --cwd pulse/app dev      # dev server (port 1420)
-bun run --cwd pulse/app build    # production build
-bun run --cwd pulse/app preview  # preview a production build
+bun run --cwd pulse/web dev      # dev server (port 1420)
+bun run --cwd pulse/web build    # production build
+bun run --cwd pulse/web preview  # preview a production build
 ```
 
 ## Env

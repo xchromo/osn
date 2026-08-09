@@ -1,5 +1,5 @@
 {
-  "name": "@pulse/app",
+  "name": "@pulse/web",
   "version": "0.21.5",
   "private": true,
   "description": "Pulse - Events platform for OSN",
