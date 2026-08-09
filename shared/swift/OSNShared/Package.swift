@@ -23,6 +23,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-http-types", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-openapi-generator", from: "1.0.0"),
     ],
     targets: [
         .target(name: "OSNKit"),
@@ -42,7 +43,10 @@ let package = Package(
         ),
         .plugin(
             name: "PulseAPIGeneratorPlugin",
-            capability: .buildTool()
+            capability: .buildTool(),
+            dependencies: [
+                .product(name: "swift-openapi-generator", package: "swift-openapi-generator")
+            ]
         ),
         .testTarget(name: "PulseAPITests", dependencies: ["PulseAPI"]),
     ]
