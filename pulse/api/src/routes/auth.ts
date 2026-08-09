@@ -43,6 +43,37 @@ import { webSessionService } from "../services/webSession";
 
 const PREFIX = "/api/auth";
 
+/**
+ * Hand-written OpenAPI responses for the four routes below.
+ *
+ * swift-openapi-generator refuses a document in which any operation carries no
+ * responses at all, and `@elysiajs/openapi` discards `detail.responses` the
+ * moment a route declares `response:` — so a route is either validated at
+ * runtime or documented by hand, never both. Every leg here returns a raw
+ * `Response` (302s carrying `set-cookie`) or a shape a TypeBox `response:`
+ * schema would describe worse than prose, so all four are documented by hand.
+ *
+ * `detail` is typed against OpenAPI 3.0, but the document the plugin emits is
+ * 3.1 — where `type: ["string", "null"]` is legal, and is the only nullable
+ * spelling swift-openapi-generator keeps (see `scripts/generate-openapi.ts`).
+ * The cast in `docSchema` is what lets a 3.1 schema be written here.
+ */
+const docSchema = (schema: Record<string, unknown>) => schema as never;
+
+const jsonResponse = (description: string, schema: Record<string, unknown>) => ({
+  description,
+  content: { "application/json": { schema: docSchema(schema) } },
+});
+
+const jsonErrorResponse = (description: string) =>
+  jsonResponse(description, {
+    type: "object",
+    properties: { error: { type: "string" } },
+    required: ["error"],
+  });
+
+const rateLimitedResponse = jsonErrorResponse("Per-IP rate limit exceeded.");
+
 /** Seven days — must match `webSessionService`'s default TTL. */
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -172,42 +203,59 @@ export const createAuthRoutes = (
     // and forwarding it blind would let anyone turn a sign-in link into
     // `prompt=none`, which asks for a silent grant with no screen at all.
     // -----------------------------------------------------------------------
-    .get("/oidc/start", async ({ query, headers, server, request }) => {
-      const ip = resolveIp(headers, server, request);
-      if (!(await checkPerIpLimit(ip, startLimiter))) {
-        return new Response(JSON.stringify({ error: "rate_limited" }), {
-          status: 429,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      if (!oidc) {
-        // A top-level navigation from the "Sign in" button — send the browser
-        // to the login page with a marker, not a raw 503 JSON body it would
-        // render in the address bar.
-        metricOidcLogin("bad_request");
-        return errorRedirect(null, loginFallbackUrl, "sign_in_unavailable", secureCookies);
-      }
-      const returnTo = typeof query["return_to"] === "string" ? query["return_to"] : "";
-      const started = await beginLogin(
-        oidc,
-        returnTo,
-        query["prompt"] === "create" ? { prompt: "create" } : {},
-      );
-      if (!started) {
-        metricOidcLogin("bad_request");
-        return new Response(JSON.stringify({ error: "invalid_return_to" }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      metricOidcLogin("start");
-      return redirect(started.authorizeUrl, [
-        buildOidcTxCookie(started.tx, {
-          secure: secureCookies,
-          maxAgeSeconds: started.txMaxAgeSeconds,
-        }),
-      ]);
-    })
+    .get(
+      "/oidc/start",
+      async ({ query, headers, server, request }) => {
+        const ip = resolveIp(headers, server, request);
+        if (!(await checkPerIpLimit(ip, startLimiter))) {
+          return new Response(JSON.stringify({ error: "rate_limited" }), {
+            status: 429,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (!oidc) {
+          // A top-level navigation from the "Sign in" button — send the browser
+          // to the login page with a marker, not a raw 503 JSON body it would
+          // render in the address bar.
+          metricOidcLogin("bad_request");
+          return errorRedirect(null, loginFallbackUrl, "sign_in_unavailable", secureCookies);
+        }
+        const returnTo = typeof query["return_to"] === "string" ? query["return_to"] : "";
+        const started = await beginLogin(
+          oidc,
+          returnTo,
+          query["prompt"] === "create" ? { prompt: "create" } : {},
+        );
+        if (!started) {
+          metricOidcLogin("bad_request");
+          return new Response(JSON.stringify({ error: "invalid_return_to" }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        metricOidcLogin("start");
+        return redirect(started.authorizeUrl, [
+          buildOidcTxCookie(started.tx, {
+            secure: secureCookies,
+            maxAgeSeconds: started.txMaxAgeSeconds,
+          }),
+        ]);
+      },
+      {
+        detail: {
+          operationId: "startOidcSignIn",
+          summary: "Begin OSN OIDC sign-in",
+          responses: {
+            302: {
+              description:
+                "Redirect to the OSN authorize endpoint, carrying the transaction cookie. On a misconfigured issuer, a redirect back to the app with an `?auth_error=` marker instead.",
+            },
+            400: jsonErrorResponse("`return_to` is missing or not an allowlisted origin."),
+            429: rateLimitedResponse,
+          },
+        },
+      },
+    )
     // -----------------------------------------------------------------------
     // GET /api/auth/oidc/callback — leg 2.
     //
@@ -215,67 +263,83 @@ export const createAuthRoutes = (
     // clears the transaction cookie: it is single-use by construction, and
     // leaving a spent PKCE verifier in the browser buys nothing.
     // -----------------------------------------------------------------------
-    .get("/oidc/callback", async ({ query, headers, server, request }) => {
-      const ip = resolveIp(headers, server, request);
-      if (!(await checkPerIpLimit(ip, startLimiter))) {
-        return new Response(JSON.stringify({ error: "rate_limited" }), {
-          status: 429,
-          headers: { "content-type": "application/json" },
+    .get(
+      "/oidc/callback",
+      async ({ query, headers, server, request }) => {
+        const ip = resolveIp(headers, server, request);
+        if (!(await checkPerIpLimit(ip, startLimiter))) {
+          return new Response(JSON.stringify({ error: "rate_limited" }), {
+            status: 429,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (!oidc) {
+          metricOidcLogin("bad_request");
+          return errorRedirect(null, loginFallbackUrl, "sign_in_unavailable", secureCookies);
+        }
+        const tx = parseOidcTxCookie(request.headers.get("cookie"));
+
+        // The issuer refused (consent denied, `login_required`, …). Its own
+        // `error` string is never echoed onward — it is unbounded text from
+        // outside, and the frontend only needs to know the sign-in did not
+        // happen.
+        if (typeof query["error"] === "string") {
+          metricOidcLogin("provider_error");
+          return errorRedirect(
+            await readReturnTo(oidc, tx),
+            loginFallbackUrl,
+            "sign_in_declined",
+            secureCookies,
+          );
+        }
+
+        const result = await completeLogin(oidc, {
+          code: typeof query["code"] === "string" ? query["code"] : null,
+          state: typeof query["state"] === "string" ? query["state"] : null,
+          tx,
         });
-      }
-      if (!oidc) {
-        metricOidcLogin("bad_request");
-        return errorRedirect(null, loginFallbackUrl, "sign_in_unavailable", secureCookies);
-      }
-      const tx = parseOidcTxCookie(request.headers.get("cookie"));
 
-      // The issuer refused (consent denied, `login_required`, …). Its own
-      // `error` string is never echoed onward — it is unbounded text from
-      // outside, and the frontend only needs to know the sign-in did not
-      // happen.
-      if (typeof query["error"] === "string") {
-        metricOidcLogin("provider_error");
-        return errorRedirect(
-          await readReturnTo(oidc, tx),
-          loginFallbackUrl,
-          "sign_in_declined",
-          secureCookies,
+        if (!result.ok) {
+          metricOidcLogin(result.reason);
+          return errorRedirect(result.returnTo, loginFallbackUrl, "sign_in_failed", secureCookies);
+        }
+
+        const session = await runtime.runPromise(
+          webSessionService
+            .create(result.identity, SESSION_TTL_SECONDS)
+            .pipe(Effect.catchTag("WebSessionWriteError", () => Effect.succeed(null))),
         );
-      }
+        if (!session) {
+          // The database refused the insert. Nothing to sign the user in with,
+          // and a retry is a single click, so send them back with the same
+          // generic marker.
+          metricOidcLogin("exchange_failed");
+          return errorRedirect(result.returnTo, loginFallbackUrl, "sign_in_failed", secureCookies);
+        }
 
-      const result = await completeLogin(oidc, {
-        code: typeof query["code"] === "string" ? query["code"] : null,
-        state: typeof query["state"] === "string" ? query["state"] : null,
-        tx,
-      });
-
-      if (!result.ok) {
-        metricOidcLogin(result.reason);
-        return errorRedirect(result.returnTo, loginFallbackUrl, "sign_in_failed", secureCookies);
-      }
-
-      const session = await runtime.runPromise(
-        webSessionService
-          .create(result.identity, SESSION_TTL_SECONDS)
-          .pipe(Effect.catchTag("WebSessionWriteError", () => Effect.succeed(null))),
-      );
-      if (!session) {
-        // The database refused the insert. Nothing to sign the user in with,
-        // and a retry is a single click, so send them back with the same
-        // generic marker.
-        metricOidcLogin("exchange_failed");
-        return errorRedirect(result.returnTo, loginFallbackUrl, "sign_in_failed", secureCookies);
-      }
-
-      metricOidcLogin("callback_ok");
-      return redirect(result.returnTo, [
-        buildWebSessionCookie(session.token, {
-          secure: secureCookies,
-          maxAgeSeconds: SESSION_TTL_SECONDS,
-        }),
-        clearOidcTxCookie({ secure: secureCookies }),
-      ]);
-    });
+        metricOidcLogin("callback_ok");
+        return redirect(result.returnTo, [
+          buildWebSessionCookie(session.token, {
+            secure: secureCookies,
+            maxAgeSeconds: SESSION_TTL_SECONDS,
+          }),
+          clearOidcTxCookie({ secure: secureCookies }),
+        ]);
+      },
+      {
+        detail: {
+          operationId: "completeOidcSignIn",
+          summary: "Complete OSN OIDC sign-in",
+          responses: {
+            302: {
+              description:
+                "Redirect back to `return_to`, setting the Pulse session cookie and clearing the transaction cookie. Every failure path redirects to the same place with an `?auth_error=` marker instead.",
+            },
+            429: rateLimitedResponse,
+          },
+        },
+      },
+    );
 
   const sessionRoutes = new Elysia({ prefix: PREFIX })
     // -----------------------------------------------------------------------
@@ -286,30 +350,58 @@ export const createAuthRoutes = (
     // the sign-in button, and a signed-out visitor is the expected case, not an
     // error.
     // -----------------------------------------------------------------------
-    .get("/session", async ({ headers, server, request, set }) => {
-      const ip = resolveIp(headers, server, request);
-      if (!(await checkPerIpLimit(ip, sessionLimiter))) {
-        set.status = 429;
-        return { error: "rate_limited" } as const;
-      }
-      const token = parseWebSessionToken(request.headers.get("cookie"));
-      if (!token) return { signedIn: false as const };
-      const session = await runtime.runPromise(
-        webSessionService
-          .validate(token)
-          .pipe(Effect.catchTag("WebSessionInvalid", () => Effect.succeed(null))),
-      );
-      if (!session) return { signedIn: false as const };
-      return {
-        signedIn: true as const,
-        osnProfileId: session.osnProfileId,
-        email: session.email,
-        handle: session.handle,
-        displayName: session.displayName,
-        avatarUrl: session.avatarUrl,
-        expiresAt: session.expiresAt.toISOString(),
-      };
-    })
+    .get(
+      "/session",
+      async ({ headers, server, request, set }) => {
+        const ip = resolveIp(headers, server, request);
+        if (!(await checkPerIpLimit(ip, sessionLimiter))) {
+          set.status = 429;
+          return { error: "rate_limited" } as const;
+        }
+        const token = parseWebSessionToken(request.headers.get("cookie"));
+        if (!token) return { signedIn: false as const };
+        const session = await runtime.runPromise(
+          webSessionService
+            .validate(token)
+            .pipe(Effect.catchTag("WebSessionInvalid", () => Effect.succeed(null))),
+        );
+        if (!session) return { signedIn: false as const };
+        return {
+          signedIn: true as const,
+          osnProfileId: session.osnProfileId,
+          email: session.email,
+          handle: session.handle,
+          displayName: session.displayName,
+          avatarUrl: session.avatarUrl,
+          expiresAt: session.expiresAt.toISOString(),
+        };
+      },
+      {
+        detail: {
+          operationId: "getWebSession",
+          summary: "Who is signed in",
+          responses: {
+            200: jsonResponse(
+              "The viewer's session. The identity fields are present only when `signedIn` is true.",
+              {
+                type: "object",
+                properties: {
+                  signedIn: { type: "boolean" },
+                  osnProfileId: { type: "string" },
+                  email: { type: "string" },
+                  handle: { type: "string" },
+                  displayName: { type: "string" },
+                  avatarUrl: { type: ["string", "null"] },
+                  expiresAt: { type: "string", format: "date-time" },
+                },
+                required: ["signedIn"],
+              },
+            ),
+            429: rateLimitedResponse,
+          },
+        },
+      },
+    )
     // -----------------------------------------------------------------------
     // POST /api/auth/signout — drop the session row and the cookie.
     //
@@ -317,32 +409,49 @@ export const createAuthRoutes = (
     // even with no cookie: signing out is idempotent, and telling a caller
     // whether a token was live is a free oracle.
     // -----------------------------------------------------------------------
-    .post("/signout", async ({ query, headers, server, request, set }) => {
-      const ip = resolveIp(headers, server, request);
-      if (!(await checkPerIpLimit(ip, sessionLimiter))) {
-        set.status = 429;
-        return { error: "rate_limited" } as const;
-      }
-      const token = parseWebSessionToken(request.headers.get("cookie"));
-      if (token) {
-        await runtime.runPromise(
-          Effect.gen(function* () {
-            if (query["all"] === "1") {
-              const session = yield* webSessionService
-                .validate(token)
-                .pipe(Effect.catchTag("WebSessionInvalid", () => Effect.succeed(null)));
-              if (session) {
-                yield* webSessionService.revokeAllForProfile(session.osnProfileId);
-                return;
+    .post(
+      "/signout",
+      async ({ query, headers, server, request, set }) => {
+        const ip = resolveIp(headers, server, request);
+        if (!(await checkPerIpLimit(ip, sessionLimiter))) {
+          set.status = 429;
+          return { error: "rate_limited" } as const;
+        }
+        const token = parseWebSessionToken(request.headers.get("cookie"));
+        if (token) {
+          await runtime.runPromise(
+            Effect.gen(function* () {
+              if (query["all"] === "1") {
+                const session = yield* webSessionService
+                  .validate(token)
+                  .pipe(Effect.catchTag("WebSessionInvalid", () => Effect.succeed(null)));
+                if (session) {
+                  yield* webSessionService.revokeAllForProfile(session.osnProfileId);
+                  return;
+                }
               }
-            }
-            yield* webSessionService.revoke(token);
-          }).pipe(Effect.catchTag("WebSessionWriteError", () => Effect.void)),
-        );
-      }
-      set.headers["set-cookie"] = clearWebSessionCookie({ secure: secureCookies });
-      return { ok: true } as const;
-    });
+              yield* webSessionService.revoke(token);
+            }).pipe(Effect.catchTag("WebSessionWriteError", () => Effect.void)),
+          );
+        }
+        set.headers["set-cookie"] = clearWebSessionCookie({ secure: secureCookies });
+        return { ok: true } as const;
+      },
+      {
+        detail: {
+          operationId: "signOutWebSession",
+          summary: "Drop the Pulse session cookie",
+          responses: {
+            200: jsonResponse("Signed out. Always 200, with or without a live session.", {
+              type: "object",
+              properties: { ok: { type: "boolean" } },
+              required: ["ok"],
+            }),
+            429: rateLimitedResponse,
+          },
+        },
+      },
+    );
 
   return new Elysia().use(redirectLegs).use(sessionRoutes);
 };

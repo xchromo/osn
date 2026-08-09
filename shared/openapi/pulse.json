@@ -863,22 +863,188 @@
     },
     "/api/auth/oidc/callback": {
       "get": {
-        "operationId": "getApiAuthOidcCallback"
+        "operationId": "completeOidcSignIn",
+        "responses": {
+          "302": {
+            "description": "Redirect back to `return_to`, setting the Pulse session cookie and clearing the transaction cookie. Every failure path redirects to the same place with an `?auth_error=` marker instead."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Per-IP rate limit exceeded."
+          }
+        },
+        "summary": "Complete OSN OIDC sign-in"
       }
     },
     "/api/auth/oidc/start": {
       "get": {
-        "operationId": "getApiAuthOidcStart"
+        "operationId": "startOidcSignIn",
+        "responses": {
+          "302": {
+            "description": "Redirect to the OSN authorize endpoint, carrying the transaction cookie. On a misconfigured issuer, a redirect back to the app with an `?auth_error=` marker instead."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "`return_to` is missing or not an allowlisted origin."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Per-IP rate limit exceeded."
+          }
+        },
+        "summary": "Begin OSN OIDC sign-in"
       }
     },
     "/api/auth/session": {
       "get": {
-        "operationId": "getApiAuthSession"
+        "operationId": "getWebSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "avatarUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": "string"
+                    },
+                    "osnProfileId": {
+                      "type": "string"
+                    },
+                    "signedIn": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "signedIn"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The viewer's session. The identity fields are present only when `signedIn` is true."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Per-IP rate limit exceeded."
+          }
+        },
+        "summary": "Who is signed in"
       }
     },
     "/api/auth/signout": {
       "post": {
-        "operationId": "postApiAuthSignout"
+        "operationId": "signOutWebSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Signed out. Always 200, with or without a live session."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Per-IP rate limit exceeded."
+          }
+        },
+        "summary": "Drop the Pulse session cookie"
       }
     },
     "/close-friends/": {
