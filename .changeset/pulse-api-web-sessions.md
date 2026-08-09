@@ -20,6 +20,10 @@ with a Pulse session of its own.
   checked first and decides the request outright — present-but-invalid is a
   rejection, never a fall back to whoever the cookie names. The iOS app is
   untouched and never pays for the cookie lookup.
+- `GET /api/close-friends/candidates` returns the caller's OSN connections
+  with handle, name and avatar. The picker used to read the graph straight
+  from the issuer with a bearer token; a browser has no OSN token to do that
+  with, so Pulse fans the two S2S bridge calls out server-side instead.
 - The session cookie is host-scoped, `HttpOnly`, `SameSite=Lax`, with no
   `Domain=`. Cookie credentials make Pulse writes CSRF-eligible for the first
   time, so an origin guard covers state-changing requests — it fires only when

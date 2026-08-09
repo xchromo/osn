@@ -861,6 +861,26 @@
         ]
       }
     },
+    "/api/auth/oidc/callback": {
+      "get": {
+        "operationId": "getApiAuthOidcCallback"
+      }
+    },
+    "/api/auth/oidc/start": {
+      "get": {
+        "operationId": "getApiAuthOidcStart"
+      }
+    },
+    "/api/auth/session": {
+      "get": {
+        "operationId": "getApiAuthSession"
+      }
+    },
+    "/api/auth/signout": {
+      "post": {
+        "operationId": "postApiAuthSignout"
+      }
+    },
     "/close-friends/": {
       "get": {
         "operationId": "listCloseFriends",
@@ -932,6 +952,101 @@
               }
             },
             "description": "Response for status 401"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/close-friends/candidates": {
+      "get": {
+        "operationId": "listCloseFriendCandidates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "connections": {
+                      "items": {
+                        "properties": {
+                          "avatarUrl": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "handle": {
+                            "type": "string"
+                          },
+                          "profileId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "handle",
+                          "displayName",
+                          "avatarUrl"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "connections"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response for status 200"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response for status 401"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response for status 502"
           }
         },
         "security": [

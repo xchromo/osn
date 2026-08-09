@@ -12,7 +12,7 @@ import {
   listCloseFriendIds,
   removeCloseFriend,
 } from "../services/closeFriends";
-import { getProfileDisplays } from "../services/graphBridge";
+import { getConnectionIds, getProfileDisplays } from "../services/graphBridge";
 
 /**
  * Pulse-scoped close-friends routes. The list lives in `pulse_close_friends`
@@ -22,6 +22,11 @@ import { getProfileDisplays } from "../services/graphBridge";
  * Profile metadata for `GET /close-friends` is joined from OSN via the
  * graph bridge so the client gets handle/displayName/avatar without
  * having to look up each id separately.
+ *
+ * `GET /close-friends/candidates` serves the picker: the caller's OSN
+ * connections with the same display fields. Clients can't read the graph
+ * themselves — a browser holds a Pulse session cookie, not an OSN token —
+ * so the fan-out over both bridge calls happens here.
  */
 export const createCloseFriendsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
@@ -84,6 +89,60 @@ export const createCloseFriendsRoutes = (
           401: t.Object({ message: t.String() }),
         },
         detail: { operationId: "listCloseFriends", security: [{ bearerAuth: [] }] },
+      },
+    )
+    .get(
+      "/candidates",
+      async ({ headers, set }) => {
+        const claims = await resolveCaller(headers);
+        if (!claims) {
+          set.status = 401;
+          return { message: "Unauthorized" } as const;
+        }
+        // The eligible set is exactly the caller's accepted connections —
+        // `addCloseFriend` rejects anything else with `not_a_connection`, so
+        // the picker and the write gate read the same list.
+        const connections = await runtime.runPromise(
+          getConnectionIds(claims.profileId).pipe(
+            Effect.flatMap((ids) => getProfileDisplays([...ids])),
+            Effect.map((displays) => [...displays.values()]),
+            Effect.catchTag("GraphBridgeError", () => Effect.succeed(null)),
+          ),
+        );
+        if (connections === null) {
+          // Unlike `GET /close-friends`, there's nothing to degrade to: an
+          // unnamed picker row is unusable, so say the graph is unreachable.
+          set.status = 502;
+          return { error: "Connections unavailable" } as const;
+        }
+        set.headers["cache-control"] = "private, max-age=30";
+        return {
+          connections: connections
+            .map((p) => ({
+              profileId: p.id,
+              handle: p.handle,
+              displayName: p.displayName,
+              avatarUrl: p.avatarUrl,
+            }))
+            .sort((a, b) => (a.displayName ?? a.handle).localeCompare(b.displayName ?? b.handle)),
+        };
+      },
+      {
+        response: {
+          200: t.Object({
+            connections: t.Array(
+              t.Object({
+                profileId: t.String(),
+                handle: t.String(),
+                displayName: t.Nullable(t.String()),
+                avatarUrl: t.Nullable(t.String()),
+              }),
+            ),
+          }),
+          401: t.Object({ message: t.String() }),
+          502: t.Object({ error: t.String() }),
+        },
+        detail: { operationId: "listCloseFriendCandidates", security: [{ bearerAuth: [] }] },
       },
     )
     .post(
