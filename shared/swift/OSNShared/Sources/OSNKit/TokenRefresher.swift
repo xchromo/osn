@@ -91,7 +91,7 @@ public actor TokenRefresher {
             // out. Fail loudly here instead of returning a grant that the
             // next request can't use.
             try verifySessionCookiePersisted()
-            try KeychainAccessTokenStore.save(grant.accessToken)
+            try KeychainAccessTokenStore.save(grant.accessToken, expiresIn: TimeInterval(grant.expiresIn))
             return grant
         case 400:
             throw refreshFailure(from: data)

@@ -14,11 +14,13 @@ struct KeychainSerialTests {
         try KeychainAccessTokenStore.delete()
         #expect(try KeychainAccessTokenStore.load() == nil)
 
-        try KeychainAccessTokenStore.save("token-a")
-        #expect(try KeychainAccessTokenStore.load() == "token-a")
+        try KeychainAccessTokenStore.save("token-a", expiresIn: 300)
+        let stored = try KeychainAccessTokenStore.load()
+        #expect(stored?.token == "token-a")
+        #expect(stored?.expiresAt.timeIntervalSinceNow ?? 0 > 250)
 
-        try KeychainAccessTokenStore.save("token-b")
-        #expect(try KeychainAccessTokenStore.load() == "token-b")
+        try KeychainAccessTokenStore.save("token-b", expiresIn: 60)
+        #expect(try KeychainAccessTokenStore.load()?.token == "token-b")
 
         try KeychainAccessTokenStore.delete()
         #expect(try KeychainAccessTokenStore.load() == nil)

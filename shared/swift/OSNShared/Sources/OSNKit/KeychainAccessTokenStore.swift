@@ -9,11 +9,26 @@ public enum KeychainAccessTokenStore {
     private static let service = "OSNKit.accessToken"
     private static let account = "current"
 
-    /// Overwrites any existing stored token.
-    public static func save(_ token: String) throws {
+    /// A cached access token plus the moment it expires, so callers can
+    /// judge freshness without a second round trip to the server.
+    public struct StoredAccessToken: Sendable, Equatable {
+        public let token: String
+        public let expiresAt: Date
+    }
+
+    private struct Payload: Codable {
+        let token: String
+        let expiresAt: Date
+    }
+
+    /// Overwrites any existing stored token. `expiresIn` is the server's
+    /// `expires_in` (seconds from now), from the `/token` response.
+    public static func save(_ token: String, expiresIn: TimeInterval) throws {
+        let payload = Payload(token: token, expiresAt: Date().addingTimeInterval(expiresIn))
+        let data = try JSONEncoder().encode(payload)
         SecItemDelete(baseQuery() as CFDictionary)
         var query = baseQuery()
-        query[kSecValueData as String] = Data(token.utf8)
+        query[kSecValueData as String] = data
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -23,7 +38,7 @@ public enum KeychainAccessTokenStore {
 
     /// `nil` when no token is stored — that's a normal state (signed out),
     /// not an error.
-    public static func load() throws -> String? {
+    public static func load() throws -> StoredAccessToken? {
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -31,10 +46,12 @@ public enum KeychainAccessTokenStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
         case errSecSuccess:
-            guard let data = result as? Data, let token = String(data: data, encoding: .utf8) else {
+            guard let data = result as? Data,
+                let payload = try? JSONDecoder().decode(Payload.self, from: data)
+            else {
                 throw OSNKitError.keychainReadFailed(status: status)
             }
-            return token
+            return StoredAccessToken(token: payload.token, expiresAt: payload.expiresAt)
         case errSecItemNotFound:
             return nil
         default:

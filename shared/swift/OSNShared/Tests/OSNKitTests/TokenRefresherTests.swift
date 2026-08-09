@@ -88,7 +88,7 @@ extension KeychainSerialTests {
     #expect(grant.tokenType == "Bearer")
     #expect(grant.expiresIn == 300)
     #expect(grant.scope == "openid profile")
-    #expect(try KeychainAccessTokenStore.load() == "at-1")
+    #expect(try KeychainAccessTokenStore.load()?.token == "at-1")
     let cookies = session.configuration.httpCookieStorage?.cookies(for: environment.baseURL) ?? []
     #expect(cookies.contains(where: { $0.name == "osn_session" }))
 
@@ -139,7 +139,7 @@ extension KeychainSerialTests {
         try await refresher.refresh()
     }
     // The failed attempt above must not have overwritten the Keychain.
-    #expect(try KeychainAccessTokenStore.load() == "at-1")
+    #expect(try KeychainAccessTokenStore.load()?.token == "at-1")
 
     // 7. Single-flight: two concurrent refreshes collapse into one request.
     let callCount = Counter()
