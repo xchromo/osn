@@ -18,7 +18,10 @@ public enum OSNColor {
     public static let accentStrong = Color(.displayP3, red: 0.7620, green: 0.2939, blue: 0.1632)
 
     /// `--pulse-accent-soft` — oklch(0.95 0.05 45). Pale coral wash; subtle fills.
-    /// Source R channel (1.0651) is out of Display P3 gamut; clamped to 1.0.
+    /// Out of Display P3 gamut on red — linear 1.0650, encoded 1.0280 —
+    /// so R alone is clamped to 1.0. That shifts the hue very slightly
+    /// toward pink rather than desaturating the whole colour, which is the
+    /// right trade for a near-white wash.
     public static let accentSoft = Color(.displayP3, red: 1.0000, green: 0.9031, blue: 0.8386)
 
     /// `--close-friend` — oklch(0.66 0.16 145). Green; close-friend ring state.

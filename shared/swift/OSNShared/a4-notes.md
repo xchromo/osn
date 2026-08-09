@@ -38,7 +38,7 @@ Method: oklch → OKLab → linear sRGB (Björn Ottosson's published matrices) �
 |---|---|---|---|
 | `accent` | `oklch(0.68 0.18 38)` | `0.8806, 0.4389, 0.2824` | |
 | `accentStrong` | `oklch(0.58 0.19 35)` | `0.7620, 0.2939, 0.1632` | |
-| `accentSoft` | `oklch(0.95 0.05 45)` | `1.0000, 0.9031, 0.8386` | source R (1.0651) out of P3 gamut, clamped to 1.0 |
+| `accentSoft` | `oklch(0.95 0.05 45)` | `1.0000, 0.9031, 0.8386` | out of P3 gamut on red — linear 1.0650, encoded 1.0280 — R alone clamped to 1.0 |
 | `closeFriend` | `oklch(0.66 0.16 145)` | `0.3861, 0.6612, 0.3523` | |
 | `badgeLive` | `oklch(0.72 0.17 22)` | `0.9253, 0.4804, 0.4675` | |
 | `accentForeground` (light) | `oklch(0.99 0.004 80)` | `0.9916, 0.9863, 0.9765` | |
@@ -69,6 +69,23 @@ All five (`GlassCard`, `GlassButton`, `Pill`, `LiveBadge`, `AvatarView`) have a 
 **Not testable, and no test was added.** `LiveBadge` reads `@Environment(\.accessibilityReduceMotion)`, which SwiftUI resolves from the live system accessibility setting when a view is part of a rendered hierarchy. A Swift Testing `@Test` function has no view host and no way to construct or inject an `EnvironmentValues` into a `View`'s `body` without actually mounting it (e.g. via a snapshot/host harness) — this package has no such dependency, and the brief prohibits inventing one. I did not find, and did not add, a way to instantiate `LiveBadge` and assert its rendered `scaleEffect`/`opacity`/`animation` under a forced `accessibilityReduceMotion = true` using only Swift Testing + SwiftUI. Saying "test if it's readable, and if not, say so" — this is the "say so": DoD item 6 is unverified by test. The logic itself (`reduceMotion ? 1 : ...`, `animation(reduceMotion ? nil : ...)`) is inspectable by reading `LiveBadge.swift` but that is not the same as a passing test.
 
 No `OSNUITests` target was added, since there is nothing else in `OSNUI` that has meaningful unit-testable logic beyond this one untestable case — `Colors.swift`'s values are checked by reading the conversion table above, not by a runtime assertion the brief asked for.
+
+## Independent re-check (orchestrator, on review)
+
+- `swift build` + `swift test` re-run on the macOS host after the review edits
+  below: 32 tests, 7 suites, 0 failures.
+- All seven conversions re-derived from scratch with an independent
+  implementation of the same pipeline (oklch → OKLab → linear sRGB → XYZ D65 →
+  linear P3 → sRGB OETF). Every channel matches the committed values to
+  ±0.0001. The one correction is the gamut note on `accentSoft`: 1.0651 is the
+  *linear* out-of-range figure, 1.0280 the encoded one — both now recorded, so
+  the clamp is checkable at either stage.
+- `GlassButton`'s doc comment sat on `GlassButtonKind`, so the component itself
+  had none — DoD 5 wasn't actually met for it. Moved onto the struct, with a
+  separate comment on the enum.
+- `Package.swift` confirmed: `.target(name: "OSNUI")`, no `dependencies:`. The
+  only imports across the seven files are `SwiftUI` plus `UIKit`/`AppKit` under
+  `canImport` in `Colors.swift`.
 
 ## Leaf-package check
 

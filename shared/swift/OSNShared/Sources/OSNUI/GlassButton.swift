@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Which of the two `GlassButton` treatments to render.
+public enum GlassButtonKind {
+    /// Accent-filled — the one action a screen wants you to take.
+    case primary
+    /// Plain glass — everything else.
+    case secondary
+}
+
 /// Primary (accent-filled) or secondary (glass) call to action. Wraps the
 /// SDK's own glass button styles (`GlassProminentButtonStyle` / `GlassButtonStyle`,
 /// exposed as `.glassProminent` / `.glass`) rather than reimplementing the
@@ -9,11 +17,6 @@ import SwiftUI
 /// glass container — glass over glass reads as mud. It belongs directly on
 /// opaque content, or as a sibling of other glass controls inside a shared
 /// `GlassEffectContainer`.
-public enum GlassButtonKind {
-    case primary
-    case secondary
-}
-
 public struct GlassButton: View {
     private let title: String
     private let kind: GlassButtonKind
