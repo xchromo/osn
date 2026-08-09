@@ -17,7 +17,7 @@ public final class StepUpPasskeyClient: Sendable {
 
     @MainActor
     public func mintStepUpToken(
-        purpose: String,
+        purpose: StepUpPurpose,
         anchorProvider: @escaping PresentationAnchorProvider
     ) async throws -> StepUpPasskeyCompleteResponse {
         let begun = try await begin()
@@ -79,7 +79,7 @@ public final class StepUpPasskeyClient: Sendable {
 
     private func complete(
         assertion: AuthenticationResponseJSON,
-        purpose: String
+        purpose: StepUpPurpose
     ) async throws -> StepUpPasskeyCompleteResponse {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("step-up/passkey/complete"))
         request.httpMethod = "POST"

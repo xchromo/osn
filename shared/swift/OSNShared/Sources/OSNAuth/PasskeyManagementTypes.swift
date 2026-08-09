@@ -17,6 +17,13 @@ struct PasskeyListResponse: Decodable {
     let passkeys: [PasskeySummary]
 }
 
+/// `PATCH /passkeys/:id` success body — `{ "success": true }` and nothing
+/// else (`osn/api/src/routes/auth/passkey-management.ts:84`). The updated
+/// summary is deliberately not echoed back.
+struct PasskeyRenameResult: Decodable {
+    let success: Bool
+}
+
 /// `DELETE /passkeys/:id` success body
 /// (`osn/api/src/routes/auth/passkey-management.ts:98`).
 public struct PasskeyDeleteResult: Sendable, Equatable, Decodable {

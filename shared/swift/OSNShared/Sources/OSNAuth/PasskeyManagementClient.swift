@@ -36,7 +36,13 @@ public final class PasskeyManagementClient: Sendable {
 
     /// `stepUpToken` must have been minted via `StepUpPasskeyClient` with
     /// `purpose: "passkey_delete"` (see type doc above).
-    public func rename(id: String, label: String, stepUpToken: String) async throws -> PasskeySummary {
+    ///
+    /// Returns nothing: the server's success body is a bare
+    /// `{ "success": true }` (`passkey-management.ts:84`), not the updated
+    /// summary. Decoding a `PasskeySummary` here would throw
+    /// `.responseMalformed` on the happy path, *after* the rename had already
+    /// committed. Callers that need the new label back should re-`list()`.
+    public func rename(id: String, label: String, stepUpToken: String) async throws {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("passkeys/\(id)"))
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -49,10 +55,10 @@ public final class PasskeyManagementClient: Sendable {
         guard http.statusCode == 200 else {
             throw RequestHelpers.opaqueFailure(status: http.statusCode, data: data)
         }
-        guard let decoded = try? JSONDecoder().decode(PasskeySummary.self, from: data) else {
+        guard let decoded = try? JSONDecoder().decode(PasskeyRenameResult.self, from: data),
+              decoded.success else {
             throw OSNAuthError.responseMalformed(status: http.statusCode)
         }
-        return decoded
     }
 
     /// `stepUpToken` must have been minted via `StepUpPasskeyClient` with

@@ -16,9 +16,15 @@ public final class PasskeyEnrollmentClient: Sendable {
     /// the first passkey on an account — the server has no step-up ceremony
     /// reachable pre-credential and bypasses the gate itself (brief §3); a
     /// later 4xx is the server's own signal that a step-up was required,
-    /// never a client-side decision. Identity for both calls comes from the
-    /// HttpOnly session cookie in the shared jar, never a body field (S-H1)
-    /// — no Bearer header here, unlike management/step-up below.
+    /// never a client-side decision.
+    ///
+    /// Both calls are Bearer-authed off the stored access token, exactly like
+    /// management and step-up: `passkey-enroll.ts:44` and `:88` resolve the
+    /// caller through `resolvePasskeyEnrollPrincipal(headers.authorization)`
+    /// (`context.ts:231`), which 401s without it. The session cookie still
+    /// rides along from the shared jar, but it is *not* what authenticates —
+    /// the server reads it only to name the caller's own session so the S-H1
+    /// sweep spares it (`passkey-enroll.ts:98`).
     @MainActor
     public func register(
         profileId: String,
@@ -74,6 +80,7 @@ public final class PasskeyEnrollmentClient: Sendable {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("passkey/register/begin"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try RequestHelpers.applyBearerAccessToken(to: &request)
         if let stepUpToken {
             request.setValue(stepUpToken, forHTTPHeaderField: "X-Step-Up-Token")
         }
@@ -99,6 +106,7 @@ public final class PasskeyEnrollmentClient: Sendable {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("passkey/register/complete"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try RequestHelpers.applyBearerAccessToken(to: &request)
         request.httpBody = try JSONEncoder().encode(
             RegisterCompleteRequestBody(profileId: profileId, attestation: attestation)
         )

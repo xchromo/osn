@@ -6,13 +6,31 @@ public struct StepUpPasskeyBeginResponse: Sendable, Equatable, Decodable {
     public let options: PublicKeyCredentialRequestOptionsJSON
 }
 
+/// The server's literal union of step-up purposes
+/// (`osn/api/src/routes/auth/step-up.ts:89-101`). Modeled as an enum so a
+/// typo can't reach the wire and come back a 422 — the same reason
+/// `PasskeyLoginTarget` is an enum rather than two optionals.
+///
+/// `passkeyDelete` covers **both** rename and delete: the server shares one
+/// verifier for the pair (`osn/api/src/services/auth/step-up.ts:398-400`).
+/// There is no `passkey_rename` purpose to "fix" this to.
+public enum StepUpPurpose: String, Sendable, Equatable, Encodable {
+    case accountDelete = "account_delete"
+    case accountExport = "account_export"
+    case pulseAppDelete = "pulse_app_delete"
+    case zapAppDelete = "zap_app_delete"
+    case recoveryGenerate = "recovery_generate"
+    case passkeyRegister = "passkey_register"
+    case passkeyDelete = "passkey_delete"
+    case emailChange = "email_change"
+    case securityEventAck = "security_event_ack"
+}
+
 /// `POST /step-up/passkey/complete` request body
-/// (`osn/api/src/routes/auth/step-up.ts:87-102`). `purpose` is one of the
-/// server's literal union; A3 only ever sends `"passkey_delete"` (shared by
-/// rename and delete — `osn/api/src/services/auth/step-up.ts:398-400`).
+/// (`osn/api/src/routes/auth/step-up.ts:87-102`).
 struct StepUpPasskeyCompleteRequestBody: Encodable {
     let assertion: AuthenticationResponseJSON
-    let purpose: String?
+    let purpose: StepUpPurpose?
 }
 
 /// `POST /step-up/passkey/complete` success body
