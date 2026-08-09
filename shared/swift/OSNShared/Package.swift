@@ -30,7 +30,7 @@ let package = Package(
         .target(name: "OSNAuth", dependencies: ["OSNKit"]),
         .target(name: "OSNUI"),
         .target(name: "OSNTesting", dependencies: ["OSNKit"]),
-        .testTarget(name: "OSNKitTests", dependencies: ["OSNKit"]),
+        .testTarget(name: "OSNKitTests", dependencies: ["OSNKit", "OSNTesting"]),
         .target(
             name: "PulseAPI",
             dependencies: [
@@ -48,6 +48,6 @@ let package = Package(
                 .product(name: "swift-openapi-generator", package: "swift-openapi-generator")
             ]
         ),
-        .testTarget(name: "PulseAPITests", dependencies: ["PulseAPI"]),
+        .testTarget(name: "PulseAPITests", dependencies: ["PulseAPI", "OSNKit", "OSNTesting"]),
     ]
 )

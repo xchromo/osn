@@ -1,14 +1,18 @@
 import Foundation
+import OSNTesting
 import Testing
 @testable import OSNKit
 
 // One Keychain item backs the whole store, so every test that touches it —
-// here and in TokenRefresherTests.swift — runs as an ordered step inside
-// this one serialized suite rather than as independent @Test funcs. Swift
-// Testing runs tests concurrently by default, and concurrent saves/deletes
-// against the same Keychain item race (duplicate-item and entitlement
-// errors that are artifacts of the race, not of the store).
-@Suite(.serialized)
+// here, in TokenRefresherTests.swift, and in PulseAPITests'
+// BearerTokenMiddlewareTests — runs as an ordered step inside this one
+// serialized suite rather than as independent @Test funcs. Swift Testing
+// runs tests concurrently by default, and concurrent saves/deletes against
+// the same Keychain item race (duplicate-item and entitlement errors that
+// are artifacts of the race, not of the store). `.keychainSerializing`
+// extends that ordering across suites and test targets — `.serialized`
+// alone only orders tests within this one suite.
+@Suite(.serialized, .keychainSerializing)
 struct KeychainSerialTests {
     @Test func keychainAccessTokenStoreRoundTrips() throws {
         try KeychainAccessTokenStore.delete()
