@@ -78,6 +78,16 @@ vi.mock("./SettingsPanel", () => ({
 vi.mock("./VendorsView", () => ({
   default: (p: { weddingId: string }) => <div data-testid="vendors">{p.weddingId}</div>,
 }));
+vi.mock("./RegistryView", () => ({
+  // Surfaces `view`: both sub-tabs mount the SAME component, so a mock reading
+  // only weddingId would keep passing with the gift list and the gift log wired
+  // to the same sub.
+  default: (p: { weddingId: string; view: string }) => (
+    <div data-testid="registry" data-view={p.view}>
+      {p.weddingId}
+    </div>
+  ),
+}));
 vi.mock("./DirectoryBrowseView", () => ({
   default: (p: { weddingId: string }) => <div data-testid="directory-browse">{p.weddingId}</div>,
 }));
@@ -116,7 +126,13 @@ function renderShell(opts: {
     setModule(m);
     // Mirror OrganiserApp: a module switch resets the sub to the module default.
     setSub(
-      m === "guests" ? "list" : m === "invite" ? "design" : m === "settings" ? "wedding" : "index",
+      m === "guests" || m === "registry"
+        ? "list"
+        : m === "invite"
+          ? "design"
+          : m === "settings"
+            ? "wedding"
+            : "index",
     );
   });
   const onSub = vi.fn((s: string) => setSub(s));
@@ -385,6 +401,62 @@ describe("ModuleShell", () => {
       renderShell({ module: "vendors", sub: "index", entitlements: ["capacity_500", "ai"] });
       expect(screen.getByTestId("upsell-panel")).toBeTruthy();
       expect(screen.queryByTestId("vendors")).toBeNull();
+    });
+  });
+
+  describe("entitlement gating — registry module", () => {
+    it("renders UpsellPanel when the registry entitlement is absent", () => {
+      // No wedding holds this entitlement yet, so the locked state is the NORMAL
+      // one: every registry route answers 402 today. The gate has to keep the
+      // views unmounted, or the module fires a guaranteed-failing fetch.
+      renderShell({ module: "registry", sub: "list", entitlements: [] });
+      expect(screen.getByTestId("upsell-panel")).toBeTruthy();
+      expect(screen.getByTestId("upsell-panel").getAttribute("data-feature")).toBe("registry");
+      expect(screen.queryByTestId("registry")).toBeNull();
+    });
+
+    it("renders the gift list when the registry entitlement is present", () => {
+      renderShell({ module: "registry", sub: "list", entitlements: ["registry"] });
+      expect(screen.queryByTestId("upsell-panel")).toBeNull();
+      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("list");
+    });
+
+    it("renders the gift log on the gifts sub", () => {
+      renderShell({ module: "registry", sub: "gifts", entitlements: ["registry"] });
+      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
+    });
+
+    it("stays locked on another module's entitlement", () => {
+      // The vendors key unlocks vendors, nothing else.
+      renderShell({ module: "registry", sub: "list", entitlements: ["vendors"] });
+      expect(screen.getByTestId("upsell-panel").getAttribute("data-feature")).toBe("registry");
+      expect(screen.queryByTestId("registry")).toBeNull();
+    });
+
+    it("gives a viewer the module read-only rather than hiding it", () => {
+      // Every module has a read view; the write controls are gated INSIDE
+      // RegistryView by canEdit, not by hiding the module from the rail.
+      renderShell({
+        canManage: false,
+        canEdit: false,
+        module: "registry",
+        sub: "gifts",
+        entitlements: ["registry"],
+      });
+      expect(within(rail()).getByRole("button", { name: /Registry/ })).toBeTruthy();
+      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
+    });
+
+    it("offers both sub-tabs and reports a switch up", () => {
+      const { onSub } = renderShell({
+        module: "registry",
+        sub: "list",
+        entitlements: ["registry"],
+      });
+      expect(screen.getByRole("tab", { name: /Gift list/ })).toBeTruthy();
+      fireEvent.click(screen.getByRole("tab", { name: /Gifts received/ }));
+      expect(onSub).toHaveBeenCalledWith("gifts");
+      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
     });
   });
 

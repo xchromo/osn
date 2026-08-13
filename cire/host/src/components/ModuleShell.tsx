@@ -15,6 +15,7 @@ import GuestTable from "./GuestTable";
 import HostsPanel from "./HostsPanel";
 import ModuleSidebar from "./ModuleSidebar";
 import Overview from "./Overview";
+import RegistryView from "./RegistryView";
 import RemintPanel from "./RemintPanel";
 import RsvpView from "./RsvpView";
 import SettingsPanel from "./SettingsPanel";
@@ -153,6 +154,10 @@ const MODULE_SUB_TABS: Partial<Record<Module, SubDef[]>> = {
     { id: "index", label: "My vendors" },
     { id: "browse", label: "Browse" },
     { id: "enquiries", label: "Enquiries" },
+  ],
+  registry: [
+    { id: "list", label: "Gift list" },
+    { id: "gifts", label: "Gifts received" },
   ],
   guests: [
     { id: "list", label: "Households" },
@@ -425,6 +430,25 @@ export default function ModuleShell(props: ModuleShellProps) {
                     <EnquiriesView
                       weddingId={props.weddingId}
                       currency={peekCachedBudget(props.weddingId)?.currency ?? "AUD"}
+                      canEdit={props.canEdit}
+                    />
+                  </Show>
+                </Show>
+              </Show>
+
+              {/* ── Registry: the gift list + the gifts received ─────────────── */}
+              <Show when={props.module === "registry"}>
+                <Show
+                  when={props.entitlements.includes("registry")}
+                  fallback={<UpsellPanel feature="registry" />}
+                >
+                  <Show when={active() === "list"}>
+                    <RegistryView weddingId={props.weddingId} view="list" canEdit={props.canEdit} />
+                  </Show>
+                  <Show when={active() === "gifts"}>
+                    <RegistryView
+                      weddingId={props.weddingId}
+                      view="gifts"
                       canEdit={props.canEdit}
                     />
                   </Show>
