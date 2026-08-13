@@ -267,6 +267,49 @@ describe("registry routes (entitled)", () => {
     expect(snap.settings.cashGiftsEnabled).toBe(false);
   });
 
+  it("400s an image key that names another wedding's upload", async () => {
+    // The schema pins the SHAPE (`assets/<segment>/<segment>`), so only the
+    // service can tell whose upload it is. A distinct code, not the generic 400,
+    // because the portal has to explain this one.
+    const app = buildApp({ grantRegistry: true });
+    const foreign = await req(app, "POST", `${base}/items`, EDITOR, {
+      title: "T",
+      imageKey: "assets/wed_other/hero_jpg",
+    });
+    expect(foreign.status).toBe(400);
+    expect(((await foreign.json()) as { error: string }).error).toBe("image_key_not_in_wedding");
+
+    const own = await req(app, "POST", `${base}/items`, EDITOR, {
+      title: "T",
+      imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/hero_jpg`,
+    });
+    expect(own.status).toBe(200);
+
+    // The update path is gated the same way.
+    const item = ((await own.json()) as { item: RegistryItemDto }).item;
+    const patched = await req(app, "PATCH", `${base}/items/${item.id}`, EDITOR, {
+      imageKey: "assets/wed_other/hero_jpg",
+    });
+    expect(patched.status).toBe(400);
+    expect(((await patched.json()) as { error: string }).error).toBe("image_key_not_in_wedding");
+  });
+
+  it("reports whether the gift log has another page, and ignores a junk offset", async () => {
+    const app = buildApp({ grantRegistry: true });
+    const first = (await (await req(app, "GET", base, OWNER)).json()) as RegistrySnapshot;
+    expect(first.giftsHasMore).toBe(false);
+
+    // `giftsOffset` is caller-supplied, so every unparseable value has to read as
+    // page one rather than 500 or NaN reaching the query.
+    for (const raw of ["abc", "-3", "1e9", ""]) {
+      const res = await req(app, "GET", `${base}?giftsOffset=${raw}`, OWNER);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as RegistrySnapshot;
+      expect(body.gifts).toEqual([]);
+      expect(body.giftsHasMore).toBe(false);
+    }
+  });
+
   it("400s an unknown gift kind in the path rather than guessing a table", async () => {
     const app = buildApp({ grantRegistry: true });
     const res = await req(app, "POST", `${base}/gifts/wishes/rcl_x/thanked`, EDITOR, {

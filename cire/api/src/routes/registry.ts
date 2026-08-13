@@ -42,6 +42,18 @@ const giftNotFound = (set: { status?: number | string }) =>
     return { error: "registry_gift_not_found" };
   });
 
+const conflict = (set: { status?: number | string }, error: string) =>
+  Effect.sync(() => {
+    set.status = 409;
+    return { error };
+  });
+
+const badRequestCode = (set: { status?: number | string }, error: string) =>
+  Effect.sync(() => {
+    set.status = 400;
+    return { error };
+  });
+
 const internal = (set: { status?: number | string }) =>
   Effect.sync(() => {
     set.status = 500;
@@ -51,6 +63,21 @@ const internal = (set: { status?: number | string }) =>
 function internalSync(set: { status?: number | string }) {
   set.status = 500;
   return { error: "Internal error" };
+}
+
+/**
+ * Log a defect before it becomes an anonymous 500 (S-L1). Annotated with the
+ * wedding id and NOTHING else — a registry payload carries guest names, gift
+ * notes and thank-you text, none of which belongs in a log line.
+ */
+const logDefect = (weddingId: string) => (cause: unknown) =>
+  Effect.logError("registry handler defect", cause).pipe(Effect.annotateLogs({ weddingId }));
+
+/** `?giftsOffset=` → a non-negative integer. Anything unparseable reads as 0. */
+function parseGiftsOffset(raw: unknown): number {
+  if (typeof raw !== "string") return 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /**
@@ -74,11 +101,15 @@ export const createRegistryReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions)
       group
         .use(weddingMember(db))
         .use(weddingEntitlement(db, "registry"))
-        .get("/registry", async ({ weddingId, set }) => {
+        .get("/registry", async ({ weddingId, query, set }) => {
           if (!weddingId) return internalSync(set);
+          // The gift log is paged; the offset is the only knob the client gets.
+          // The service clamps it — this only has to turn a string into a number.
+          const giftsOffset = parseGiftsOffset((query as Record<string, unknown>)?.giftsOffset);
           return runCire(
-            registryService.get(weddingId).pipe(
+            registryService.get(weddingId, { giftsOffset }).pipe(
               Effect.provideService(DbService, db),
+              Effect.tapDefect(logDefect(weddingId)),
               Effect.catchAllDefect(() => internal(set)),
             ),
           );
@@ -101,6 +132,10 @@ export const createRegistryReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions)
  * NOTE `/registry/items/reorder` is registered BEFORE `/registry/items/:itemId`
  * so the literal wins over the param.
  *
+ * `FamilyNotInWedding` has no mapping here on purpose: it can only come out of
+ * `registryService.claim`, which the GUEST surface will call. It gets its 404
+ * when that route lands, alongside the claim/release endpoints.
+ *
  * Stripe onboarding (`/registry/stripe/*`, weddingOwner — connecting a bank
  * account is an owner action) lands with the Connect work; it is deliberately
  * absent rather than stubbed, so nothing here implies a payment path exists yet.
@@ -121,22 +156,16 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
               return runCire(
                 Effect.gen(function* () {
                   const body = yield* Schema.decodeUnknown(UpdateRegistrySettingsBody)(raw);
-                  // Cash gifts cannot be switched on without a Stripe account
-                  // that can actually take a charge. Otherwise the guest site
-                  // would offer a contribute button that 503s — a worse failure
-                  // than not offering it, because the guest thinks they paid.
-                  if (body.cashGiftsEnabled === true) {
-                    const current = yield* registryService.get(weddingId);
-                    if (!current.settings.stripeChargesEnabled) {
-                      set.status = 409;
-                      return { error: "stripe_not_ready" };
-                    }
-                  }
+                  // The cash-gifts/Stripe invariant lives in the service (S-M3),
+                  // not here: this route used to load the WHOLE snapshot — items,
+                  // gift log, currency — to read one boolean off it (P-C2).
                   const settings = yield* registryService.updateSettings(weddingId, body);
                   return { settings };
                 }).pipe(
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
+                  Effect.catchTag("StripeNotReady", () => conflict(set, "stripe_not_ready")),
+                  Effect.tapDefect(logDefect(weddingId)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
               );
@@ -157,6 +186,14 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                 }).pipe(
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
+                  Effect.catchTag("InvalidQuantity", () => badRequest(set)),
+                  Effect.catchTag("ImageKeyNotInWedding", () =>
+                    badRequestCode(set, "image_key_not_in_wedding"),
+                  ),
+                  Effect.catchTag("RegistryItemLimitReached", () =>
+                    conflict(set, "registry_item_limit_reached"),
+                  ),
+                  Effect.tapDefect(logDefect(weddingId)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
               );
@@ -176,6 +213,7 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                 }).pipe(
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
+                  Effect.tapDefect(logDefect(weddingId)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
               );
@@ -200,7 +238,12 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                 }).pipe(
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
+                  Effect.catchTag("InvalidQuantity", () => badRequest(set)),
+                  Effect.catchTag("ImageKeyNotInWedding", () =>
+                    badRequestCode(set, "image_key_not_in_wedding"),
+                  ),
                   Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
+                  Effect.tapDefect(logDefect(weddingId)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
               );
@@ -215,6 +258,7 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                 Effect.map(() => ({ ok: true as const })),
                 Effect.provideService(DbService, db),
                 Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
+                Effect.tapDefect(logDefect(weddingId)),
                 Effect.catchAllDefect(() => internal(set)),
               ),
             );
@@ -246,6 +290,7 @@ export const createRegistryWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                   Effect.provideService(DbService, db),
                   Effect.catchTag("ParseError", () => badRequest(set)),
                   Effect.catchTag("GiftNotInWedding", () => giftNotFound(set)),
+                  Effect.tapDefect(logDefect(weddingId)),
                   Effect.catchAllDefect(() => internal(set)),
                 ),
               );

@@ -6,6 +6,7 @@ import {
   registryClaims,
   registryContributions,
   registryItems,
+  registrySettings,
   weddings,
 } from "@cire/db";
 import { eq } from "drizzle-orm";
@@ -14,10 +15,15 @@ import { Effect, Exit } from "effect";
 import { DbService } from "../db";
 import { createDb, seedDb } from "../db/setup";
 import {
+  FamilyNotInWedding,
   GiftNotInWedding,
+  ImageKeyNotInWedding,
+  InvalidQuantity,
   ItemFullyClaimed,
   registryService,
+  RegistryItemLimitReached,
   RegistryItemNotInWedding,
+  StripeNotReady,
   toEpochSeconds,
 } from "./registry";
 
@@ -72,6 +78,49 @@ const newItem = (over: Partial<{ title: string; quantityWanted: number }> = {}) 
   quantityWanted: over.quantityWanted ?? 1,
   category: null,
 });
+
+/** A succeeded contribution, written directly (Stripe lands in PR 5). */
+function seedContribution(
+  db: Db0,
+  over: Partial<{
+    amountMinor: number;
+    currency: string;
+    primaryAmountMinor: number | null;
+    primaryCurrency: string | null;
+    status: "pending" | "succeeded";
+    familyId: string;
+    sessionId: string;
+    createdAt: Date;
+  }> = {},
+) {
+  const [famA] = twoFamilies(db);
+  const now = over.createdAt ?? new Date();
+  const id = `rct_${crypto.randomUUID()}`;
+  db.insert(registryContributions)
+    .values({
+      id,
+      weddingId: BOOTSTRAP_WEDDING_ID,
+      itemId: null,
+      familyId: over.familyId ?? famA,
+      status: over.status ?? "succeeded",
+      amountMinor: over.amountMinor ?? 10_000,
+      currency: over.currency ?? "AUD",
+      primaryAmountMinor: over.primaryAmountMinor ?? null,
+      primaryCurrency: over.primaryCurrency ?? null,
+      fxRate: null,
+      fxRateAt: null,
+      stripeCheckoutSessionId: over.sessionId ?? `cs_${crypto.randomUUID()}`,
+      stripePaymentIntentId: null,
+      message: null,
+      displayName: null,
+      thankedAt: null,
+      thankedBy: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  return id;
+}
 
 describe("registry settings", () => {
   it("reads as unpublished before any row exists", async () => {
@@ -378,48 +427,6 @@ describe("registryService.claim", () => {
 });
 
 describe("gift log", () => {
-  /** A succeeded contribution, written directly (Stripe lands in PR 5). */
-  function seedContribution(
-    db: Db0,
-    over: Partial<{
-      amountMinor: number;
-      currency: string;
-      primaryAmountMinor: number | null;
-      primaryCurrency: string | null;
-      status: "pending" | "succeeded";
-      familyId: string;
-      sessionId: string;
-    }> = {},
-  ) {
-    const [famA] = twoFamilies(db);
-    const now = new Date();
-    const id = `rct_${crypto.randomUUID()}`;
-    db.insert(registryContributions)
-      .values({
-        id,
-        weddingId: BOOTSTRAP_WEDDING_ID,
-        itemId: null,
-        familyId: over.familyId ?? famA,
-        status: over.status ?? "succeeded",
-        amountMinor: over.amountMinor ?? 10_000,
-        currency: over.currency ?? "AUD",
-        primaryAmountMinor: over.primaryAmountMinor ?? null,
-        primaryCurrency: over.primaryCurrency ?? null,
-        fxRate: null,
-        fxRateAt: null,
-        stripeCheckoutSessionId: over.sessionId ?? `cs_${crypto.randomUUID()}`,
-        stripePaymentIntentId: null,
-        message: null,
-        displayName: null,
-        thankedAt: null,
-        thankedBy: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    return id;
-  }
-
   it("merges claims and contributions newest-first", async () => {
     const db = db0();
     const [famA] = twoFamilies(db);
@@ -438,7 +445,7 @@ describe("gift log", () => {
     );
     seedContribution(db);
 
-    const gifts = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    const { entries: gifts } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
     expect(gifts).toHaveLength(2);
     expect(new Set(gifts.map((g) => g.kind))).toEqual(new Set(["claim", "contribution"]));
     const claim = gifts.find((g) => g.kind === "claim")!;
@@ -496,7 +503,7 @@ describe("gift log", () => {
 
     // Money someone actually sent survives the listing being removed — the FK is
     // ON DELETE SET NULL, not CASCADE.
-    const gifts = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    const { entries: gifts } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
     expect(gifts).toHaveLength(1);
     expect(gifts[0]!.itemId).toBeNull();
     expect(gifts[0]!.amountMinor).toBe(4_000);
@@ -540,7 +547,7 @@ describe("gift log", () => {
         }),
       );
     }
-    const thanked = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    const { entries: thanked } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
     expect(thanked.every((g) => g.thankedAt !== null)).toBe(true);
 
     // Un-thank clears the attribution too.
@@ -554,7 +561,7 @@ describe("gift log", () => {
         actorOsnProfileId: "usr_owner",
       }),
     );
-    const after = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    const { entries: after } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
     expect(after.find((g) => g.kind === "claim")!.thankedAt).toBeNull();
 
     const exit = await run(
@@ -571,6 +578,267 @@ describe("gift log", () => {
     if (Exit.isFailure(exit)) {
       expect(exit.cause.toString()).toContain(new GiftNotInWedding()._tag);
     }
+  });
+});
+
+describe("gift log paging", () => {
+  /** `n` succeeded contributions, oldest first, one second apart. */
+  function seedRun(db: Db0, n: number, startSecondsAgo = n) {
+    for (let i = 0; i < n; i += 1) {
+      seedContribution(db, {
+        amountMinor: 1_000 + i,
+        createdAt: new Date(Date.now() - (startSecondsAgo - i) * 1_000),
+      });
+    }
+  }
+
+  it("caps a page and reports there is more", async () => {
+    const db = db0();
+    seedRun(db, 55);
+    const first = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    // GIFT_LOG_PAGE is 50 — a page, not the table.
+    expect(first.entries).toHaveLength(50);
+    expect(first.hasMore).toBe(true);
+
+    const second = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID, { offset: 50 }));
+    expect(second.entries).toHaveLength(5);
+    expect(second.hasMore).toBe(false);
+
+    // The two pages are disjoint and jointly complete.
+    const ids = new Set([...first.entries, ...second.entries].map((g) => g.id));
+    expect(ids.size).toBe(55);
+  });
+
+  it("clamps a nonsense limit or offset instead of trusting it", async () => {
+    const db = db0();
+    seedRun(db, 3);
+    // Negative offset reads as 0; an over-page limit is capped at GIFT_LOG_PAGE.
+    const back = await ok(
+      db,
+      registryService.giftLog(BOOTSTRAP_WEDDING_ID, { offset: -5, limit: 10_000 }),
+    );
+    expect(back.entries).toHaveLength(3);
+    expect(back.hasMore).toBe(false);
+
+    // NaN reads as the floor rather than producing an empty, silent page.
+    const nan = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID, { offset: Number.NaN }));
+    expect(nan.entries).toHaveLength(3);
+
+    // A limit of 0 would be a page nobody can advance past.
+    const zero = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID, { limit: 0 }));
+    expect(zero.entries).toHaveLength(1);
+    expect(zero.hasMore).toBe(true);
+  });
+
+  it("orders the two gift tables against each other, newest first", async () => {
+    const db = db0();
+    const [famA] = twoFamilies(db);
+    const item = await ok(db, registryService.createItem(newItem()));
+    // Older money, then a newer claim: the merge must interleave by time, not
+    // concatenate one table after the other.
+    seedContribution(db, { createdAt: new Date(Date.now() - 60_000) });
+    await ok(
+      db,
+      registryService.claim({
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        itemId: item.id,
+        familyId: famA,
+        quantity: 1,
+        status: "reserved",
+        note: null,
+        displayName: null,
+      }),
+    );
+    const { entries } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+    expect(entries.map((g) => g.kind)).toEqual(["claim", "contribution"]);
+    expect(entries[0]!.createdAt).toBeGreaterThanOrEqual(entries[1]!.createdAt);
+  });
+
+  it("totals ALL succeeded money, not just the money on the first page", async () => {
+    const db = db0();
+    // 60 gifts of 1_000 — more than one page. A total summed off the page would
+    // under-report by 10_000, which is the bug the SQL aggregate exists to stop.
+    for (let i = 0; i < 60; i += 1) seedContribution(db, { amountMinor: 1_000 });
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.gifts).toHaveLength(50);
+    expect(snap.giftsHasMore).toBe(true);
+    expect(snap.contributionsPrimaryMinor).toBe(60_000);
+  });
+
+  it("pages the snapshot's gift log through giftsOffset", async () => {
+    const db = db0();
+    seedRun(db, 52);
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID, { giftsOffset: 50 }));
+    expect(snap.gifts).toHaveLength(2);
+    expect(snap.giftsHasMore).toBe(false);
+    // Items and totals are unaffected by where the gift log is paged to.
+    expect(snap.contributionsPrimaryMinor).toBeGreaterThan(0);
+  });
+});
+
+describe("registry ownership + range guards", () => {
+  const foreignKey = `assets/${OTHER}/hero.jpg`;
+
+  it("refuses an image key belonging to another wedding", async () => {
+    const db = db0();
+    const create = await run(
+      db,
+      registryService.createItem({ ...newItem(), imageKey: foreignKey }),
+    );
+    expect(Exit.isFailure(create)).toBe(true);
+    if (Exit.isFailure(create)) {
+      expect(create.cause.toString()).toContain(new ImageKeyNotInWedding()._tag);
+    }
+
+    // The wedding's OWN key is fine, and the same check guards the update path.
+    const item = await ok(
+      db,
+      registryService.createItem({
+        ...newItem(),
+        imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/hero.jpg`,
+      }),
+    );
+    const update = await run(
+      db,
+      registryService.updateItem({
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        itemId: item.id,
+        patch: { imageKey: foreignKey },
+      }),
+    );
+    expect(Exit.isFailure(update)).toBe(true);
+  });
+
+  it("refuses an out-of-range quantity on create, update and claim", async () => {
+    const db = db0();
+    const [famA] = twoFamilies(db);
+    for (const quantityWanted of [0, -1, 1.5]) {
+      const exit = await run(db, registryService.createItem(newItem({ quantityWanted })));
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(exit.cause.toString()).toContain(new InvalidQuantity()._tag);
+      }
+    }
+
+    const item = await ok(db, registryService.createItem(newItem({ quantityWanted: 2 })));
+    const update = await run(
+      db,
+      registryService.updateItem({
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        itemId: item.id,
+        patch: { quantityWanted: 0 },
+      }),
+    );
+    expect(Exit.isFailure(update)).toBe(true);
+
+    // A claim is bounded on both sides — the CHECK constraint says 1..99, and a
+    // service that let 1e9 through would write a row SQLite then rejects.
+    const base = {
+      weddingId: BOOTSTRAP_WEDDING_ID,
+      itemId: item.id,
+      familyId: famA,
+      status: "reserved",
+      note: null,
+      displayName: null,
+    } as const;
+    for (const quantity of [0, 100, 2.5]) {
+      const exit = await run(db, registryService.claim({ ...base, quantity }));
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(exit.cause.toString()).toContain(new InvalidQuantity()._tag);
+      }
+    }
+    expect(db.select().from(registryClaims).all()).toHaveLength(0);
+  });
+
+  it("refuses a claim for a household on another wedding", async () => {
+    const db = db0();
+    const item = await ok(db, registryService.createItem(newItem()));
+    const now = new Date();
+    const foreignFamily = `fam_${crypto.randomUUID()}`;
+    db.insert(families)
+      .values({
+        id: foreignFamily,
+        weddingId: OTHER,
+        publicId: `OTHER-${crypto.randomUUID().slice(0, 8)}`,
+        familyName: "Trespass",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const exit = await run(
+      db,
+      registryService.claim({
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        itemId: item.id,
+        familyId: foreignFamily,
+        quantity: 1,
+        status: "reserved",
+        note: null,
+        displayName: null,
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.toString()).toContain(new FamilyNotInWedding()._tag);
+    }
+    expect(db.select().from(registryClaims).all()).toHaveLength(0);
+  });
+
+  it("refuses to enable cash gifts before Stripe can take a charge", async () => {
+    const db = db0();
+    const blocked = await run(
+      db,
+      registryService.updateSettings(BOOTSTRAP_WEDDING_ID, { cashGiftsEnabled: true }),
+    );
+    expect(Exit.isFailure(blocked)).toBe(true);
+    if (Exit.isFailure(blocked)) {
+      expect(blocked.cause.toString()).toContain(new StripeNotReady()._tag);
+    }
+    // The refused write created no settings row to half-enable.
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.settings.cashGiftsEnabled).toBe(false);
+
+    // Once Stripe reports charges enabled, the same patch goes through.
+    await ok(db, registryService.updateSettings(BOOTSTRAP_WEDDING_ID, { published: true }));
+    db.update(registrySettings)
+      .set({ stripeChargesEnabled: true })
+      .where(eq(registrySettings.weddingId, BOOTSTRAP_WEDDING_ID))
+      .run();
+    const enabled = await ok(
+      db,
+      registryService.updateSettings(BOOTSTRAP_WEDDING_ID, { cashGiftsEnabled: true }),
+    );
+    expect(enabled.cashGiftsEnabled).toBe(true);
+  });
+
+  it("stops a wedding adding items past the ceiling", async () => {
+    const db = db0();
+    const now = new Date();
+    // Fill to the cap in one statement — 500 service calls would be 500 aggregates.
+    db.insert(registryItems)
+      .values(
+        Array.from({ length: 500 }, (_, i) => ({
+          id: `reg_bulk_${i}`,
+          weddingId: BOOTSTRAP_WEDDING_ID,
+          kind: "product" as const,
+          title: `Bulk ${i}`,
+          quantityWanted: 1,
+          sortOrder: i,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      )
+      .run();
+
+    const exit = await run(db, registryService.createItem(newItem()));
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.toString()).toContain(new RegistryItemLimitReached()._tag);
+    }
+    // The ceiling is per wedding, not global.
+    await ok(db, registryService.createItem({ ...newItem(), weddingId: OTHER }));
   });
 });
 

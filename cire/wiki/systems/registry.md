@@ -6,7 +6,7 @@ related:
   - "[[budget]]"
   - "[[platform-plan]]"
   - "[[consent]]"
-last-reviewed: 2026-08-13
+last-reviewed: 2026-08-14
 ---
 
 # Gift registry
@@ -43,7 +43,9 @@ One row per wedding, keyed by `wedding_id` (PK + FK cascade). **An absent row re
 
 ### `registry_items`
 
-`id` (`reg_*`) · `wedding_id` · `kind` (`product` \| `cash_fund`) · `title` · `description` · `image_key` + `image_crop` · `external_url` · `price_minor` · `quantity_wanted` · `allow_partial` · `target_minor` · `category` · `sort_order` · timestamps. Indexed `(wedding_id, sort_order)` — every list read filters and orders on exactly that pair.
+`id` (`reg_*`) · `wedding_id` · `kind` (`product` \| `cash_fund`) · `title` · `description` · `image_key` + `image_crop` · `external_url` · `price_minor` · `quantity_wanted` · `allow_partial` · `target_minor` · `category` · `sort_order` · timestamps. Indexed `(wedding_id, sort_order, id)` — every list read filters and orders on exactly that triple, and `id` is in the index because it is the tie-break for equal `sort_order` (without it the sort spills to a temp b-tree).
+
+Two CHECK constraints: `quantity_wanted >= 1` and `kind in ('product','cash_fund')`. The service validates both first and returns a typed error; the constraints are there for the paths the service doesn't own — a fixture, a migration, a future import.
 
 `kind = 'cash_fund'`, `allow_partial` and `target_minor` are declared but unused: they are the named-fund and group-gifting seams, so adding either is UI work rather than a migration.
 
@@ -56,6 +58,10 @@ One row per wedding, keyed by `wedding_id` (PK + FK cascade). **An absent row re
 `wedding_id` is denormalised from the item so the gift log filters without a join and a wedding delete cascades even once the item is gone. `display_name` covers "thank Auntie Ros", where the household name isn't who to write to.
 
 **Unique `(item_id, family_id)`.** One row per household per item — re-claiming updates it rather than stacking rows, which is what makes the quantity arithmetic below tractable.
+
+CHECK `quantity between 1 and 99` and `status in ('reserved','purchased','released')`. The 99 ceiling matches `MAX_CLAIM_QUANTITY` in the service: a claim is a household saying how many of a listed gift they will bring, so a four-digit quantity is a typo or an attack, never a fact.
+
+Two covering indexes carry the hot reads. `(item_id, status, family_id, quantity)` serves the claim statement's `sum(quantity)` sub-select — every column it touches is in the index, so the guard never visits the table. `(wedding_id, item_id, status, quantity)` serves the list read's per-item claimed-count rollup for a whole wedding in one index scan.
 
 ### `registry_contributions`
 
@@ -130,21 +136,38 @@ All organiser routes sit under `/api/organiser/weddings/:weddingId/registry`, ga
 
 `/registry/items/reorder` is registered **before** `/registry/items/:itemId` so the literal wins over the param. `:kind` is decoded through the same Effect Schema a body field would be — an unknown value 400s rather than falling through to a table by coincidence.
 
+### Bounded reads
+
+`GET /registry` returns the settings, every item, and a **page** of the gift log — never the whole log. A wedding with 300 guests can produce a four-figure gift log, and one unbounded read of it on every portal page load is the shape that turns a free-tier D1 read budget into an outage.
+
+- **50 gifts a page** (`GIFT_LOG_PAGE`), with `?giftsOffset=` walking it and **`giftsHasMore`** in the response telling the portal whether to draw a "load more". An unparseable, negative or absurd offset reads as 0 rather than 400ing — a junk query string is a broken link, not an attack worth a status code.
+- **The offset is capped** (`MAX_GIFT_LOG_OFFSET` = 500). Paging is offset-based, not keyset, because the log merges two tables whose timestamps are second-granular and share no id order; a cap is what keeps the cost of the deepest page bounded.
+- **Totals are computed in SQL, not from the page.** `contributionsPrimaryMinor` is a `sum()` over every `succeeded` contribution. Summing the page instead would under-report the couple's money the moment the log passed 50 entries — silently, and in the direction that looks like a missing gift.
+- **500 items a wedding** (`MAX_ITEMS_PER_WEDDING`) — `POST /registry/items` answers **409 `registry_item_limit_reached`** past it. The ceiling is per wedding, not per account.
+
 `PUT /registry/settings` refuses `cashGiftsEnabled: true` with **409 `stripe_not_ready`** unless the wedding's Connect account can actually take charges. Offering a contribute button that 503s is worse than offering none, because the guest believes they paid.
 
 ### External URLs
 
 `external_url` must be an absolute `https:` URL, checked at the boundary by parsing it — not by shape-matching. It reaches an `<a href>` on the guest site, and an unvalidated URL there is a same-origin script sink; the precedent is **CON-S-L2**, where `vendor.privacyUrl` reached an `href` with no scheme check. The guest renderer re-checks rather than trusting the column, because a row can also arrive from a migration or a fixture.
 
+The parse also **rejects embedded credentials** (`https://evil.com@retailer.example/…`, which reads as the retailer to a guest and resolves to `evil.com` to the browser) and **stores the parsed `URL.href`**, not the raw input — so what the column holds is the normalised form the browser would resolve, and two spellings of the same URL can't diverge between the check and the render.
+
+`shipping_visible_from` is a calendar date, and its schema round-trips the string through a real `Date` rather than shape-matching `\d{4}-\d{2}-\d{2}`: `2026-02-30` matches the shape and is not a day.
+
 ### Images
 
 Registry images are **always our own copy in R2**, through the existing invite-assets pipeline. Never hotlink a retailer image: an off-origin `img-src` breaks the guest site's CSP and would need a vendor entry in the [[consent]] registry.
+
+**An `imageKey` must name this wedding's own upload.** Keys are `assets/<weddingId>/<name>`, so an editor on wedding A could otherwise set an item's image to `assets/<weddingB>/hero` and read a private photo out of a wedding they have no role on — an object-reference hole, not a validation nicety. Both `POST /registry/items` and `PATCH /registry/items/:itemId` compare the key's wedding segment against the route's `:weddingId` and answer **400 `image_key_not_in_wedding`** otherwise. The schema separately pins the key's *shape* (`assets/<segment>/<segment>`, no dots, no traversal), so a malformed key 400s before the ownership check ever runs — the two guards answer different questions and both are wanted.
 
 ---
 
 ## Observability
 
 `cire.registry.item.write` (attribute: `action` = create/update/remove) and `cire.registry.gift` (attribute: `action` = thanked/unthanked). Both are attributed by action only — no `weddingId`, `itemId` or `familyId` ever reaches a metric attribute; those belong in spans and logs.
+
+Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **logged** (`registry handler defect`, annotated with `weddingId` alone) instead of being swallowed into a bare 500. `weddingId` alone is the point: a guest's note, display name or contribution message is PII and never reaches a log line, so the annotation is deliberately the one field that identifies the wedding and nothing that identifies a person.
 
 ---
 

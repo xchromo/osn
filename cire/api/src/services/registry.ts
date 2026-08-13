@@ -36,6 +36,38 @@ export class RegistryItemNotInWedding extends Data.TaggedError("RegistryItemNotI
 export class ItemFullyClaimed extends Data.TaggedError("ItemFullyClaimed") {}
 /** No claim/contribution with this id under this wedding. 404-class. */
 export class GiftNotInWedding extends Data.TaggedError("GiftNotInWedding") {}
+/** The claiming household is not on this wedding's guest list. 404-class. */
+export class FamilyNotInWedding extends Data.TaggedError("FamilyNotInWedding") {}
+/** The image key names another wedding's object. 400-class. */
+export class ImageKeyNotInWedding extends Data.TaggedError("ImageKeyNotInWedding") {}
+/** Cash gifts asked for without a Stripe account that can take charges. 409-class. */
+export class StripeNotReady extends Data.TaggedError("StripeNotReady") {}
+/** The wedding is at its item ceiling. 409-class. */
+export class RegistryItemLimitReached extends Data.TaggedError("RegistryItemLimitReached") {}
+/**
+ * A quantity outside the range the CHECK constraints allow (S-M1). The service
+ * refuses it so the caller gets a tagged error rather than a raw D1 constraint
+ * throw, which surfaces as a 500 and says nothing useful.
+ */
+export class InvalidQuantity extends Data.TaggedError("InvalidQuantity") {}
+
+/** One page of the gift log. A wedding's log is unbounded; a snapshot is not. */
+const GIFT_LOG_PAGE = 50;
+/**
+ * How deep `offset` may go. The merge reads `offset + limit` rows from BOTH
+ * tables to serve one page, so an unbounded offset is an unbounded read by
+ * another name — the thing the pagination exists to stop.
+ */
+const MAX_GIFT_LOG_OFFSET = 500;
+/**
+ * Ceiling on items per wedding (S-L4). `reorderItems` already caps its id list at
+ * 500; without a matching cap on creation the two disagree, and a list past the
+ * reorder cap becomes unorderable.
+ */
+const MAX_ITEMS_PER_WEDDING = 500;
+/** Range the `registry_claims.quantity` CHECK allows. Kept in step with the DDL. */
+const MIN_CLAIM_QUANTITY = 1;
+const MAX_CLAIM_QUANTITY = 99;
 
 export type RegistryItemKind = "product" | "cash_fund";
 export type RegistryClaimStatus = "reserved" | "purchased" | "released";
@@ -111,6 +143,8 @@ export interface RegistrySnapshot {
   settings: RegistrySettingsDto;
   items: RegistryItemDto[];
   gifts: GiftLogEntryDto[];
+  /** Whether another page of gift-log rows sits past `gifts`. */
+  giftsHasMore: boolean;
   /** The wedding's primary currency — what every authored figure is in. */
   currency: string;
   /**
@@ -287,41 +321,106 @@ function claimedByItem(weddingId: string): Effect.Effect<Map<string, number>, ne
   });
 }
 
+/**
+ * Sum of succeeded contributions in the primary currency, computed IN SQL.
+ *
+ * It used to be a JS loop over the gift log, which quietly made the total a
+ * function of how many rows the log happened to return — so paginating the log
+ * would have started under-reporting the money. One row out of the database,
+ * whatever the page size.
+ *
+ * A same-currency row has no primary snapshot (the FX columns are NULL) and so
+ * contributes its as-given amount; that is the `coalesce` pair.
+ */
+function contributionsPrimaryTotal(weddingId: string): Effect.Effect<number, never, DbService> {
+  return Effect.gen(function* () {
+    const db = yield* DbService;
+    const [row] = yield* dbQuery(() =>
+      db
+        .select({
+          total: sql<number>`coalesce(sum(coalesce(${registryContributions.primaryAmountMinor}, ${registryContributions.amountMinor})), 0)`,
+        })
+        .from(registryContributions)
+        .where(
+          and(
+            eq(registryContributions.weddingId, weddingId),
+            eq(registryContributions.status, "succeeded"),
+          ),
+        )
+        .all(),
+    );
+    return Number((row as { total: number } | undefined)?.total ?? 0) || 0;
+  });
+}
+
+/**
+ * Does this R2 key name an object under this wedding? (S-H1)
+ *
+ * `ImageKey` in the HTTP schema pins the SHAPE — `assets/<segment>/<segment>` —
+ * but shape alone lets an editor of wedding A point an item at wedding B's
+ * upload, which the guest site would then serve. The middle segment IS the
+ * wedding id, so ownership is a string compare, not a query.
+ */
+function imageKeyBelongsTo(weddingId: string, key: string): boolean {
+  const parts = key.split("/");
+  return parts.length === 3 && parts[0] === "assets" && parts[1] === weddingId;
+}
+
+/** Integer in `[min, max]`? The guard behind the quantity CHECK constraints. */
+const inQuantityRange = (n: number, min: number, max: number): boolean =>
+  Number.isInteger(n) && n >= min && n <= max;
+
+/** Clamp a caller-supplied paging number into a range. NaN reads as the floor. */
+const clamp = (n: number, min: number, max: number): number =>
+  Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : min;
+
 export const registryService = {
   /** The organiser-facing snapshot: settings, items with claim counts, gift log. */
-  get(weddingId: string): Effect.Effect<RegistrySnapshot, never, DbService> {
+  get(
+    weddingId: string,
+    options?: { giftsOffset?: number },
+  ): Effect.Effect<RegistrySnapshot, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      const [settingsRow] = yield* dbQuery(() =>
-        db.select().from(registrySettings).where(eq(registrySettings.weddingId, weddingId)).all(),
-      );
-      const itemRows = yield* dbQuery(() =>
-        db
-          .select()
-          .from(registryItems)
-          .where(eq(registryItems.weddingId, weddingId))
-          .orderBy(asc(registryItems.sortOrder), asc(registryItems.id))
-          .all(),
-      );
-      const claimed = yield* claimedByItem(weddingId);
-      const gifts = yield* registryService.giftLog(weddingId);
-      const currency = yield* primaryCurrency(weddingId);
-
-      // Sum in the primary currency only — a column of mixed currencies cannot be
-      // added up in any other one. A same-currency row has no primary snapshot
-      // (the four FX columns are NULL), so it contributes its as-given amount.
-      let contributionsPrimaryMinor = 0;
-      for (const g of gifts) {
-        if (g.kind !== "contribution" || g.status !== "succeeded") continue;
-        contributionsPrimaryMinor += g.primaryAmountMinor ?? g.amountMinor ?? 0;
-      }
+      // Five independent reads (P-W1). Each is a separate D1 round trip and none
+      // depends on another's result, so issuing them together overlaps the
+      // latency instead of stacking it — the same shape claimService.get uses.
+      // On bun:sqlite the concurrency is a no-op; on D1 it is most of the
+      // endpoint's wall clock.
+      const { claimed, contributionsPrimaryMinor, currency, gifts, itemRows, settingsRows } =
+        yield* Effect.all(
+          {
+            settingsRows: dbQuery(() =>
+              db
+                .select()
+                .from(registrySettings)
+                .where(eq(registrySettings.weddingId, weddingId))
+                .all(),
+            ),
+            itemRows: dbQuery(() =>
+              db
+                .select()
+                .from(registryItems)
+                .where(eq(registryItems.weddingId, weddingId))
+                .orderBy(asc(registryItems.sortOrder), asc(registryItems.id))
+                .all(),
+            ),
+            claimed: claimedByItem(weddingId),
+            gifts: registryService.giftLog(weddingId, { offset: options?.giftsOffset }),
+            currency: primaryCurrency(weddingId),
+            contributionsPrimaryMinor: contributionsPrimaryTotal(weddingId),
+          },
+          { concurrency: "unbounded" },
+        );
+      const [settingsRow] = settingsRows;
 
       return {
         settings: settingsRow
           ? toSettingsDto(settingsRow as SettingsRow)
           : defaultSettings(weddingId),
         items: (itemRows as ItemRow[]).map((r) => toItemDto(r, claimed.get(r.id) ?? 0)),
-        gifts,
+        gifts: gifts.entries,
+        giftsHasMore: gifts.hasMore,
         currency,
         contributionsPrimaryMinor,
       };
@@ -331,12 +430,33 @@ export const registryService = {
   /**
    * Claims and contributions, merged and newest-first — the view the couple works
    * from after the day. Two queries rather than a SQL UNION: the tables carry
-   * different columns, and the merge is a sort over at most a wedding's worth of
-   * gifts.
+   * different columns, and the merge is a sort over one page's worth of rows.
+   *
+   * PAGINATED (P-C1). A wedding's gift log is unbounded — every household may
+   * claim every item and contribute on top — so an unpaged read is an unbounded
+   * response and an unbounded D1 result set.
+   *
+   * OFFSET, not keyset, deliberately. `created_at` is epoch SECONDS, so several
+   * gifts sharing a timestamp is ordinary rather than exotic (a couple opening
+   * the registry to a mailing list produces exactly that). A keyset cursor of
+   * `created_at < :last` silently DROPS every row tied with the page boundary,
+   * and the usual fix — an id tie-break — has nothing to break on here, because
+   * the two id spaces come from different tables and have no shared order. The
+   * offset ceiling (`MAX_GIFT_LOG_OFFSET`) is what keeps the read bounded.
+   *
+   * Each side reads `offset + limit + 1` rows: enough that the merge can serve
+   * the requested window whichever table the newest rows came from, plus one to
+   * decide `hasMore` without a count.
    */
-  giftLog(weddingId: string): Effect.Effect<GiftLogEntryDto[], never, DbService> {
+  giftLog(
+    weddingId: string,
+    options?: { limit?: number; offset?: number },
+  ): Effect.Effect<{ entries: GiftLogEntryDto[]; hasMore: boolean }, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
+      const limit = clamp(options?.limit ?? GIFT_LOG_PAGE, 1, GIFT_LOG_PAGE);
+      const offset = clamp(options?.offset ?? 0, 0, MAX_GIFT_LOG_OFFSET);
+      const readAhead = offset + limit + 1;
       const claimRows = yield* dbQuery(() =>
         db
           .select({
@@ -357,6 +477,7 @@ export const registryService = {
           .innerJoin(families, eq(registryClaims.familyId, families.id))
           .where(eq(registryClaims.weddingId, weddingId))
           .orderBy(desc(registryClaims.createdAt))
+          .limit(readAhead)
           .all(),
       );
       const contributionRows = yield* dbQuery(() =>
@@ -385,6 +506,7 @@ export const registryService = {
           .innerJoin(families, eq(registryContributions.familyId, families.id))
           .where(eq(registryContributions.weddingId, weddingId))
           .orderBy(desc(registryContributions.createdAt))
+          .limit(readAhead)
           .all(),
       );
 
@@ -460,18 +582,51 @@ export const registryService = {
         createdAt: r.createdAt.getTime(),
       }));
 
-      return [...claims, ...contributions].toSorted((a, b) => b.createdAt - a.createdAt);
+      // `merged` is built here and returned to nobody else, so sorting it in
+      // place is not the shared-array aliasing hazard oxlint's `no-array-sort`
+      // guards against — and `toSorted` is ES2023, past this package's ES2022 lib.
+      const merged: GiftLogEntryDto[] = [...claims, ...contributions];
+      merged.sort((a, b) => b.createdAt - a.createdAt);
+
+      return {
+        entries: merged.slice(offset, offset + limit),
+        hasMore: merged.length > offset + limit,
+      };
     }).pipe(Effect.withSpan("cire.registry.giftLog"));
   },
 
-  /** Upsert the settings row. Creates it on first write (absent row = defaults). */
+  /**
+   * Upsert the settings row. Creates it on first write (absent row = defaults).
+   *
+   * Owns the cash-gifts invariant (S-M3): the switch that shows guests a
+   * contribute button cannot be turned on unless Stripe can actually take a
+   * charge. Enforcing it here rather than in the route means every caller gets
+   * it — a guest paying into an account that cannot receive money is a refund
+   * and a support case, not a validation nit.
+   */
   updateSettings(
     weddingId: string,
     patch: UpdateRegistrySettingsPatch,
-  ): Effect.Effect<RegistrySettingsDto, never, DbService> {
+  ): Effect.Effect<RegistrySettingsDto, StripeNotReady, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const now = new Date();
+
+      if (patch.cashGiftsEnabled === true) {
+        // One PK-indexed read, and only on the write that asks for it. An absent
+        // row means the registry was never opened, so certainly no Stripe.
+        const [existing] = yield* dbQuery(() =>
+          db
+            .select({ chargesEnabled: registrySettings.stripeChargesEnabled })
+            .from(registrySettings)
+            .where(eq(registrySettings.weddingId, weddingId))
+            .all(),
+        );
+        if (!(existing as { chargesEnabled: boolean } | undefined)?.chargesEnabled) {
+          return yield* Effect.fail(new StripeNotReady());
+        }
+      }
+
       const set: Record<string, unknown> = { updatedAt: now };
       if (patch.published !== undefined) set.published = patch.published;
       if (patch.headline !== undefined) set.headline = patch.headline;
@@ -504,21 +659,42 @@ export const registryService = {
     }).pipe(Effect.withSpan("cire.registry.updateSettings"));
   },
 
-  createItem(input: CreateRegistryItemInput): Effect.Effect<RegistryItemDto, never, DbService> {
+  createItem(
+    input: CreateRegistryItemInput,
+  ): Effect.Effect<
+    RegistryItemDto,
+    ImageKeyNotInWedding | InvalidQuantity | RegistryItemLimitReached,
+    DbService
+  > {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      // Append to the end of the wedding's list: next sort_order = max + 1.
-      const existing = yield* dbQuery(() =>
+      if (input.imageKey && !imageKeyBelongsTo(input.weddingId, input.imageKey)) {
+        return yield* Effect.fail(new ImageKeyNotInWedding());
+      }
+      if (!inQuantityRange(input.quantityWanted, 1, Number.MAX_SAFE_INTEGER)) {
+        return yield* Effect.fail(new InvalidQuantity());
+      }
+      // One aggregate, not a full column scan (P-W3), and it answers both
+      // questions the insert has: is the wedding at its ceiling, and what is the
+      // next sort_order. Reading every row's sort_order to take a max was the
+      // whole list on every create (S-L4 added the ceiling that made it worse).
+      const [agg] = yield* dbQuery(() =>
         db
-          .select({ sortOrder: registryItems.sortOrder })
+          .select({
+            count: sql<number>`count(*)`,
+            maxSort: sql<number>`coalesce(max(${registryItems.sortOrder}), -1)`,
+          })
           .from(registryItems)
           .where(eq(registryItems.weddingId, input.weddingId))
           .all(),
       );
-      const maxSort = (existing as { sortOrder: number }[]).reduce(
-        (m, r) => Math.max(m, r.sortOrder),
-        -1,
-      );
+      const { count, maxSort } = (agg as { count: number; maxSort: number } | undefined) ?? {
+        count: 0,
+        maxSort: -1,
+      };
+      if (Number(count) >= MAX_ITEMS_PER_WEDDING) {
+        return yield* Effect.fail(new RegistryItemLimitReached());
+      }
       const now = new Date();
       const row: ItemRow = {
         id: `reg_${crypto.randomUUID()}`,
@@ -534,7 +710,7 @@ export const registryService = {
         allowPartial: false,
         targetMinor: null,
         category: input.category,
-        sortOrder: maxSort + 1,
+        sortOrder: Number(maxSort) + 1,
         createdAt: now,
         updatedAt: now,
       };
@@ -547,10 +723,23 @@ export const registryService = {
     weddingId: string;
     itemId: string;
     patch: UpdateRegistryItemPatch;
-  }): Effect.Effect<RegistryItemDto, RegistryItemNotInWedding, DbService> {
+  }): Effect.Effect<
+    RegistryItemDto,
+    ImageKeyNotInWedding | InvalidQuantity | RegistryItemNotInWedding,
+    DbService
+  > {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const { weddingId, itemId, patch } = input;
+
+      if (patch.imageKey && !imageKeyBelongsTo(weddingId, patch.imageKey)) {
+        return yield* Effect.fail(new ImageKeyNotInWedding());
+      }
+      if (patch.quantityWanted !== undefined) {
+        if (!inQuantityRange(patch.quantityWanted, 1, Number.MAX_SAFE_INTEGER)) {
+          return yield* Effect.fail(new InvalidQuantity());
+        }
+      }
 
       const set: Record<string, unknown> = { updatedAt: new Date() };
       if (patch.title !== undefined) set.title = patch.title;
@@ -573,8 +762,24 @@ export const registryService = {
           .all(),
       );
       if (!updated) return yield* Effect.fail(new RegistryItemNotInWedding());
-      const claimed = yield* claimedByItem(weddingId);
-      return toItemDto(updated as ItemRow, claimed.get(itemId) ?? 0);
+      // The claimed sum for the ONE item that changed (P-W4). The wedding-wide
+      // GROUP BY this used to call built a map of every item's claims to read a
+      // single key out of it.
+      const [claimedRow] = yield* dbQuery(() =>
+        db
+          .select({ claimed: sql<number>`coalesce(sum(${registryClaims.quantity}), 0)` })
+          .from(registryClaims)
+          .where(
+            and(
+              eq(registryClaims.weddingId, weddingId),
+              eq(registryClaims.itemId, itemId),
+              sql`${registryClaims.status} <> 'released'`,
+            ),
+          )
+          .all(),
+      );
+      const claimed = Number((claimedRow as { claimed: number } | undefined)?.claimed ?? 0) || 0;
+      return toItemDto(updated as ItemRow, claimed);
     }).pipe(Effect.withSpan("cire.registry.updateItem"));
   },
 
@@ -637,6 +842,12 @@ export const registryService = {
    * household raising its own quantity is measured against everyone else's
    * claims — which is what makes the same statement serve both the first claim
    * and a later change, via the ON CONFLICT arm.
+   *
+   * The same WHERE also proves the household belongs to this wedding (S-H2). A
+   * guest session names a `family_id`; without the EXISTS, a leaked id from
+   * another wedding would write a claim row carrying THIS wedding's `wedding_id`
+   * and a foreign family's — a cross-tenant row that then shows up in the
+   * couple's gift log under a household they have never heard of.
    */
   claim(input: {
     weddingId: string;
@@ -646,10 +857,17 @@ export const registryService = {
     status: Exclude<RegistryClaimStatus, "released">;
     note: string | null;
     displayName: string | null;
-  }): Effect.Effect<void, RegistryItemNotInWedding | ItemFullyClaimed, DbService> {
+  }): Effect.Effect<
+    void,
+    FamilyNotInWedding | InvalidQuantity | ItemFullyClaimed | RegistryItemNotInWedding,
+    DbService
+  > {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const { weddingId, itemId, familyId, quantity, status, note, displayName } = input;
+      if (!inQuantityRange(quantity, MIN_CLAIM_QUANTITY, MAX_CLAIM_QUANTITY)) {
+        return yield* Effect.fail(new InvalidQuantity());
+      }
       const id = `rcl_${crypto.randomUUID()}`;
       // `integer({ mode: "timestamp" })` is epoch SECONDS in drizzle-sqlite. This
       // statement writes those columns directly rather than through a Date-valued
@@ -667,6 +885,10 @@ export const registryService = {
           FROM ${registryItems} ri
           WHERE ri.id = ${itemId}
             AND ri.wedding_id = ${weddingId}
+            AND EXISTS (
+                  SELECT 1 FROM ${families} f
+                  WHERE f.id = ${familyId} AND f.wedding_id = ${weddingId}
+                )
             AND ${quantity} + coalesce((
                   SELECT sum(rc.quantity) FROM ${registryClaims} rc
                   WHERE rc.item_id = ri.id
@@ -688,16 +910,30 @@ export const registryService = {
       // refused re-claim would read as a success.
       if ((written as unknown[]).length > 0) return;
 
-      // Nothing written means one of two things; only the failure path pays for
-      // telling them apart.
-      const [item] = yield* dbQuery(() =>
-        db
-          .select({ id: registryItems.id })
-          .from(registryItems)
-          .where(and(eq(registryItems.id, itemId), eq(registryItems.weddingId, weddingId)))
-          .all(),
+      // Nothing written means one of three things; only the failure path pays
+      // for telling them apart.
+      const { familyRows, itemRows } = yield* Effect.all(
+        {
+          itemRows: dbQuery(() =>
+            db
+              .select({ id: registryItems.id })
+              .from(registryItems)
+              .where(and(eq(registryItems.id, itemId), eq(registryItems.weddingId, weddingId)))
+              .all(),
+          ),
+          familyRows: dbQuery(() =>
+            db
+              .select({ id: families.id })
+              .from(families)
+              .where(and(eq(families.id, familyId), eq(families.weddingId, weddingId)))
+              .all(),
+          ),
+        },
+        { concurrency: "unbounded" },
       );
-      return yield* Effect.fail(item ? new ItemFullyClaimed() : new RegistryItemNotInWedding());
+      if (!itemRows[0]) return yield* Effect.fail(new RegistryItemNotInWedding());
+      if (!familyRows[0]) return yield* Effect.fail(new FamilyNotInWedding());
+      return yield* Effect.fail(new ItemFullyClaimed());
     }).pipe(Effect.withSpan("cire.registry.claim"));
   },
 
@@ -709,6 +945,10 @@ export const registryService = {
   }): Effect.Effect<void, RegistryItemNotInWedding, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
+      // No family/wedding cross-check needed here (unlike `claim`): the WHERE
+      // matches an EXISTING claim row, which `claim` already refused to write
+      // unless the household belonged to the wedding. A foreign family id simply
+      // matches nothing.
       const [released] = yield* dbQuery(() =>
         db
           .update(registryClaims)
@@ -771,24 +1011,31 @@ export const registryService = {
   hasRows(weddingId: string): Effect.Effect<boolean, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      const [item] = yield* dbQuery(() =>
-        db
-          .select({ id: registryItems.id })
-          .from(registryItems)
-          .where(eq(registryItems.weddingId, weddingId))
-          .limit(1)
-          .all(),
+      // Both probes always (P-I5): the short-circuit saved a round trip only for
+      // weddings that HAVE items, and cost a serial second one for every wedding
+      // that does not — which is every wedding, since the feature ships locked.
+      const [itemRows, contributionRows] = yield* Effect.all(
+        [
+          dbQuery(() =>
+            db
+              .select({ id: registryItems.id })
+              .from(registryItems)
+              .where(eq(registryItems.weddingId, weddingId))
+              .limit(1)
+              .all(),
+          ),
+          dbQuery(() =>
+            db
+              .select({ id: registryContributions.id })
+              .from(registryContributions)
+              .where(eq(registryContributions.weddingId, weddingId))
+              .limit(1)
+              .all(),
+          ),
+        ],
+        { concurrency: "unbounded" },
       );
-      if (item) return true;
-      const [contribution] = yield* dbQuery(() =>
-        db
-          .select({ id: registryContributions.id })
-          .from(registryContributions)
-          .where(eq(registryContributions.weddingId, weddingId))
-          .limit(1)
-          .all(),
-      );
-      return Boolean(contribution);
+      return itemRows.length > 0 || contributionRows.length > 0;
     }).pipe(Effect.withSpan("cire.registry.hasRows"));
   },
 };

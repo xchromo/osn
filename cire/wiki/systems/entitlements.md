@@ -5,7 +5,7 @@ related:
   - "[[vendors]]"
   - "[[registry]]"
   - "[[cire-auth]]"
-last-reviewed: 2026-08-13
+last-reviewed: 2026-08-14
 ---
 
 # Entitlements — per-wedding capability gates
@@ -102,6 +102,8 @@ The entitlement gate sits **after** the role gate. The role gate already returns
 HTTP status `402`. The organiser portal reads the `entitlement` field to display the relevant upsell UI panel.
 
 A missing `weddingId` in `params` (should not occur after the role gate validates it) degrades to a `402` rather than throwing.
+
+**It does no D1 read when the role gate has already refused.** Both role gates park their refusal on the context as `weddingGateError`; the entitlement `derive` returns immediately when it finds one. Elysia runs every `derive` before any `onBeforeHandle`, so without that check a stranger's request still paid for an entitlement query whose answer could never change the response — a free, unauthenticated read on every request to every gated route. Skipping it leaves the status ordering untouched (401, then 403 `read_only_role`, then 402 `payment_required`), which route tests pin.
 
 ---
 

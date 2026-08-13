@@ -16,7 +16,28 @@ const MAX_QUANTITY = 99;
 const MAX_MINOR = 9_000_000_000_000;
 
 /**
- * An absolute `https:` URL.
+ * Parse an absolute `https:` URL, or `null` if the string is not one.
+ *
+ * Embedded credentials are rejected outright (S-M5). `https://host.example@evil.example/`
+ * is a valid URL whose authority is `evil.example`, and every UI that shows an
+ * item's link shows a truncated form of it — so the one part a guest reads is
+ * exactly the part the syntax lets an attacker choose. Nothing legitimate puts a
+ * userinfo section in a gift-registry link.
+ */
+function parseHttpsUrl(value: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  return parsed;
+}
+
+/**
+ * An absolute `https:` URL, stored in its parsed form.
  *
  * Scheme-checked, not merely shape-checked. `external_url` is rendered into an
  * `<a href>` on the guest site, and an unvalidated URL there is a same-origin
@@ -24,21 +45,23 @@ const MAX_MINOR = 9_000_000_000_000;
  * with no scheme check and a `javascript:` value added later would have executed.
  * The guest renderer re-checks rather than trusting this, because a row can also
  * arrive from a migration or a fixture.
+ *
+ * The transform stores `URL.href` rather than the raw input (S-M5), so what the
+ * column holds is what the parser saw — one normal form per link, and no gap
+ * between the string that passed validation and the string that gets rendered.
  */
 export const HttpsUrl = Schema.String.pipe(
   Schema.maxLength(MAX_URL_CHARS),
-  Schema.filter(
-    (value) => {
-      let parsed: URL;
-      try {
-        parsed = new URL(value);
-      } catch {
-        return false;
-      }
-      return parsed.protocol === "https:";
-    },
-    { message: () => "must be an absolute https:// URL" },
-  ),
+  Schema.filter((value) => parseHttpsUrl(value) !== null, {
+    message: () => "must be an absolute https:// URL without embedded credentials",
+  }),
+  Schema.transform(Schema.String, {
+    strict: true,
+    // The filter above already rejected anything unparseable, so the fallback is
+    // unreachable — it exists only to keep this total.
+    decode: (value) => parseHttpsUrl(value)?.href ?? value,
+    encode: (value) => value,
+  }),
 );
 
 const Title = Schema.String.pipe(Schema.minLength(1), Schema.maxLength(MAX_TITLE_CHARS));
@@ -49,10 +72,43 @@ const Note = Schema.String.pipe(Schema.maxLength(MAX_NOTE_CHARS));
 const DisplayName = Schema.String.pipe(Schema.maxLength(MAX_DISPLAY_NAME_CHARS));
 const Category = Schema.String.pipe(Schema.maxLength(MAX_CATEGORY_CHARS));
 const ShippingAddress = Schema.String.pipe(Schema.maxLength(MAX_ADDRESS_CHARS));
-/** A loose ISO date string (YYYY-MM-DD from a date input). Stored as text. */
-const IsoDate = Schema.String.pipe(Schema.maxLength(32));
-/** R2 object key for an image already uploaded through the assets pipeline. */
-const ImageKey = Schema.String.pipe(Schema.maxLength(512));
+/**
+ * A calendar date (`YYYY-MM-DD` from a date input), stored as text.
+ *
+ * Checked as a real date, not merely a bounded string (S-M2). This column gates
+ * when the couple's HOME ADDRESS becomes visible to guests, and the comparison
+ * that reads it treats an unparseable value as "no embargo" — so a garbage date
+ * publishes the address immediately. Mirrors `CalendarDate` in `schemas/settings.ts`:
+ * the pattern admits impossible days (2026-02-31), so the filter round-trips
+ * through `Date` and requires the same calendar day back.
+ */
+const IsoDate = Schema.String.pipe(
+  Schema.pattern(/^\d{4}-\d{2}-\d{2}$/),
+  Schema.filter(
+    (s) => {
+      const t = Date.parse(`${s}T00:00:00Z`);
+      return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
+    },
+    { message: () => "not a real calendar date" },
+  ),
+);
+
+/**
+ * R2 object key for an image already uploaded through the assets pipeline.
+ *
+ * Shape-checked here and OWNERSHIP-checked in the service (S-H1). Every other
+ * cire image key is minted server-side — `services/invite-assets.ts` builds
+ * `assets/<weddingId>/<slot>-<uuid>` and the client never names one — so this is
+ * the first key a client gets to choose. A free-form string would let an editor
+ * of wedding A point an item at wedding B's object, which the serve path would
+ * then honour. The pattern pins the namespace and a safe charset (no `..`, no
+ * slashes past the two segments); `registryService` additionally requires the
+ * middle segment to be the caller's own `weddingId`.
+ */
+const ImageKey = Schema.String.pipe(
+  Schema.maxLength(512),
+  Schema.pattern(/^assets\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,256}$/),
+);
 
 const Minor = Schema.Number.pipe(
   Schema.int(),

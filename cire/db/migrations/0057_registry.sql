@@ -39,9 +39,11 @@ CREATE TABLE `registry_items` (
   `category` text,
   `sort_order` integer DEFAULT 0 NOT NULL,
   `created_at` integer NOT NULL,
-  `updated_at` integer NOT NULL
+  `updated_at` integer NOT NULL,
+  CONSTRAINT `registry_items_quantity_wanted_ck` CHECK (quantity_wanted >= 1),
+  CONSTRAINT `registry_items_kind_ck` CHECK (kind in ('product','cash_fund'))
 );--> statement-breakpoint
-CREATE INDEX `registry_items_wedding_sort_idx` ON `registry_items` (`wedding_id`,`sort_order`);--> statement-breakpoint
+CREATE INDEX `registry_items_wedding_sort_idx` ON `registry_items` (`wedding_id`,`sort_order`,`id`);--> statement-breakpoint
 CREATE TABLE `registry_claims` (
   `id` text PRIMARY KEY NOT NULL,
   `wedding_id` text NOT NULL REFERENCES `weddings`(`id`) ON DELETE CASCADE,
@@ -54,13 +56,16 @@ CREATE TABLE `registry_claims` (
   `thanked_at` integer,
   `thanked_by` text,
   `created_at` integer NOT NULL,
-  `updated_at` integer NOT NULL
+  `updated_at` integer NOT NULL,
+  CONSTRAINT `registry_claims_quantity_ck` CHECK (quantity >= 1 and quantity <= 99),
+  CONSTRAINT `registry_claims_status_ck` CHECK (status in ('reserved','purchased','released'))
 );--> statement-breakpoint
 -- One claim row per (item, household): re-claiming UPDATES rather than stacking
 -- rows, which is what keeps the remaining-quantity arithmetic tractable.
 CREATE UNIQUE INDEX `registry_claims_item_family_uniq` ON `registry_claims` (`item_id`,`family_id`);--> statement-breakpoint
 CREATE INDEX `registry_claims_wedding_created_idx` ON `registry_claims` (`wedding_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `registry_claims_item_status_idx` ON `registry_claims` (`item_id`,`status`);--> statement-breakpoint
+CREATE INDEX `registry_claims_item_status_idx` ON `registry_claims` (`item_id`,`status`,`family_id`,`quantity`);--> statement-breakpoint
+CREATE INDEX `registry_claims_wedding_item_status_idx` ON `registry_claims` (`wedding_id`,`item_id`,`status`,`quantity`);--> statement-breakpoint
 CREATE TABLE `registry_contributions` (
   `id` text PRIMARY KEY NOT NULL,
   `wedding_id` text NOT NULL REFERENCES `weddings`(`id`) ON DELETE CASCADE,
