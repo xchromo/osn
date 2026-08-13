@@ -404,6 +404,12 @@ describe("ModuleShell", () => {
     });
   });
 
+  /**
+   * `RegistryView` is `lazy()`, so a mounted registry panel arrives a microtask
+   * after the render — every positive assertion here has to await it. The
+   * NEGATIVE ones do not, and deliberately are not awaited: the point of the
+   * locked case is that the chunk is never asked for at all.
+   */
   describe("entitlement gating — registry module", () => {
     it("renders UpsellPanel when the registry entitlement is absent", () => {
       // No wedding holds this entitlement yet, so the locked state is the NORMAL
@@ -415,15 +421,15 @@ describe("ModuleShell", () => {
       expect(screen.queryByTestId("registry")).toBeNull();
     });
 
-    it("renders the gift list when the registry entitlement is present", () => {
+    it("renders the gift list when the registry entitlement is present", async () => {
       renderShell({ module: "registry", sub: "list", entitlements: ["registry"] });
       expect(screen.queryByTestId("upsell-panel")).toBeNull();
-      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("list");
+      expect((await screen.findByTestId("registry")).getAttribute("data-view")).toBe("list");
     });
 
-    it("renders the gift log on the gifts sub", () => {
+    it("renders the gift log on the gifts sub", async () => {
       renderShell({ module: "registry", sub: "gifts", entitlements: ["registry"] });
-      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
+      expect((await screen.findByTestId("registry")).getAttribute("data-view")).toBe("gifts");
     });
 
     it("stays locked on another module's entitlement", () => {
@@ -433,7 +439,7 @@ describe("ModuleShell", () => {
       expect(screen.queryByTestId("registry")).toBeNull();
     });
 
-    it("gives a viewer the module read-only rather than hiding it", () => {
+    it("gives a viewer the module read-only rather than hiding it", async () => {
       // Every module has a read view; the write controls are gated INSIDE
       // RegistryView by canEdit, not by hiding the module from the rail.
       renderShell({
@@ -444,10 +450,10 @@ describe("ModuleShell", () => {
         entitlements: ["registry"],
       });
       expect(within(rail()).getByRole("button", { name: /Registry/ })).toBeTruthy();
-      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
+      expect((await screen.findByTestId("registry")).getAttribute("data-view")).toBe("gifts");
     });
 
-    it("offers both sub-tabs and reports a switch up", () => {
+    it("offers both sub-tabs and reports a switch up", async () => {
       const { onSub } = renderShell({
         module: "registry",
         sub: "list",
@@ -456,7 +462,7 @@ describe("ModuleShell", () => {
       expect(screen.getByRole("tab", { name: /Gift list/ })).toBeTruthy();
       fireEvent.click(screen.getByRole("tab", { name: /Gifts received/ }));
       expect(onSub).toHaveBeenCalledWith("gifts");
-      expect(screen.getByTestId("registry").getAttribute("data-view")).toBe("gifts");
+      expect((await screen.findByTestId("registry")).getAttribute("data-view")).toBe("gifts");
     });
   });
 

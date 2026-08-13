@@ -2,7 +2,6 @@ import { useAuth } from "@shared/rp-auth/solid";
 import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
-import { isHttpUrl } from "../lib/guest-validation";
 import { haptic } from "../lib/haptics";
 import { formatMinor, formatMinorPair, minorToInput, parseMinor } from "../lib/money";
 import {
@@ -36,6 +35,24 @@ const MIN_QUANTITY = 1;
 const MAX_QUANTITY = 99;
 
 /**
+ * Is this a link this view will put in an `href`?
+ *
+ * `https:` only, matching the API schema that accepts the field and the message
+ * the form shows on a 400 — the shared `isHttpUrl` also passes `http:` and
+ * treats blank as valid, which is right for the guest-detail forms it was
+ * written for and wrong at a render site (S-L2). A stored row can predate the
+ * schema or come from a fixture, so the check belongs here as well as at write
+ * time (precedent CON-S-L2).
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The gift registry — the couple's list, and the log of gifts against it.
  *
  * Guest-authored text (`note`, `displayName`, and the household's `familyName`)
@@ -65,13 +82,20 @@ export default function RegistryView(props: RegistryViewProps) {
   const [editCategory, setEditCategory] = createSignal("");
   const [editUrl, setEditUrl] = createSignal("");
 
+  // Ids are percent-encoded at every interpolation, the way `enquiries-api.ts`
+  // does it. Today's ids are nanoid-shaped and can't carry a `/` or `?`, so this
+  // changes no request that is actually made — it stops the day an id format
+  // changes from turning a path segment into a new path or a query string
+  // (S-L1).
+  const wedding = () => encodeURIComponent(props.weddingId);
   const registryUrl = (giftsOffset?: number) =>
     apiUrl(
-      `/api/organiser/weddings/${props.weddingId}/registry${
+      `/api/organiser/weddings/${wedding()}/registry${
         giftsOffset ? `?giftsOffset=${giftsOffset}` : ""
       }`,
     );
-  const itemsUrl = () => apiUrl(`/api/organiser/weddings/${props.weddingId}/registry/items`);
+  const itemsUrl = () => apiUrl(`/api/organiser/weddings/${wedding()}/registry/items`);
+  const itemUrl = (itemId: string) => `${itemsUrl()}/${encodeURIComponent(itemId)}`;
 
   const load = async (): Promise<RegistrySnapshot> => {
     const res = await authFetch(registryUrl());
@@ -114,6 +138,12 @@ export default function RegistryView(props: RegistryViewProps) {
   const items = createMemo(() =>
     (snapshot()?.items ?? []).toSorted((a, b) => a.sortOrder - b.sortOrder),
   );
+
+  // The gift log, already ordered by the server. A memo rather than two
+  // `snapshot()?.gifts ?? []` reads, so the empty-state `<Show>` and the `<For>`
+  // resolve one array and `<For>` keeps its identity when the snapshot object is
+  // replaced by an unrelated write (REG-P-I2).
+  const gifts = createMemo(() => snapshot()?.gifts ?? []);
 
   // ── Add item ──────────────────────────────────────────────────────────────
   const addItem = async (e: Event) => {
@@ -220,7 +250,7 @@ export default function RegistryView(props: RegistryViewProps) {
     };
     closeEdit();
     try {
-      const res = await authFetch(`${itemsUrl()}/${item.id}`, {
+      const res = await authFetch(itemUrl(item.id), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -251,7 +281,7 @@ export default function RegistryView(props: RegistryViewProps) {
     patchSnap((s) => ({ ...s, items: s.items.filter((x) => x.id !== item.id) }));
     haptic("commit");
     try {
-      const res = await authFetch(`${itemsUrl()}/${item.id}`, { method: "DELETE" });
+      const res = await authFetch(itemUrl(item.id), { method: "DELETE" });
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) throw new Error(`delete ${res.status}`);
     } catch {
@@ -276,9 +306,17 @@ export default function RegistryView(props: RegistryViewProps) {
     reordered.splice(target, 0, moved!);
     const orderedIds = reordered.map((it) => it.id);
     const bySort = new Map(orderedIds.map((id, i) => [id, i]));
+    // Rewrite ONLY the rows whose position actually changed, and hand every
+    // other row back by reference. `<For>` reconciles by item identity, so a
+    // blanket `{ ...it }` would tear down and rebuild all up-to-500 rows on
+    // every arrow press — losing the inputs and the caret of an inline editor
+    // left open below the moved row (REG-P-W1). `items()` re-sorts regardless.
     patchSnap((s) => ({
       ...s,
-      items: s.items.map((it) => ({ ...it, sortOrder: bySort.get(it.id) ?? it.sortOrder })),
+      items: s.items.map((it) => {
+        const next = bySort.get(it.id) ?? it.sortOrder;
+        return next === it.sortOrder ? it : { ...it, sortOrder: next };
+      }),
     }));
     haptic("commit");
     try {
@@ -325,7 +363,9 @@ export default function RegistryView(props: RegistryViewProps) {
     try {
       const res = await authFetch(
         apiUrl(
-          `/api/organiser/weddings/${props.weddingId}/registry/gifts/${gift.kind}/${gift.id}/thanked`,
+          `/api/organiser/weddings/${wedding()}/registry/gifts/${encodeURIComponent(
+            gift.kind,
+          )}/${encodeURIComponent(gift.id)}/thanked`,
         ),
         {
           method: "POST",
@@ -472,12 +512,17 @@ export default function RegistryView(props: RegistryViewProps) {
                         `href` with no check). The API schema already refuses
                         anything but `https:`, but a row can also arrive from a
                         migration or a fixture, and a `javascript:` href here
-                        runs in the organiser's own origin. */}
-                    <Show when={item.externalUrl && isHttpUrl(item.externalUrl)}>
+                        runs in the organiser's own origin.
+
+                        The `aria-label` names the item, because a screen-reader
+                        user listing the page's links otherwise hears "Link,
+                        link, link" with nothing to tell them apart (C-L2). */}
+                    <Show when={item.externalUrl && isHttpsUrl(item.externalUrl)}>
                       <a
                         href={item.externalUrl!}
                         target="_blank"
                         rel="noopener noreferrer"
+                        aria-label={`Open the shop page for ${item.title}`}
                         class="text-gold-dim hover:text-gold text-[0.78rem] underline-offset-2 hover:underline"
                       >
                         Link
@@ -647,62 +692,66 @@ export default function RegistryView(props: RegistryViewProps) {
         </Show>
 
         <Show
-          when={(snapshot()?.gifts ?? []).length > 0}
+          when={gifts().length > 0}
           fallback={<p class="text-text-muted text-[0.85rem] italic">No gifts yet.</p>}
         >
           <ul class="flex flex-col gap-1">
-            <For each={snapshot()?.gifts ?? []}>
-              {(gift) => (
-                <li class="border-border bg-surface/10 flex flex-col gap-1 rounded-sm border px-3 py-2">
-                  <div class="flex flex-wrap items-center gap-3">
-                    {/* Guest-authored — a text node, never markup (S-L3). */}
-                    <span class="text-text min-w-[10rem] flex-1 text-[0.9rem] font-medium">
-                      {giftFrom(gift)}
-                    </span>
-                    <span class="text-text-muted text-[0.82rem]">
-                      {gift.itemTitle ?? "Cash gift"}
-                    </span>
-                    <Show when={(gift.quantity ?? 1) > 1}>
-                      <span class="text-text-muted text-[0.78rem]">×{gift.quantity}</span>
-                    </Show>
-                    <Show when={gift.amountMinor != null}>
-                      <span class="flex flex-col items-end">
-                        <span class="text-text text-[0.85rem]">{giftMoney(gift).given}</span>
-                        <Show when={giftMoney(gift).primary}>
-                          <span class="text-text-muted text-[0.72rem]">
-                            ≈ {giftMoney(gift).primary}
-                          </span>
-                        </Show>
+            <For each={gifts()}>
+              {(gift) => {
+                // One formatting pass per row: `formatMinorPair` was called
+                // three times in the markup below, and it is the only
+                // non-trivial work a gift row does (REG-P-I1).
+                const money = giftMoney(gift);
+                return (
+                  <li class="border-border bg-surface/10 flex flex-col gap-1 rounded-sm border px-3 py-2">
+                    <div class="flex flex-wrap items-center gap-3">
+                      {/* Guest-authored — a text node, never markup (S-L3). */}
+                      <span class="text-text min-w-[10rem] flex-1 text-[0.9rem] font-medium">
+                        {giftFrom(gift)}
                       </span>
-                    </Show>
-                    <span class="bg-surface/60 text-text-muted rounded-full px-2 py-0.5 text-[0.72rem]">
-                      {gift.status}
-                    </span>
-                    <Show
-                      when={props.canEdit}
-                      fallback={
-                        <Show when={gift.thankedAt != null}>
-                          <span class="text-text-muted text-[0.78rem]">Thanked</span>
-                        </Show>
-                      }
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={gift.thankedAt != null}
-                        aria-label={`Mark thanked: ${giftFrom(gift)}`}
-                        onClick={() => toggleThanked(gift)}
-                        class="text-gold-dim hover:text-gold text-[0.78rem] underline-offset-2 hover:underline"
+                      <span class="text-text-muted text-[0.82rem]">
+                        {gift.itemTitle ?? "Cash gift"}
+                      </span>
+                      <Show when={(gift.quantity ?? 1) > 1}>
+                        <span class="text-text-muted text-[0.78rem]">×{gift.quantity}</span>
+                      </Show>
+                      <Show when={gift.amountMinor != null}>
+                        <span class="flex flex-col items-end">
+                          <span class="text-text text-[0.85rem]">{money.given}</span>
+                          <Show when={money.primary}>
+                            <span class="text-text-muted text-[0.72rem]">≈ {money.primary}</span>
+                          </Show>
+                        </span>
+                      </Show>
+                      <span class="bg-surface/60 text-text-muted rounded-full px-2 py-0.5 text-[0.72rem]">
+                        {gift.status}
+                      </span>
+                      <Show
+                        when={props.canEdit}
+                        fallback={
+                          <Show when={gift.thankedAt != null}>
+                            <span class="text-text-muted text-[0.78rem]">Thanked</span>
+                          </Show>
+                        }
                       >
-                        {gift.thankedAt != null ? "Thanked" : "Mark thanked"}
-                      </button>
+                        <button
+                          type="button"
+                          aria-pressed={gift.thankedAt != null}
+                          aria-label={`Mark thanked: ${giftFrom(gift)}`}
+                          onClick={() => toggleThanked(gift)}
+                          class="text-gold-dim hover:text-gold text-[0.78rem] underline-offset-2 hover:underline"
+                        >
+                          {gift.thankedAt != null ? "Thanked" : "Mark thanked"}
+                        </button>
+                      </Show>
+                    </div>
+                    <Show when={gift.note}>
+                      {/* Guest-authored — a text node, never markup (S-L3). */}
+                      <p class="text-text-muted text-[0.82rem] italic">{gift.note}</p>
                     </Show>
-                  </div>
-                  <Show when={gift.note}>
-                    {/* Guest-authored — a text node, never markup (S-L3). */}
-                    <p class="text-text-muted text-[0.82rem] italic">{gift.note}</p>
-                  </Show>
-                </li>
-              )}
+                  </li>
+                );
+              }}
             </For>
           </ul>
         </Show>

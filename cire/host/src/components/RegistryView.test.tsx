@@ -126,7 +126,7 @@ describe("RegistryView — the gift list", () => {
     expect(await screen.findByText(/all taken/)).toBeInTheDocument();
   });
 
-  it("links an https item URL and renders nothing for a non-http scheme (S-L3)", async () => {
+  it("links an https item URL only — no javascript:, no plain http (S-L2)", async () => {
     setCachedRegistry(
       "wed_1",
       snapshot({
@@ -135,13 +135,22 @@ describe("RegistryView — the gift list", () => {
           // The API schema refuses this at write time; a fixture or a migration
           // can still put it in a row, and it would run in the organiser origin.
           item({ id: "ri_bad", title: "Wine fridge", externalUrl: "javascript:alert(1)" }),
+          // Not an attack, but the host clicks it out of the portal and the shop
+          // page — with whatever the guest is about to type into it — travels in
+          // clear. Rendered as text, not as a link.
+          item({ id: "ri_http", title: "Cake stand", externalUrl: "http://shop.example/stand" }),
         ],
       }),
     );
     render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
-    const links = await screen.findAllByRole("link", { name: "Link" });
+    await screen.findByText("Copper pan");
+    // Named by what it opens, not by "Link" — a screen-reader user hitting a
+    // list of them otherwise hears the same word once per row (C-L2).
+    const links = screen.getAllByRole("link", { name: /^Open the shop page for/ });
     expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAccessibleName("Open the shop page for Copper pan");
     expect(links[0]).toHaveAttribute("href", "https://shop.example/pan");
+    expect(links[0]).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("hides the add form and every row control from a viewer", async () => {

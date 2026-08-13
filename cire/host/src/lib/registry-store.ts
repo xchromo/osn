@@ -130,8 +130,19 @@ export function peekCachedRegistry(weddingId: string): RegistrySnapshot | null {
   return cache.get(weddingId)?.snapshot() ?? null;
 }
 
+/**
+ * Drop the cached snapshot, keeping the SIGNAL.
+ *
+ * Deleting the map entry would mint a fresh signal on the next `entryFor`, and
+ * every view that captured the old accessor at mount would then read a signal
+ * nothing writes to again — a dead view with stale content. The sibling stores
+ * (`vendors-store`, `budget-store`, `events-store`, `enquiries-store`) still
+ * delete; this is the repo-wide `P-W2` in `[[cire/wiki/todo/perf]]`, fixed here
+ * because `RegistryView` is the first consumer to invalidate on several write
+ * paths rather than only on unmount.
+ */
 export function invalidateRegistry(weddingId: string): void {
-  cache.delete(weddingId);
+  entryFor(weddingId).setSnapshot(null);
 }
 
 /** How many of an item's wanted quantity are still unspoken for. Never negative
