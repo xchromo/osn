@@ -255,9 +255,14 @@ export function Register(props: RegisterProps) {
         attestation,
       });
       toast.success(`Welcome, @${handle()}`);
-      setStep("done");
       const next = session();
       if (next) await adoptSession(next);
+      // "done" comes last, after the session is actually published. It is the
+      // one step with no error slot and no retry button, so anything that can
+      // still fail has to fail while the passkey step is on screen — and
+      // `adoptSession` can: it writes to `localStorage`, which throws when
+      // storage is disabled or full.
+      setStep("done");
       props.onSuccess?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Passkey setup failed";

@@ -9,7 +9,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // The Register stand-in exposes a button that fires `onSuccess`, which is how
 // the real component signals "account created and passkey enrolled".
 vi.mock("@osn/ui/auth/SignIn", () => ({
-  SignIn: () => <div data-testid="signin" />,
+  SignIn: (props: { onSuccess?: () => void }) => (
+    <div data-testid="signin">
+      <button type="button" data-testid="signin-finished" onClick={() => props.onSuccess?.()}>
+        finish
+      </button>
+    </div>
+  ),
 }));
 vi.mock("@osn/ui/auth/Register", () => ({
   Register: (props: { onSuccess?: () => void }) => (
@@ -118,6 +124,17 @@ describe("<AuthDialogs /> — close-on-session invariant", () => {
     expect(onShowRegisterChange).toHaveBeenCalledWith(false);
   });
 
+  it("closes the sign-in dialog when sign-in reports success", () => {
+    const onShowSignInChange = vi.fn();
+    renderDialogs(
+      makeAuth(() => null),
+      { signIn: true },
+      { onShowSignInChange },
+    );
+    fireEvent.click(screen.getByTestId("signin-finished"));
+    expect(onShowSignInChange).toHaveBeenCalledWith(false);
+  });
+
   it("clears both open flags the moment a session appears", async () => {
     const [session, setSession] = createSignal<unknown>(null);
     const onShowRegisterChange = vi.fn();
@@ -138,5 +155,38 @@ describe("<AuthDialogs /> — close-on-session invariant", () => {
 
     expect(onShowRegisterChange).toHaveBeenCalledWith(false);
     expect(onShowSignInChange).toHaveBeenCalledWith(false);
+  });
+
+  // Only the flag that was actually set gets cleared. Without the per-flag
+  // guards the effect would fire both setters on every session, in every shell
+  // — including the two that mount signed-in and never opened a dialog.
+  it("clears only the flag that was set, and none when both are shut", async () => {
+    const [session, setSession] = createSignal<unknown>(null);
+    const onShowRegisterChange = vi.fn();
+    const onShowSignInChange = vi.fn();
+    renderDialogs(
+      makeAuth(session),
+      { register: true },
+      { onShowRegisterChange, onShowSignInChange },
+    );
+
+    setSession(SAMPLE_SESSION);
+    await Promise.resolve();
+
+    expect(onShowRegisterChange).toHaveBeenCalledWith(false);
+    expect(onShowSignInChange).not.toHaveBeenCalled();
+  });
+
+  it("touches neither flag when a session arrives with both dialogs shut", async () => {
+    const [session, setSession] = createSignal<unknown>(null);
+    const onShowRegisterChange = vi.fn();
+    const onShowSignInChange = vi.fn();
+    renderDialogs(makeAuth(session), {}, { onShowRegisterChange, onShowSignInChange });
+
+    setSession(SAMPLE_SESSION);
+    await Promise.resolve();
+
+    expect(onShowRegisterChange).not.toHaveBeenCalled();
+    expect(onShowSignInChange).not.toHaveBeenCalled();
   });
 });
