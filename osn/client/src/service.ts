@@ -283,7 +283,13 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
 
       const fetchTokenGrantOnce = () =>
         Effect.gen(function* () {
-          const raw = yield* Effect.tryPromise({
+          // The `fetch` call stands alone so that ONLY a transport failure can
+          // be classified as network. `fetch` rejects with a `TypeError` for
+          // transport failure specifically, but `TypeError` is a type JS reuses
+          // for everything — with response handling inside this try, a genuine
+          // parse or shape bug would be relabelled "network" and retried on the
+          // wrong ladder, and no signal would distinguish the two (S-L3).
+          const response = yield* Effect.tryPromise({
             try: () =>
               sessionFetch(`${config.issuerUrl}/token`, {
                 method: "POST",
@@ -292,26 +298,28 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
                 body: new URLSearchParams({
                   grant_type: "refresh_token",
                 }).toString(),
-              }).then((r) => {
-                if (r.ok) return r.json() as Promise<unknown>;
-                // 4xx ⇒ terminal: cookie gone/expired/rotated. 429/5xx ⇒
-                // transient: throw a plain Error so the retry policy kicks in.
-                if (r.status >= 400 && r.status < 500 && r.status !== 429) {
-                  throw new TerminalGrantError(r.status);
-                }
-                throw new Error(`Token grant failed (transient): ${r.status}`);
               }),
-            // TerminalGrantError must pass through untouched so the retry
-            // policy can refuse to retry it. Anything thrown by `fetch` rather
-            // than by the branches above never reached a response — that is the
-            // network class. What is left is the transient HTTP throw.
-            catch: (cause) => {
-              if (cause instanceof TerminalGrantError) return cause;
-              if (cause instanceof Error && cause.name === "TypeError") {
-                return new NetworkGrantError(cause);
+            catch: (cause) =>
+              cause instanceof Error && cause.name === "TypeError"
+                ? new NetworkGrantError(cause)
+                : new TokenRefreshError({ cause }),
+          });
+
+          const raw = yield* Effect.tryPromise({
+            try: () => {
+              if (response.ok) return response.json() as Promise<unknown>;
+              // 4xx ⇒ terminal: cookie gone/expired/rotated. 429/5xx ⇒
+              // transient: throw a plain Error so the retry policy kicks in.
+              if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                throw new TerminalGrantError(response.status);
               }
-              return new TokenRefreshError({ cause });
+              throw new Error(`Token grant failed (transient): ${response.status}`);
             },
+            // TerminalGrantError must pass through untouched so the retry
+            // policy can refuse to retry it. Everything else here — a transient
+            // status, a body that will not parse — is a plain transient failure.
+            catch: (cause) =>
+              cause instanceof TerminalGrantError ? cause : new TokenRefreshError({ cause }),
           });
 
           return yield* Effect.try({
