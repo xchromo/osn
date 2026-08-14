@@ -104,6 +104,14 @@ export interface Env {
   // required to reach the handler at all), so an unbound limiter degrades a
   // throttle rather than removing a brute-force defence.
   CLAIM_SESSION_RATE_LIMITER?: WorkersRateLimitBinding;
+  // Native Workers Rate Limiting bindings for the organiser registry amplifier
+  // routes — the link preview (fetches a URL the caller typed) and the image
+  // copy (that fetch plus an R2 write). Both are authenticated, entitlement-
+  // gated organiser routes, so an absent binding degrades to the per-isolate
+  // in-memory default in `createApp` rather than failing closed: the budget
+  // exists to protect the third party being fetched, not to stop a brute force.
+  REGISTRY_PREVIEW_RATE_LIMITER?: WorkersRateLimitBinding;
+  REGISTRY_IMAGE_RATE_LIMITER?: WorkersRateLimitBinding;
   // Turnstile bot-protection secret (KEY-OPTIONAL). When set, the guest claim +
   // RSVP endpoints require a valid Turnstile token (fail-closed); unset ⇒ those
   // gates are skipped. `wrangler secret put TURNSTILE_SECRET_KEY`.
