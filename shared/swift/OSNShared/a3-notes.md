@@ -70,8 +70,9 @@
 ## BLOCKED
 
 - `pulse/ios/project.yml`: `com.apple.developer.associated-domains`
-  (`webcredentials:musubi.social`) and App Group
-  `group.social.musubi.session` are declared in the entitlements block
-  but neither capability is registered in the Apple developer portal.
-  Xcode codesigning of the Pulse target will fail until both are added
-  there.
+  (`webcredentials:musubi.social`) is declared in the entitlements block
+  but no App ID carries the capability in the Apple developer portal.
+  Xcode codesigning of the Pulse target will fail until it is added there.
+  Cleared 2026-08-14: the App Group `group.social.musubi.session` is now
+  registered under team FV59Y8RSUH, so `SharedCookieJar.makeSession()` no
+  longer throws on a correctly signed build.
