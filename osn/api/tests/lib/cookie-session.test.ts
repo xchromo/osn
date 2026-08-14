@@ -130,6 +130,30 @@ describe("buildSessionMarkerCookie", () => {
     const cookie = buildSessionMarkerCookie({ secure: true, markerDomain: "musubi.social" });
     expect(cookie.startsWith(`${SESSION_MARKER_COOKIE_NAME}=`)).toBe(true);
   });
+
+  it("drops a domain that is not a bare hostname (S-L2)", () => {
+    // The value is interpolated straight into a response header. `;` or CR/LF
+    // would splice attributes onto the cookie — HttpOnly, a foreign Domain, a
+    // second cookie entirely. It comes from wrangler.toml today, which is why
+    // this is low and not high, but the check costs one regex and survives the
+    // day the value comes from somewhere else.
+    const spliced = buildSessionMarkerCookie({
+      secure: true,
+      markerDomain: "musubi.social; HttpOnly",
+    });
+    expect(spliced).not.toContain("Domain=");
+    expect(spliced).not.toContain("HttpOnly");
+
+    expect(
+      buildSessionMarkerCookie({ secure: true, markerDomain: "evil\r\nSet-Cookie: a=b" }),
+    ).not.toContain("Domain=");
+
+    // Fail CLOSED, not open: a host-only marker costs a cold-start sign-in on a
+    // split-host deployment. A spliced header is a defect.
+    expect(buildSessionMarkerCookie({ secure: true, markerDomain: "dev.musubi.social" })).toContain(
+      "Domain=dev.musubi.social",
+    );
+  });
 });
 
 describe("buildClearSessionMarkerCookie", () => {

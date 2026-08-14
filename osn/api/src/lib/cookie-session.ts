@@ -69,9 +69,22 @@ export function buildClearSessionCookie(config: CookieSessionConfig): string {
   return parts.join("; ");
 }
 
+/**
+ * A bare hostname, nothing else. The domain reaches this file from
+ * `wrangler.toml` via `Env`, so it is trusted today — but it is interpolated
+ * straight into a response header, and a value carrying `;` or CR/LF would
+ * splice extra attributes onto the cookie. Validating at the one point that
+ * emits it keeps that closed if the value ever comes from somewhere less
+ * trusted (S-L2).
+ */
+const HOSTNAME_PATTERN = /^[a-z0-9.-]+$/i;
+
 function markerCookieParts(config: CookieSessionConfig): string[] {
   const parts = ["SameSite=Lax", "Path=/"];
-  if (config.markerDomain) {
+  // Fail closed to a host-only marker rather than emitting a malformed header.
+  // Host-only costs a cold-start sign-in on a split-host deployment; a spliced
+  // header is a defect.
+  if (config.markerDomain && HOSTNAME_PATTERN.test(config.markerDomain)) {
     parts.push(`Domain=${config.markerDomain}`);
   }
   if (config.secure) {
