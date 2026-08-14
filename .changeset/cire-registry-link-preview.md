@@ -98,3 +98,9 @@ Candidates are re-filtered to `https:` in the browser before any of them becomes
 an `<img src>`; a page with no usable picture is a note offering the upload path,
 not an error. The thumbnail is fetched with the organiser's token into an object
 URL, since unlike the invite image route this one is gated.
+
+Both limiters are declared on the **dev** environment too (namespace ids 1103 /
+1104, the 11xx dev range). Named environments inherit no bindings, so leaving
+them out would have silently dropped dev back to the per-isolate in-memory
+counter on the one tier where these routes actually run — the registry is comped
+to the dev sample wedding and locked everywhere else.
