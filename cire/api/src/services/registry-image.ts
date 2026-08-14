@@ -234,11 +234,13 @@ export const registryImageService = {
     } = options;
 
     return Effect.gen(function* () {
-      const guard = createUrlGuard(resolveHost);
       // ONE budget for the whole operation — every hop and the body read share
       // it, so three hosts each answering just inside a per-hop timeout can't
       // add up to a Worker's whole wall clock.
       const signal = AbortSignal.timeout(timeoutMs);
+      // The guard carries the same signal, so its DNS lookups run inside that
+      // budget rather than beside it (P-W3).
+      const guard = createUrlGuard(resolveHost, signal);
 
       const fetched = yield* Effect.promise(() =>
         guardedFetch({

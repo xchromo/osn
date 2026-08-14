@@ -520,6 +520,57 @@ describe("scanHtml", () => {
     expect(scanned.siteName).toBeNull();
     expect(scanned.candidates).toEqual([]);
   });
+
+  it("scans a flood of unterminated tags in linear time", () => {
+    // P-C1. The URL is attacker-chosen, so the document is too, and the old
+    // patterns backtracked quadratically on an opening tag that never closes:
+    // half a megabyte of `<img ` measured ~25s of CPU against a 10ms budget on
+    // Cloudflare's free tier. Each shape is padded near the byte cap the fetch
+    // allows, so this is the worst input the service can actually be handed.
+    const flood = (open: string) => open.repeat(Math.floor(500_000 / open.length));
+    for (const open of ["<title", "<meta ", "<img "]) {
+      const started = Date.now();
+      const scanned = scanHtml(flood(open));
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(scanned.candidates).toEqual([]);
+    }
+  });
+
+  it("still reads a title out of a very large page", () => {
+    // The linear patterns must not have bought their speed by giving up on real
+    // documents — a long page with a title at the top still yields it.
+    const scanned = scanHtml(`<title>Nice Vase</title>${"<p>filler</p>".repeat(30_000)}`);
+    expect(scanned.title).toBe("Nice Vase");
+  });
+
+  it("stops collecting <img> candidates well before a page can list a thousand", () => {
+    // P-W1: only six URLs are ever emitted, and social-card candidates outrank
+    // every `<img>`, so a cap on rank-2 collection cannot change the output —
+    // it only stops the scan from scaling with a page's tag count.
+    const imgs = Array.from(
+      { length: 400 },
+      (_, i) => `<img src="https://cdn.example/${i}.jpg" width="600">`,
+    ).join("");
+    const scanned = scanHtml(imgs);
+    expect(scanned.candidates.length).toBeLessThanOrEqual(32);
+    expect(scanned.candidates.slice(0, 3).map((c) => c.url)).toEqual([
+      "https://cdn.example/0.jpg",
+      "https://cdn.example/1.jpg",
+      "https://cdn.example/2.jpg",
+    ]);
+  });
+
+  it("keeps a social-card image no matter how many <img> precede it", () => {
+    const imgs = Array.from(
+      { length: 400 },
+      (_, i) => `<img src="https://cdn.example/${i}.jpg" width="600">`,
+    ).join("");
+    const scanned = scanHtml(
+      `${imgs}<meta property="og:image" content="https://cdn.example/card.jpg">`,
+    );
+    const ranked = [...scanned.candidates].sort((a, b) => a.rank - b.rank);
+    expect(ranked[0]?.url).toBe("https://cdn.example/card.jpg");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -615,6 +666,28 @@ describe("preview — image candidates", () => {
     }
   });
 
+  it("emits the same six urls from a page listing hundreds of images", async () => {
+    // P-W1: the rank-2 cap changes what the scanner COLLECTS, never what the
+    // preview emits.
+    const imgs = Array.from(
+      { length: 300 },
+      (_, i) => `<img src="https://cdn.example/${i}.jpg" width="600">`,
+    ).join("");
+    const { fetchImpl } = recordingFetch(() => htmlResponse(imgs));
+    const exit = await run("https://shop.example/item", { fetchImpl, resolveHost: publicResolver });
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.imageUrls).toEqual([
+        "https://cdn.example/0.jpg",
+        "https://cdn.example/1.jpg",
+        "https://cdn.example/2.jpg",
+        "https://cdn.example/3.jpg",
+        "https://cdn.example/4.jpg",
+        "https://cdn.example/5.jpg",
+      ]);
+    }
+  });
+
   it("resolves each image host at most once", async () => {
     const hosts: string[] = [];
     const imgs = Array.from(
@@ -630,6 +703,63 @@ describe("preview — image candidates", () => {
       },
     });
     expect(hosts).toEqual(["shop.example", "cdn.example"]);
+  });
+
+  it("resolves distinct image hosts at the same time, not one after another", async () => {
+    // P-W3: the checks used to run in series inside the emit loop, so six hosts
+    // cost six round trips end to end. Ordering is unchanged — only the waiting is.
+    let inFlight = 0;
+    let peak = 0;
+    const imgs = ["a", "b", "c"]
+      .map((h) => `<img src="https://${h}.example/x.jpg" width="600">`)
+      .join("");
+    const { fetchImpl } = recordingFetch(() => htmlResponse(imgs));
+    const exit = await run("https://shop.example/item", {
+      fetchImpl,
+      resolveHost: () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve(["93.184.216.34"]);
+          }, 10);
+        });
+      },
+    });
+    expect(peak).toBeGreaterThanOrEqual(3);
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.imageUrls).toEqual([
+        "https://a.example/x.jpg",
+        "https://b.example/x.jpg",
+        "https://c.example/x.jpg",
+      ]);
+    }
+  });
+
+  it("aborts an in-flight DNS lookup when the operation's budget expires", async () => {
+    // P-W3: the lookups now share the preview's one time budget instead of
+    // running beside it with only their own per-query timeout.
+    let aborted = false;
+    const { fetchImpl } = recordingFetch(() =>
+      htmlResponse('<img src="https://cdn.example/a.jpg" width="600">'),
+    );
+    const exit = await run("https://shop.example/item", {
+      fetchImpl,
+      timeoutMs: 50,
+      resolveHost: (host, signal) => {
+        if (host === "shop.example") return Promise.resolve(["93.184.216.34"]);
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    });
+    expect(aborted).toBe(true);
+    expect(failureTag(exit)).toBe("LinkPreviewNoImages");
   });
 
   it("fails with NoImages when a real page offers none we can use", async () => {

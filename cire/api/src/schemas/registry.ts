@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { REGISTRY_IMAGE_KEY } from "../services/invite-assets";
+
 const MAX_TITLE_CHARS = 200;
 const MAX_HEADLINE_CHARS = 200;
 const MAX_DESCRIPTION_CHARS = 2000;
@@ -101,14 +103,18 @@ const IsoDate = Schema.String.pipe(
  * `assets/<weddingId>/<slot>-<uuid>` and the client never names one — so this is
  * the first key a client gets to choose. A free-form string would let an editor
  * of wedding A point an item at wedding B's object, which the serve path would
- * then honour. The pattern pins the namespace and a safe charset (no `..`, no
- * slashes past the two segments); `registryService` additionally requires the
- * middle segment to be the caller's own `weddingId`.
+ * then honour. The pattern pins the namespace, the SLOT and a safe charset (no
+ * `..`, no slashes past the two segments); `registryService` additionally
+ * requires the middle segment to be the caller's own `weddingId`.
+ *
+ * The slot half matters as much as the wedding half (S-M1). Without it, an
+ * editor could name their own wedding's invite hero here and have deleting the
+ * item reap the hero's object — same wedding, so the ownership check passes.
+ * {@link REGISTRY_IMAGE_KEY} is the one definition of that shape, exported from
+ * the module that mints these keys, so the schema, the ownership check and the
+ * serve route cannot drift apart.
  */
-const ImageKey = Schema.String.pipe(
-  Schema.maxLength(512),
-  Schema.pattern(/^assets\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,256}$/),
-);
+const ImageKey = Schema.String.pipe(Schema.maxLength(512), Schema.pattern(REGISTRY_IMAGE_KEY));
 
 const Minor = Schema.Number.pipe(
   Schema.int(),

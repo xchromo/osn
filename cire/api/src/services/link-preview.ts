@@ -65,6 +65,7 @@ export type BlockReason =
   | "scheme"
   | "credentials"
   | "no_host"
+  | "port"
   | "private_address"
   | "unresolvable";
 
@@ -236,8 +237,13 @@ export function isIpLiteral(host: string): boolean {
 // DNS-over-HTTPS
 // ---------------------------------------------------------------------------
 
-/** Resolve a hostname to its A + AAAA answers. Injected in tests; no network there. */
-export type HostResolver = (hostname: string) => Promise<readonly string[]>;
+/**
+ * Resolve a hostname to its A + AAAA answers. Injected in tests; no network there.
+ *
+ * `signal` is the OPERATION's budget, not the lookup's — see
+ * {@link createDohResolver}. It is optional so a test stub can stay one-argument.
+ */
+export type HostResolver = (hostname: string, signal?: AbortSignal) => Promise<readonly string[]>;
 
 const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
 /** DNS is not the budget — a slow resolver must not eat the page's time. */
@@ -255,17 +261,24 @@ interface DohAnswer {
  * followed by the resolver, so the address rows are the whole answer. A failed
  * or malformed query contributes no addresses, which the caller reads as
  * "unresolvable" and refuses. It never widens what we are willing to dial.
+ *
+ * The lookup answers to two clocks (P-W3): its own {@link DOH_TIMEOUT_MS}, and
+ * the caller's whole-operation budget. Without the second, DNS sat OUTSIDE the
+ * budget the fetches share — a preview that had already spent its 5 seconds on
+ * hops could still go on to add 2 more per candidate host. `AbortSignal.any`
+ * makes whichever fires first end the query.
  */
 export function createDohResolver(fetchImpl: typeof fetch = fetch): HostResolver {
-  return async (hostname: string) => {
+  return async (hostname: string, signal?: AbortSignal) => {
     const query = async (type: "A" | "AAAA"): Promise<readonly string[]> => {
       try {
+        const budget = AbortSignal.timeout(DOH_TIMEOUT_MS);
         const res = await fetchImpl(
           `${DOH_ENDPOINT}?name=${encodeURIComponent(hostname)}&type=${type}`,
           {
             method: "GET",
             headers: { accept: "application/dns-json" },
-            signal: AbortSignal.timeout(DOH_TIMEOUT_MS),
+            signal: signal ? AbortSignal.any([signal, budget]) : budget,
           },
         );
         if (!res.ok) return [];
@@ -321,10 +334,37 @@ export interface LinkPreview {
 // HTML scanning (regex, not a parser — see the module comment)
 // ---------------------------------------------------------------------------
 
-const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
-const META_RE = /<meta\b[^>]*>/gi;
-const LINK_RE = /<link\b[^>]*>/gi;
-const IMG_RE = /<img\b[^>]*>/gi;
+/**
+ * Tag matchers, written so no input can make them backtrack (P-C1).
+ *
+ * The earlier shapes let the character class match `<`, so an unclosed tag left
+ * the engine free to restart the same class at every following position — and
+ * this input is a remote page we did not choose. 512 KB of `"<img "` (the byte
+ * cap, all of it a start with no `>`) took ~25 seconds of CPU; a Worker on the
+ * free plan gets 10 milliseconds. Excluding `<` from the class pins each match
+ * to the run of bytes between one `<` and the next, so the scan is linear in the
+ * document however hostile it is.
+ *
+ * The cost is real but tiny: a `<` INSIDE an attribute value (`alt="a < b"`) is
+ * legal HTML and now stops the match, so that one tag is skipped. A skipped tag
+ * costs a dropped candidate, never a wrong one — and this was never a parser.
+ */
+const TITLE_RE = /<title[^<>]*>([^<]*)</i;
+const META_RE = /<meta\s[^<>]*>/gi;
+const LINK_RE = /<link\s[^<>]*>/gi;
+const IMG_RE = /<img\s[^<>]*>/gi;
+
+/**
+ * How many `<img>` candidates are worth collecting (P-W1).
+ *
+ * Only {@link MAX_IMAGES} URLs are ever emitted, and every `<img>` shares the
+ * bottom rank band, so the sort keeps the FIRST six of them in document order —
+ * a decision the 33rd `<img>` cannot change. Higher-ranked candidates
+ * (`og:image`, `image_src`) keep being collected without a cap, so nothing that
+ * could win is dropped. The headroom over six is for the emit loop, which walks
+ * past candidates a redirect or a DNS check refuses.
+ */
+const MAX_IMG_CANDIDATES = 32;
 
 /** Pull one attribute out of a raw tag string. Quoted or bare, any case. */
 function attr(tag: string, name: string): string | null {
@@ -390,6 +430,10 @@ interface ScannedHtml {
  * then `<img>` tags in document order with the ones that declare themselves tiny
  * dropped. Order inside a band is document order, which for a product page puts
  * the hero shot first.
+ *
+ * URLs come back exactly as the document wrote them — entity decoding happens
+ * where a candidate is EMITTED (P-W1), so a page with a thousand images pays for
+ * the handful that survive the ranking rather than for all thousand.
  */
 export function scanHtml(html: string): ScannedHtml {
   let ogTitle: string | null = null;
@@ -402,7 +446,7 @@ export function scanHtml(html: string): ScannedHtml {
     if (!key) continue;
     const content = attr(tag, "content");
     if (content === null) continue;
-    if (SOCIAL_IMAGE_KEYS.has(key)) candidates.push({ url: decodeEntities(content), rank: 0 });
+    if (SOCIAL_IMAGE_KEYS.has(key)) candidates.push({ url: content, rank: 0 });
     else if (key === "og:title") ogTitle = content;
     else if (key === "twitter:title") twitterTitle = content;
     else if (key === "og:site_name") siteName = content;
@@ -412,10 +456,12 @@ export function scanHtml(html: string): ScannedHtml {
     const rel = attr(tag, "rel")?.toLowerCase();
     if (rel !== "image_src") continue;
     const href = attr(tag, "href");
-    if (href) candidates.push({ url: decodeEntities(href), rank: 1 });
+    if (href) candidates.push({ url: href, rank: 1 });
   }
 
+  let imgCount = 0;
   for (const [tag] of html.matchAll(IMG_RE)) {
+    if (imgCount >= MAX_IMG_CANDIDATES) break;
     const src = attr(tag, "src");
     if (!src) continue;
     // A declared dimension is the only size signal available without fetching
@@ -424,7 +470,8 @@ export function scanHtml(html: string): ScannedHtml {
     const height = Number(attr(tag, "height") ?? Number.NaN);
     if (Number.isFinite(width) && width < MIN_IMG_DIMENSION) continue;
     if (Number.isFinite(height) && height < MIN_IMG_DIMENSION) continue;
-    candidates.push({ url: decodeEntities(src), rank: 2 });
+    candidates.push({ url: src, rank: 2 });
+    imgCount += 1;
   }
 
   const rawTitle = TITLE_RE.exec(html)?.[1] ?? null;
@@ -548,11 +595,19 @@ export interface UrlGuard {
   readonly resolveHost: HostResolver;
   /** Memo of host → allowed, so six images on one host cost one lookup. */
   readonly seen: Map<string, boolean>;
+  /** The operation's time budget, handed to every DNS lookup the guard makes. */
+  readonly signal?: AbortSignal;
 }
 
-/** A fresh guard, with an empty host memo, for one operation. */
-export function createUrlGuard(resolveHost: HostResolver): UrlGuard {
-  return { resolveHost, seen: new Map<string, boolean>() };
+/**
+ * A fresh guard, with an empty host memo, for one operation.
+ *
+ * Pass the operation's `signal` so DNS runs inside the same budget as the
+ * fetches (P-W3). Omitting it leaves each lookup on its own 2s timeout, which is
+ * what the tests do.
+ */
+export function createUrlGuard(resolveHost: HostResolver, signal?: AbortSignal): UrlGuard {
+  return { resolveHost, seen: new Map<string, boolean>(), signal };
 }
 
 /**
@@ -574,6 +629,11 @@ export async function checkUrl(
   if (url.username !== "" || url.password !== "") return "credentials";
   const host = url.hostname.toLowerCase();
   if (host.length === 0) return "no_host";
+  // Default port only. Every shop link an organiser pastes is on 443, so an
+  // allowlist of one costs nothing legitimate — and it removes the port-scanning
+  // primitive outright: without it the address checks pass any *public* host on
+  // any port, and the route's own success/502/415 outcomes are the oracle.
+  if (url.port !== "" && url.port !== "443") return "port";
 
   const cached = guard.seen.get(host);
   if (cached !== undefined) return cached ? url : "private_address";
@@ -591,7 +651,7 @@ export async function checkUrl(
   // open here would hand every DNS outage a free SSRF.
   let addresses: readonly string[];
   try {
-    addresses = await guard.resolveHost(host);
+    addresses = await guard.resolveHost(host, guard.signal);
   } catch {
     addresses = [];
   }
@@ -758,6 +818,58 @@ async function fetchDocument(
   return { ok: true, document: { finalUrl, html } };
 }
 
+/**
+ * How far down the ranked list the host warm-up looks, and how many distinct
+ * hosts it will resolve. Bounds the fan-out so a page listing a hundred hosts
+ * cannot turn one preview into a hundred DNS queries.
+ */
+const PREFETCH_CANDIDATES = 32;
+const PREFETCH_HOSTS = 8;
+
+/** The host a candidate would be fetched from, or null if it is not an https URL. */
+function candidateHost(raw: string, base: string): string | null {
+  try {
+    const url = new URL(raw, base);
+    return url.protocol === "https:" ? url.hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Warm `guard.seen` by resolving the DISTINCT hosts of the top candidates at
+ * once (P-W3).
+ *
+ * The emit loop below stays sequential and unchanged, so the order and the
+ * membership of the result are exactly what they were — this only decides WHEN
+ * the DNS answers arrive. In series, six images across six hosts cost six round
+ * trips end to end; in parallel they cost one, and the memo means the loop then
+ * finds every answer already there.
+ *
+ * One check per distinct host, not per candidate: `checkUrl` writes the memo, so
+ * dispatching two URLs on one host would put two identical queries in flight
+ * before either had written it. Hosts already in the memo (the document's own,
+ * resolved during the fetch) are skipped.
+ */
+async function warmHosts(
+  ranked: readonly Candidate[],
+  finalUrl: URL,
+  guard: UrlGuard,
+): Promise<void> {
+  const pending = new Map<string, string>();
+  for (const candidate of ranked.slice(0, PREFETCH_CANDIDATES)) {
+    if (pending.size >= PREFETCH_HOSTS) break;
+    const host = candidateHost(decodeEntities(candidate.url), finalUrl.href);
+    if (host === null || guard.seen.has(host) || pending.has(host)) continue;
+    pending.set(host, candidate.url);
+  }
+  await Promise.all(
+    Array.from(pending.values(), (url) =>
+      checkUrl(decodeEntities(url), finalUrl.href, guard).catch(() => undefined),
+    ),
+  );
+}
+
 /** Layer 5: absolute-ise, keep `https:`, re-check the host, dedupe, cap. */
 async function resolveCandidates(
   candidates: readonly Candidate[],
@@ -768,12 +880,16 @@ async function resolveCandidates(
   // `toSorted` is ES2023 and this package's lib is ES2022. Copy, then sort.
   ranked.sort((a, b) => a.rank - b.rank);
 
+  await warmHosts(ranked, finalUrl, guard);
+
   const out: string[] = [];
   const seenUrls = new Set<string>();
   for (const candidate of ranked) {
     if (out.length >= MAX_IMAGES) break;
+    // Entities are decoded HERE rather than at scan time (P-W1): only the
+    // candidates that reach this loop are worth the string work.
     // eslint-disable-next-line no-await-in-loop
-    const checked = await checkUrl(candidate.url, finalUrl.href, guard);
+    const checked = await checkUrl(decodeEntities(candidate.url), finalUrl.href, guard);
     // A `javascript:` / `data:` src, a private host, an unparseable value — all
     // land here as a reason string and are simply dropped. The picker only ever
     // sees URLs that would have passed the fetch guard.
@@ -805,11 +921,14 @@ function preview(
   } = options;
 
   return Effect.gen(function* () {
-    const guard = createUrlGuard(resolveHost);
     // ONE budget for the whole operation — hops included. A chain of three hosts
     // each answering just inside a per-hop timeout must not add up to 15s of a
     // Worker's wall clock.
     const signal = AbortSignal.timeout(timeoutMs);
+    // The guard holds the same signal, so the DNS lookups it makes are inside the
+    // budget too rather than beside it (P-W3) — a stalled resolver used to be able
+    // to outlive the fetch it was gating.
+    const guard = createUrlGuard(resolveHost, signal);
 
     const outcome = yield* Effect.promise(() =>
       fetchDocument(rawUrl, guard, fetchImpl, maxRedirects, maxBytes, signal),

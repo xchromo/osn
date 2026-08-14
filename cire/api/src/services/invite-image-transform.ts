@@ -262,6 +262,36 @@ export function imageResponseHeaders(
 }
 
 /**
+ * The `Cache-Control` the STORED copy carries (P-W2).
+ *
+ * Cloudflare's Cache API documents a `private` response as unstorable — `cache.put`
+ * rejects with a 413 rather than storing it — so every gated slot (the registry
+ * serve route among them) has been putting bytes into a cache that quietly refused
+ * them, paying the Images binding on every request while believing it had a hit.
+ * The copy handed to `put` therefore says `public`; the copy handed to the CLIENT
+ * still says whatever {@link imageResponseHeaders} decided.
+ *
+ * That is safe because the cache key is synthetic — `buildTransformCacheKey` mints
+ * a URL from the slot, variant, format and SERVER-derived version, and no inbound
+ * request URL can name it — and because the lookup happens after auth, the role
+ * gate and the entitlement check. `public` here means "this per-colo store may hold
+ * it", not "any proxy may"; nothing between us and the browser ever sees this
+ * header.
+ *
+ * NOT VERIFIED against a live Worker. The 413-on-`private` behaviour is from
+ * Cloudflare's docs; confirm with `wrangler tail` and a second identical request
+ * (see `[[wiki/todo/perf]]`).
+ */
+const STORABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+/** Copy a response, swapping in one header. Bodies are teed by the caller. */
+function withCacheControl(response: Response, value: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", value);
+  return new Response(response.body, { status: response.status, headers });
+}
+
+/**
  * Serve a transformed image given an already-resolved R2 key + server-derived
  * content version. Shared by the wedding-slot (`hero`/`story`), the per-event and
  * the registry-item serve routes so all three get the IDENTICAL Cache-API-short-
@@ -319,7 +349,10 @@ export function serveTransformedImage(args: {
       const hit = yield* Effect.promise(() => cache.match(cacheKey));
       if (hit) {
         metricImageTransform("cache_hit", variant, format);
-        return hit;
+        // The stored copy says `public` so the store would accept it; re-stamp the
+        // slot's real visibility on the way out, or a private image would tell the
+        // browser it was shareable purely because it had been cached once.
+        return withCacheControl(hit, `${visibility}, max-age=31536000, immutable`);
       }
     }
 
@@ -367,12 +400,31 @@ export function serveTransformedImage(args: {
     }
 
     if (cache && cacheKey) {
-      const put = cache.put(cacheKey, response.clone());
+      // Store a copy the cache will actually accept (P-W2) — see
+      // {@link STORABLE_CACHE_CONTROL}. `response.clone()` tees the body first, so
+      // the returned response keeps its own readable copy.
+      const storable = withCacheControl(response.clone(), STORABLE_CACHE_CONTROL);
+      const put = Effect.tryPromise({
+        try: () => cache.put(cacheKey, storable),
+        catch: (cause) => cause,
+      }).pipe(
+        // A refused put is a missed cache, not a failed request — but silence here
+        // is what let the refusal go unnoticed in the first place, and off the
+        // request's own promise chain it would surface as an unhandled rejection.
+        Effect.catchAll((cause) =>
+          Effect.logWarning("image cache put failed", {
+            cacheSlot,
+            variant,
+            format,
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+        ),
+      );
       const waitUntil = getWaitUntil(request);
       if (waitUntil) {
-        waitUntil(put);
+        waitUntil(Effect.runPromise(put));
       } else {
-        yield* Effect.promise(() => put);
+        yield* put;
       }
     }
 

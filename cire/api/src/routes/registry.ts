@@ -4,6 +4,7 @@ import { Elysia } from "elysia";
 
 import { DbService } from "../db";
 import type { Db } from "../db";
+import { getWaitUntil } from "../lib/execution-ctx";
 import { metricRegistryGift, metricRegistryItemWrite, metricRegistryLinkPreview } from "../metrics";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
@@ -23,7 +24,7 @@ import {
   UpdateRegistrySettingsBody,
 } from "../schemas/registry";
 import { versionFromKey } from "../services/event-image";
-import { AssetsR2Service, MAX_IMAGE_BYTES } from "../services/invite-assets";
+import { AssetsR2Service, MAX_IMAGE_BYTES, REGISTRY_IMAGE_NAME } from "../services/invite-assets";
 import type { AssetR2Error, AssetsBucket } from "../services/invite-assets";
 import {
   negotiateFormat,
@@ -90,6 +91,31 @@ function internalSync(set: { status?: number | string }) {
  */
 const logDefect = (weddingId: string) => (cause: unknown) =>
   Effect.logError("registry handler defect", cause).pipe(Effect.annotateLogs({ weddingId }));
+
+/**
+ * Reap an orphaned R2 object AFTER the response goes out (P-I1).
+ *
+ * The organiser deleted a row; the object behind it is bookkeeping they never
+ * see. Awaiting the R2 round trip inline puts a network call on the critical
+ * path of a request whose work is already done, so hand it to `waitUntil` and
+ * answer now. The reaper is already best-effort and logs its own failures, so
+ * nothing is lost by not observing the result.
+ *
+ * `getWaitUntil` returns nothing outside a Worker (unit tests, the local Bun
+ * entry), and there the reap runs inline as before — which is also what keeps
+ * the existing delete tests able to observe it.
+ */
+function reapAfterResponse(
+  request: Request,
+  assets: AssetsBucket | undefined,
+  imageKey: string | null,
+): Effect.Effect<void> {
+  if (!imageKey) return Effect.void;
+  const reap = reapR2Objects(assets, "assets", [imageKey]);
+  const waitUntil = getWaitUntil(request);
+  if (!waitUntil) return reap;
+  return Effect.sync(() => waitUntil(Effect.runPromise(reap)));
+}
 
 /** `?giftsOffset=` → a non-negative integer. Anything unparseable reads as 0. */
 function parseGiftsOffset(raw: unknown): number {
@@ -278,19 +304,24 @@ export const createRegistryWriteRoutes = (
             },
             manualParse,
           )
-          .delete("/registry/items/:itemId", async ({ weddingId, params, set }) => {
+          .delete("/registry/items/:itemId", async ({ weddingId, params, request, set }) => {
             if (!weddingId) return internalSync(set);
             return runCire(
               registryService.removeItem(weddingId, params.itemId).pipe(
                 Effect.tap(() => Effect.sync(() => metricRegistryItemWrite("remove"))),
-                // The row was the only reference to that object, so once the row
-                // is gone the image is an orphan. Reap it here rather than
-                // leaving it to the 7-day reconcile sweep: the picture came off a
-                // shop page or the couple's camera roll, and a bucket with no
-                // lifecycle rule keeps it forever. Best-effort by contract — a
-                // failed delete logs and never turns a successful delete into an
-                // error the organiser has to see.
-                Effect.tap(({ imageKey }) => reapR2Objects(assets, "assets", [imageKey])),
+                // Nothing else references the object now, so it is an orphan.
+                // Reap it rather than leaving it to the 7-day reconcile sweep:
+                // the picture came off a shop page or the couple's camera roll,
+                // and a bucket with no lifecycle rule keeps it forever.
+                // Best-effort by contract — a failed delete logs and never turns
+                // a successful delete into an error the organiser has to see.
+                //
+                // `imageKeyOrphaned` is the service's verdict, taken with the
+                // delete: two items may name the same key, and reaping on the
+                // first delete would blank the survivor's picture (S-M1).
+                Effect.tap(({ imageKey, imageKeyOrphaned }) =>
+                  reapAfterResponse(request, assets, imageKeyOrphaned ? imageKey : null),
+                ),
                 Effect.map(() => ({ ok: true as const })),
                 Effect.provideService(DbService, db),
                 Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
@@ -460,10 +491,6 @@ export interface RegistryImageDeps {
   /** Test seam: injectable fetch + DNS resolver for the from-url leg. */
   readonly imageOptions?: LinkPreviewOptions;
 }
-
-/** Last segment of a registry image key: `registry-<uuid>`. Anything else — a
- *  slash, a `..`, another slot's name — never reaches R2. */
-const REGISTRY_IMAGE_NAME = /^registry-[A-Za-z0-9-]{1,64}$/;
 
 /**
  * Gift registry — IMAGE SAVES:
@@ -665,7 +692,11 @@ export const createRegistryImageServeRoutes = (
               request,
               key,
               version: versionFromKey(key),
-              cacheSlot: `registry:${weddingId}`,
+              // The image name belongs in the slot, as it does on the invite
+              // routes: without it every registry image in a wedding shares one
+              // cache path and is told apart only by `versionFromKey`, a 32-bit
+              // hash that is not a security primitive and need not be unique.
+              cacheSlot: `registry:${weddingId}:${params.name}`,
               variant,
               format,
               visibility: "private",

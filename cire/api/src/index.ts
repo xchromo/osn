@@ -317,6 +317,18 @@ const handler: ExportedHandler<Env> = {
       const sessionEdgeLimiter = env.CLAIM_SESSION_RATE_LIMITER
         ? createWorkersRateLimiter(env.CLAIM_SESSION_RATE_LIMITER)
         : undefined;
+      // The registry link-preview and image-copy surfaces are amplifiers too:
+      // each request makes us fetch a URL the caller chose and, on the image
+      // leg, write to R2. createApp's in-memory default counts per ISOLATE, so
+      // the "10 a minute" the design argues for is really 10 a minute per
+      // isolate — a bound the caller can widen by spreading requests. These get
+      // the native binding for the same reason claim does.
+      const registryPreviewEdgeLimiter = env.REGISTRY_PREVIEW_RATE_LIMITER
+        ? createWorkersRateLimiter(env.REGISTRY_PREVIEW_RATE_LIMITER)
+        : undefined;
+      const registryImageEdgeLimiter = env.REGISTRY_IMAGE_RATE_LIMITER
+        ? createWorkersRateLimiter(env.REGISTRY_IMAGE_RATE_LIMITER)
+        : undefined;
       // Turnstile bot protection (KEY-OPTIONAL). Unset secret ⇒ null ⇒ the
       // claim + rsvp gates are skipped. The secret is read here and never
       // logged or placed anywhere but Cloudflare's siteverify endpoint.
@@ -376,6 +388,10 @@ const handler: ExportedHandler<Env> = {
           // CLAIM_RATE_LIMITER (5/min), the exact budget this route was split
           // away from. Absent binding ⇒ createApp's in-memory 60/min default.
           ...(sessionEdgeLimiter ? { claimSessionLimiter: sessionEdgeLimiter } : {}),
+          ...(registryPreviewEdgeLimiter
+            ? { registryPreviewLimiter: registryPreviewEdgeLimiter }
+            : {}),
+          ...(registryImageEdgeLimiter ? { registryImageLimiter: registryImageEdgeLimiter } : {}),
           r2: env.SHEETS,
           assets: env.ASSETS,
           images: env.IMAGES,

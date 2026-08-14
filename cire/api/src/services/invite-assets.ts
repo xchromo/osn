@@ -61,6 +61,28 @@ function assetKey(weddingId: string, slot: AssetSlotLabel): string {
   return `assets/${weddingId}/${slot}-${crypto.randomUUID()}`;
 }
 
+/**
+ * The `registry` slot's share of {@link assetKey}, written once (S-M1).
+ *
+ * A registry item's `image_key` is the one key a CLIENT names, so three separate
+ * places have to agree on its shape: the schema that admits it, the service that
+ * checks ownership, and the route that rebuilds a key from a URL segment. When
+ * that shape lived in each of them, the loosest one won — a key of
+ * `assets/<own-wedding>/hero-<uuid>` passed validation, so an editor could point
+ * an item at their own wedding's INVITE hero and have deleting the item reap it.
+ * Pinning the slot prefix here, beside the minting site, means a key can only
+ * ever name an object this module minted for `registry`.
+ */
+const REGISTRY_IMAGE_NAME_PATTERN = "registry-[A-Za-z0-9-]{1,64}";
+
+/** Last segment of a registry image key — what travels in the serve URL. */
+export const REGISTRY_IMAGE_NAME = new RegExp(`^${REGISTRY_IMAGE_NAME_PATTERN}$`);
+
+/** The whole key: `assets/<weddingId>/registry-<uuid>`. */
+export const REGISTRY_IMAGE_KEY = new RegExp(
+  `^assets/[A-Za-z0-9_-]{1,128}/${REGISTRY_IMAGE_NAME_PATTERN}$`,
+);
+
 export interface StoredAsset {
   bytes: ArrayBuffer;
   contentType: string;

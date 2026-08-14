@@ -37,11 +37,29 @@ in the module's own doc comment, with what would change the answer.
 
 Blocked URLs come back as a 400 with a stable `blocked_url` code and **no
 reason** — telling a caller which rule fired turns the endpoint into a network
-scanner with a clean oracle. The reason goes to the log instead. The route sits
-behind the same gates as the registry writes (`osnAuth` → `weddingEditor` →
-the `registry` entitlement) with its own per-organiser limiter appended at 10
+scanner with a clean oracle. The reason goes to the log instead. Ports are an
+allowlist of one, default or `443`: every shop link an organiser pastes is on
+443, and without the rule the address checks pass any *public* host on any port,
+which hands back the port scanner the opaque error code was meant to deny. The
+route sits behind the same gates as the registry writes (`osnAuth` →
+`weddingEditor` → the `registry` entitlement) with its own limiter appended at 10
 requests a minute, since one authenticated call costs a full page fetch to a host
-the caller named.
+the caller named. That limiter and the image one run on **native Workers
+rate-limit bindings** (`REGISTRY_PREVIEW_RATE_LIMITER`,
+`REGISTRY_IMAGE_RATE_LIMITER`, separate namespaces so previewing several pages
+per picture kept doesn't 429 the honest path) rather than the in-memory default,
+which counts per isolate and so is not a bound a busy caller can't widen.
+
+The HTML scan is the other half of the untrusted input, and it is regex over
+bytes a stranger wrote. Every tag-scanning pattern excludes `<` **and** `>`
+rather than the usual `[^>]*`: with `>` alone, an unterminated `<meta` lets the
+engine backtrack across the whole document per candidate start, and a page built
+to do that spent 21–25 seconds of CPU against a 10 ms budget — one request, one
+dead isolate. Excluding both makes each match linear and self-terminating.
+Candidate collection stops at 32 raw matches before ranking, entity decoding
+happens once per emitted candidate instead of per match, and the hosts behind the
+candidates are DoH-resolved in parallel (deduped, capped at 8) rather than one
+after another.
 
 **The picked URL is never stored.** Preview hands back candidates; the moment an
 organiser chooses one, `POST /registry/image/from-url` downloads it and writes
@@ -57,10 +75,19 @@ ordinary case here, so the header decides nothing. `POST /registry/image` takes 
 direct upload through the same checks and the same `assets/<weddingId>/…` key
 space as invite hero images, and `GET /registry/image/:name` serves our copy
 through the Images transform binding with the key rebuilt server-side and the
-response marked `private`. Deleting an item reaps its object, and the R2
-reconciler counts registry keys as live references, so an abandoned add form
-leaves nothing behind past the grace window. This closes S-L2 in the security
-backlog, which asked for exactly this.
+response marked `private`.
+
+Registry names must start `registry-`, and that prefix is now a matter of
+correctness rather than tidiness: the key space is shared with invite hero
+images, so without it an item could be pointed at the hero image's key and
+deleting the item would take the hero image with it. The pattern lives once, in
+`services/invite-assets.ts`, and both the request schema and the ownership check
+read it from there. Deleting an item reaps its object through `waitUntil` — but
+only after a wedding-scoped count proves no other item still holds that key,
+since two items may legitimately share one picture. The R2 reconciler counts
+registry keys as live references, so an abandoned add form leaves nothing behind
+past the grace window. This closes S-L2 in the security backlog, which asked for
+exactly this.
 
 On the portal, `RegistryImageField` gives an item its picture either way: upload
 a file, or paste a shop link and **choose** among what that page offers. The

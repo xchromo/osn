@@ -133,7 +133,12 @@ export default function RegistryImageField(props: {
     const name = key.slice(key.lastIndexOf("/") + 1);
     void (async () => {
       try {
-        const res = await authFetch(apiUrl(`${base()}/image/${encodeURIComponent(name)}`));
+        // `thumb` (320px), not the default `card` (800px): this paints into an
+        // 80px box, so the card variant would spend several times the bytes and
+        // the decode on detail no one can see (P-W4).
+        const res = await authFetch(
+          apiUrl(`${base()}/image/${encodeURIComponent(name)}?variant=thumb`),
+        );
         if (!res.ok) throw new Error(`image ${res.status}`);
         const blob = await res.blob();
         if (!live) return;
@@ -473,7 +478,25 @@ export default function RegistryImageField(props: {
                       class="border-border aria-checked:border-gold rounded-sm border p-1"
                     >
                       {/* Decorative: the button carries the name. */}
-                      <img src={candidate} alt="" class="h-20 w-20 object-cover" />
+                      {/* `no-referrer`: the shop is a third party we do not trust with
+                          the portal's origin, the path an organiser is editing, or a
+                          referrer that pairs their IP with a wedding. */}
+                      {/* These are the shop's own full-size product images — six of
+                          them, at whatever pixel dimensions the shop happens to
+                          publish, all decoding into an 80px box (P-I2). The width and
+                          height let the browser reserve the box before any of them
+                          arrive, so the row does not reflow as they land; `lazy` and
+                          `async` keep the ones below the fold off the main thread. */}
+                      <img
+                        src={candidate}
+                        alt=""
+                        referrerpolicy="no-referrer"
+                        loading="lazy"
+                        decoding="async"
+                        width={80}
+                        height={80}
+                        class="h-20 w-20 object-cover"
+                      />
                     </button>
                   )}
                 </For>

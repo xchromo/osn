@@ -292,30 +292,50 @@ describe("registry routes (entitled)", () => {
   });
 
   it("400s an image key that names another wedding's upload", async () => {
-    // The schema pins the SHAPE (`assets/<segment>/<segment>`), so only the
+    // The schema pins the SHAPE (`assets/<segment>/registry-<name>`), so only the
     // service can tell whose upload it is. A distinct code, not the generic 400,
     // because the portal has to explain this one.
     const app = buildApp({ grantRegistry: true });
     const foreign = await req(app, "POST", `${base}/items`, EDITOR, {
       title: "T",
-      imageKey: "assets/wed_other/hero_jpg",
+      imageKey: "assets/wed_other/registry-abc",
     });
     expect(foreign.status).toBe(400);
     expect(((await foreign.json()) as { error: string }).error).toBe("image_key_not_in_wedding");
 
     const own = await req(app, "POST", `${base}/items`, EDITOR, {
       title: "T",
-      imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/hero_jpg`,
+      imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/registry-abc`,
     });
     expect(own.status).toBe(200);
 
     // The update path is gated the same way.
     const item = ((await own.json()) as { item: RegistryItemDto }).item;
     const patched = await req(app, "PATCH", `${base}/items/${item.id}`, EDITOR, {
-      imageKey: "assets/wed_other/hero_jpg",
+      imageKey: "assets/wed_other/registry-abc",
     });
     expect(patched.status).toBe(400);
     expect(((await patched.json()) as { error: string }).error).toBe("image_key_not_in_wedding");
+  });
+
+  it("refuses a key naming a different slot of the caller's OWN wedding", async () => {
+    // S-M1. The wedding half of the key is right, so the ownership check passes —
+    // what stops it is the slot. Without that, an editor could point an item at
+    // their own invite hero and have deleting the item reap the hero's object.
+    const app = buildApp({ grantRegistry: true });
+    const created = await req(app, "POST", `${base}/items`, EDITOR, {
+      title: "T",
+      imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/hero-0000`,
+    });
+    expect(created.status).toBe(400);
+
+    const ok = await req(app, "POST", `${base}/items`, EDITOR, { title: "T" });
+    expect(ok.status).toBe(200);
+    const item = ((await ok.json()) as { item: RegistryItemDto }).item;
+    const patched = await req(app, "PATCH", `${base}/items/${item.id}`, EDITOR, {
+      imageKey: `assets/${BOOTSTRAP_WEDDING_ID}/story-0000`,
+    });
+    expect(patched.status).toBe(400);
   });
 
   it("reports whether the gift log has another page, and ignores a junk offset", async () => {
@@ -877,6 +897,33 @@ describe("deleting an item reaps its image", () => {
     expect(assets._store.has(imageKey)).toBe(true);
 
     expect((await req(app, "DELETE", `${base}/items/${item.id}`, EDITOR)).status).toBe(200);
+    expect(assets._store.has(imageKey)).toBe(false);
+  });
+
+  it("keeps the object while a second item still points at it", async () => {
+    // S-M1: the same picture can back two items. The reap fires on the LAST
+    // reference, not the first delete — otherwise the survivor loses its picture.
+    const assets = createAssetsStub();
+    const app = buildApp({ grantRegistry: true, assets });
+    const uploaded = await appRequest(app, `${base}/image`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "image/png",
+        Authorization: `Bearer ${await auth.sign(EDITOR)}`,
+      },
+      body: PNG,
+    });
+    const { imageKey } = (await uploaded.json()) as { imageKey: string };
+    const items: RegistryItemDto[] = [];
+    for (const title of ["Pan", "Same pan"]) {
+      const created = await req(app, "POST", `${base}/items`, EDITOR, { title, imageKey });
+      items.push(((await created.json()) as { item: RegistryItemDto }).item);
+    }
+
+    expect((await req(app, "DELETE", `${base}/items/${items[0]!.id}`, EDITOR)).status).toBe(200);
+    expect(assets._store.has(imageKey)).toBe(true);
+
+    expect((await req(app, "DELETE", `${base}/items/${items[1]!.id}`, EDITOR)).status).toBe(200);
     expect(assets._store.has(imageKey)).toBe(false);
   });
 

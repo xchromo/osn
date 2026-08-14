@@ -112,6 +112,26 @@ type = "ratelimit"
 namespace_id = "1002"
 simple = { limit = 60, period = 60 }
 
+# The registry link-preview limiter. This route fetches a URL the caller typed,
+# so the budget is what stops it being used to hammer a third party — and an
+# in-memory counter can't do that, because it counts per isolate and Cloudflare
+# will give a busy caller more than one. 10/60 mirrors the in-memory default.
+[[unsafe.bindings]]
+name = "REGISTRY_PREVIEW_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 10, period = 60 }
+
+# The registry image-copy limiter. Separate namespace from the preview above: a
+# picked image is one download plus one R2 write, and an organiser filling in a
+# gift list legitimately previews several pages per image they keep, so sharing
+# one budget would 429 the honest path.
+[[unsafe.bindings]]
+name = "REGISTRY_IMAGE_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 10, period = 60 }
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cire-db"
@@ -329,6 +349,18 @@ name = "CLAIM_SESSION_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1002"
 simple = { limit = 60, period = 60 }
+
+[[env.production.unsafe.bindings]]
+name = "REGISTRY_PREVIEW_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 10, period = 60 }
+
+[[env.production.unsafe.bindings]]
+name = "REGISTRY_IMAGE_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 10, period = 60 }
 
 [[env.production.d1_databases]]
 binding = "DB"
