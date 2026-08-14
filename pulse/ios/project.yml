@@ -26,6 +26,10 @@ targets:
         product: PulseFeature
     settings:
       base:
+        # Changing this means changing `osn/social/public/.well-known/
+        # apple-app-site-association` in the same commit — it names
+        # `<TEAMID>.<bundle id>`, and a stale entry there means the
+        # associated domain silently never forms and passkeys never appear.
         PRODUCT_BUNDLE_IDENTIFIER: social.musubi.pulse
         DEVELOPMENT_TEAM: FV59Y8RSUH
         CODE_SIGN_STYLE: Automatic
