@@ -6,6 +6,7 @@ import {
   buildSessionCookies,
   readSessionCookie,
 } from "../../lib/cookie-session";
+import { sessionStatusUnknown } from "../../lib/grant-failure";
 import type { AuthRouteContext } from "./context";
 import { toTokenResponseCookieOnly } from "./context";
 import { errorResponse, tokenResponse } from "./response-schemas";
@@ -46,12 +47,15 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
             return toTokenResponseCookieOnly(tokens);
           } catch (e) {
             set.status = 400;
-            // Same reasoning, and the client already reads a 4xx here as
-            // "logged out". The session cookie is left alone on purpose: this
-            // catch also covers a storage blip, and a client that still holds
-            // local account state retries the grant without consulting the
-            // marker, which is the path back from a false negative.
-            set.headers["set-cookie"] = buildClearSessionMarkerCookie(cookieConfig);
+            // Retract the marker only when this failure proves the cookie is
+            // dead. A storage blip and the benign concurrent-rotation race both
+            // land here with a live cookie, and retracting on either would
+            // strand a cold-start browser — the population the marker exists to
+            // serve — permanently signed out (S-M2). The session cookie itself
+            // is never cleared here for the same reason.
+            if (!sessionStatusUnknown(e)) {
+              set.headers["set-cookie"] = buildClearSessionMarkerCookie(cookieConfig);
+            }
             return { error: "invalid_grant", message: String(e) };
           }
         },
