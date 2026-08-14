@@ -20,6 +20,35 @@ import type { AccountSession, PublicProfile, Session } from "./tokens";
 
 const ACCOUNT_SESSION_KEY = "@osn/client:account_session";
 
+/**
+ * The JS-readable marker the issuer sets next to the HttpOnly session cookie.
+ * Mirrors `SESSION_MARKER_COOKIE_NAME` in `@osn/api` — the two must agree.
+ */
+const SESSION_MARKER_COOKIE = "osn_has_session";
+
+/**
+ * Does this browser claim to hold a session cookie?
+ *
+ * The session cookie is HttpOnly, so a page cannot ask "am I signed in?"
+ * without spending a `POST /token`. That made every anonymous page load — and
+ * every bot crawl — a write against the issuer: three requests, once retries
+ * are counted. The marker answers the question locally.
+ *
+ * The marker carries no secret and grants nothing; a forged one buys the
+ * forger a single 400. It is only ever read to decide whether a grant is worth
+ * attempting, never to decide that someone IS signed in.
+ *
+ * Outside a browser (iOS, SSR, tests) there is no `document` and no cookie jar
+ * to read — the native transport keeps the cookie in the Keychain — so assume
+ * a session may exist and let the grant decide, exactly as before.
+ */
+function hasSessionMarker(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.cookie
+    .split(";")
+    .some((part) => part.trim().startsWith(`${SESSION_MARKER_COOKIE}=1`));
+}
+
 /** Build a Session from the active profile's cached token. Returns null if expired or missing. */
 function toSession(account: AccountSession): Session | null {
   const profileToken = account.profileTokens[account.activeProfileId];
@@ -219,9 +248,14 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       //     gone/expired/rotated-out. The user IS logged out — fail fast, no
       //     retry (retrying a rejected grant is pointless and a rotated cookie
       //     replay would only trip reuse detection).
-      //   - TRANSIENT (network error, 429, 5xx): the cookie is probably still
-      //     alive; the server just couldn't answer. Retry with bounded backoff
-      //     before giving up so a momentary hiccup doesn't evict a live session.
+      //   - TRANSIENT (429, 5xx): the cookie is probably still alive; the
+      //     server just couldn't answer. Retry with bounded backoff before
+      //     giving up so a momentary hiccup doesn't evict a live session.
+      //   - NETWORK (fetch rejects): could be a dropped connection, but it is
+      //     equally a CORS refusal — the browser reports both as the same
+      //     opaque TypeError. A refused origin never becomes an allowed one on
+      //     the next attempt, so this class gets ONE retry, not two: enough for
+      //     a genuine blip, not enough to turn a page load into a burst.
       // -----------------------------------------------------------------------
 
       // A 4xx from /token is a definitive "no/expired session" — surfaced as a
@@ -232,11 +266,20 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
         constructor(readonly status: number) {}
       }
 
+      // `fetch` itself rejected — no response came back at all.
+      class NetworkGrantError {
+        readonly _tag = "NetworkGrantError";
+        constructor(readonly cause: unknown) {}
+      }
+
       // Bounded exponential backoff for transient /token failures. Three
       // attempts total (~0 + 200ms + 400ms ≈ 0.6s worst case) keeps the
       // cold-start path responsive while absorbing a single Worker cold-start
       // or transient upstream blip. Terminal (4xx) failures short-circuit.
       const TOKEN_GRANT_RETRY_DELAYS_MS = [200, 400] as const;
+
+      // Two attempts total for the network class — see NETWORK above.
+      const NETWORK_GRANT_RETRY_DELAYS_MS = [200] as const;
 
       const fetchTokenGrantOnce = () =>
         Effect.gen(function* () {
@@ -258,10 +301,17 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
                 }
                 throw new Error(`Token grant failed (transient): ${r.status}`);
               }),
-            // A TerminalGrantError must pass through untouched so the retry
-            // policy can refuse to retry it; anything else is transient.
-            catch: (cause) =>
-              cause instanceof TerminalGrantError ? cause : new TokenRefreshError({ cause }),
+            // TerminalGrantError must pass through untouched so the retry
+            // policy can refuse to retry it. Anything thrown by `fetch` rather
+            // than by the branches above never reached a response — that is the
+            // network class. What is left is the transient HTTP throw.
+            catch: (cause) => {
+              if (cause instanceof TerminalGrantError) return cause;
+              if (cause instanceof Error && cause.name === "TypeError") {
+                return new NetworkGrantError(cause);
+              }
+              return new TokenRefreshError({ cause });
+            },
           });
 
           return yield* Effect.try({
@@ -286,8 +336,10 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
               );
             }
 
-            lastError = err;
-            const delay = TOKEN_GRANT_RETRY_DELAYS_MS[attempt];
+            const isNetwork = err instanceof NetworkGrantError;
+            lastError = isNetwork ? new TokenRefreshError({ cause: err.cause }) : err;
+            const delays = isNetwork ? NETWORK_GRANT_RETRY_DELAYS_MS : TOKEN_GRANT_RETRY_DELAYS_MS;
+            const delay: number | undefined = delays[attempt];
             if (delay === undefined) return yield* Effect.fail(lastError);
             yield* Effect.sleep(`${delay} millis`);
           }
@@ -490,7 +542,16 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       const loadSession = () =>
         Effect.gen(function* () {
           const account = yield* getAccountSession();
-          if (!account) return yield* bootstrapFromCookie();
+          // No stored account AND no marker ⇒ this browser has never held a
+          // session (or has been logged out), so there is nothing for /token to
+          // redeem. Skipping the grant is what keeps an anonymous page load —
+          // a crawler's, above all — from costing the issuer a request.
+          // Case 3 below deliberately does NOT consult the marker: an account
+          // that believes it `hasSession` predates the marker on first deploy,
+          // and its grant is what heals it.
+          if (!account) {
+            return hasSessionMarker() ? yield* bootstrapFromCookie() : null;
+          }
 
           const live = toSession(account);
           if (live) return live;

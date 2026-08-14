@@ -1,8 +1,9 @@
 import { Elysia, t } from "elysia";
 
 import {
-  buildClearSessionCookie,
-  buildSessionCookie,
+  buildClearSessionCookies,
+  buildClearSessionMarkerCookie,
+  buildSessionCookies,
   readSessionCookie,
 } from "../../lib/cookie-session";
 import type { AuthRouteContext } from "./context";
@@ -33,14 +34,24 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
           const refresh_token = readSessionCookie(headers.cookie, cookieConfig);
           if (!refresh_token) {
             set.status = 400;
+            // Retract the marker: it promised a cookie that isn't here, and
+            // left standing it would re-arm this pointless grant on every load.
+            // Only the marker — the session cookie is already absent.
+            set.headers["set-cookie"] = buildClearSessionMarkerCookie(cookieConfig);
             return { error: "invalid_request" };
           }
           try {
             const tokens = await run(auth.refreshTokens(refresh_token));
-            set.headers["set-cookie"] = buildSessionCookie(tokens.refreshToken, cookieConfig);
+            set.headers["set-cookie"] = buildSessionCookies(tokens.refreshToken, cookieConfig);
             return toTokenResponseCookieOnly(tokens);
           } catch (e) {
             set.status = 400;
+            // Same reasoning, and the client already reads a 4xx here as
+            // "logged out". The session cookie is left alone on purpose: this
+            // catch also covers a storage blip, and a client that still holds
+            // local account state retries the grant without consulting the
+            // marker, which is the path back from a false negative.
+            set.headers["set-cookie"] = buildClearSessionMarkerCookie(cookieConfig);
             return { error: "invalid_grant", message: String(e) };
           }
         },
@@ -76,7 +87,7 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
               // Swallow — don't leak whether the session existed.
             }
           }
-          set.headers["set-cookie"] = buildClearSessionCookie(cookieConfig);
+          set.headers["set-cookie"] = buildClearSessionCookies(cookieConfig);
           return { success: true };
         },
         {
