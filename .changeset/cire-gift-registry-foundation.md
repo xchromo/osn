@@ -45,3 +45,18 @@ minor-unit exponent off the formatter it already builds, so no extra
 `Intl.NumberFormat` is constructed. `BudgetView` and `VendorsView` each carried
 their own copy of that `/ 100` formatter, built fresh per `<For>` row; both now
 delegate to the shared memoised one.
+
+**Unlocked in dev, locked in prod.** The dev tier gets a comp grant of the
+`registry` entitlement for the bootstrap wedding, emitted into `dev-seed.sql` by
+`cire/db/seed/generate.ts`. It lives in the generated-SQL path only, never in
+the in-memory fixture `seedDb` builds, because a grant there would entitle every
+route test and the 402 assertions that prove the gate works would pass for the
+wrong reason. Dev is where it takes effect by construction: `cire-db-dev` is
+reset and re-seeded on every dev deploy, and production is never seeded at all,
+so a live wedding holds an entitlement only if someone bought or comped it.
+
+The same regeneration picked up drift the reset generator (added in the dev-tier
+PR) had already found in principle: `dev-seed.sql`'s sibling `dev-reset.sql`
+reads its table list off the Drizzle schema, so migration 0057's four registry
+tables now appear in the DROP list. Without that the dev reset would leave them
+behind and the next migration replay would die on `CREATE TABLE`.
