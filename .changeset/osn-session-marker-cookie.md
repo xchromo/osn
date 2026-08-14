@@ -13,9 +13,8 @@ Two causes, both fixed here:
 - **The client asked for a session it had no reason to think existed.** A
   cold page load with no stored account always replayed the cookie against
   `/token`, even in a browser that had never signed in. The API now sets a
-  readable `osn_has_session` marker cookie beside the HttpOnly session cookie
-  (and retracts it on both 400 paths); the client skips the grant when the
-  marker is absent. The marker holds no secret — a forged one buys a single
+  readable `osn_has_session` marker cookie beside the HttpOnly session cookie;
+  the client skips the grant when the marker is absent. The marker holds no secret — a forged one buys a single
   400. It carries `Domain` from the new `OSN_COOKIE_DOMAIN` var, because the
   issuer (`id.musubi.social`) and the app (`musubi.social`) are different
   hosts; the session cookie itself stays `__Host-` and host-only. Where there
