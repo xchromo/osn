@@ -43,9 +43,10 @@ targets:
     # OSNKit/SharedCookieJar.swift:10 (osnSessionAppGroupIdentifier) — change
     # one and the jar silently splits in two.
     #
-    # BLOCKED: the associated domain is not registered yet. No App ID carries
-    # webcredentials:musubi.social, so codesigning fails until it is added in
-    # the developer portal. Passkeys won't autofill from the app before then.
+    # Both capabilities are on the App ID: App Groups (with this group
+    # assigned) and Associated Domains. Adding or removing a capability there
+    # invalidates every provisioning profile carrying this App ID, so they
+    # have to be regenerated afterwards.
     entitlements:
       path: Pulse.entitlements
       properties:
