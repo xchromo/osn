@@ -5,11 +5,17 @@ import type { InviteImageSlot } from "../schemas/invite";
 /**
  * The label that namespaces an R2 image key. The two wedding-level invite slots
  * (`hero`/`story`) plus `event` (one optional image per event, keyed by event id
- * in `events.event_image_key`). It only affects the readable key prefix — the
- * uuid suffix is what guarantees per-upload uniqueness — so a closed union is
- * enough; it never has to mirror an `:slot` route param like `InviteImageSlot`.
+ * in `events.event_image_key`) and `registry` (one optional image per gift item,
+ * keyed in `registry_items.image_key`). It only affects the readable key prefix
+ * — the uuid suffix is what guarantees per-upload uniqueness — so a closed union
+ * is enough; it never has to mirror an `:slot` route param like `InviteImageSlot`.
+ *
+ * Adding a label means adding its key column to
+ * `services/asset-reconcile.ts::loadReferencedKeys` in the same change. That set
+ * is what marks an object LIVE; a label whose column is missing there looks
+ * orphaned and gets swept once past the grace window.
  */
-export type AssetSlotLabel = InviteImageSlot | "event";
+export type AssetSlotLabel = InviteImageSlot | "event" | "registry";
 
 // Binary R2 surface for invite images. The CSV-import `R2Bucket` in
 // `r2-imports.ts` is text-only (`get().text()`), so images get their own narrow
@@ -256,8 +262,13 @@ export function createAssetsStub(): AssetsBucket & {
         httpMetadata: { contentType: v.contentType },
       };
     },
-    delete(key: string) {
-      store.delete(key);
+    // R2's `delete` takes a key OR an array of keys, and the reaper
+    // (`reapR2Objects`) tries the array form FIRST. A stub that accepted only a
+    // string would not throw on an array — `Map.delete([...])` just returns
+    // false — so the reaper's per-key fallback would never run and a stub-backed
+    // test would report a clean sweep while nothing was deleted. Mirror R2.
+    delete(key: string | string[]) {
+      for (const k of Array.isArray(key) ? key : [key]) store.delete(k);
       return Promise.resolve();
     },
   };

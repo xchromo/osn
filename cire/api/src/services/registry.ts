@@ -783,10 +783,19 @@ export const registryService = {
     }).pipe(Effect.withSpan("cire.registry.updateItem"));
   },
 
+  /**
+   * Delete an item and report the R2 key it was holding, if any.
+   *
+   * The key comes back because the row was the only thing referencing that
+   * object: once it is gone the image is an orphan, and an orphan in a bucket
+   * with no lifecycle rule is a leak. The ROUTE reaps it (best-effort, outside
+   * this Effect's requirements) — this service stays DB-only, exactly as
+   * `eventImageService` keeps its R2 work in the module that owns the bucket.
+   */
   removeItem(
     weddingId: string,
     itemId: string,
-  ): Effect.Effect<void, RegistryItemNotInWedding, DbService> {
+  ): Effect.Effect<{ imageKey: string | null }, RegistryItemNotInWedding, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       // Claims cascade with the item; contributions do NOT — their `item_id` is
@@ -796,10 +805,11 @@ export const registryService = {
         db
           .delete(registryItems)
           .where(and(eq(registryItems.id, itemId), eq(registryItems.weddingId, weddingId)))
-          .returning({ id: registryItems.id })
+          .returning({ id: registryItems.id, imageKey: registryItems.imageKey })
           .all(),
       );
       if (!removed) return yield* Effect.fail(new RegistryItemNotInWedding());
+      return { imageKey: (removed as { imageKey: string | null }).imageKey };
     }).pipe(Effect.withSpan("cire.registry.removeItem"));
   },
 

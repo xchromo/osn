@@ -165,6 +165,35 @@ export const UpdateRegistryItemBody = Schema.Struct({
 });
 export type UpdateRegistryItemBody = Schema.Schema.Type<typeof UpdateRegistryItemBody>;
 
+/**
+ * Link preview request — the URL of a shop page the organiser wants scraped.
+ *
+ * Reuses `HttpsUrl`, so the scheme and credential checks happen at the boundary
+ * before the service ever sees the string. That is the OUTER of two identical
+ * gates, not the only one: `services/link-preview.ts` re-checks the scheme on
+ * the input and on every redirect hop, because a `Location` header never passes
+ * through here.
+ */
+export const RegistryLinkPreviewBody = Schema.Struct({
+  url: HttpsUrl,
+});
+export type RegistryLinkPreviewBody = Schema.Schema.Type<typeof RegistryLinkPreviewBody>;
+
+/**
+ * Save-from-URL request — the ONE candidate the organiser picked out of the
+ * preview, whose bytes get copied into R2.
+ *
+ * Same `HttpsUrl` as the preview above, and for the same reason: this is the
+ * outer of two gates. It is tempting to treat this URL as already-vetted since
+ * we emitted it a moment ago, but it arrives in a request body — a client can
+ * post any URL here, in any order, without ever calling the preview — so the
+ * service re-runs the full SSRF guard on it regardless of what this schema says.
+ */
+export const RegistrySaveImageFromUrlBody = Schema.Struct({
+  url: HttpsUrl,
+});
+export type RegistrySaveImageFromUrlBody = Schema.Schema.Type<typeof RegistrySaveImageFromUrlBody>;
+
 /** Reorder: the new order of item ids across the whole wedding's list. */
 export const ReorderRegistryItemsBody = Schema.Struct({
   orderedIds: Schema.Array(Schema.NonEmptyString).pipe(Schema.maxItems(500)),
