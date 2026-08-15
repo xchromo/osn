@@ -1469,7 +1469,7 @@ Expected: 25 epics + 116 issues + 116 links = 257 mutations. At 8s that is ~35 m
 ```bash
 gh issue list --repo xchromo/osn --limit 500 --json number --jq 'length'
 ```
-Expected: 219 (85 from phase 1 + 134).
+Expected: 226 (85 from phase 1 + 141).
 
 - [ ] **Step 3: Spot-check the sub-issue links**
 
@@ -1511,7 +1511,7 @@ Expected: 60 epics (Security High/Medium/Low, Performance, Compliance, plus the 
 gh issue list --repo xchromo/osn-tracker --limit 500 --json number --jq 'length'
 gh issue list --repo xchromo/osn --label area:security --json number --jq 'length'
 ```
-Expected: `349` and `0`. The second number being anything but zero is a disclosure incident — close those issues immediately (never delete) and fix the classifier.
+Expected: `416` (60 epics + 356 issues) and `0`. The second number being anything but zero is a disclosure incident — close those issues immediately (never delete) and fix the classifier.
 
 - [ ] **Step 5: Commit**
 
@@ -1559,7 +1559,9 @@ Tracked work lives in GitHub Issues, not here.
 
 Completed items are in [changelog/](changelog/). For how findings are tagged see
 [conventions/review-findings.md](conventions/review-findings.md). For the setup itself see
-[runbooks/github-issues-setup.md](../../../wiki/runbooks/github-issues-setup.md).
+[runbooks/github-issues-setup.md](runbooks/github-issues-setup.md).
+
+(The links above are relative to `wiki/TODO.md`, which is where this block lands.)
 ```
 
 - [ ] **Step 3: Do the same for cire and delete the shards**
