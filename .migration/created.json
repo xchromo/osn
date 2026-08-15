@@ -1,0 +1,74 @@
+{
+  "epic:public:cire/api": {
+    "number": 450,
+    "id": "5159311503"
+  },
+  "epic:public:cire/db": {
+    "number": 451,
+    "id": "5159311918"
+  },
+  "epic:public:Phase 0 — core-domain refactor (invite decoupling)": {
+    "number": 452,
+    "id": "5159312358"
+  },
+  "epic:public:Phase 2 — vendors & services": {
+    "number": 453,
+    "id": "5159312766"
+  },
+  "epic:public:Phase 3 — pricing estimates": {
+    "number": 454,
+    "id": "5159313211"
+  },
+  "epic:public:Phase 4 — seating, comms, registry": {
+    "number": 455,
+    "id": "5159313657"
+  },
+  "epic:public:Spreadsheet ingestion (cire/api)": {
+    "number": 456,
+    "id": "5159314116"
+  },
+  "epic:public:Organiser portal (cire/host + cire/api)": {
+    "number": 457,
+    "id": "5159314555"
+  },
+  "epic:public:Up Next": {
+    "number": 458,
+    "id": "5159314956"
+  },
+  "epic:public:Open": {
+    "number": 459,
+    "id": "5159315351"
+  },
+  "epic:public:Pulse (pulse/web + pulse/api + pulse/db)": {
+    "number": 460,
+    "id": "5159315785"
+  },
+  "epic:public:OSN Core (osn/api)": {
+    "number": 461,
+    "id": "5159316193"
+  },
+  "epic:public:Cire (cire/invites + cire/host + cire/api + cire/db)": {
+    "number": 462,
+    "id": "5159316593"
+  },
+  "epic:public:Cire Landing (cire/landing)": {
+    "number": 463,
+    "id": "5159317051"
+  },
+  "epic:public:Cire Landing (cire/landing) — Platform roadmap (withjoy parity)": {
+    "number": 464,
+    "id": "5159317484"
+  },
+  "epic:public:Landing (osn/landing + pulse/landing)": {
+    "number": 465,
+    "id": "5159317924"
+  },
+  "cire/wiki/todo/api.md:38": {
+    "number": 466,
+    "id": "5159318345"
+  },
+  "cire/wiki/todo/api.md:44": {
+    "number": 467,
+    "id": "5159318791"
+  }
+}

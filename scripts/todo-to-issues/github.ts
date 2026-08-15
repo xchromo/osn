@@ -43,6 +43,35 @@ export async function createIssue(
   return { number: result.number, id: String(result.id) };
 }
 
+export async function readIssue(
+  gh: Gh,
+  repo: string,
+  number: number,
+): Promise<{ title: string; body: string }> {
+  const result = (await gh([`repos/${repo}/issues/${number}`])) as {
+    title: string;
+    body: string | null;
+  };
+  return { title: result.title, body: result.body ?? "" };
+}
+
+export async function updateIssue(
+  gh: Gh,
+  repo: string,
+  number: number,
+  entry: { title: string; body: string },
+): Promise<void> {
+  await gh([
+    `repos/${repo}/issues/${number}`,
+    "--method",
+    "PATCH",
+    "-f",
+    `title=${entry.title}`,
+    "-f",
+    `body=${entry.body}`,
+  ]);
+}
+
 export async function linkSubIssue(
   gh: Gh,
   repo: string,

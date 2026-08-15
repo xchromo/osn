@@ -31,6 +31,13 @@ test("degrades an unresolved link to a code span, never a dead link", () => {
   expect(out).not.toContain("[[");
 });
 
+test("a link cited inside a code span still becomes a link", () => {
+  const out = rewriteWikilinks("See `[[identity-model]]` for detail", INDEX, URL);
+  expect(out).toBe(
+    "See [identity-model](https://github.com/xchromo/osn/blob/main/wiki/systems/identity-model.md) for detail",
+  );
+});
+
 test("leaves an existing markdown link alone", () => {
   const input = "[The Copenhagen Book](https://thecopenhagenbook.com/)";
   expect(rewriteWikilinks(input, INDEX, URL)).toBe(input);

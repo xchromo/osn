@@ -2,7 +2,7 @@ import { Glob } from "bun";
 
 import { checkManifest } from "./assert";
 import { classify } from "./classify";
-import { createIssue, ghApi, linkSubIssue, Throttle } from "./github";
+import { createIssue, ghApi, linkSubIssue, readIssue, Throttle, updateIssue } from "./github";
 import { parseTodo } from "./parse";
 import { PHASES } from "./phases";
 import { buildManifest } from "./render";
@@ -100,6 +100,45 @@ async function apply(phase: string, limit = Infinity): Promise<void> {
   }
 }
 
+/**
+ * Push a corrected rendering onto issues already created. A defect in the
+ * rendering can surface hundreds of calls into a run, and the alternative is
+ * editing them by hand. Only issues whose title or body actually moved are
+ * touched, so a repeat run is free.
+ */
+async function resync(limit = Infinity): Promise<void> {
+  const manifest = await plan();
+  const state: Record<string, { number: number; id: string }> = await Bun.file(CREATED)
+    .json()
+    .catch(() => ({}));
+
+  // A read is an ordinary GET against the 5,000/hr allowance, so it needs
+  // nothing like the gap a write does. Only the PATCH is content creation.
+  const reads = new Throttle(500);
+  const writes = new Throttle(8_000);
+  let budget = limit;
+  let checked = 0;
+  let changed = 0;
+  for (const entry of manifest) {
+    const created = state[`${entry.sourceFile}:${entry.sourceLine}`];
+    if (!created || budget <= 0) continue;
+    const repo = REPOS[entry.repo];
+    await reads.wait();
+    const live = await readIssue(ghApi, repo, created.number);
+    checked += 1;
+    if (live.title === entry.issueTitle && live.body === entry.issueBody) continue;
+    budget -= 1;
+    changed += 1;
+    await writes.wait();
+    await updateIssue(ghApi, repo, created.number, {
+      title: entry.issueTitle,
+      body: entry.issueBody,
+    });
+    console.log(`resync #${created.number}  ${entry.issueTitle.slice(0, 60)}`);
+  }
+  console.log(`${checked} checked, ${changed} updated`);
+}
+
 if (import.meta.main) {
   const command = Bun.argv[2] ?? "plan";
   if (command === "plan") {
@@ -121,11 +160,12 @@ if (import.meta.main) {
       console.error(`\n${violations.length} violations`);
       process.exit(1);
     }
-  } else if (command === "apply") {
+  } else if (command === "apply" || command === "resync") {
     const flag = Bun.argv.indexOf("--limit");
     const limit = flag === -1 ? Infinity : Number(Bun.argv[flag + 1]);
     if (Number.isNaN(limit) || limit <= 0) throw new Error("--limit wants a positive number");
-    await apply(Bun.argv[3] ?? "", limit);
+    if (command === "apply") await apply(Bun.argv[3] ?? "", limit);
+    else await resync(limit);
   } else {
     console.error(`unknown command: ${command}`);
     process.exit(1);

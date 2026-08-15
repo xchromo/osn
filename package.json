@@ -25,6 +25,7 @@
     "migrate:plan": "bun run scripts/todo-to-issues/main.ts plan",
     "migrate:verify": "bun run scripts/todo-to-issues/main.ts verify",
     "migrate:apply": "bun run scripts/todo-to-issues/main.ts apply",
+    "migrate:resync": "bun run scripts/todo-to-issues/main.ts resync",
     "clean": "git clean -fdX",
     "db:reset": "bun run --cwd osn/db db:reset && bun run --cwd pulse/db db:reset && bun run --cwd zap/db db:reset && bun run --cwd cire/db db:reset",
     "fmt": "bunx --bun oxfmt osn pulse zap shared cire '!**/*.{json,jsonc,md,yml,yaml,css,html,astro}'",

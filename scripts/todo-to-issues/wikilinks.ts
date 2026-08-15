@@ -1,4 +1,6 @@
 const WIKILINK = /\[\[([^\]]+)\]\]/g;
+/** Most of these pages are cited as `[[page]]`, backticks and all. */
+const CODED_WIKILINK = /`(\[\[[^\]]+\]\])`/g;
 
 export function buildWikiIndex(paths: string[]): Map<string, string> {
   const index = new Map<string, string>();
@@ -17,7 +19,9 @@ export function rewriteWikilinks(
   index: Map<string, string>,
   repoUrl: string,
 ): string {
-  return text.replace(WIKILINK, (_match, raw: string) => {
+  // A link left inside a code span is dead on GitHub -- it renders the markdown
+  // literally. Shed the backticks first so the rewrite produces a real link.
+  return text.replace(CODED_WIKILINK, "$1").replace(WIKILINK, (_match, raw: string) => {
     const target = raw.split("|")[0].trim().replace(/#.*$/, "");
     const path = index.get(target) ?? index.get(target.replace(/\/$/, ""));
     return path ? `[${target}](${repoUrl}/${path})` : `\`${target}\``;

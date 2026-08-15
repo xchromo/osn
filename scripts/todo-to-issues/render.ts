@@ -5,7 +5,7 @@ export const PUBLIC_BLOB = "https://github.com/xchromo/osn/blob/main";
 const MAX_TITLE = 120;
 const MIN_LEAD = 25;
 /** A trailing "See [[page]]" points at reading, not at work. The body keeps it. */
-const SEE_ALSO = /[\s.;,—-]*\bsee\s+\[\[[^\]]+\]\][.\s]*$/i;
+const SEE_ALSO = /[\s.;,—-]*\bsee\s+`?\[\[[^\]]+\]\]`?[.\s]*$/i;
 
 /** Markdown down to bare words. Headings and titles both become issue titles. */
 export function plainText(text: string): string {
