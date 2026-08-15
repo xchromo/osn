@@ -82,12 +82,29 @@ public final class OSNSession {
     /// to `.signedIn(profile)`. Never branches on whether the `begin` step
     /// found an account — `PasskeyLoginClient.signIn` already keeps that
     /// opaque.
+    ///
+    /// Brief T3 §4 modal collision: only one `ASAuthorizationController`
+    /// request can be live at a time. Cancels a still-armed autofill
+    /// request before starting the modal ceremony, and re-arms autofill
+    /// (same `anchorProvider`) if the modal flow throws or is cancelled —
+    /// a failed/cancelled button tap should not leave the QuickType
+    /// suggestion gone too.
     public func signIn(
         identifier: String?,
         anchorProvider: @escaping PresentationAnchorProvider
     ) async throws {
-        let response = try await loginClient.signIn(identifier: identifier, anchorProvider: anchorProvider)
-        state = .signedIn(response.profile)
+        #if os(iOS)
+        cancelAutoFillSignIn()
+        #endif
+        do {
+            let response = try await loginClient.signIn(identifier: identifier, anchorProvider: anchorProvider)
+            state = .signedIn(response.profile)
+        } catch {
+            #if os(iOS)
+            await startAutoFillSignIn(anchorProvider: anchorProvider)
+            #endif
+            throw error
+        }
     }
 
     /// `TokenRefresher.logout()` already deletes the Keychain access token
@@ -117,4 +134,66 @@ public final class OSNSession {
         guard !isFresh else { return }
         try await tokenRefresher.refresh()
     }
+
+    #if os(iOS)
+    private var autoFillHandle: PasskeyCeremonyHandle?
+
+    /// Conditional UI (brief T3 §4): arms `performAutoFillAssistedRequests()`
+    /// so the account's passkey shows up in the QuickType bar, letting a
+    /// returning user sign in with a tap instead of "Sign in with passkey".
+    /// Never throws and never lands on `.failed` — see
+    /// `attemptAutoFillSignIn` for why.
+    public func startAutoFillSignIn(anchorProvider: @escaping PresentationAnchorProvider) async {
+        await attemptAutoFillSignIn(anchorProvider: anchorProvider, isRetry: false)
+    }
+
+    public func cancelAutoFillSignIn() {
+        autoFillHandle?.cancel()
+        autoFillHandle = nil
+    }
+
+    /// The server's passkey challenge lives 120 seconds
+    /// (`osn/api/src/services/auth/constants.ts` `CHALLENGE_TTL_MS`). An
+    /// autofill request typically sits armed in the QuickType bar far
+    /// longer than that before the user taps it, so a non-cancellation
+    /// failure here is almost always an expired challenge, not a bad
+    /// credential — surfacing `.failed` for it would blame the user for
+    /// waiting. On such a failure this re-arms once with a fresh challenge
+    /// and stays silent; if the retry also fails it gives up and stays
+    /// `.signedOut`. Deliberately does not loop on a timer under the 120s
+    /// TTL instead: cancelling and re-issuing the request flickers the
+    /// QuickType suggestion, which is worse than leaving a slightly stale
+    /// one armed until the user acts or the view disappears.
+    private func attemptAutoFillSignIn(anchorProvider: @escaping PresentationAnchorProvider, isRetry: Bool) async {
+        do {
+            let begun = try await loginClient.beginLogin(identifier: nil, turnstileToken: nil)
+            let assertionRequest = try loginClient.makeAssertionRequest(from: begun)
+            let handle = PasskeyCeremonyHandle(
+                requests: [assertionRequest],
+                autoFill: true,
+                anchorProvider: anchorProvider
+            )
+            autoFillHandle = handle
+            let authorization = try await handle.result()
+            autoFillHandle = nil
+            let target = try loginClient.loginTarget(identifier: nil, begun: begun)
+            let assertion = try loginClient.packageAssertion(authorization)
+            let response = try await loginClient.complete(target: target, assertion: assertion)
+            state = .signedIn(response.profile)
+        } catch is CancellationError {
+            autoFillHandle = nil
+        } catch let error as PasskeyCeremonyError {
+            autoFillHandle = nil
+            if case .cancelled = error { return }
+            if !isRetry {
+                await attemptAutoFillSignIn(anchorProvider: anchorProvider, isRetry: true)
+            }
+        } catch {
+            autoFillHandle = nil
+            if !isRetry {
+                await attemptAutoFillSignIn(anchorProvider: anchorProvider, isRetry: true)
+            }
+        }
+    }
+    #endif
 }

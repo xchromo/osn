@@ -72,9 +72,28 @@
 - No confirmation against a live `osn-api` deployment. The shapes are now
   read off the server source rather than the brief (see Verified), but
   nothing has been checked against a captured production payload.
-- No conditional UI / passkey autofill: `PasskeyCeremonyRunner` never calls
-  `performAutoFillAssistedRequests()`. The discoverable-credential flow the
-  brief asked for works; the QuickType-bar suggestion does not exist yet.
+- Conditional UI / passkey autofill (brief T3): `OSNSession.startAutoFillSignIn`
+  arms `performAutoFillAssistedRequests()` via a new `PasskeyCeremonyHandle`
+  (cancellable, `#if os(iOS)`-gated), and `PasskeySignInView` starts/cancels it
+  in `.task`/`.onDisappear`. The three `PasskeyLoginClient` helpers it reuses —
+  `beginLogin`, `makeAssertionRequest`, `loginTarget` — are machine-tested
+  (`PasskeyLoginClientHelpersTests`), as is `SingleResumeContinuation`'s
+  behaviour under a cancel/completion race. What is **not** machine-tested,
+  anywhere: `packageAssertion(_:)` (needs an `ASAuthorizationPlatformPublicKeyCredentialAssertion`,
+  which Apple vends only from a real ceremony and exposes no public
+  initializer for), and the full autofill runtime path end to end
+  (`performAutoFillAssistedRequests()` itself, the QuickType suggestion
+  appearing, the one-shot silent re-arm on a 120s-TTL-expired challenge, the
+  modal/autofill collision handling in `signIn`). CI never executes any of
+  that — see the note below. It ships human-reviewed only.
+- CI coverage gap, stated plainly: the macOS host runs `swift test`, which
+  compiles and runs every `#if os(iOS)` block's *non*-iOS-only siblings but
+  cannot execute iOS-only code (`performAutoFillAssistedRequests()` doesn't
+  exist on macOS) or drive a real `ASAuthorizationController` ceremony either
+  way. The iOS lane runs `xcodebuild ... build`, not `test` — a typecheck, not
+  a run. So no line of the autofill path executes in CI on either platform.
+  A simulator test lane that could exercise it is a separate task, not
+  started here.
 - Xcode build of the Pulse target with the new entitlements has not been
   run — `swift build`/`swift test` only exercise the SPM package, not the
   Xcode project XcodeGen would generate. Nothing blocks that build now (see
