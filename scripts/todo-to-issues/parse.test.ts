@@ -2,6 +2,11 @@ import { expect, test } from "bun:test";
 
 import { parseTodo } from "./parse";
 
+test("a level-one heading names the section too", () => {
+  const items = parseTodo("# cire/api\n\n- [ ] Return the customisation on upload\n", "a.md");
+  expect(items[0]?.section).toBe("cire/api");
+});
+
 const SAMPLE = `# OSN Project TODO
 
 ## Up Next

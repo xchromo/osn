@@ -20,9 +20,60 @@ const base: Classified = {
 };
 
 test("strips emphasis and keeps the finding ID leading the title", () => {
-  expect(renderTitle(base)).toBe(
-    "S-M (register-abandon) — pre-existing; the cookie ships early. See sessions",
+  expect(renderTitle(base)).toBe("S-M (register-abandon) — pre-existing; the cookie ships early");
+});
+
+test("a bold lead becomes the title and the argument after it does not", () => {
+  const item = {
+    ...base,
+    title:
+      "**Invite image upload should return the full customisation** (P-I2) — `POST /invite/image/:slot` " +
+      "returns only the slot, so the builder must refetch the whole customisation after every upload.",
+  };
+  expect(renderTitle(item)).toBe("Invite image upload should return the full customisation");
+});
+
+test("a bold subject too short to stand alone takes the clause it opens", () => {
+  const item = {
+    ...base,
+    title:
+      "**Directory search** — a lat/lng bounding-box prefilter with a haversine ordering on D1; " +
+      "the radius comes from the wedding's canonical point, and it needs its own rate limiter.",
+  };
+  expect(renderTitle(item)).toBe(
+    "Directory search — a lat/lng bounding-box prefilter with a haversine ordering on D1",
   );
+});
+
+test("a dotted path is not mistaken for a clause end", () => {
+  const item = {
+    ...base,
+    title: "The deploy job reads wiki/TODO.md and never retries on failure. " + "word ".repeat(30),
+  };
+  expect(renderTitle(item)).toBe("The deploy job reads wiki/TODO.md and never retries on failure");
+});
+
+test("underscore emphasis goes and snake_case identifiers stay", () => {
+  const item = {
+    ...base,
+    title: "Replace `weddings.owner_osn_profile_id` with a join table _before_ the beta.",
+  };
+  expect(renderTitle(item)).toBe(
+    "Replace weddings.owner_osn_profile_id with a join table before the beta",
+  );
+});
+
+test("a trailing wiki pointer leaves the title but stays in the body", () => {
+  expect(renderTitle(base)).not.toContain("sessions");
+  expect(renderBody(base, INDEX)).toContain("sessions.md");
+});
+
+test("a title that already fits is kept whole", () => {
+  const item = {
+    ...base,
+    title: "**Marketing depth** — pricing, deeper feature pages, real imagery.",
+  };
+  expect(renderTitle(item)).toBe("Marketing depth — pricing, deeper feature pages, real imagery");
 });
 
 test("truncates a long title on a word boundary and marks it", () => {

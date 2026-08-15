@@ -25,7 +25,11 @@ export function parseTodo(markdown: string, sourceFile: string): Item[] {
     const heading = HEADING.exec(line);
     if (heading) {
       flush();
-      if (heading[1].length === 2) {
+      // The cire shards head their only section at `#` (`# cire/api`), so a rule
+      // that reads `##` alone leaves those items sectionless and the epic falls
+      // back to a file path. A `#` in wiki/TODO.md is the document title, which
+      // the first `##` overwrites before any item is reached.
+      if (heading[1].length <= 2) {
         section = heading[2].trim();
         subsection = null;
       } else if (heading[1].length === 3) {
