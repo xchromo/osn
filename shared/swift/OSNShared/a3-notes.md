@@ -62,6 +62,34 @@
   `PulseFeature`'s old `SignInView`. `PulseRootView` renders it against
   `session.auth`; no other view changed.
 
+## Musubi (second client)
+
+- New `MusubiFeature` target (`OSNKit`/`OSNAuth`/`OSNUI`/`OSNAuthUI`, no API
+  client — Musubi talks to OSNAuth's clients only). `MusubiRootView` gates
+  directly on `OSNSession.state` (no `PulseSession`-style wrapper) and
+  reuses `PasskeySignInView` unmodified. `MusubiAccountView` is read-only:
+  lists passkeys, shows the profile when `.signedIn` carries one (`nil` on a
+  restored session — handled, not force-unwrapped), and a sign-out button.
+  No rename/delete UI — both need a step-up ceremony
+  (`wiki/systems/step-up.md`), out of scope.
+- `ensureFreshAccessToken()` runs immediately before every
+  `PasskeyManagementClient.list()` call in `MusubiAccountView`, per
+  `RequestHelpers.applyBearerAccessToken`'s no-expiry-check/no-401-retry
+  behavior. A load failure surfaces inline in the view (error text + Retry
+  button) and never touches `session.state`.
+- `osn/ios/` mirrors `pulse/ios/` (`project.yml`, `Sources/App.swift`):
+  bundle id `social.musubi.app`, same team/App-Group/associated-domain
+  entitlements. AASA
+  (`osn/social/public/.well-known/apple-app-site-association`) now lists
+  both `FV59Y8RSUH.social.musubi.pulse` and `FV59Y8RSUH.social.musubi.app`.
+  `ci-swift.yml`'s path filter and `swift` job now also generate/build the
+  `Musubi` scheme; the job's `name:` string is untouched (may be pinned by a
+  required status check).
+- This branch did not run the two-app shared-cookie-jar check (signing in
+  on Pulse, confirming Musubi restores signed-in via the App Group jar) —
+  that is a simulator-level check outside this task, tracked below in §Not
+  verified, and is not closed by adding the second client.
+
 ## Not verified
 
 - No device/simulator run of an actual passkey ceremony (`ASAuthorizationController`
