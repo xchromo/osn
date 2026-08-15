@@ -33,7 +33,7 @@ export async function plan(): Promise<ManifestEntry[]> {
   return buildManifest(classified, index);
 }
 
-async function apply(phase: string): Promise<void> {
+async function apply(phase: string, limit = Infinity): Promise<void> {
   const manifest = await plan();
   const violations = checkManifest(manifest);
   if (violations.length > 0) {
@@ -51,12 +51,23 @@ async function apply(phase: string): Promise<void> {
   const save = () => Bun.write(CREATED, `${JSON.stringify(state, null, 2)}\n`);
   const key = (e: ManifestEntry) => `${e.sourceFile}:${e.sourceLine}`;
 
+  // A run may be capped, so a first batch can be read on GitHub before the rest
+  // follows. Every write is recorded in CREATED, so the next run resumes where
+  // this one stopped rather than repeating it.
+  let budget = limit;
+  const spend = async () => {
+    if (budget <= 0) return false;
+    budget -= 1;
+    await throttle.wait();
+    return true;
+  };
+
   // Epics first, so every child has a parent to attach to.
   for (const epic of new Set(entries.map((e) => e.epic))) {
     const sample = entries.find((e) => e.epic === epic)!;
     const epicKey = `epic:${sample.repo}:${epic}`;
     if (state[epicKey]) continue;
-    await throttle.wait();
+    if (!(await spend())) break;
     state[epicKey] = await createIssue(ghApi, REPOS[sample.repo], {
       title: epic,
       body: `Epic. Migrated from \`${sample.sourceFile}\` — section "${epic}".`,
@@ -68,7 +79,7 @@ async function apply(phase: string): Promise<void> {
 
   for (const entry of entries) {
     if (state[key(entry)]) continue;
-    await throttle.wait();
+    if (!(await spend())) break;
     state[key(entry)] = await createIssue(ghApi, REPOS[entry.repo], {
       title: entry.issueTitle,
       body: entry.issueBody,
@@ -82,7 +93,7 @@ async function apply(phase: string): Promise<void> {
     const child = state[key(entry)];
     const parent = state[`epic:${entry.repo}:${entry.epic}`];
     if (!child || !parent || state[`link:${key(entry)}`]) continue;
-    await throttle.wait();
+    if (!(await spend())) break;
     await linkSubIssue(ghApi, REPOS[entry.repo], parent.number, child.id);
     state[`link:${key(entry)}`] = child;
     await save();
@@ -111,7 +122,10 @@ if (import.meta.main) {
       process.exit(1);
     }
   } else if (command === "apply") {
-    await apply(Bun.argv[3] ?? "");
+    const flag = Bun.argv.indexOf("--limit");
+    const limit = flag === -1 ? Infinity : Number(Bun.argv[flag + 1]);
+    if (Number.isNaN(limit) || limit <= 0) throw new Error("--limit wants a positive number");
+    await apply(Bun.argv[3] ?? "", limit);
   } else {
     console.error(`unknown command: ${command}`);
     process.exit(1);
