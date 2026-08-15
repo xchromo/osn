@@ -13,7 +13,22 @@ export class Throttle {
   }
 }
 
-export const ghApi: Gh = async (args) => {
+/**
+ * Whether a failure happened before the request reached GitHub.
+ *
+ * A run is hundreds of calls long and one dropped connection should not end
+ * it. But a POST that failed *after* GitHub saw it may have created the issue
+ * anyway, and retrying that would file a duplicate. So only the failures that
+ * name the connection itself count -- DNS, dial, handshake. Anything else is
+ * raised and the run stops, which is what the resumable state file is for.
+ */
+export function isPreflightFailure(message: string): boolean {
+  return /dial tcp|no such host|connection refused|connection reset by peer|TLS handshake timeout|EOF$/i.test(
+    message,
+  );
+}
+
+const rawGhApi = async (args: string[]): Promise<unknown> => {
   const proc = Bun.spawn(["gh", "api", ...args], { stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -23,6 +38,23 @@ export const ghApi: Gh = async (args) => {
   if (code !== 0) throw new Error(`gh api failed (${code}): ${err.trim()}`);
   return out.trim() === "" ? {} : JSON.parse(out);
 };
+
+/** Retry a preflight failure a few times, backing off. */
+export function withRetry(inner: Gh, sleep: (ms: number) => Promise<void> = Bun.sleep): Gh {
+  return async (args) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await inner(args);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt >= 3 || !isPreflightFailure(message)) throw error;
+        await sleep(2_000 * 2 ** attempt);
+      }
+    }
+  };
+}
+
+export const ghApi: Gh = withRetry(rawGhApi);
 
 export async function createIssue(
   gh: Gh,
