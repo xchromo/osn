@@ -97,10 +97,24 @@ Project → Workflows:
    for `xchromo/osn` and `xchromo/osn-tracker`.
 2. **Item added to project** — set `Status` = `Backlog`.
 
-Do this **before** the migration runs. Auto-add is what makes the migration
-cost zero Project API calls; adding 639 issues by hand afterwards costs 639
-GraphQL mutations against the same secondary rate limit the issue creates are
-already fighting.
+Do this **before** the migration runs if you can. Auto-add is what makes the
+migration cost zero Project API calls.
+
+**It did not happen that way on the first run.** Creating the Project needs the
+`project` scope, and `gh auth refresh` cannot be run by an agent — it is
+interactive. Rather than stall the whole migration on one token grant, the
+issues were created first and the Project comes second. Auto-add only fires on
+issues opened *after* the workflow is enabled, so everything created before it
+has to be backfilled:
+
+```bash
+bun run scripts/todo-to-issues/backfill-project.ts $N          # dry run, prints the plan
+bun run scripts/todo-to-issues/backfill-project.ts $N --apply
+```
+
+It reads `.migration/created.json`, skips anything already on the board, and
+throttles at the same 8s gap the issue creation uses — an item-add is a
+content-creation mutation and counts against the same 500/hour.
 
 ## 6. Views (UI only)
 

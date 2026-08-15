@@ -25,7 +25,7 @@
 
 Two simplifications found while planning. Both reduce API load and neither changes the outcome.
 
-1. **The `Finding ID` project field is dropped.** Populating it for 344 migrated findings needs 344 extra GraphQL mutations, and the ID already leads the issue title (`S-M34 — …`). It stays greppable with `gh issue list --search "S-M34"`. The Project keeps three fields: Status, Priority, Effort.
+1. **The `Finding ID` project field is dropped.** Populating it for 356 migrated findings needs 356 extra GraphQL mutations, and the ID already leads the issue title (`S-M34 — …`). It stays greppable with `gh issue list --search "S-M34"`. The Project keeps three fields: Status, Priority, Effort.
 2. **Status is set by a built-in Project workflow, not by the script.** The "Item added to project" workflow sets `Status = Backlog` on add, costing zero API calls. The ~10 Up Next items get moved to `Up Next` by hand in the UI (Task 8), which is faster than any scripted pass.
 
 ## File Structure
@@ -48,7 +48,7 @@ scripts/todo-to-issues/
   main.ts         # CLI: `plan` (dry run) | `verify` | `apply --phase N`
 .migration/
   manifest.json   # committed; issue number <-> source file + line
-docs/runbooks/github-issues-setup.md   # Phase 0, the parts only a human can do
+wiki/runbooks/github-issues-setup.md   # Phase 0, the parts only a human can do
 ```
 
 Each module has one job and is testable without the network. `github.ts` is the only file that writes to GitHub; everything upstream of it is pure and covered by tests.
@@ -818,7 +818,7 @@ if (import.meta.main) {
 - [ ] **Step 6: Run the dry run and read the counts**
 
 Run: `bun run scripts/todo-to-issues/main.ts plan`
-Expected: `550 items` — `public: 206`, `private: 344`.
+Expected: `541 items` — `public: 185`, `private: 356`.
 
 If the numbers differ, do **not** adjust the expected numbers. Find the misclassified items with:
 ```bash
@@ -868,7 +868,7 @@ The manifest is the artifact under review. These assertions are what make it saf
 2. No body matches the business-content patterns: `/\bABN\b/`, `/English Street Ventures/i`, `/Lemon Squeezy/i`, `/\bMoR\b/`.
 3. No body contains `[[` — every wikilink resolved or degraded.
 4. Every entry has exactly one `product:` label and exactly one `area:` label.
-5. Counts match the spec: 206 public, 344 private.
+5. Counts match the spec: 185 public, 356 private.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -946,7 +946,7 @@ export type Violation = { rule: string; where: string; detail: string };
 const BUSINESS = [/\bABN\b/, /English Street Ventures/i, /Lemon Squeezy/i, /\bMoR\b/];
 const PRIVATE_AREAS = ["area:security", "area:performance", "area:compliance"];
 
-export const EXPECTED = { public: 206, private: 344 };
+export const EXPECTED = { public: 185, private: 356 };
 
 export function checkManifest(manifest: ManifestEntry[]): Violation[] {
   const violations: Violation[] = [];
@@ -1306,12 +1306,12 @@ git commit -m "feat(scripts): throttled resumable GitHub issue writer"
 The only task that needs the user. Everything here is one-off setup; the runbook records it so it can be redone.
 
 **Files:**
-- Create: `docs/runbooks/github-issues-setup.md`
+- Create: `wiki/runbooks/github-issues-setup.md`
 - Create: `scripts/todo-to-issues/labels.sh`
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `xchromo/osn-tracker` (private repo), 16 labels on both repos, the `OSN Platform` Project with three fields and four views.
+- Produces: `xchromo/osn-tracker` (private repo), 19 labels on both repos, the `OSN Platform` Project with three fields and four views.
 
 - [ ] **Step 1: Confirm the token has the project scopes**
 
@@ -1400,12 +1400,12 @@ In the Project → Workflows:
 
 - [ ] **Step 7: Write the runbook**
 
-`docs/runbooks/github-issues-setup.md` records steps 1–6 verbatim, plus: the project number, the tracker repo URL, and the rule that the project stays private. Follow the frontmatter convention used by the other runbooks in that directory (`title`, `description`, `tags`, `related`, `last-reviewed`).
+`wiki/runbooks/github-issues-setup.md` records steps 1–6 verbatim, plus: the project number, the tracker repo URL, and the rule that the project stays private. Follow the frontmatter convention used by the other runbooks in that directory (`title`, `description`, `tags`, `related`, `last-reviewed`).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add scripts/todo-to-issues/labels.sh docs/runbooks/github-issues-setup.md
+git add scripts/todo-to-issues/labels.sh wiki/runbooks/github-issues-setup.md
 git commit -m "chore: create the private tracker, labels and OSN Platform project"
 ```
 
@@ -1413,7 +1413,7 @@ git commit -m "chore: create the private tracker, labels and OSN Platform projec
 
 ## Task 8: Phase 1 — migrate in-flight work
 
-77 issues. The user asked for incomplete work first; this is that.
+69 issues. The user asked for incomplete work first; this is that.
 
 **Files:**
 - Modify: `.migration/created.json` (generated)
@@ -1431,7 +1431,7 @@ Expected: `77`, and the epic list covering Up Next, Pulse, OSN Core, Cire, Cire 
 - [ ] **Step 2: Apply**
 
 Run: `bun run scripts/todo-to-issues/main.ts apply 1`
-Expected: ~85 lines (8 epics + 77 issues), one every 8 seconds — about 12 minutes, then the sub-issue links, about 10 minutes more.
+Expected: 85 lines (16 epics + 69 issues), one every 8 seconds — about 11 minutes, then 69 sub-issue links, about 9 minutes more.
 
 If it stops on a secondary-rate-limit error, wait for the next hour and re-run the same command. `.migration/created.json` makes the re-run skip everything already created.
 
@@ -1457,12 +1457,12 @@ git commit -m "chore: migrate in-flight TODO items to GitHub Issues (phase 1)"
 
 ## Task 9: Phase 2 — migrate planned work
 
-129 issues: Zap, Verified Identity, Platform, Auth Improvements, Future.
+116 issues: Zap, Verified Identity, Platform, Auth Improvements, Future.
 
 - [ ] **Step 1: Apply**
 
 Run: `bun run scripts/todo-to-issues/main.ts apply 2`
-Expected: 5 epics + 129 issues + 129 links = 263 mutations. At 8s that is ~35 minutes and it crosses an hour boundary — expect one stop and one re-run.
+Expected: 25 epics + 116 issues + 116 links = 257 mutations. At 8s that is ~35 minutes and it crosses an hour boundary — expect one stop and one re-run.
 
 - [ ] **Step 2: Reconcile**
 
@@ -1486,7 +1486,7 @@ git commit -m "chore: migrate planned TODO items to GitHub Issues (phase 2)"
 
 ## Task 10: Phase 3 — migrate the backlogs to the private tracker
 
-344 issues. This is the disclosure-sensitive phase.
+356 issues. This is the disclosure-sensitive phase.
 
 - [ ] **Step 1: Re-run the gates immediately before applying**
 
@@ -1503,7 +1503,7 @@ Expected: `true`. If this prints `false`, stop — nothing gets created until it
 - [ ] **Step 3: Apply**
 
 Run: `bun run scripts/todo-to-issues/main.ts apply 3`
-Expected: 5 epics (Security High/Medium/Low, Performance, Compliance, plus the cire shards) + 344 issues + 344 links = ~700 mutations, spread over two hourly windows. Re-run after each stop.
+Expected: 60 epics (Security High/Medium/Low, Performance, Compliance, plus the cire shards) + 356 issues + 356 links = 772 mutations, spread over two hourly windows. Re-run after each stop.
 
 - [ ] **Step 4: Reconcile and confirm nothing leaked**
 
@@ -1559,7 +1559,7 @@ Tracked work lives in GitHub Issues, not here.
 
 Completed items are in [changelog/](changelog/). For how findings are tagged see
 [conventions/review-findings.md](conventions/review-findings.md). For the setup itself see
-[runbooks/github-issues-setup.md](../docs/runbooks/github-issues-setup.md).
+[runbooks/github-issues-setup.md](../../../wiki/runbooks/github-issues-setup.md).
 ```
 
 - [ ] **Step 3: Do the same for cire and delete the shards**
@@ -1712,4 +1712,4 @@ git commit -m "chore: rewrite prep-pr and new-feat around GitHub Issues"
 
 **Types.** `Item` → `Classified` → `ManifestEntry` extend one another in `types.ts`; `classify()` returns `Classified`, `buildManifest()` returns `ManifestEntry[]`, `checkManifest()` and `apply()` both consume `ManifestEntry`. `createIssue` returns `{number, id}` where `id` is stringified, and `linkSubIssue` takes that same string. `Gh` is the injection point in both `github.ts` and its test.
 
-**Counts.** 206 public + 344 private = 550, matching the spec and `grep -c` on the two sources (411 in `wiki/TODO.md`, 139 across the cire shards). Task 4 Step 6 fails loudly if the parser disagrees.
+**Counts.** 185 public + 356 private = 541. The spec's estimate was 206/344; the parser found fewer public items and more private ones once `# cire/api`-style headings set the section properly and the security backlogs were read whole. Task 4 Step 6 fails loudly if the parser disagrees with 185/356.
