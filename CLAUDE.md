@@ -176,7 +176,7 @@ So: tables and mermaid for anything a reader might hit through GitHub; the Obsid
 - **New system or pattern** → create wiki page, link from table above and `[[wiki/index]]`.
 - **Modify existing pattern** → update wiki page in same PR.
 - **Every wiki page must have YAML frontmatter** with `title`, `tags`, `related`, `last-reviewed`.
-- **Use `[[wiki links]]`** between wiki pages; never relative markdown links.
+- **Use `[[wiki links]]`** between wiki pages; never relative markdown links. The vault is `wiki/` alone, so a page in another tree — `cire/wiki/` — cannot be reached by a wikilink in any form: cite it as a backticked repo path (`` `cire/wiki/systems/vendors.md` ``). `[[vendors]]`, `[[systems/vendors]]` and `[[cire/wiki/systems/vendors]]` all render as broken links.
 - **Security/performance findings** in `wiki/TODO.md` include `[[wiki links]]` to affected system pages (e.g., `[[rate-limiting]]`, `[[arc-tokens]]`).
 - **Update `last-reviewed`** in frontmatter of any wiki page you touch.
 
@@ -241,7 +241,7 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 | oxfmt | `.oxfmtrc.json` — import sorting + Tailwind class sorting |
 | Runtime | Use `bunx --bun` for all tooling |
 | Branching | PRs required to merge to main; always work on feature branch |
-| Changesets | Every PR includes changeset (`bun run changeset`) — CI fails without. Package names must match workspace `name` field exactly (e.g. `"@pulse/web"`, not `"pulse"`). Never mix ignored (version-less, e.g. `@cire/*`) and versioned packages in one changeset — split them; Changeset Check (`scripts/validate-changesets.sh`) enforces both rules. **One exception**, added with the Swift work: a PR that touches nothing any versioned package ships — `shared/swift/`, `pulse/ios/`, `osn/ios/`, `.github/`, `scripts/`, `wiki/`, `docs/`, top-level prose — needs no changeset, because there is no honest package to name. The test is an **allowlist** (`scripts/changeset-required.sh`, fixtures in `changeset-required.test.sh`): anything not on it, including `bun.lock` and root `turbo.json`/`tsconfig.json`, still requires one |
+| Changesets | Every PR includes changeset (`bun run changeset`) — CI fails without. Package names must match workspace `name` field exactly (e.g. `"@pulse/web"`, not `"pulse"`). Never mix ignored (version-less, e.g. `@cire/*`) and versioned packages in one changeset — split them; Changeset Check (`scripts/validate-changesets.sh`) enforces both rules. **One exception**, added with the Swift work: a PR that touches nothing any versioned package ships — `shared/swift/`, `pulse/ios/`, `osn/ios/`, `.github/`, `.claude/`, `scripts/`, `wiki/`, `docs/`, top-level prose — needs no changeset, because there is no honest package to name. The test is an **allowlist** (`scripts/changeset-required.sh`, fixtures in `changeset-required.test.sh`): anything not on it, including `bun.lock` and root `turbo.json`/`tsconfig.json`, still requires one |
 | Versioning | Automatic — changesets consumed + committed by CI on merge to main |
 
 ## Commands
