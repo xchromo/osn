@@ -74,23 +74,27 @@ A single **private** org-level Project on `xchromo`, named **OSN Platform**.
 - Org-level because only org projects can span two repositories.
 - Private so tracker issue titles do not leak through the project view.
 
-Custom fields (4 of 50):
+Custom fields (3 of 50):
 
 | Field | Type | Values |
 |---|---|---|
 | Status | single-select | Backlog, Up Next, In Progress, In Review, Blocked, Done |
 | Priority | single-select | P0, P1, P2, P3 |
 | Effort | single-select | XS, S, M, L, XL |
-| Finding ID | text | preserves `S-M34`, `P-W2`, `C-L7`, `AUDIT-Z1` |
+
+No `Finding ID` field. Populating one for 344 migrated findings costs 344 extra GraphQL mutations, and the ID already leads the issue title (`S-M34 — …`), so `gh issue list --search "S-M34"` finds it. An unpopulated field is worse than no field.
 
 Views:
 
 1. **Board** — by Status
-2. **Table** — grouped by Product
-3. **Review findings** — filtered to `area:security,performance,compliance`, grouped by Severity
+2. **Table** — grouped by Labels (product is a label, not a field)
+3. **Review findings** — filtered to `area:security,performance,compliance`, grouped by Labels
 4. **Up Next** — Status = Up Next / In Progress, Priority P0–P1
 
-Auto-add workflow on both repos so every new issue lands in the project without an API call.
+Two built-in workflows carry the rest, both costing zero API calls:
+
+- **Auto-add** on both repos, so every new issue lands in the project.
+- **Item added to project** sets `Status` = `Backlog`. The migration script never touches project fields. The ~10 Up Next items get their Status and Priority set by hand in the UI during Phase 1 — the only hand-curation in the migration.
 
 ### Labels (identical on both repos)
 
@@ -99,7 +103,7 @@ Auto-add workflow on both repos so every new issue lands in the project without 
 - `severity:` `critical`, `high`, `medium`, `low`, `info`
 - `epic`
 
-Product / area / severity are **labels, not project fields**, so `gh issue list --label severity:critical` works without the project scope. Status / Priority / Effort / Finding ID are project fields because they are workflow state, not classification.
+Product / area / severity are **labels, not project fields**, so `gh issue list --label severity:critical` works without the project scope. Status / Priority / Effort are project fields because they are workflow state, not classification. Exactly one `product:` label per issue, so grouping the table view by Labels gives clean columns.
 
 Severity derives from the finding-ID prefix per `wiki/conventions/review-findings.md`: `C` → critical, `H`/`W` → high, `M` → medium, `L` → low, `I` → info.
 
@@ -111,7 +115,7 @@ Largest epic is Security Backlog at 97 items, under the 100-sub-issue cap. If a 
 
 ### Migration script
 
-`scripts/todo-to-issues.ts` — bun, committed to the repo, idempotent.
+`scripts/todo-to-issues/` — bun, committed to the repo, idempotent. Split by responsibility (`parse`, `classify`, `wikilinks`, `render`, `assert`, `github`, `main`) so everything upstream of the writer is pure and unit-tested; `github.ts` is the only module that talks to the network.
 
 1. **Parse.** Walk `wiki/TODO.md` and `cire/wiki/todo/*.md`. For each `- [ ]`, capture the item text plus every nested bullet and continuation paragraph until the next sibling. Item prose is dense and multi-paragraph; it carries over **verbatim**.
 2. **Classify.** Repo, labels, Finding ID, and severity from the item text and its `##` / `###` ancestors.
@@ -143,7 +147,7 @@ Phase 0 is the only phase blocked on the user. Phases 1–3 are the script; 4–
 
 Today Step 7 writes `S-*`/`P-*` findings into `wiki/TODO.md`, checks off completed items, and prunes Up Next. After migration:
 
-- New `S-*` / `P-*` / `C-*` findings → `gh issue create --repo xchromo/osn-tracker` with the severity label and the Finding ID field set. Body keeps the existing four-field format (Issue / Why / Solution / Rationale) unchanged.
+- New `S-*` / `P-*` / `C-*` findings → `gh issue create --repo xchromo/osn-tracker` with the severity, area, and product labels, and the finding ID leading the title. Body keeps the existing four-field format (Issue / Why / Solution / Rationale) unchanged.
 - Findings **fixed on this branch** → `Closes #N` in the PR body. Never edit a checkbox; never delete an issue.
 - Step 8's PR body gains a mandatory `## Issues` section listing every `Closes #N` and every issue opened.
 - "Up Next pruning" becomes a Project Status move, not a file edit.
@@ -166,7 +170,7 @@ Gains a step before the worktree: create the issue, or take an existing one by n
 
 ## Testing
 
-The script is verified by its dry run, not by unit tests: the manifest is the artifact under review. Specifically, before any write we check —
+Two layers. The pure modules (parse, classify, wikilinks, render, assert, and the throttle) carry unit tests run by `bun run test:migration`. On top of that the manifest is the artifact under review, and `bun run migrate:verify` refuses to apply unless every gate below passes —
 
 - Manifest issue count matches the grep counts in this document (206 public, 344 private, ~20 epics).
 - Zero items classified into the public repo carry a `severity:` label.
