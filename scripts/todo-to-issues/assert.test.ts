@@ -23,10 +23,10 @@ const ok: ManifestEntry = {
 // Every test builds a one-item manifest, so the two whole-manifest gates -- the count
 // and the override coverage -- always fire. Assert on the per-entry rules here; both
 // whole-manifest gates get their own tests below.
-const WHOLE_MANIFEST = ["expected-counts", "overrides-matched"];
+const WHOLE_MANIFEST = new Set(["expected-counts", "overrides-matched"]);
 const rules = (entries: ManifestEntry[]) =>
   checkManifest(entries)
-    .filter((v) => !WHOLE_MANIFEST.includes(v.rule))
+    .filter((v) => !WHOLE_MANIFEST.has(v.rule))
     .map((v) => v.rule);
 
 test("a clean public entry trips no content rule", () => {

@@ -5,7 +5,7 @@ import type { ManifestEntry } from "./types";
 export type Violation = { rule: string; where: string; detail: string };
 
 const BUSINESS = [/\bABN\b/, /English Street Ventures/i, /Lemon Squeezy/i, /\bMoR\b/];
-const PRIVATE_AREAS = ["area:security", "area:performance", "area:compliance"];
+const PRIVATE_AREAS = new Set(["area:security", "area:performance", "area:compliance"]);
 
 // Locked against the parser's own count of indent-0 open items, checked in at the
 // time of the migration. A mismatch means the source files moved under us -- stop
@@ -20,7 +20,7 @@ export function checkManifest(manifest: ManifestEntry[]): Violation[] {
     if (
       entry.repo === "public" &&
       (entry.labels.some((l) => l.startsWith("severity:")) ||
-        entry.labels.some((l) => PRIVATE_AREAS.includes(l)))
+        entry.labels.some((l) => PRIVATE_AREAS.has(l)))
     ) {
       violations.push({
         rule: "no-findings-in-public",
