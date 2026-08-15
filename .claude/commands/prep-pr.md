@@ -87,22 +87,79 @@ Ask the user: "Do you want to address any findings before pushing?" If yes, paus
 
 ---
 
-## Step 7 — Update documentation
+## Step 7 — File the findings as issues
 
-Before pushing, update the relevant docs to reflect the changes made on this branch.
+Work is tracked in GitHub Issues, not in a markdown checklist. Two repos:
 
-**Always check and update as needed:**
+| Kind of item | Repo |
+|---|---|
+| Review findings — `S-*`, `P-*`, `C-*` | **`xchromo/osn-tracker`** (private) |
+| Planned work, features, bugs | **`xchromo/osn`** (public) |
 
-- **`wiki/TODO.md` — Security/Performance backlogs**: add any new `S-*` / `P-*` findings from Step 6. Use the finding ID as the item label (e.g. `- [ ] S-M1 — No rate limit on /foo endpoint`). Include `[[wiki links]]` to affected system pages (e.g., `[[rate-limiting]]`, `[[arc-tokens]]`). Mark findings resolved on this branch with `[x]` + short note.
-- **`wiki/TODO.md` — App/Platform sections**: check off items completed by this branch.
-- **`wiki/TODO.md` — Up Next**: prune completed items. Review the full TODO and surface 2–3 suggested next priorities to the user — items that are now unblocked, newly urgent, or logically follow from this branch's work. Let the user decide whether to add them.
+`xchromo/osn` is public. A finding names an unpatched route, so filing one there publishes it. **Route by kind, not by severity** — an `S-`, `P-`, or `C-` ID always goes to the tracker, however minor it looks.
+
+### New findings from Step 6
+
+One issue per finding that this branch does **not** fix. Title leads with the finding ID; body keeps the same four fields the PR uses.
+
+```bash
+gh issue create --repo xchromo/osn-tracker \
+  --title "S-M1 — No rate limit on POST /events/:id/rsvp" \
+  --label "area:security" --label "severity:medium" --label "product:cire" \
+  --body "$(cat <<'EOF'
+**Issue:** What the problem is.
+**Why:** Risk, correctness, or design concern.
+**Solution:** What would fix it.
+**Rationale:** Why that is the right fix.
+
+Found reviewing `<branch-name>`.
+EOF
+)"
+```
+
+Labels, exactly one of each:
+
+- `area:` — `security` for `S-*`, `performance` for `P-*`, `compliance` for `C-*`
+- `severity:` — from the ID prefix per `wiki/conventions/review-findings.md`: `C` → `critical`, `H`/`W` → `high`, `M` → `medium`, `L` → `low`, `I` → `info`
+- `product:` — `osn-core`, `pulse`, `cire`, `zap`, `shared`, or `landing`
+
+### Findings fixed on this branch
+
+Do not open an issue and close it. Do not edit a checkbox. Put `Closes #N` in the PR body (Step 8) and let the merge close it.
+
+If the finding predates this branch it already has an issue — find it by ID, since the ID leads the title:
+
+```bash
+gh issue list --repo xchromo/osn-tracker --search "S-M1 in:title" --state open
+```
+
+If a fixed finding turns out to have no issue, open one and close it with a comment naming the PR. **Never delete an issue** — `wiki/conventions/review-findings.md` keeps the history.
+
+### Planned work completed by this branch
+
+Find its issue in the public repo and add it to the `Closes #N` list in Step 8. Same rule: no checkbox edits, no deletions.
+
+```bash
+gh issue list --repo xchromo/osn --search "<keywords>" --state open
+```
+
+### Up Next
+
+No longer a file to prune. Move the issue's **Status** field in the **OSN Platform** project — `Done` is set by the merge, so the only manual move here is promoting what this branch unblocked. Surface 2–3 candidates to the user and let them decide; do not move anything unasked.
+
+### Docs
+
 - **`CLAUDE.md`**: update if this branch introduces a new pattern, package, convention, or architectural decision that future AI sessions need to know about. Do not add noise — only update if the change is genuinely reusable context.
 - **`wiki/` pages**: if this branch introduces, modifies, or removes a system, pattern, or convention that has a corresponding wiki page, update that page:
   - **New system/pattern** → create a wiki page with YAML frontmatter (title, tags, related, packages, last-reviewed). Link from ≥2 existing pages. Add to the CLAUDE.md Wiki Navigation table and `wiki/index.md`.
   - **Modified system** → update the corresponding wiki page to reflect the changes.
   - **Update `last-reviewed`** in frontmatter of any wiki page you touch.
 
-Commit any doc updates with the message: `docs: update wiki and TODO for <branch-summary>`.
+The narrative wiki stays hand-written and stays in the repo. Only the checklists moved to issues.
+
+Commit any doc updates with the message: `docs: update wiki for <branch-summary>`.
+
+Report the issues opened and the issue numbers this branch closes — Step 8 needs both.
 
 ---
 
@@ -123,6 +180,15 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 ## Workspaces affected
 - <list of affected packages/apps, or "CI/infra only">
 
+## Issues
+
+Closes #<n> — <one-line title>
+Closes xchromo/osn-tracker#<n> — <finding ID only>
+
+Opened:
+- xchromo/osn#<n> — <title>
+- xchromo/osn-tracker#<n> — <finding ID only, no description>
+
 ## Decisions & issues
 
 <For every non-trivial decision, lint/type error, test failure, or security/perf finding — use this format per item:>
@@ -140,6 +206,12 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 EOF
 )"
 ```
+
+**The "Issues" section is mandatory.** It lists every issue this branch closes and every issue Step 7 opened. If the branch closes nothing and opened nothing, say "None" — an absent section reads as a forgotten one.
+
+**A PR on `xchromo/osn` is public.** Reference a tracker issue by number and finding ID only — never paste its title, its file:line, or a word of its body. `xchromo/osn-tracker#412 — S-M1` is the whole entry.
+
+A same-repo issue closes on merge with plain `Closes #<n>`. A tracker issue needs the full `Closes xchromo/osn-tracker#<n>`; that works across repos when you have write access to both, so verify it actually closed after the merge and close it by hand if not.
 
 **The "Decisions & issues" section is mandatory.** Every entry must use the four-field format above. Entries that were dismissed rather than fixed must still appear — include the rationale for dismissal in the Rationale field.
 

@@ -233,3 +233,5 @@ DerivedData/
 # it maps source lines to the issues already created, and `bun run clean` would
 # take it out with everything else ignored here.
 .migration/manifest.json
+# Shards handed to the disclosure audit, regenerated from the manifest.
+.migration/audit/

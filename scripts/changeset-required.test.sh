@@ -36,6 +36,14 @@ run_case "wiki and top-level prose only" skip \
 CLAUDE.md
 README.md'
 
+run_case "agent instructions only" skip \
+'.claude/commands/prep-pr.md
+.claude/settings.json'
+
+run_case "agent instructions plus one source file" required \
+'.claude/commands/prep-pr.md
+osn/api/src/index.ts'
+
 run_case "source file in a versioned package" required \
   'osn/api/src/routes/graph.ts'
 

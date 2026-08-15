@@ -6,7 +6,7 @@
 
 ## Problem
 
-All tracked work lives in two markdown checklists: `wiki/TODO.md` (411 open items, 1034 lines) and `cire/wiki/todo/*.md` (139 open items across 10 shards). Both are edited by hand and by the `prep-pr` command. This costs us:
+All tracked work lives in two markdown checklists: `wiki/TODO.md` (406 open top-level items, 1034 lines) and `cire/wiki/todo/*.md` (135 open top-level items across 10 shards). Both are edited by hand and by the `prep-pr` command. This costs us:
 
 - **Merge collisions.** Every feature PR touches the same TODO file. The cire shards exist only to work around this.
 - **No query.** "What P0 security work is open in Pulse?" needs a grep and a read, not a filter.
@@ -19,7 +19,9 @@ Move to GitHub Issues + one org-level Project, keep the narrative wiki, and rewr
 
 ### Disclosure
 
-`xchromo/osn` is a **public** repo. The security, performance, and compliance backlogs carry 344 open findings with file:line references, exploitability notes, and named unpatched routes. Publishing them is publishing an attack map. This forces the two-repo split below.
+`xchromo/osn` is a **public** repo. The security, performance, and compliance backlogs carry 356 open findings with file:line references, exploitability notes, and named unpatched routes. Publishing them is publishing an attack map. This forces the two-repo split below.
+
+Routing by section alone is not enough, and an audit of the public bucket proved it: 12 findings sat outside the three backlog sections. Six were bolded IDs the classifier's anchored regex never saw (`**S-L2 …**`), six were prose in Up Next and Platform naming a live gap with no ID at all. Both are fixed in `scripts/todo-to-issues/` — the first by matching through emphasis and routing on the ID's own prefix, the second by an audited override list. See "Content-based routing" below.
 
 Business and monetisation content (`wiki/business/`, gitignored) never enters an issue, public or private.
 
@@ -33,12 +35,12 @@ Business and monetisation content (`wiki/business/`, gitignored) never enters an
 |---|---|---|
 | Items per Project v2 | 50,000 | No |
 | Fields per Project | 50 | No |
-| Sub-issues per parent | 100 | No (largest epic ≈ 97) |
+| Sub-issues per parent | 100 | No (largest epic ≈ 97 — watch it) |
 | Sub-issue nesting depth | 8 | No (we use 2) |
 | Primary rate limit | 5,000 req/hr | No |
 | **Secondary: content creation** | **80/min, 500/hr** | **Yes** |
 
-~570 issue creates plus ~550 sub-issue links ≈ 1,120 mutations ≈ three hourly windows at a self-imposed 450/hr with an 8s throttle. Project membership costs **zero** API calls — the Project's built-in auto-add workflow pulls new issues in, saving ~570 `addProjectV2ItemById` mutations.
+639 issue creates plus 541 sub-issue links = 1,180 mutations ≈ three hourly windows at a self-imposed 450/hr with an 8s throttle. Project membership costs **zero** API calls — the Project's built-in auto-add workflow pulls new issues in, saving 639 `addProjectV2ItemById` mutations.
 
 ### Token scopes
 
@@ -58,14 +60,25 @@ Rule: **review findings → private tracker; planned work → public repo.**
 
 | | Repo | Content | Open |
 |---|---|---|---|
-| Public | `xchromo/osn` | Up Next, per-app sections, Zap, Verified Identity, Platform, Auth Improvements, Future; cire status/web/api/db/import/platform | **206** |
-| Private (new) | `xchromo/osn-tracker` | Security, Performance, Compliance backlogs — both osn and cire | **344** |
+| Public | `xchromo/osn` | Up Next, per-app sections, Zap, Verified Identity, Platform, Auth Improvements, Future; cire status/web/api/db/import/platform | **185** |
+| Private (new) | `xchromo/osn-tracker` | Security, Performance, Compliance backlogs — both osn and cire, plus the 12 findings filed elsewhere | **356** |
 
-Plus ~20 epic parents → **~570 issues**.
+Plus 98 epic parents (41 public, 57 private) → **639 issues**.
 
 The performance backlog goes private with security and compliance. Perf findings here describe unbounded queries, missing pagination, and unthrottled endpoints — on a public repo they read as a DoS shopping list. One rule ("findings are private") also keeps `prep-pr` routing by *kind*, not by a severity judgment call it would get wrong.
 
-Auth Improvements (Copenhagen Book) stays **public**: its three open items are roadmap hardening — JWKS migration for `@zap/api`, 8-digit registration OTP, device/session listing UI — not open vulnerabilities.
+Auth Improvements (Copenhagen Book) stays **public** apart from one item. The 8-digit registration OTP and the device/session listing UI are roadmap hardening, not open vulnerabilities. The JWKS migration for `@zap/api` (H4) is different: it says in as many words which live service still verifies on a shared secret, and calls it the weakest of the set. That one is overridden private.
+
+### Content-based routing
+
+Section routing is the default and it is right for the great majority of items. Two escape hatches cover what it misses, both in `scripts/todo-to-issues/classify.ts`:
+
+1. **The finding ID outranks the section.** `S-`, `P-`, and `C-` map to security, performance, and compliance wherever the item was filed, and the ID is matched through leading `**`/`_` emphasis. Six findings under Platform were routing public purely because their ID was bolded. `T-` carries no area — test findings are coverage gaps, not defects, and are not filed.
+2. **An audited override list** (`private-overrides.ts`) for prose that names a live gap without an ID. Six entries, each pinned to a file and line, each carrying a written reason.
+
+An override is pinned to a line, so an edit above it slides the target and the override silently stops applying. The `overrides-matched` gate in `assert.ts` closes that: every override must match exactly one manifest item, that item's title must still contain the recorded fragment, and it must have routed private. A shifted line fails the run.
+
+Two of the twelve came from the harness flagging a subagent's own reasoning, not from the audit's verdict — the refuters had cleared both for publication. They are routed private anyway. On this question the cost of a false positive is a public issue that reads slightly over-cautious; the cost of a false negative is unrecoverable.
 
 ### One org Project
 
@@ -82,7 +95,7 @@ Custom fields (3 of 50):
 | Priority | single-select | P0, P1, P2, P3 |
 | Effort | single-select | XS, S, M, L, XL |
 
-No `Finding ID` field. Populating one for 344 migrated findings costs 344 extra GraphQL mutations, and the ID already leads the issue title (`S-M34 — …`), so `gh issue list --search "S-M34"` finds it. An unpopulated field is worse than no field.
+No `Finding ID` field. Populating one for 356 migrated findings costs 356 extra GraphQL mutations, and the ID already leads the issue title (`S-M34 — …`), so `gh issue list --search "S-M34"` finds it. An unpopulated field is worse than no field.
 
 Views:
 
@@ -133,9 +146,9 @@ Incomplete work first, backlog second — per the original ask.
 | Phase | Work | Issues |
 |---|---|---|
 | **0** | Token refresh (user); create `osn-tracker`; labels on both repos; project + fields + views + auto-add | 0 |
-| **1** | **In-flight**: Up Next 10, Pulse 11, OSN Core 12, Cire 2, Cire Landing 7, Landing 3, cire shards 32 | **77** |
-| **2** | Planned, not started: Zap 39, Verified Identity 38, Platform 38, Auth 3, Future 11 | **129** |
-| **3** | Backlogs → private tracker: Security 97+35, Performance 76+72, Compliance 64 | **344** |
+| **1** | **In-flight**: Up Next 10, Pulse 11, OSN Core 10, Cire 2, Cire Landing 7, Landing 3, cire shards 26 | **69** |
+| **2** | Planned, not started: Zap 39, Verified Identity 37, Platform 27, Auth 2, Future 11 | **116** |
+| **3** | Findings → private tracker: Security 107+31, Performance 77+72, Compliance 65+4 (osn+cire) | **356** |
 | **4** | Docs: fold `[x]` into `wiki/changelog/`, delete TODO checklists, leave pointer pages | 0 |
 | **5** | Rewrite `prep-pr.md` + `new-feat.md`; add `.github/ISSUE_TEMPLATE/` | 0 |
 
@@ -172,7 +185,9 @@ Gains a step before the worktree: create the issue, or take an existing one by n
 
 Two layers. The pure modules (parse, classify, wikilinks, render, assert, and the throttle) carry unit tests run by `bun run test:migration`. On top of that the manifest is the artifact under review, and `bun run migrate:verify` refuses to apply unless every gate below passes —
 
-- Manifest issue count matches the grep counts in this document (206 public, 344 private, ~20 epics).
+- Manifest issue count matches the counts in this document: 541 items, 185 public and 356 private, in 98 epics. An earlier draft said 550 because it counted nested checkboxes; those stay inside their parent's body rather than becoming issues, and `grep -c "^- \[ \]"` confirms 406 + 135.
+- Every item falls into exactly one migration phase — 69 / 116 / 356, no orphans, no overlaps. A renamed heading fails this gate instead of silently dropping its items.
+- Every override in `private-overrides.ts` matched exactly one item, on a title that still reads as recorded, and that item routed private.
 - Zero items classified into the public repo carry a `severity:` label.
 - Zero manifest bodies match the business-content patterns (ABN, entity name, pricing).
 - Every `[[wikilink]]` either resolved to a path that exists or degraded to a code span — no `[[` survives.

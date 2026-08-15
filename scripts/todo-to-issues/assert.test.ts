@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { checkManifest, EXPECTED } from "./assert";
+import { PRIVATE_OVERRIDES } from "./private-overrides";
 import type { ManifestEntry } from "./types";
 
 const ok: ManifestEntry = {
@@ -19,11 +20,13 @@ const ok: ManifestEntry = {
   epic: "Up Next",
 };
 
-// Every test builds a one-item manifest, so the count gate always fires. Assert on
-// the rules under test instead, and check the count gate on its own below.
+// Every test builds a one-item manifest, so the two whole-manifest gates -- the count
+// and the override coverage -- always fire. Assert on the per-entry rules here; both
+// whole-manifest gates get their own tests below.
+const WHOLE_MANIFEST = ["expected-counts", "overrides-matched"];
 const rules = (entries: ManifestEntry[]) =>
   checkManifest(entries)
-    .filter((v) => v.rule !== "expected-counts")
+    .filter((v) => !WHOLE_MANIFEST.includes(v.rule))
     .map((v) => v.rule);
 
 test("a clean public entry trips no content rule", () => {
@@ -63,4 +66,45 @@ test("the count gate fires when the manifest size drifts", () => {
   const violations = checkManifest([ok]).filter((v) => v.rule === "expected-counts");
   expect(violations).toHaveLength(2);
   expect(violations[0]?.detail).toBe(`expected ${EXPECTED.public}, got 1`);
+});
+
+const overrides = (entries: ManifestEntry[]) =>
+  checkManifest(entries).filter((v) => v.rule === "overrides-matched");
+
+const asOverride = (o: (typeof PRIVATE_OVERRIDES)[number]): ManifestEntry => ({
+  ...ok,
+  sourceFile: o.file,
+  sourceLine: o.line,
+  title: `${o.titleIncludes} and the rest of the line`,
+  repo: "private",
+  labels: [`product:${o.product ?? "osn-core"}`, `area:${o.area}`],
+});
+
+test("the override gate stays quiet when every override found its line", () => {
+  expect(overrides(PRIVATE_OVERRIDES.map(asOverride))).toEqual([]);
+});
+
+test("a shifted line fails the override gate instead of publishing", () => {
+  const first = PRIVATE_OVERRIDES[0]!;
+  const entries = PRIVATE_OVERRIDES.map(asOverride);
+  entries[0] = { ...entries[0]!, sourceLine: first.line + 3 };
+  expect(overrides(entries)[0]?.detail).toContain("matched 0 items");
+});
+
+test("a rewritten line fails the override gate", () => {
+  const entries = PRIVATE_OVERRIDES.map(asOverride);
+  entries[0] = { ...entries[0]!, title: "something else entirely", repo: "public" };
+  expect(overrides(entries)[0]?.detail).toContain("line now holds");
+  // The file is untouched, so the other overrides stay quiet -- only the moved one fails.
+  expect(overrides(entries)).toHaveLength(1);
+});
+
+test("an override that did not take is a violation", () => {
+  const entries = PRIVATE_OVERRIDES.map(asOverride);
+  entries[0] = { ...entries[0]!, repo: "public" };
+  expect(overrides(entries)[0]?.detail).toContain("routed public");
+});
+
+test("the override gate says nothing about a manifest that skipped the file", () => {
+  expect(overrides([{ ...ok, sourceFile: "cire/wiki/todo/perf.md" }])).toEqual([]);
 });

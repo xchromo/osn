@@ -4,7 +4,34 @@ If $ARGUMENTS is empty, ask the user for a feature name before proceeding.
 
 ---
 
-**First, detect the environment** — the branch setup differs between a personal terminal and the Claude Code remote (web/cloud) environment.
+**Step 0 — the issue comes first.** Every branch traces to an issue, so the work is visible before it starts, not after.
+
+If $ARGUMENTS is an issue number or URL (`#412`, `xchromo/osn#412`), take that issue:
+
+```bash
+gh issue view 412 --repo xchromo/osn --json number,title,body,labels
+```
+
+Otherwise open one:
+
+```bash
+gh issue create --repo xchromo/osn \
+  --title "<short imperative title>" \
+  --label "product:<osn-core|pulse|cire|zap|shared|landing>" \
+  --label "area:feature" \
+  --body "<what and why, in a couple of sentences>"
+```
+
+Two things follow from the issue:
+
+- **The branch name.** Kebab-case the issue title and prefix it — `feat/guest-list-filtering`. Pass this to Agent 1; it does not derive its own.
+- **Status.** Move the issue to **In Progress** in the **OSN Platform** project. `gh project item-edit` needs the `project` scope; if it is missing, say so and move it in the UI rather than skipping it.
+
+Work that fixes a review finding is the exception — that issue already exists in `xchromo/osn-tracker`. Take it by number, do not open a duplicate in the public repo, and keep the finding's text out of the public branch name.
+
+---
+
+**Then detect the environment** — the branch setup differs between a personal terminal and the Claude Code remote (web/cloud) environment.
 
 Run this check:
 
@@ -24,7 +51,7 @@ Then run **two agents in parallel**: the environment-appropriate variant of Agen
 Every feature gets its own worktree and branch in the bare repo (`/Users/ac/.work/osn.git`). Never check out the feature branch in an existing worktree (`main/`, etc.).
 
 1. Run `git fetch origin main`
-2. Derive a kebab-case branch name from the feature description, prefixed with `feat/` (e.g. `feat/user-profile-page`). The worktree directory name is the branch name without the prefix (e.g. `user-profile-page`)
+2. Use the branch name from Step 0 — derived from the issue title, prefixed with `feat/` (e.g. `feat/user-profile-page`). The worktree directory name is the branch name without the prefix (e.g. `user-profile-page`)
 3. Run `git worktree add /Users/ac/.work/osn.git/<dir-name> -b <branch-name> origin/main`
 4. Run `bun install` inside the new worktree (fresh worktrees have no `node_modules`)
 5. Report the exact branch name and worktree path created — **all feature work happens in that worktree**, not in `main/`
@@ -38,7 +65,7 @@ The remote environment already has the repo checked out in the working directory
 1. Run `git fetch origin main`
 2. Determine the branch:
    - If the session has a **designated development branch** (a `claude/*` branch named in the task/environment setup), use that exact branch name — do not invent a `feat/*` name. **Never push to a different branch without explicit permission.**
-   - Otherwise, derive a kebab-case `feat/*` branch name from the feature description.
+   - Otherwise, use the `feat/*` branch name from Step 0.
 3. Create/switch to the branch on top of the latest main: `git checkout -B <branch-name> origin/main` (use `-B` so re-running is idempotent; if you have uncommitted work in progress, switch without resetting instead).
 4. Report the exact branch name and that work proceeds in the current working directory.
 
@@ -85,6 +112,7 @@ If none apply, proceed with the repo's own conventions (root + area `CLAUDE.md`)
 ---
 
 After both agents complete, summarise:
+- The issue number and its Status in the project
 - The branch that was created (and, on PERSONAL, the worktree path)
 - The full implementation plan
 

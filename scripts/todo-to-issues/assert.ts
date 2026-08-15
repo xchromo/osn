@@ -1,4 +1,5 @@
 import { phasesOf } from "./phases";
+import { PRIVATE_OVERRIDES } from "./private-overrides";
 import type { ManifestEntry } from "./types";
 
 export type Violation = { rule: string; where: string; detail: string };
@@ -9,7 +10,7 @@ const PRIVATE_AREAS = ["area:security", "area:performance", "area:compliance"];
 // Locked against the parser's own count of indent-0 open items, checked in at the
 // time of the migration. A mismatch means the source files moved under us -- stop
 // and reconcile before creating anything.
-export const EXPECTED = { public: 197, private: 344 };
+export const EXPECTED = { public: 185, private: 356 };
 
 export function checkManifest(manifest: ManifestEntry[]): Violation[] {
   const violations: Violation[] = [];
@@ -57,6 +58,41 @@ export function checkManifest(manifest: ManifestEntry[]): Violation[] {
         rule: "one-phase",
         where: at(entry),
         detail: phases.length === 0 ? `no phase claims section "${entry.section}"` : phases.join(),
+      });
+    }
+  }
+
+  // An override names a file and a line. Edit the source above that line and it slides,
+  // the override stops matching, and the item routes public with no error -- the exact
+  // silence this whole gate exists to break.
+  for (const override of PRIVATE_OVERRIDES) {
+    const fromFile = manifest.filter((e) => e.sourceFile === override.file);
+    // A manifest that never touched the file cannot say anything about the override.
+    // Once the file is in, though, a missing line is a shifted line and must fail.
+    if (fromFile.length === 0) continue;
+    const matched = fromFile.filter((e) => e.sourceLine === override.line);
+    if (matched.length !== 1) {
+      violations.push({
+        rule: "overrides-matched",
+        where: `${override.file}:${override.line}`,
+        detail: `matched ${matched.length} items, expected 1 -- has the source moved?`,
+      });
+      continue;
+    }
+    const entry = matched[0]!;
+    // The title check is the one that catches a shifted line: the override still finds
+    // *an* item there, just not the one it was written for.
+    if (!entry.title.includes(override.titleIncludes)) {
+      violations.push({
+        rule: "overrides-matched",
+        where: `${override.file}:${override.line}`,
+        detail: `line now holds "${entry.issueTitle}", not "${override.titleIncludes}"`,
+      });
+    } else if (entry.repo !== "private") {
+      violations.push({
+        rule: "overrides-matched",
+        where: `${override.file}:${override.line}`,
+        detail: `override did not take: routed ${entry.repo}`,
       });
     }
   }
