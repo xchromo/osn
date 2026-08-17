@@ -2,7 +2,16 @@ import { Glob } from "bun";
 
 import { checkManifest } from "./assert";
 import { classify } from "./classify";
-import { createIssueOnce, ghApi, linkSubIssue, readIssue, Throttle, updateIssue } from "./github";
+import {
+  createIssueOnce,
+  ghApi,
+  linkSubIssue,
+  readIssue,
+  setIssueType,
+  Throttle,
+  updateIssue,
+} from "./github";
+import { issueType } from "./issue-type";
 import { parseTodo } from "./parse";
 import { PHASES } from "./phases";
 import { buildManifest } from "./render";
@@ -101,6 +110,62 @@ async function apply(phase: string, limit = Infinity): Promise<void> {
 }
 
 /**
+ * Give every created issue its GitHub issue type.
+ *
+ * Types are an org-level field a Project can group and filter on, and they were
+ * adopted after the first issues had been filed. Each issue that has been set
+ * is remembered in CREATED, so a stopped run resumes rather than repeating the
+ * ones it already did.
+ */
+async function types(limit = Infinity): Promise<void> {
+  const manifest = await plan();
+  const state: Record<string, { number: number; id: string }> = await Bun.file(CREATED)
+    .json()
+    .catch(() => ({}));
+
+  const targets: { key: string; repo: string; number: number; type: string }[] = [];
+  for (const entry of manifest) {
+    const created = state[`${entry.sourceFile}:${entry.sourceLine}`];
+    if (created) {
+      targets.push({
+        key: `type:${entry.sourceFile}:${entry.sourceLine}`,
+        repo: REPOS[entry.repo],
+        number: created.number,
+        type: issueType(entry.labels),
+      });
+    }
+    const epicKey = `epic:${entry.repo}:${entry.epic}`;
+    const epic = state[epicKey];
+    if (epic && !targets.some((t) => t.key === `type:${epicKey}`)) {
+      targets.push({
+        key: `type:${epicKey}`,
+        repo: REPOS[entry.repo],
+        number: epic.number,
+        type: issueType(["epic"]),
+      });
+    }
+  }
+
+  const throttle = new Throttle(8_000);
+  const save = () => Bun.write(CREATED, `${JSON.stringify(state, null, 2)}\n`);
+  let budget = limit;
+  let done = 0;
+  for (const target of targets) {
+    // The marker records which type was set, so a later change to the mapping
+    // re-applies rather than being mistaken for work already done.
+    if (state[target.key]?.id === target.type || budget <= 0) continue;
+    budget -= 1;
+    await throttle.wait();
+    await setIssueType(ghApi, target.repo, target.number, target.type);
+    state[target.key] = { number: target.number, id: target.type };
+    await save();
+    done += 1;
+    console.log(`type  #${target.number}  ${target.type}`);
+  }
+  console.log(`${targets.length} issues, ${done} set this run`);
+}
+
+/**
  * Push a corrected rendering onto issues already created. A defect in the
  * rendering can surface hundreds of calls into a run, and the alternative is
  * editing them by hand. Only issues whose title or body actually moved are
@@ -160,11 +225,12 @@ if (import.meta.main) {
       console.error(`\n${violations.length} violations`);
       process.exit(1);
     }
-  } else if (command === "apply" || command === "resync") {
+  } else if (command === "apply" || command === "resync" || command === "types") {
     const flag = Bun.argv.indexOf("--limit");
     const limit = flag === -1 ? Infinity : Number(Bun.argv[flag + 1]);
     if (Number.isNaN(limit) || limit <= 0) throw new Error("--limit wants a positive number");
     if (command === "apply") await apply(Bun.argv[3] ?? "", limit);
+    else if (command === "types") await types(limit);
     else await resync(limit);
   } else {
     console.error(`unknown command: ${command}`);

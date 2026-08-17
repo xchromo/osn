@@ -59,7 +59,7 @@ export const ghApi: Gh = withRetry(rawGhApi);
 export async function createIssue(
   gh: Gh,
   repo: string,
-  entry: { title: string; body: string; labels: string[] },
+  entry: { title: string; body: string; labels: string[]; type?: string },
 ): Promise<Created> {
   const args = [
     `repos/${repo}/issues`,
@@ -70,6 +70,7 @@ export async function createIssue(
     "-f",
     `body=${entry.body}`,
     ...entry.labels.flatMap((label) => ["-f", `labels[]=${label}`]),
+    ...(entry.type ? ["-f", `type=${entry.type}`] : []),
   ];
   const result = (await gh(args)) as { number: number; id: number };
   return { number: result.number, id: String(result.id) };
@@ -108,7 +109,7 @@ export async function findIssueByTitle(
 export async function createIssueOnce(
   gh: Gh,
   repo: string,
-  entry: { title: string; body: string; labels: string[] },
+  entry: { title: string; body: string; labels: string[]; type?: string },
 ): Promise<Created> {
   try {
     return await createIssue(gh, repo, entry);
@@ -146,6 +147,20 @@ export async function updateIssue(
     "-f",
     `body=${entry.body}`,
   ]);
+}
+
+/**
+ * Set an issue's type, the org-level field Projects can group and filter on.
+ * Separate from creation so issues filed before types were in use can be
+ * brought up to date without being rewritten.
+ */
+export async function setIssueType(
+  gh: Gh,
+  repo: string,
+  number: number,
+  type: string,
+): Promise<void> {
+  await gh([`repos/${repo}/issues/${number}`, "--method", "PATCH", "-f", `type=${type}`]);
 }
 
 export async function linkSubIssue(

@@ -4,7 +4,7 @@ tags: [runbooks, process, issues]
 related:
   - "[[review-findings]]"
   - "[[index]]"
-last-reviewed: 2026-08-15
+last-reviewed: 2026-08-17
 ---
 
 # GitHub Issues setup
@@ -68,7 +68,43 @@ changed. Every issue carries exactly one `product:` and one `area:`; only a
 finding carries a `severity:`, taken from the tier letter in its ID. The
 manifest gate in `scripts/todo-to-issues/assert.ts` rejects anything else.
 
-## 4. The Project
+## 4. Issue types
+
+Types are an org-level field, separate from labels: a label says which area an
+item belongs to, a type says what kind of work it is, and a Project can group
+and filter on it. `xchromo` uses the three GitHub creates by default.
+
+```bash
+gh api orgs/xchromo/issue-types --jq '.[] | "\(.id)  \(.name)"'
+```
+
+| Type | What gets it |
+|---|---|
+| `Bug` | An `S-*` or `P-*` finding — something behaves wrongly and wants fixing |
+| `Feature` | New capability, everything labelled `area:feature` |
+| `Task` | The rest: compliance items, ops, schema, docs, epics, and any finding at `severity:info`, which records an observation and asks for no fix |
+
+The mapping lives in `scripts/todo-to-issues/issue-type.ts` and is the same one
+`/prep-pr` and `/new-feat` follow when they file an issue by hand.
+
+Epics take `Task` because a custom `Epic` type would need the `admin:org`
+scope, and `gh auth refresh` cannot be run by an agent. The `epic` label is
+what distinguishes them; add the type later if the scope is ever granted.
+
+Setting a type on an issue that already exists:
+
+```bash
+gh issue edit 450 --repo xchromo/osn --type Task
+```
+
+To do that across everything the migration created — resumable, and it skips
+any issue already carrying the right type:
+
+```bash
+bun run scripts/todo-to-issues/main.ts types
+```
+
+## 5. The Project
 
 ```bash
 gh project create --owner xchromo --title "OSN Platform"
@@ -89,7 +125,7 @@ gh project field-create $N --owner xchromo --name "Effort" \
   --data-type SINGLE_SELECT --single-select-options "XS,S,M,L,XL"
 ```
 
-## 5. Workflows (UI only — no API)
+## 6. Workflows (UI only — no API)
 
 Project → Workflows:
 
@@ -116,16 +152,17 @@ It reads `.migration/created.json`, skips anything already on the board, and
 throttles at the same 8s gap the issue creation uses — an item-add is a
 content-creation mutation and counts against the same 500/hour.
 
-## 6. Views (UI only)
+## 7. Views (UI only)
 
 | View | Layout | Setting |
 |---|---|---|
 | Board | Board | Group by Status |
 | By product | Table | Group by Labels |
+| By type | Table | Group by Type |
 | Review findings | Table | Filter `label:area:security,area:performance,area:compliance`, group by Labels |
 | Up Next | Board | Filter `status:"Up Next","In Progress"` |
 
-## 7. Record the numbers
+## 8. Record the numbers
 
 Fill these in once, here:
 

@@ -17,10 +17,13 @@ Otherwise open one:
 ```bash
 gh issue create --repo xchromo/osn \
   --title "<short imperative title>" \
+  --type Feature \
   --label "product:<osn-core|pulse|cire|zap|shared|landing>" \
   --label "area:feature" \
   --body "<what and why, in a couple of sentences>"
 ```
+
+`--type` is an org-level field the Project groups and filters on, separate from the labels. `Feature` for new capability, `Bug` for something already built behaving wrongly, `Task` for the rest — a migration, a chore, a piece of infrastructure.
 
 Two things follow from the issue:
 
@@ -76,6 +79,7 @@ The remote environment already has the repo checked out in the working directory
 Explore the OSN codebase and produce a concise implementation plan for the feature described in $ARGUMENTS.
 
 The plan should:
+
 - Identify relevant existing files and patterns (Effect.ts services, Elysia routes, Drizzle schema, SolidJS frontend)
 - List the files that need to be created or modified
 - Outline the implementation steps in order
@@ -91,27 +95,28 @@ The plan should:
 
 **Skills to use while implementing** (invoke these — don't reinvent what a skill already encodes):
 
-| Part of the task | Skill to invoke |
-|---|---|
-| Any new UI — components, pages, layouts, visual/UX work | `frontend-design` (then review the result with `web-design-guidelines` for accessibility) |
-| Page-load / Core Web Vitals profiling | `web-perf` |
+| Part of the task                                                                                | Skill to invoke                                                                                         |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Any new UI — components, pages, layouts, visual/UX work                                         | `frontend-design` (then review the result with `web-design-guidelines` for accessibility)               |
+| Page-load / Core Web Vitals profiling                                                           | `web-perf`                                                                                              |
 | Anything Cloudflare (Workers, Pages, KV, **D1**, **R2**, Images, AI, caching, bindings, config) | `cloudflare`; writing/reviewing Worker code → `workers-best-practices`; running `wrangler` → `wrangler` |
-| Durable Objects (stateful coordination, RPC, alarms, WebSockets) | `durable-objects` |
-| Cloudflare Agents SDK / durable workflows / scheduled agents / MCP servers | `agents-sdk` |
-| Sandboxed / untrusted code execution | `sandbox-sdk` |
-| Sending or routing transactional email | `cloudflare-email-service` |
-| Turnstile / CAPTCHA / bot protection on a form | `turnstile-spin` |
-| Building an AI agent (tools, structured output, streaming) | `building-pydantic-ai-agents` (or `claude-api` for Anthropic SDK / model/pricing questions) |
-| Implementing any feature or bugfix logic | `test-driven-development` (write the failing test first) |
-| A bug, test failure, or unexpected behavior | `systematic-debugging` |
-| The feature is ambiguous / needs product direction | `brainstorming` **with the user first**, before implementing |
-| Importing from / pushing to Figma designs | the `figma-*` skills (`figma-use`, `figma-generate-design`, …) |
+| Durable Objects (stateful coordination, RPC, alarms, WebSockets)                                | `durable-objects`                                                                                       |
+| Cloudflare Agents SDK / durable workflows / scheduled agents / MCP servers                      | `agents-sdk`                                                                                            |
+| Sandboxed / untrusted code execution                                                            | `sandbox-sdk`                                                                                           |
+| Sending or routing transactional email                                                          | `cloudflare-email-service`                                                                              |
+| Turnstile / CAPTCHA / bot protection on a form                                                  | `turnstile-spin`                                                                                        |
+| Building an AI agent (tools, structured output, streaming)                                      | `building-pydantic-ai-agents` (or `claude-api` for Anthropic SDK / model/pricing questions)             |
+| Implementing any feature or bugfix logic                                                        | `test-driven-development` (write the failing test first)                                                |
+| A bug, test failure, or unexpected behavior                                                     | `systematic-debugging`                                                                                  |
+| The feature is ambiguous / needs product direction                                              | `brainstorming` **with the user first**, before implementing                                            |
+| Importing from / pushing to Figma designs                                                       | the `figma-*` skills (`figma-use`, `figma-generate-design`, …)                                          |
 
 If none apply, proceed with the repo's own conventions (root + area `CLAUDE.md`). When unsure whether a skill fits, invoke it — a wrong fit costs little.
 
 ---
 
 After both agents complete, summarise:
+
 - The issue number and its Status in the project
 - The branch that was created (and, on PERSONAL, the worktree path)
 - The full implementation plan

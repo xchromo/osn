@@ -7,6 +7,7 @@ Prepare the current branch for a pull request. Run the following steps in order.
 Run `git diff --name-only main...HEAD` to list all changed files.
 
 Map changed files to workspaces using these rules:
+
 - Files under `osn/<name>/` → workspace `osn/<name>`, package `@osn/<name>` (except the special case: `osn/db` → `@osn/db`, `osn/api` → `@osn/api`)
 - Files under `pulse/<name>/` → workspace `pulse/<name>`, package `@pulse/<name>`
 - Files under `shared/<name>/` → workspace `shared/<name>`, package `@shared/<name>`
@@ -21,12 +22,14 @@ Report: the list of affected workspaces and whether any CI/infra-only files were
 Run `git diff --name-only main...HEAD -- .changeset/` and filter out `config.json` and `README.md` to find new changeset files on this branch.
 
 **If no new changeset files exist:**
+
 - Summarise the changes (from the step 1 diff) in 1–2 sentences suitable for a changeset summary.
 - Present this summary to the user and ask them to confirm or edit it.
 - If all changes are CI/infra-only (no workspace packages affected), run: `bun run changeset --empty`
 - Otherwise, run `bun run changeset` — the interactive CLI will prompt for packages and bump type; guide the user to select the affected packages and an appropriate bump type (patch for fixes, minor for features, major for breaking changes).
 
 **If changeset(s) exist:**
+
 - Read each new changeset file and extract the package names listed in its YAML frontmatter (between the `---` fences).
 - **Validate every package name** against the actual `name` field in its `package.json`. Run `jq -r .name <workspace>/package.json` for each. A mismatch (e.g. `osn` instead of `@osn/api`, or `@osn/app` instead of `@osn/api`) will cause `changeset version` to fail in CI with "package not in workspace". Fix any mismatches before continuing.
 - Compare against the affected workspace packages from step 1.
@@ -91,10 +94,10 @@ Ask the user: "Do you want to address any findings before pushing?" If yes, paus
 
 Work is tracked in GitHub Issues, not in a markdown checklist. Two repos:
 
-| Kind of item | Repo |
-|---|---|
+| Kind of item                          | Repo                                |
+| ------------------------------------- | ----------------------------------- |
 | Review findings — `S-*`, `P-*`, `C-*` | **`xchromo/osn-tracker`** (private) |
-| Planned work, features, bugs | **`xchromo/osn`** (public) |
+| Planned work, features, bugs          | **`xchromo/osn`** (public)          |
 
 `xchromo/osn` is public. A finding names an unpatched route, so filing one there publishes it. **Route by kind, not by severity** — an `S-`, `P-`, or `C-` ID always goes to the tracker, however minor it looks.
 
@@ -105,6 +108,7 @@ One issue per finding that this branch does **not** fix. Title leads with the fi
 ```bash
 gh issue create --repo xchromo/osn-tracker \
   --title "S-M1 — No rate limit on POST /events/:id/rsvp" \
+  --type Bug \
   --label "area:security" --label "severity:medium" --label "product:cire" \
   --body "$(cat <<'EOF'
 **Issue:** What the problem is.
@@ -122,6 +126,11 @@ Labels, exactly one of each:
 - `area:` — `security` for `S-*`, `performance` for `P-*`, `compliance` for `C-*`
 - `severity:` — from the ID prefix per `wiki/conventions/review-findings.md`: `C` → `critical`, `H`/`W` → `high`, `M` → `medium`, `L` → `low`, `I` → `info`
 - `product:` — `osn-core`, `pulse`, `cire`, `zap`, `shared`, or `landing`
+
+`--type`, exactly one — an org-level field the Project groups and filters on, separate from the labels:
+
+- **`Bug`** for an `S-*` or `P-*` finding: something behaves wrongly and wants fixing
+- **`Task`** for a `C-*` compliance item, and for any finding filed at `severity:info` — it records an observation and asks for no fix
 
 ### Findings fixed on this branch
 
