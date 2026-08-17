@@ -110,6 +110,19 @@ any issue already carrying the right type:
 bun run scripts/todo-to-issues/main.ts types
 ```
 
+> **That command does nothing now, and reports success.** `types`, `resync`
+> and `verify` all start by re-parsing the source checklists into a manifest,
+> and Phase 4 of the migration deleted those checklists. An empty manifest
+> means no targets, so the run prints `0 issues, 0 set this run` and exits 0.
+> Every issue was typed before the sources went, so nothing is outstanding —
+> but if a future issue needs one, set it with `gh issue edit --type`, or list
+> the untyped ones from GitHub itself:
+>
+> ```bash
+> gh issue list --repo xchromo/osn --state all --limit 2000 \
+>   --json number,title,issueType --jq '.[] | select(.issueType == null) | "\(.number)  \(.title)"'
+> ```
+
 ## 5. The Project
 
 ```bash
