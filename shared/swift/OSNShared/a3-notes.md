@@ -101,10 +101,17 @@
   a run. So no line of the autofill path executes in CI on either platform.
   A simulator test lane that could exercise it is a separate task, not
   started here.
-- Xcode build of the Pulse target with the new entitlements has not been
-  run — `swift build`/`swift test` only exercise the SPM package, not the
-  Xcode project XcodeGen would generate. Nothing blocks that build now (see
-  BLOCKED below); it just hasn't been done.
+- The Xcode build of the Pulse target with the new entitlements has now been
+  run (`xcodegen generate` + `xcodebuild -scheme Pulse` against a concrete
+  iOS Simulator destination, signed, exit 0), and the resulting bundle
+  carries `com.apple.security.application-groups =>
+  ["group.social.musubi.session"]` under `FV59Y8RSUH.social.musubi.pulse`.
+  Probe it with `plutil -p <DerivedData>/Build/Intermediates.noindex/Pulse.build/Debug-iphonesimulator/Pulse.build/Pulse.app-Simulated.xcent`
+  — a simulator build is `adhoc, linker-signed`, so `codesign -d
+  --entitlements` prints nothing and proves nothing.
+  What that build does **not** cover: it typechecks the `#if os(iOS)`
+  autofill code that `swift build` compiles out, but it still never *runs*
+  it. See the CI coverage gap above — that stands.
 
 ## BLOCKED
 
