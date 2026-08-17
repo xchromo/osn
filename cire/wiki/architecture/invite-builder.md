@@ -5,7 +5,7 @@ related:
   - "[[index]]"
   - "[[monorepo-structure]]"
   - "[[invite-templates]]"
-last-reviewed: 2026-08-08
+last-reviewed: 2026-08-17
 ---
 
 # Invite Builder
@@ -1017,7 +1017,7 @@ resolved once in the `previewTokens` memo — and shared into `PaletteField`
 via its `tokens`/`adjustments` props, so the whole builder derives exactly
 once per colour-drag frame). Both layers stay permanently mounted with a
 CSS-only container-query switch — a deliberate trade (one markup source, no
-`ResizeObserver`) accepted as `P-I1` in `wiki/todo/perf.md` (cire wiki). The
+`ResizeObserver`) accepted as `P-I1` in `xchromo/osn-tracker`. The
 `url("…")` sink both layers' crop rendering shares (`cropBackgroundStyle`,
 lockstep organiser + guest copies) escapes its URL argument at the sink
 (S-L1). The hero preview is **crop-aware** (saved rectangles render via the
@@ -1196,7 +1196,7 @@ failures live there. Copy fields enforce the server caps client-side
 (`maxlength` + live counters from `COPY_CAPS`, kept in lockstep with
 `InviteTextBody`), so the 300-char closing-note limit is a counter, not a 400.
 A true draft→publish model that would unify the two persistence models needs
-API/schema support — tracked in `wiki/todo/deferred.md` (cire wiki), along
+API/schema support — tracked as an open issue in `xchromo/osn`, along
 with an `updatedAt` concurrent-edit guard (the GET payload doesn't expose a
 row version yet).
 
@@ -1312,4 +1312,4 @@ redacting logger, and metrics:
 
 Uploaded images are personal data (wedding photos) and inherit the existing cire
 retention gap. Tracked alongside the other cire entries — see
-`wiki/todo/db.md` / `wiki/todo/api.md`.
+`gh issue list --repo xchromo/osn --label product:cire`.

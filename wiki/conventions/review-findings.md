@@ -62,8 +62,11 @@ One issue per finding, with the ID leading the title and the four fields as the 
 ```bash
 gh issue create --repo xchromo/osn-tracker \
   --title "S-M3 -- No rate limit on /foo endpoint" \
+  --type Bug \
   --label "area:security" --label "severity:medium" --label "product:cire"
 ```
+
+`--type` is the org-level issue type, which the Project groups on. `S-*` and `P-*` findings are `Bug`: something already built behaves wrongly. `C-*` compliance items are `Task`, and so is anything filed at `severity:info` -- it records an observation and asks for no fix.
 
 Labels, exactly one of each:
 

@@ -17,7 +17,7 @@ related:
   - "[[turnstile]]"
   - "[[data-map]]"
   - "[[dpia/cire-guest-data]]"
-last-reviewed: 2026-08-07
+last-reviewed: 2026-08-17
 ---
 
 # Cire
@@ -125,7 +125,7 @@ one-time Turnstile widget step, and post-deploy smoke checks live in the
 
 ## Cire-internal docs
 
-Cire keeps its own knowledge graph: `cire/CLAUDE.md` is the AI entry point and `cire/wiki/` is the Obsidian vault (architecture, conventions, observability, per-area TODO shards under `cire/wiki/todo/`). This page and [[cire-auth]] cover the OSN-facing integration surface only.
+Cire keeps its own knowledge graph: `cire/CLAUDE.md` is the AI entry point and `cire/wiki/` is the Obsidian vault (architecture, conventions, observability). This page and [[cire-auth]] cover the OSN-facing integration surface only.
 
 ## Marketing site + platform roadmap
 
@@ -142,9 +142,8 @@ discovery with availability + location search, context-aware pricing estimates,
 budget, checklist, seating, and guest comms. The multi-tenant `weddings` root
 means this is a product build-out, not a migration. **A phased build plan now
 exists**: architecture + schema sketches in
-`cire/wiki/architecture/platform-plan.md`, actionable checklist in
-`cire/wiki/todo/platform.md`; also tracked under the Cire + Landing sections of
-`wiki/TODO.md`.
+`cire/wiki/architecture/platform-plan.md`, actionable items as open issues
+(`gh issue list --repo xchromo/osn --label product:cire`).
 
 ## Future integrations
 
