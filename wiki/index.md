@@ -12,6 +12,7 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 ## Quick Links
 
 - [[TODO]] — a pointer to GitHub Issues, where the backlogs now live
+- [[deferred-decisions]] — open questions parked for later, and the ones already settled
 - [`../CLAUDE.md`](../CLAUDE.md) — slim repo-root entry point (lives outside the vault)
 
 ## Architecture
