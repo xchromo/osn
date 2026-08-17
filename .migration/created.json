@@ -4730,5 +4730,1013 @@
   "link:wiki/TODO.md:992": {
     "number": 416,
     "id": "5168925108"
+  },
+  "type:cire/wiki/todo/api.md:38": {
+    "number": 466,
+    "id": "Feature"
+  },
+  "type:epic:public:cire/api": {
+    "number": 450,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/api.md:44": {
+    "number": 467,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/api.md:45": {
+    "number": 468,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/db.md:61": {
+    "number": 469,
+    "id": "Task"
+  },
+  "type:epic:public:cire/db": {
+    "number": 451,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/db.md:65": {
+    "number": 470,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:17": {
+    "number": 61,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Guest sign-out control (claude/cire-invites-claim-code-button-sn5br8, 2026-08-08)": {
+    "number": 1,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:18": {
+    "number": 62,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:26": {
+    "number": 63,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — RSVP save latency (claude/rsvp-modal-close-delay-d8sqnd, 2026-08-08)": {
+    "number": 2,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:33": {
+    "number": 64,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:39": {
+    "number": 65,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — RSVP confirmation timing + mobile invite preview (claude/pr388-deploy-mobile-invite-jlz8in,…": {
+    "number": 3,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:48": {
+    "number": 66,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — CSV import into each module's Edit mode (claude/cire-csv-import-reorganize-y1vbnk, 2026-08-06)": {
+    "number": 4,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:49": {
+    "number": 67,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:50": {
+    "number": 68,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:90": {
+    "number": 69,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Claim-field contrast + reveal ownership (claude/cire-invites-claim-input-bug-8q0ev8, 2026-08-05)": {
+    "number": 5,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:97": {
+    "number": 70,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Guests-editor review — household rename fix (claude/cire-web-editor-household-name-qcfkb4,…": {
+    "number": 6,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:103": {
+    "number": 71,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Bare domain → marketing site (claude/live-cire-wedding-rename-x3y623, 2026-08-02)": {
+    "number": 7,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:113": {
+    "number": 72,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Invite open path — restore, preconnect, prefetch (claude/invite-code-gating-hints-g8nw0o,…": {
+    "number": 8,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:114": {
+    "number": 73,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:115": {
+    "number": 74,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:116": {
+    "number": 75,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:123": {
+    "number": 76,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Guest-deletion fix — row identity + the households read (claude/cire-guest-deletion-bug-ve85ng,…": {
+    "number": 9,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:124": {
+    "number": 77,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:130": {
+    "number": 78,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — RSVP CSV per-event dietary + editor co-host add (claude/rsvp-notice-contrast-fix-m5px1l,…": {
+    "number": 10,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:143": {
+    "number": 79,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — RSVP-by editable by a co-host — review findings (claude/cire-rsvp-date-cohost-edit-va8w9i,…": {
+    "number": 11,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:145": {
+    "number": 80,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:155": {
+    "number": 81,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Single-sheet CSV uploads — review findings (claude/cire-dashboard-csv-uploads-zk5rt0, 2026-07-31)": {
+    "number": 12,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:180": {
+    "number": 82,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Host portal fluid layout — review findings (claude/host-portal-responsive-ui-zdy9ri, 2026-07-30)": {
+    "number": 13,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:182": {
+    "number": 83,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:183": {
+    "number": 84,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:184": {
+    "number": 85,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:185": {
+    "number": 86,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:194": {
+    "number": 87,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Closing hero band — review findings (claude/closing-hero-image-j40coh, 2026-07-31)": {
+    "number": 14,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:195": {
+    "number": 88,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:196": {
+    "number": 89,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:198": {
+    "number": 90,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:199": {
+    "number": 91,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:207": {
+    "number": 92,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Data-layer review fixes — pre-merge review findings (claude/cire-data-layer-review-s7d6gt,…": {
+    "number": 15,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:208": {
+    "number": 93,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:217": {
+    "number": 94,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Invite builder UX pass — review findings (claude/invite-builder-structure-review-ali18d,…": {
+    "number": 16,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:233": {
+    "number": 95,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Closing section — review findings (claude/cire-footer-customisation-xkc09y, 2026-07-29)": {
+    "number": 17,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:234": {
+    "number": 96,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:240": {
+    "number": 97,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Hero phone crop — review findings (claude/hero-image-responsive-crop-b6b74u, 2026-07-23)": {
+    "number": 18,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:249": {
+    "number": 98,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Guest invite taste pass — review findings (fix/cire-invite-taste-pass, 2026-07-22)": {
+    "number": 19,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:250": {
+    "number": 99,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:251": {
+    "number": 100,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:261": {
+    "number": 101,
+    "id": "Task"
+  },
+  "type:epic:private:Performance Backlog — Host dashboard redesign — review findings (feat/cire-host-dashboard-redesign, 2026-07-22)": {
+    "number": 20,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:272": {
+    "number": 102,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Invite customisation + builder restructure — review findings (cire-invite-customization branch)": {
+    "number": 21,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:277": {
+    "number": 103,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Optional End/Location CSV spec — review findings (wedding-management-platform branch)": {
+    "number": 22,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:296": {
+    "number": 104,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Crop editor + colour picker fixes — review findings (cire-color-upload-bugs branch)": {
+    "number": 23,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:331": {
+    "number": 105,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Observability instrumentation — review notes (Info, no action)": {
+    "number": 24,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:335": {
+    "number": 106,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:342": {
+    "number": 107,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:361": {
+    "number": 108,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Vendors PR B — vendor portal review notes (feat/cire-vendor-portal)": {
+    "number": 25,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:371": {
+    "number": 109,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Vendors S3 (directory browse) — /prep-pr perf review notes (feat/cire-vendors-directory-browse)": {
+    "number": 26,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:372": {
+    "number": 110,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:373": {
+    "number": 111,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:380": {
+    "number": 112,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Vendors S4 PR B — enquiry backend perf review notes (feat/cire-vendors-enquiries)": {
+    "number": 27,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:381": {
+    "number": 113,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:382": {
+    "number": 114,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:383": {
+    "number": 115,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:389": {
+    "number": 116,
+    "id": "Bug"
+  },
+  "type:epic:private:Performance Backlog — Platform tiering Phase 1 (entitlement foundation) — /prep-pr perf review notes…": {
+    "number": 28,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:390": {
+    "number": 117,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:391": {
+    "number": 118,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:392": {
+    "number": 119,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:393": {
+    "number": 120,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:398": {
+    "number": 121,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:400": {
+    "number": 122,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/perf.md:410": {
+    "number": 123,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:411": {
+    "number": 124,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:412": {
+    "number": 125,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:427": {
+    "number": 126,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:441": {
+    "number": 127,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:524": {
+    "number": 128,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:536": {
+    "number": 129,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:544": {
+    "number": 130,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:555": {
+    "number": 131,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/perf.md:561": {
+    "number": 132,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/platform.md:26": {
+    "number": 471,
+    "id": "Feature"
+  },
+  "type:epic:public:Phase 0 — core-domain refactor (invite decoupling)": {
+    "number": 452,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/platform.md:29": {
+    "number": 472,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:43": {
+    "number": 473,
+    "id": "Task"
+  },
+  "type:epic:public:Phase 2 — vendors & services": {
+    "number": 453,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/platform.md:44": {
+    "number": 474,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:45": {
+    "number": 475,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:46": {
+    "number": 476,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:51": {
+    "number": 477,
+    "id": "Feature"
+  },
+  "type:epic:public:Phase 3 — pricing estimates": {
+    "number": 454,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/platform.md:52": {
+    "number": 478,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:56": {
+    "number": 479,
+    "id": "Feature"
+  },
+  "type:epic:public:Phase 4 — seating, comms, registry": {
+    "number": 455,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/platform.md:57": {
+    "number": 480,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:58": {
+    "number": 481,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/platform.md:59": {
+    "number": 482,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/security.md:19": {
+    "number": 133,
+    "id": "Task"
+  },
+  "type:epic:private:Security Backlog — RSVP sheet close delay (claude/rsvp-modal-close-delay-d8sqnd, 2026-08-08)": {
+    "number": 29,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:25": {
+    "number": 134,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — RSVP partial saves + persistent confirmation fill (claude/fog-bloom-sweep-fill-issues-lwdamh,…": {
+    "number": 30,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:43": {
+    "number": 135,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Host-portal date picker + event timezones + design-aware preview…": {
+    "number": 31,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:55": {
+    "number": 136,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Household-rename fix — familyUpdates op (claude/cire-web-editor-household-name-qcfkb4, 2026-08-02)": {
+    "number": 32,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:73": {
+    "number": 137,
+    "id": "Task"
+  },
+  "type:epic:private:Security Backlog — Guest-deletion fix — row identity in the reconcile diff (claude/cire-guest-deletion-bug-ve85ng,…": {
+    "number": 33,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:82": {
+    "number": 138,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Guest session restore (claude/invite-code-gating-hints-g8nw0o, 2026-08-02)": {
+    "number": 34,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:83": {
+    "number": 139,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:84": {
+    "number": 140,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:102": {
+    "number": 141,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Invite styling + contrast warnings + hex picker (claude/cire-invite-styling-picker-87ni7b,…": {
+    "number": 35,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:103": {
+    "number": 142,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:107": {
+    "number": 143,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:117": {
+    "number": 144,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — RSVP-by editable by a co-host — review findings (claude/cire-rsvp-date-cohost-edit-va8w9i,…": {
+    "number": 36,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:124": {
+    "number": 145,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Closing hero band — review findings (claude/closing-hero-image-j40coh, 2026-07-31)": {
+    "number": 37,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:125": {
+    "number": 146,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:129": {
+    "number": 147,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:141": {
+    "number": 148,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Single-sheet CSV uploads + import error reporting — review findings…": {
+    "number": 38,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:142": {
+    "number": 149,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:143": {
+    "number": 150,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:171": {
+    "number": 151,
+    "id": "Bug"
+  },
+  "type:epic:private:Security Backlog — Closing section — review findings (claude/cire-footer-customisation-xkc09y, 2026-07-29)": {
+    "number": 39,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:172": {
+    "number": 152,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:215": {
+    "number": 153,
+    "id": "Bug"
+  },
+  "type:epic:private:High": {
+    "number": 40,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:225": {
+    "number": 154,
+    "id": "Bug"
+  },
+  "type:epic:private:Low": {
+    "number": 41,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:231": {
+    "number": 155,
+    "id": "Bug"
+  },
+  "type:epic:private:Low — Vendors S4 PR B — enquiry backend review notes (feat/cire-vendors-enquiries)": {
+    "number": 42,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:232": {
+    "number": 156,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:240": {
+    "number": 157,
+    "id": "Bug"
+  },
+  "type:epic:private:Low — Vendors PR B — vendor portal review notes (feat/cire-vendor-portal)": {
+    "number": 43,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:242": {
+    "number": 158,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:243": {
+    "number": 159,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:257": {
+    "number": 160,
+    "id": "Bug"
+  },
+  "type:epic:private:Low — Vendors S3 (directory browse) — /prep-pr review notes (feat/cire-vendors-directory-browse)": {
+    "number": 44,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:258": {
+    "number": 161,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:277": {
+    "number": 162,
+    "id": "Bug"
+  },
+  "type:epic:private:Low — Site-wide consent framework (claude/site-wide-consent-framework-jys0q2)": {
+    "number": 45,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/security.md:278": {
+    "number": 163,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:289": {
+    "number": 164,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:317": {
+    "number": 165,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:417": {
+    "number": 166,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/security.md:441": {
+    "number": 167,
+    "id": "Bug"
+  },
+  "type:cire/wiki/todo/spreadsheet-import.md:42": {
+    "number": 483,
+    "id": "Feature"
+  },
+  "type:epic:public:Spreadsheet ingestion (cire/api)": {
+    "number": 456,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/spreadsheet-import.md:57": {
+    "number": 484,
+    "id": "Feature"
+  },
+  "type:epic:public:Organiser portal (cire/host + cire/api)": {
+    "number": 457,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/status.md:42": {
+    "number": 485,
+    "id": "Task"
+  },
+  "type:epic:public:Up Next": {
+    "number": 458,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/status.md:43": {
+    "number": 486,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:84": {
+    "number": 487,
+    "id": "Feature"
+  },
+  "type:epic:public:Open": {
+    "number": 459,
+    "id": "Task"
+  },
+  "type:cire/wiki/todo/web.md:88": {
+    "number": 488,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:90": {
+    "number": 489,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:115": {
+    "number": 490,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:121": {
+    "number": 491,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:122": {
+    "number": 492,
+    "id": "Feature"
+  },
+  "type:cire/wiki/todo/web.md:123": {
+    "number": 493,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:9": {
+    "number": 494,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:15": {
+    "number": 168,
+    "id": "Bug"
+  },
+  "type:epic:private:Up Next": {
+    "number": 46,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:17": {
+    "number": 495,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:18": {
+    "number": 496,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:19": {
+    "number": 497,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:27": {
+    "number": 169,
+    "id": "Bug"
+  },
+  "type:wiki/TODO.md:28": {
+    "number": 498,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:29": {
+    "number": 499,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:30": {
+    "number": 500,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:31": {
+    "number": 501,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:111": {
+    "number": 502,
+    "id": "Feature"
+  },
+  "type:epic:public:Pulse (pulse/web + pulse/api + pulse/db)": {
+    "number": 460,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:112": {
+    "number": 503,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:113": {
+    "number": 504,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:115": {
+    "number": 505,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:116": {
+    "number": 506,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:119": {
+    "number": 507,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:120": {
+    "number": 508,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:121": {
+    "number": 509,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:122": {
+    "number": 510,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:125": {
+    "number": 511,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:127": {
+    "number": 512,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:138": {
+    "number": 513,
+    "id": "Feature"
+  },
+  "type:epic:public:OSN Core (osn/api)": {
+    "number": 461,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:139": {
+    "number": 514,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:149": {
+    "number": 515,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:150": {
+    "number": 516,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:151": {
+    "number": 517,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:154": {
+    "number": 518,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:162": {
+    "number": 519,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:163": {
+    "number": 520,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:166": {
+    "number": 521,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:167": {
+    "number": 522,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:177": {
+    "number": 561,
+    "id": "Feature"
+  },
+  "type:epic:public:Zap (zap/app + zap/api + zap/db) — M0 — Scaffold (remaining)": {
+    "number": 536,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:178": {
+    "number": 562,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:182": {
+    "number": 563,
+    "id": "Feature"
+  },
+  "type:epic:public:Zap (zap/app + zap/api + zap/db) — M1 — 1:1 DMs (E2E)": {
+    "number": 537,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:183": {
+    "number": 564,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:184": {
+    "number": 565,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:185": {
+    "number": 566,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:186": {
+    "number": 567,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:187": {
+    "number": 568,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:188": {
+    "number": 569,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:192": {
+    "number": 570,
+    "id": "Feature"
+  },
+  "type:epic:public:Zap (zap/app + zap/api + zap/db) — M2 — Group chats": {
+    "number": 538,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:193": {
+    "number": 571,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:194": {
+    "number": 572,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:195": {
+    "number": 573,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:196": {
+    "number": 574,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:197": {
+    "number": 575,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:201": {
+    "number": 576,
+    "id": "Feature"
+  },
+  "type:epic:public:Zap (zap/app + zap/api + zap/db) — M3 — Organisation chats (the differentiator)": {
+    "number": 539,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:202": {
+    "number": 577,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:203": {
+    "number": 578,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:204": {
+    "number": 579,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:205": {
+    "number": 580,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:206": {
+    "number": 581,
+    "id": "Feature"
+  },
+  "type:wiki/TODO.md:210": {
+    "number": 582,
+    "id": "Feature"
+  },
+  "type:epic:public:Zap (zap/app + zap/api + zap/db) — M4 — Locality / government channels": {
+    "number": 540,
+    "id": "Task"
+  },
+  "type:wiki/TODO.md:211": {
+    "number": 583,
+    "id": "Feature"
   }
 }
