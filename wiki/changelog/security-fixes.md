@@ -8,12 +8,16 @@ related:
   - "[[redis]]"
   - "[[identity-model]]"
   - "[[event-access]]"
-last-reviewed: 2026-08-13
+last-reviewed: 2026-08-17
 ---
 
 # Security Fixes — Completed
 
 Archived completed security findings from [[TODO]]. Finding IDs follow the [[review-findings]] format. For open findings see the Security Backlog in [[TODO]].
+
+## Stale cached profile survived a shared-Keychain sign-in swap (2026-08-17)
+
+- [x] **S-H1 (session-identity-cache)** — **Pulse and Musubi could show one signed-in user's name and email while acting as another.** **Issue:** Pulse and Musubi share one cookie jar (App Group `group.social.musubi.session`) and one Keychain access-token slot, but each app keeps its own `OSNSession` with its own cached `PasskeyProfile`. Sign into Musubi as A, switch Pulse to B, come back to Musubi: the cached profile still rendered A's name and email, while `loadPasskeys()` — which authenticates with the now-refreshed, now-B access token — listed B's passkeys, and "Sign out" would have ended B's session under A's label. The live access token was always the truth; only the cached profile could lie, and nothing in either app ever checked the two against each other. **Why:** one app displaying another signed-in user's identity is a direct trust failure on a shared device, not a cosmetic bug — the mismatch reaches destructive actions (sign-out) and account-management surfaces (passkey list) that a user reasonably expects to be scoped to the name on screen. **Solution:** a new `AccessTokenClaims` type decodes the `sub`/`email`/`handle`/`displayName` claims already present in every access token `issueAccessToken` mints (no new server contract; the signature is not verified client-side and this is documented as not a trust boundary — every authorization decision still happens server-side). A pure function, `reconciledProfile(cached:claims:)`, is the seam: no claims → `nil` (fail closed, never guess an identity); the cached profile's `id` matches the token's `sub` → keep the cache verbatim (the only source for `avatarUrl`, which claims can't supply); otherwise → replace it with a fresh profile built from the claims. `OSNSession` calls this from `restore()` after every silent relaunch refresh and from `ensureFreshAccessToken()` — the seam every authenticated call already goes through — on both its already-fresh and just-refreshed paths, so a sibling app rotating the shared Keychain slot to a different user is caught on this app's very next authenticated call. A new `revalidate()`, wired to `.onChange(of: scenePhase)` on `.active` in both `MusubiRootView` and `PulseRootView`, re-checks on every foreground too. **Rationale:** deriving displayed identity from the live token rather than trusting a per-app cache means the two apps can never again disagree about who is signed in, without requiring either app to know the other exists — the shared Keychain slot is the only coordination point needed. Not exercised: the real two-app ceremony (both apps installed side by side, one switching users while the other is foregrounded) — every test drives the same code paths through a mocked `URLSession` and a directly-written Keychain entry, the ceiling of what a single-package `swift test` run can cover. See [[identity-model]], [[sessions]].
 
 ## OTP codes written to the production log sink (2026-08-13)
 
