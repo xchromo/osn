@@ -477,6 +477,63 @@ it, which also switches on the cookie `Secure` flag, the plaintext-JWKS refusal
 and the fail-closed CORS check on those tiers — all three were silently off
 before, since the code keys them off the same var.
 
+### Passkey-less sign-in on local and dev
+
+A passkey is the only primary login factor, so a seeded account is unreachable:
+nobody can enrol a WebAuthn credential on behalf of a row a seed script wrote.
+`GET /dev/login` on `osn-api` mints a **real** OSN session for one fixed
+principal instead, so the OIDC chain, the organiser portal, the vendor portal and
+`@osn/social` all run untouched — there is no bypass anywhere else in the stack.
+
+The principal is fixed and provisioned on first use (idempotent, so it survives
+`osn-db-dev` never being reset):
+
+| Field | Value |
+|---|---|
+| Profile | `usr_dev_bootstrap_owner` — the id the cire seed writes as the **seeded wedding's owner**, so the organiser portal opens on real data |
+| Account | `acc_dev_bootstrap`, `dev@seed.osn.dev` |
+| Handle | `dev_bootstrap` — in `RESERVED_HANDLES`, so no real registration can take it first |
+| Org | `org_dev_bootstrap`, membership `admin` |
+
+Two gates, both fail-closed, both in `buildAppDeps` (`osn/api/src/build-deps.ts`,
+`servesDevLogin`, which is the same predicate as the docs gate above):
+
+- tier is `local` or `dev` — a typo'd `OSN_ENV` leaves it **off**;
+- `DEV_LOGIN_SECRET` is set.
+
+Fail either and the routes are **never mounted**, so the path answers 404 rather
+than a 401 that would admit the surface exists.
+
+```bash
+# local (bun run dev): put DEV_LOGIN_SECRET in osn/api/.env
+open "http://localhost:4000/dev/login?secret=$SECRET&return_to=http://localhost:4322/dashboard"
+
+# deployed dev — one-time, then redeploy to cycle warm isolates
+printf '%s' "$SECRET" | wrangler secret put DEV_LOGIN_SECRET --env dev
+open "https://id.dev.musubi.social/dev/login?secret=$SECRET&return_to=https://host.dev.cireweddings.com/dashboard"
+```
+
+`return_to` is optional; without it the response is the session JSON. With it the
+route 302s, after checking the target's origin against **the tier's own CORS
+allowlist** — an off-list `return_to` is a 400, never a redirect, so the endpoint
+can't be turned into an open redirect that leaks the session cookie.
+
+> [!important] Why `GET`, and why no button
+> The origin guard rejects a POST without a matching `Origin` header, so GET is
+> what works from an address bar, `curl` and headless Chrome. More importantly it
+> keeps the secret **out of every public frontend bundle** — nothing but the
+> operator's URL carries it. Do not add a "sign in as dev" button to any app.
+
+The session is a normal one: it shows up in `/sessions`, rotates, and can be
+revoked like any other. No `security_events` row is written (the kind union is
+closed and this has no place in a real account-security UI) — the session row and
+an `Effect.logWarning` are the audit trail.
+
+> [!note] The vendor portal signs in but lists nothing
+> The dev principal has an org and a membership, not a `directory_vendors` row.
+> `vendor.dev` therefore authenticates fine and shows an empty directory listing
+> until that row is seeded.
+
 ---
 
 ## 6. Verifying the dev tier

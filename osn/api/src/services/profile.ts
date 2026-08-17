@@ -69,6 +69,9 @@ const RESERVED_HANDLES = new Set([
   "status",
   "null",
   "undefined",
+  // The dev sign-in principal — see `routes/auth/dev-login.ts` and the copy of
+  // this set in `services/auth/constants.ts`.
+  "dev_bootstrap",
 ]);
 
 // ---------------------------------------------------------------------------

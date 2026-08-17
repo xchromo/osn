@@ -59,6 +59,14 @@ const isNonLocal = (env: EnvRecord): boolean => !!env.OSN_ENV && env.OSN_ENV !==
 const servesOpenapiDocs = (env: EnvRecord): boolean =>
   !isNonLocal(env) || parseDeploymentEnvironment(env.OSN_ENV) === "dev";
 
+/**
+ * Which tiers may mount the passkey-less dev sign-in: the same `local` + `dev`
+ * pair as the OpenAPI docs, derived the same way and failing closed on a tier
+ * string neither parser recognises. See `routes/auth/dev-login.ts` for why the
+ * route exists at all.
+ */
+const servesDevLogin = (env: EnvRecord): boolean => servesOpenapiDocs(env);
+
 // ---------------------------------------------------------------------------
 // JWT key pair — ES256 (ECDSA P-256)
 //
@@ -391,6 +399,14 @@ export async function buildAppDeps(env: EnvRecord, parts: BuildParts): Promise<B
     // fail-closed verifier enforces siteverify on those endpoints. The secret is
     // read here and never logged or placed in any other dep.
     turnstileVerifier: createTurnstileVerifier(env.TURNSTILE_SECRET_KEY),
+    // Passkey-less dev sign-in (KEY-OPTIONAL, tier-gated). Both gates must
+    // hold or this is `null` and the routes are never mounted — a 404, not a
+    // 401 that admits the surface exists. `return_to` reuses the tier's own
+    // CORS allowlist so there is no second place to keep origins in sync.
+    devLogin:
+      servesDevLogin(env) && env.DEV_LOGIN_SECRET
+        ? { secret: env.DEV_LOGIN_SECRET, allowedReturnOrigins: corsOrigins }
+        : null,
     // AOT and the observability plugin co-vary by runtime: both ON for Bun,
     // both OFF for workerd (AOT's `new Function` is forbidden there). The
     // `includeObservabilityPlugin` flag is the single Bun-vs-Workers

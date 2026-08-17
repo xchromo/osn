@@ -6,6 +6,7 @@ related:
   - "[[sessions]]"
   - "[[recovery-codes]]"
   - "[[step-up]]"
+  - "[[dev-environment]]"
 packages:
   - "@osn/api"
   - "@osn/client"
@@ -191,6 +192,21 @@ relaxation. A user who deleted their old passkey on another device before
 the recovery would technically hold an account backed by recovery codes
 alone. Because `deletePasskey` refuses
 to leave 0 passkeys, that state is unreachable in normal operation.
+
+## The one bypass, and where it can exist
+
+`GET|POST /dev/login` mints a real session for a single fixed principal without
+any ceremony, so a **seeded** account is reachable at all — a seed script cannot
+enrol a WebAuthn credential, which otherwise leaves every seeded row permanently
+locked out. It is not a general relaxation: one hard-coded profile id, no
+identifier parameter, nothing to enumerate.
+
+It exists only where both gates pass, and both fail closed: the tier is `local`
+or `dev`, and `DEV_LOGIN_SECRET` is set. Otherwise the routes are never mounted
+and the path is a 404. `staging` and `production` can never mount it whatever
+their secrets hold. The handle `dev_bootstrap` is in `RESERVED_HANDLES` so no
+real registration can occupy the principal's row first. Full operator notes in
+[[dev-environment]] §5.
 
 ## Enumeration safety (S-M1)
 
