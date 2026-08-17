@@ -101,7 +101,15 @@ public final class OSNSession {
             state = .signedIn(response.profile)
         } catch {
             #if os(iOS)
-            await startAutoFillSignIn(anchorProvider: anchorProvider)
+            // Detached, never awaited: `startAutoFillSignIn` does not return
+            // until the ceremony it arms completes, which for a QuickType
+            // suggestion means "when the user taps it", i.e. usually never.
+            // Awaiting it here would hold `signIn` open past the modal
+            // failure, and `PasskeySignInView` leaves its button disabled and
+            // its error unshown for exactly as long as `signIn` runs.
+            Task { [weak self] in
+                await self?.startAutoFillSignIn(anchorProvider: anchorProvider)
+            }
             #endif
             throw error
         }

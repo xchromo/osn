@@ -67,7 +67,7 @@ final class PasskeyCeremonyHandle {
     }
 }
 
-final class PasskeyCeremonyRunner: NSObject, @unchecked Sendable, ASAuthorizationControllerDelegate,
+final class PasskeyCeremonyRunner: NSObject, ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding
 {
     private let anchorProvider: PresentationAnchorProvider
