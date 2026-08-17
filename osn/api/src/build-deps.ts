@@ -68,8 +68,8 @@ const servesOpenapiDocs = (env: EnvRecord): boolean =>
  * `undefined` is the documented local default (see `isNonLocal`). See
  * `routes/auth/dev-login.ts` for why the route exists at all.
  */
-const DEV_LOGIN_TIERS: readonly (string | undefined)[] = [undefined, "local", "dev", "development"];
-const servesDevLogin = (env: EnvRecord): boolean => DEV_LOGIN_TIERS.includes(env.OSN_ENV);
+const DEV_LOGIN_TIERS = new Set<string | undefined>([undefined, "local", "dev", "development"]);
+const servesDevLogin = (env: EnvRecord): boolean => DEV_LOGIN_TIERS.has(env.OSN_ENV);
 
 /**
  * `DEV_LOGIN_RETURN_ORIGINS` — comma-separated origins a dev-login `return_to`
