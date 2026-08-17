@@ -85,10 +85,29 @@
   `ci-swift.yml`'s path filter and `swift` job now also generate/build the
   `Musubi` scheme; the job's `name:` string is untouched (may be pinned by a
   required status check).
-- This branch did not run the two-app shared-cookie-jar check (signing in
-  on Pulse, confirming Musubi restores signed-in via the App Group jar) —
-  that is a simulator-level check outside this task, tracked below in §Not
-  verified, and is not closed by adding the second client.
+- **App Group container verified on simulator, 2026-08-17.** Both apps were
+  built signed for `iPhone 17 Pro` (iOS 26.3, `C9C6D823-…`), installed, and
+  launched. Three things came out of it:
+  - The entitlement reaches the bundle. A simulator build is
+    `adhoc, linker-signed`, so `codesign -d --entitlements` shows nothing and
+    is the wrong probe; the entitlements live in a `__TEXT,__entitlements`
+    section and in `<Scheme>.build/<App>.app-Simulated.xcent`. `plutil -p` on
+    those prints `com.apple.security.application-groups =>
+    ["group.social.musubi.session"]` for both, under
+    `FV59Y8RSUH.social.musubi.pulse` and `FV59Y8RSUH.social.musubi.app`.
+  - Both apps resolve the **same** container:
+    `xcrun simctl get_app_container … group.social.musubi.session` returns
+    `…/Containers/Shared/AppGroup/DBBDABDC-4232-4719-BAB3-A65F87FF9FA7` for
+    each bundle id.
+  - `SharedCookieJar.makeSession()` does not throw in either app. Both
+    render `PasskeySignInView`; neither shows `MusubiApp`/`PulseApp`'s
+    `Text(sessionError)` fallback, which is the only thing an
+    `OSNKitError.appGroupContainerUnavailable` would produce. A live process
+    alone proves nothing here — the throw is caught, not fatal — so this was
+    checked by screenshot, not by exit status.
+- What that check does **not** close: signing in on Pulse and confirming
+  Musubi restores signed-in through the shared jar. That needs a real passkey
+  ceremony, which is blocked — see §Not verified.
 
 ## Not verified
 
