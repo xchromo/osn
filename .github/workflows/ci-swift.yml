@@ -115,11 +115,16 @@ jobs:
       # "OpenAPIGenerator" in package "swift-openapi-generator"`. The flag is
       # how you consent on a runner. The package and its version are pinned in
       # `Package.resolved`, so this doesn't widen what code can run.
+      # Both apps consume the same `OSNShared` products (`OSNKit`, `OSNAuth`,
+      # `OSNUI`). DerivedData is keyed per project by default, so without a
+      # shared path the second xcodebuild recompiles all three from scratch
+      # inside the same job. One path, one compile.
       - name: xcodebuild (Pulse)
         working-directory: pulse/ios
         run: |
           xcodebuild -scheme Pulse \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -skipPackagePluginValidation \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
@@ -135,6 +140,7 @@ jobs:
         run: |
           xcodebuild -scheme Musubi \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -skipPackagePluginValidation \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
