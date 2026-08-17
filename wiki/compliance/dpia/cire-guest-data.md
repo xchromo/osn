@@ -34,8 +34,8 @@ evidences the condition. The lawful-processing blocker is therefore **closed**;
 final sign-off now turns only on the residual retention gaps (C-H1) below.
 
 > **Label note.** This finding is labelled **C-H2 (cire dietary)** to
-> disambiguate it from the root Compliance Backlog **C-H2** (OSN account-erasure
-> endpoint), which is a separate finding tracked in `[[TODO]]`.
+> disambiguate it from the root **C-H2** (OSN account-erasure endpoint), which
+> is a separate finding in `xchromo/osn-tracker`.
 
 ## 1. Description of the processing
 
