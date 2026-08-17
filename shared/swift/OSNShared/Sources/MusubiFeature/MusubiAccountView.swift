@@ -65,11 +65,24 @@ public struct MusubiAccountView: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            try await session.ensureFreshAccessToken()
-            let client = PasskeyManagementClient(session: session.urlSession, environment: .local)
-            passkeys = try await client.list()
+            passkeys = try await fetchPasskeys(session: session)
         } catch {
             errorMessage = String(describing: error)
         }
     }
+}
+
+/// The network half of `MusubiAccountView.loadPasskeys()`, pulled out so a
+/// test can reach it: refreshes the access token if it's missing or about
+/// to expire, then lists passkeys. Contract this exists to protect — a
+/// failing `list()` must throw without ever mutating `session.state`, i.e.
+/// a passkey-list failure must not sign the user out. `session.state` is
+/// `private(set)`; nothing below this call has any way to write to it, and
+/// that's what makes the contract checkable from a test rather than merely
+/// asserted in a comment.
+@MainActor
+func fetchPasskeys(session: OSNSession) async throws -> [PasskeySummary] {
+    try await session.ensureFreshAccessToken()
+    let client = PasskeyManagementClient(session: session.urlSession, environment: .local)
+    return try await client.list()
 }

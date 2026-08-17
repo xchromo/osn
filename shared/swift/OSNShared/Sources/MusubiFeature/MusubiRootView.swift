@@ -18,7 +18,7 @@ public struct MusubiRootView: View {
     public var body: some View {
         content
             .task {
-                if session.state == .restoring {
+                if shouldRestore(session.state) {
                     await session.restore()
                 }
             }
@@ -35,4 +35,14 @@ public struct MusubiRootView: View {
             MusubiAccountView(session: session)
         }
     }
+}
+
+/// The gate `MusubiRootView`'s `.task` runs on: restore only fires while the
+/// session is still in its initial `.restoring` state, so it runs at most
+/// once per launch and a signed-in/signed-out/failed session is never
+/// re-restored. Pulled out of the view body so it's reachable from a test —
+/// `swift test` can't render SwiftUI, and a test that reimplements this
+/// switch against its own copy would stay green after the real gate broke.
+func shouldRestore(_ state: OSNSession.SessionState) -> Bool {
+    state == .restoring
 }

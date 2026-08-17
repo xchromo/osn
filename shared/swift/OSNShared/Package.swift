@@ -50,5 +50,6 @@ let package = Package(
         .target(name: "PulseFeature", dependencies: ["OSNKit", "OSNAuth", "OSNUI", "OSNAuthUI", "PulseAPI"]),
         .testTarget(name: "PulseFeatureTests", dependencies: ["PulseFeature", "OSNTesting"]),
         .target(name: "MusubiFeature", dependencies: ["OSNKit", "OSNAuth", "OSNUI", "OSNAuthUI"]),
+        .testTarget(name: "MusubiFeatureTests", dependencies: ["MusubiFeature", "OSNTesting"]),
     ]
 )
