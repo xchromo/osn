@@ -147,7 +147,7 @@ exists**: architecture + schema sketches in
 
 ## Future integrations
 
-- **Pulse event feed** — surface cire weddings in Pulse's event feed. Mechanism undecided: ARC-token pull from `cire/api` vs push-on-publish into `pulse/db` (Deferred Decisions in `wiki/TODO.md`).
+- **Pulse event feed** — surface cire weddings in Pulse's event feed. Mechanism undecided: ARC-token pull from `cire/api` vs push-on-publish into `pulse/db` (an open decision issue in `xchromo/osn`).
 - **Roles for co-hosts** — co-host *membership* shipped (#148, `wedding_hosts` + `weddingMember()`); co-hosts currently get read-only dashboard access. A future role column (`owner`/`editor`/`viewer`) would let a co-host be granted write access short of full ownership.
 - **Guest account-linking frontend** — backend shipped (see [[cire-auth]]); the guest-site "link my Pulse account" affordance is the remaining piece. Once invitees are linked, the Pulse event-feed integration above can surface their invitations.
 
