@@ -493,10 +493,16 @@ The principal is fixed and provisioned on first use (idempotent, so it survives
 | Profile | `usr_dev_bootstrap_owner` — the id the cire seed writes as the **seeded wedding's owner**, so the organiser portal opens on real data |
 | Account | `acc_dev_bootstrap`, `dev@seed.osn.dev` |
 | Handle | `dev_bootstrap` — in `RESERVED_HANDLES`, so no real registration can take it first |
-| Org | `org_dev_bootstrap`, membership `admin` |
+| Org | `org_dev_bootstrap`, handle `dev_bootstrap_org`, membership `admin` |
+
+Both handles are in `RESERVED_HANDLES`, and organisation creation consults that
+set too — so neither a profile nor an organisation registration can occupy the
+row first.
 
 Two gates, both fail-closed, both in `buildAppDeps` (`osn/api/src/build-deps.ts`,
-`servesDevLogin`, which is the same predicate as the docs gate above):
+`servesDevLogin`, which keeps **its own** tier list — deliberately not an alias
+of the docs gate above, so a later change to how docs are gated cannot quietly
+widen a credential bypass):
 
 - tier is `local` or `dev` — a typo'd `OSN_ENV` leaves it **off**;
 - `DEV_LOGIN_SECRET` is set.
@@ -505,7 +511,7 @@ Fail either and the routes are **never mounted**, so the path answers 404 rather
 than a 401 that would admit the surface exists.
 
 ```bash
-# local (bun run dev): put DEV_LOGIN_SECRET in osn/api/.env
+# local (bun run dev): put DEV_LOGIN_SECRET + DEV_LOGIN_RETURN_ORIGINS in osn/api/.env
 open "http://localhost:4000/dev/login?secret=$SECRET&return_to=http://localhost:4322/dashboard"
 
 # deployed dev — one-time, then redeploy to cycle warm isolates
@@ -514,9 +520,31 @@ open "https://id.dev.musubi.social/dev/login?secret=$SECRET&return_to=https://ho
 ```
 
 `return_to` is optional; without it the response is the session JSON. With it the
-route 302s, after checking the target's origin against **the tier's own CORS
-allowlist** — an off-list `return_to` is a 400, never a redirect, so the endpoint
-can't be turned into an open redirect that leaks the session cookie.
+route 302s, after checking the target's origin against
+**`DEV_LOGIN_RETURN_ORIGINS`** — a comma-separated var of its own, already set in
+`wrangler.toml`'s `[env.dev.vars]` for the four dev browser hosts, and in
+`.env.example` for the local ports. An off-list `return_to` is a 400, never a
+redirect, so the endpoint can't be turned into an open redirect that leaks the
+session cookie. **Unset ⇒ every `return_to` is a 400** — closed by default, so
+each origin is an explicit decision.
+
+> [!note] Why not the CORS allowlist
+> `OSN_CORS_ORIGIN` also feeds the CSRF origin guard. Adding a redirect target
+> there would widen that guard for **every** route, and a redirect target need
+> not be an origin that fetches this API with credentials. The two lists overlap
+> today; they are not the same list.
+
+The origin check runs **before** the secret is compared, so a wrong secret
+redirects nowhere, and both verbs answer `Referrer-Policy: no-referrer` so the
+secret-bearing URL never reaches the target as a `Referer`.
+
+> [!warning] The URL is the credential
+> Anyone who can read a `/dev/login?secret=…` link can sign in as the dev
+> principal and hand a signed-in link to someone else. Treat it like a password:
+> never paste it into an issue, a PR, or a chat, and rotate `DEV_LOGIN_SECRET` if
+> it turns up in one. Production is unreachable this way — the tier gate keeps
+> the route unmounted and the production deploy job **fails** while
+> `DEV_LOGIN_SECRET` is set on `osn-api-production`.
 
 > [!important] Why `GET`, and why no button
 > The origin guard rejects a POST without a matching `Origin` header, so GET is
