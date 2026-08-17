@@ -114,7 +114,7 @@ carries no captured source dims (three hand-kept copies; the two inside
 pair by convention). `cropAspectRatio` also gained a `[0.05, 20]` clamp in both
 mirrors: `natW`/`natH` are validated only as positive and finite, and a ratio
 that stringifies to exponential notation is a value CSS drops outright, which
-would render the band as a zero-height box (`[[security]]` S-L1).
+would render the band as a zero-height box (S-L1 in `xchromo/osn-tracker`).
 
 **It is behind the claim gate — enforced at the API, not in the render tree.**
 The first cut gated it only with `<Show when={claimResult()}>`, which controls
@@ -740,7 +740,7 @@ and let the fresh `/api/invite/:slug` response override the per-request snapshot
     panel whose background is the theme **surface** colour (`--invite-surface`)
     when set, else a dark `oklch(0% 0 0 / 0.45)` scrim panel — so the title reads
     over any busy/sharp photo. (Future: auto contrast-check the title colour vs the
-    image and auto-enable the panel — see `[[todo/future]]`.)
+    image and auto-enable the panel — see [[future]].)
   - **Visible-or-gone load lifecycle (the "invisible hero" SSR fix)**: the backdrop
     fades in on `load`; on a failed load (`onError` — e.g. a 404'd image) it
     **unmounts** so the base gradient shows through (replacing an `onLoad`-only gate
@@ -954,14 +954,14 @@ into the first form control of the active section, which sits *behind* the
 opaque overlay the open menu paints across the top of that section, with Escape
 bound to the tabs and the trigger rather than to the field. WCAG 2.2 SC 2.4.11
 *Focus Not Obscured*, and the "reveal without advancing focus" exception does
-not apply (**SM-C-M1** in `[[security]]`).
+not apply (**SM-C-M1** in `xchromo/osn-tracker`).
 
 A fifth closer is not a dismissal at all: the `ResizeObserver` that already
 picks the preview layer also collapses the menu once the container crosses
 `SECTION_MENU_REM` (48rem), because the trigger is the signal's only other
 writer — left alone, a menu opened narrow stays "open" for the rest of the
 session after a rotate or resize, and `selectSection` then focuses a
-`display: none` trigger on every wide tab click (**SM-P-I1** in `[[perf]]`).
+`display: none` trigger on every wide tab click (**SM-P-I1** in `xchromo/osn-tracker`).
 
 **Arrow keys follow the geometry, not the DOM order.** `ArrowLeft`/`ArrowRight`
 step one, always. `ArrowDown`/`ArrowUp` are handled **only while the menu is
