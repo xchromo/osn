@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import {
   createIssue,
+  createIssueOnce,
+  findIssueByTitle,
   isPreflightFailure,
   linkSubIssue,
   readIssue,
@@ -112,6 +114,44 @@ test("gives up after a handful of preflight failures", async () => {
   );
   expect(gh([])).rejects.toThrow("connection refused");
   expect(attempts).toBe(4);
+});
+
+test("finds an issue by exact title, ignoring pull requests", async () => {
+  const gh = async () => [
+    { number: 9, id: 900, title: "Ship it", pull_request: { url: "..." } },
+    { number: 8, id: 800, title: "Ship it" },
+    { number: 7, id: 700, title: "Ship it later" },
+  ];
+  expect(await findIssueByTitle(gh, "xchromo/osn", "Ship it")).toEqual({ number: 8, id: "800" });
+  expect(await findIssueByTitle(gh, "xchromo/osn", "Never filed")).toBeNull();
+});
+
+test("adopts the issue a timed-out create already made, rather than filing a second", async () => {
+  let creates = 0;
+  const gh = async (args: string[]) => {
+    if (args.includes("--method")) {
+      creates += 1;
+      throw new Error("read tcp: operation timed out");
+    }
+    return [{ number: 8, id: 800, title: "Ship it" }];
+  };
+  const created = await createIssueOnce(gh, "xchromo/osn", {
+    title: "Ship it",
+    body: "B",
+    labels: [],
+  });
+  expect(created).toEqual({ number: 8, id: "800" });
+  expect(creates).toBe(1);
+});
+
+test("a create that filed nothing still raises, so the run stops", async () => {
+  const gh = async (args: string[]) => {
+    if (args.includes("--method")) throw new Error("HTTP 422: Validation Failed");
+    return [];
+  };
+  expect(
+    createIssueOnce(gh, "xchromo/osn", { title: "Ship it", body: "B", labels: [] }),
+  ).rejects.toThrow("422");
 });
 
 test("no exported function issues a DELETE", async () => {

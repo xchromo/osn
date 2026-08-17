@@ -2,7 +2,7 @@ import { Glob } from "bun";
 
 import { checkManifest } from "./assert";
 import { classify } from "./classify";
-import { createIssue, ghApi, linkSubIssue, readIssue, Throttle, updateIssue } from "./github";
+import { createIssueOnce, ghApi, linkSubIssue, readIssue, Throttle, updateIssue } from "./github";
 import { parseTodo } from "./parse";
 import { PHASES } from "./phases";
 import { buildManifest } from "./render";
@@ -68,7 +68,7 @@ async function apply(phase: string, limit = Infinity): Promise<void> {
     const epicKey = `epic:${sample.repo}:${epic}`;
     if (state[epicKey]) continue;
     if (!(await spend())) break;
-    state[epicKey] = await createIssue(ghApi, REPOS[sample.repo], {
+    state[epicKey] = await createIssueOnce(ghApi, REPOS[sample.repo], {
       title: epic,
       body: `Epic. Migrated from \`${sample.sourceFile}\` — section "${epic}".`,
       labels: ["epic", sample.labels.find((l) => l.startsWith("product:"))!],
@@ -80,7 +80,7 @@ async function apply(phase: string, limit = Infinity): Promise<void> {
   for (const entry of entries) {
     if (state[key(entry)]) continue;
     if (!(await spend())) break;
-    state[key(entry)] = await createIssue(ghApi, REPOS[entry.repo], {
+    state[key(entry)] = await createIssueOnce(ghApi, REPOS[entry.repo], {
       title: entry.issueTitle,
       body: entry.issueBody,
       labels: entry.labels,

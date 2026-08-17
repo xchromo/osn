@@ -1642,5 +1642,221 @@
   "link:wiki/TODO.md:1068": {
     "number": 676,
     "id": "5159491505"
+  },
+  "epic:private:Performance Backlog — Guest sign-out control (claude/cire-invites-claim-code-button-sn5br8, 2026-08-08)": {
+    "number": 1,
+    "id": "5159568098"
+  },
+  "epic:private:Performance Backlog — RSVP save latency (claude/rsvp-modal-close-delay-d8sqnd, 2026-08-08)": {
+    "number": 2,
+    "id": "5159568580"
+  },
+  "epic:private:Performance Backlog — RSVP confirmation timing + mobile invite preview (claude/pr388-deploy-mobile-invite-jlz8in,…": {
+    "number": 3,
+    "id": "5159569029"
+  },
+  "epic:private:Performance Backlog — CSV import into each module's Edit mode (claude/cire-csv-import-reorganize-y1vbnk, 2026-08-06)": {
+    "number": 4,
+    "id": "5159569532"
+  },
+  "epic:private:Performance Backlog — Claim-field contrast + reveal ownership (claude/cire-invites-claim-input-bug-8q0ev8, 2026-08-05)": {
+    "number": 5,
+    "id": "5159570010"
+  },
+  "epic:private:Performance Backlog — Guests-editor review — household rename fix (claude/cire-web-editor-household-name-qcfkb4,…": {
+    "number": 6,
+    "id": "5159570505"
+  },
+  "epic:private:Performance Backlog — Bare domain → marketing site (claude/live-cire-wedding-rename-x3y623, 2026-08-02)": {
+    "number": 7,
+    "id": "5159570973"
+  },
+  "epic:private:Performance Backlog — Invite open path — restore, preconnect, prefetch (claude/invite-code-gating-hints-g8nw0o,…": {
+    "number": 8,
+    "id": "5159571448"
+  },
+  "epic:private:Performance Backlog — Guest-deletion fix — row identity + the households read (claude/cire-guest-deletion-bug-ve85ng,…": {
+    "number": 9,
+    "id": "5159571912"
+  },
+  "epic:private:Performance Backlog — RSVP CSV per-event dietary + editor co-host add (claude/rsvp-notice-contrast-fix-m5px1l,…": {
+    "number": 10,
+    "id": "5159572355"
+  },
+  "epic:private:Performance Backlog — RSVP-by editable by a co-host — review findings (claude/cire-rsvp-date-cohost-edit-va8w9i,…": {
+    "number": 11,
+    "id": "5159572850"
+  },
+  "epic:private:Performance Backlog — Single-sheet CSV uploads — review findings (claude/cire-dashboard-csv-uploads-zk5rt0, 2026-07-31)": {
+    "number": 12,
+    "id": "5159573280"
+  },
+  "epic:private:Performance Backlog — Host portal fluid layout — review findings (claude/host-portal-responsive-ui-zdy9ri, 2026-07-30)": {
+    "number": 13,
+    "id": "5159573713"
+  },
+  "epic:private:Performance Backlog — Closing hero band — review findings (claude/closing-hero-image-j40coh, 2026-07-31)": {
+    "number": 14,
+    "id": "5159574231"
+  },
+  "epic:private:Performance Backlog — Data-layer review fixes — pre-merge review findings (claude/cire-data-layer-review-s7d6gt,…": {
+    "number": 15,
+    "id": "5159574645"
+  },
+  "epic:private:Performance Backlog — Invite builder UX pass — review findings (claude/invite-builder-structure-review-ali18d,…": {
+    "number": 16,
+    "id": "5159575139"
+  },
+  "epic:private:Performance Backlog — Closing section — review findings (claude/cire-footer-customisation-xkc09y, 2026-07-29)": {
+    "number": 17,
+    "id": "5159575573"
+  },
+  "epic:private:Performance Backlog — Hero phone crop — review findings (claude/hero-image-responsive-crop-b6b74u, 2026-07-23)": {
+    "number": 18,
+    "id": "5159576040"
+  },
+  "epic:private:Performance Backlog — Guest invite taste pass — review findings (fix/cire-invite-taste-pass, 2026-07-22)": {
+    "number": 19,
+    "id": "5159576475"
+  },
+  "epic:private:Performance Backlog — Host dashboard redesign — review findings (feat/cire-host-dashboard-redesign, 2026-07-22)": {
+    "number": 20,
+    "id": "5159576959"
+  },
+  "epic:private:Performance Backlog — Invite customisation + builder restructure — review findings (cire-invite-customization branch)": {
+    "number": 21,
+    "id": "5159577456"
+  },
+  "epic:private:Performance Backlog — Optional End/Location CSV spec — review findings (wedding-management-platform branch)": {
+    "number": 22,
+    "id": "5159577949"
+  },
+  "epic:private:Performance Backlog — Crop editor + colour picker fixes — review findings (cire-color-upload-bugs branch)": {
+    "number": 23,
+    "id": "5159578425"
+  },
+  "epic:private:Performance Backlog — Observability instrumentation — review notes (Info, no action)": {
+    "number": 24,
+    "id": "5159578900"
+  },
+  "epic:private:Performance Backlog — Vendors PR B — vendor portal review notes (feat/cire-vendor-portal)": {
+    "number": 25,
+    "id": "5159579355"
+  },
+  "epic:private:Performance Backlog — Vendors S3 (directory browse) — /prep-pr perf review notes (feat/cire-vendors-directory-browse)": {
+    "number": 26,
+    "id": "5159579853"
+  },
+  "epic:private:Performance Backlog — Vendors S4 PR B — enquiry backend perf review notes (feat/cire-vendors-enquiries)": {
+    "number": 27,
+    "id": "5159580331"
+  },
+  "epic:private:Performance Backlog — Platform tiering Phase 1 (entitlement foundation) — /prep-pr perf review notes…": {
+    "number": 28,
+    "id": "5159580827"
+  },
+  "epic:private:Security Backlog — RSVP sheet close delay (claude/rsvp-modal-close-delay-d8sqnd, 2026-08-08)": {
+    "number": 29,
+    "id": "5159581387"
+  },
+  "epic:private:Security Backlog — RSVP partial saves + persistent confirmation fill (claude/fog-bloom-sweep-fill-issues-lwdamh,…": {
+    "number": 30,
+    "id": "5159581855"
+  },
+  "epic:private:Security Backlog — Host-portal date picker + event timezones + design-aware preview…": {
+    "number": 31,
+    "id": "5159582320"
+  },
+  "epic:private:Security Backlog — Household-rename fix — familyUpdates op (claude/cire-web-editor-household-name-qcfkb4, 2026-08-02)": {
+    "number": 32,
+    "id": "5159582793"
+  },
+  "epic:private:Security Backlog — Guest-deletion fix — row identity in the reconcile diff (claude/cire-guest-deletion-bug-ve85ng,…": {
+    "number": 33,
+    "id": "5159583298"
+  },
+  "epic:private:Security Backlog — Guest session restore (claude/invite-code-gating-hints-g8nw0o, 2026-08-02)": {
+    "number": 34,
+    "id": "5159583759"
+  },
+  "epic:private:Security Backlog — Invite styling + contrast warnings + hex picker (claude/cire-invite-styling-picker-87ni7b,…": {
+    "number": 35,
+    "id": "5159584244"
+  },
+  "epic:private:Security Backlog — RSVP-by editable by a co-host — review findings (claude/cire-rsvp-date-cohost-edit-va8w9i,…": {
+    "number": 36,
+    "id": "5159584768"
+  },
+  "epic:private:Security Backlog — Closing hero band — review findings (claude/closing-hero-image-j40coh, 2026-07-31)": {
+    "number": 37,
+    "id": "5159585219"
+  },
+  "epic:private:Security Backlog — Single-sheet CSV uploads + import error reporting — review findings…": {
+    "number": 38,
+    "id": "5159585707"
+  },
+  "epic:private:Security Backlog — Closing section — review findings (claude/cire-footer-customisation-xkc09y, 2026-07-29)": {
+    "number": 39,
+    "id": "5159586192"
+  },
+  "epic:private:High": {
+    "number": 40,
+    "id": "5159586632"
+  },
+  "epic:private:Low": {
+    "number": 41,
+    "id": "5159587079"
+  },
+  "epic:private:Low — Vendors S4 PR B — enquiry backend review notes (feat/cire-vendors-enquiries)": {
+    "number": 42,
+    "id": "5159587561"
+  },
+  "epic:private:Low — Vendors PR B — vendor portal review notes (feat/cire-vendor-portal)": {
+    "number": 43,
+    "id": "5159588037"
+  },
+  "epic:private:Low — Vendors S3 (directory browse) — /prep-pr review notes (feat/cire-vendors-directory-browse)": {
+    "number": 44,
+    "id": "5159588514"
+  },
+  "epic:private:Low — Site-wide consent framework (claude/site-wide-consent-framework-jys0q2)": {
+    "number": 45,
+    "id": "5159589047"
+  },
+  "epic:private:Up Next": {
+    "number": 46,
+    "id": "5159589611"
+  },
+  "epic:private:Verified Identity (@osn/api + @osn/db + @shared/crypto + @osn/social) — V-M0 — Foundations (no provider yet)": {
+    "number": 47,
+    "id": "5159590080"
+  },
+  "epic:private:Platform — Four-environment DB story (local / dev / staging / prod) — see database-environments": {
+    "number": 48,
+    "id": "5159590567"
+  },
+  "epic:private:Platform — Crypto (osn/crypto)": {
+    "number": 49,
+    "id": "5160924678"
+  },
+  "epic:private:Platform — Redis Migration Phase 4 — see redis": {
+    "number": 50,
+    "id": "5160925112"
+  },
+  "epic:private:Security Backlog — Medium": {
+    "number": 51,
+    "id": "5160925605"
+  },
+  "epic:private:Security Backlog — Auth PR review (#315–#324) — remaining open": {
+    "number": 52,
+    "id": "5160926024"
+  },
+  "epic:private:Security Backlog — Low": {
+    "number": 53,
+    "id": "5161045494"
+  },
+  "epic:private:Performance Backlog": {
+    "number": 54,
+    "id": "5161045526"
   }
 }

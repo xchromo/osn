@@ -75,6 +75,50 @@ export async function createIssue(
   return { number: result.number, id: String(result.id) };
 }
 
+/**
+ * The most recent issue in the repo with this exact title, if there is one.
+ *
+ * The listing endpoint answers newest-first and also returns pull requests,
+ * which carry a `pull_request` key and are not issues for our purposes.
+ */
+export async function findIssueByTitle(
+  gh: Gh,
+  repo: string,
+  title: string,
+): Promise<Created | null> {
+  const result = (await gh([`repos/${repo}/issues?state=all&per_page=100`])) as {
+    number: number;
+    id: number;
+    title: string;
+    pull_request?: unknown;
+  }[];
+  const match = result.find((issue) => !issue.pull_request && issue.title === title);
+  return match ? { number: match.number, id: String(match.id) } : null;
+}
+
+/**
+ * Create an issue, or adopt the one a failed attempt already created.
+ *
+ * A POST can time out on the read after GitHub has accepted it, so the issue
+ * exists but the run never learned its number. Retrying blindly would file a
+ * duplicate; instead the repo is asked whether the issue is already there. A
+ * failure that created nothing -- a 422, a rate-limit 403 -- finds no match
+ * and is raised, which stops the run as before.
+ */
+export async function createIssueOnce(
+  gh: Gh,
+  repo: string,
+  entry: { title: string; body: string; labels: string[] },
+): Promise<Created> {
+  try {
+    return await createIssue(gh, repo, entry);
+  } catch (error) {
+    const existing = await findIssueByTitle(gh, repo, entry.title);
+    if (!existing) throw error;
+    return existing;
+  }
+}
+
 export async function readIssue(
   gh: Gh,
   repo: string,
