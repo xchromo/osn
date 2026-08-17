@@ -101,13 +101,14 @@ public final class OSNSession {
             state = .signedIn(response.profile)
         } catch {
             #if os(iOS)
-            // Detached, never awaited: `startAutoFillSignIn` does not return
+            // Detached and never awaited, but *tracked* — see
+            // `autoFillReArmTask`. `startAutoFillSignIn` does not return
             // until the ceremony it arms completes, which for a QuickType
             // suggestion means "when the user taps it", i.e. usually never.
             // Awaiting it here would hold `signIn` open past the modal
             // failure, and `PasskeySignInView` leaves its button disabled and
             // its error unshown for exactly as long as `signIn` runs.
-            Task { [weak self] in
+            autoFillReArmTask = Task { [weak self] in
                 await self?.startAutoFillSignIn(anchorProvider: anchorProvider)
             }
             #endif
@@ -146,6 +147,26 @@ public final class OSNSession {
     #if os(iOS)
     private var autoFillHandle: PasskeyCeremonyHandle?
 
+    /// The re-arm `Task` `signIn`'s catch spawns. Held so
+    /// `cancelAutoFillSignIn()` can cancel it as well as the armed handle:
+    /// the Task does not reach `autoFillHandle = handle` until a
+    /// `beginLogin` round trip has finished, so a view that disappears
+    /// inside that window would otherwise call `cancelAutoFillSignIn()`
+    /// against a `nil` handle, cancel nothing, and let the Task go on to
+    /// arm a ceremony no later call can reach.
+    private var autoFillReArmTask: Task<Void, Never>?
+
+    /// Clears `autoFillHandle` only if it still points at the caller's own
+    /// handle. Two autofill attempts can overlap — the first suspended in
+    /// `handle.result()` while the second arms — and the first one waking
+    /// up to an unconditional `autoFillHandle = nil` would drop the second's
+    /// handle on the floor, leaving it armed and uncancellable.
+    private func clearAutoFillHandle(_ handle: PasskeyCeremonyHandle) {
+        if autoFillHandle === handle {
+            autoFillHandle = nil
+        }
+    }
+
     /// Conditional UI (brief T3 §4): arms `performAutoFillAssistedRequests()`
     /// so the account's passkey shows up in the QuickType bar, letting a
     /// returning user sign in with a tap instead of "Sign in with passkey".
@@ -156,6 +177,8 @@ public final class OSNSession {
     }
 
     public func cancelAutoFillSignIn() {
+        autoFillReArmTask?.cancel()
+        autoFillReArmTask = nil
         autoFillHandle?.cancel()
         autoFillHandle = nil
     }
@@ -173,31 +196,44 @@ public final class OSNSession {
     /// QuickType suggestion, which is worse than leaving a slightly stale
     /// one armed until the user acts or the view disappears.
     private func attemptAutoFillSignIn(anchorProvider: @escaping PresentationAnchorProvider, isRetry: Bool) async {
+        guard !Task.isCancelled else { return }
+        var armed: PasskeyCeremonyHandle?
         do {
             let begun = try await loginClient.beginLogin(identifier: nil, turnstileToken: nil)
             let assertionRequest = try loginClient.makeAssertionRequest(from: begun)
+            guard !Task.isCancelled else { return }
             let handle = PasskeyCeremonyHandle(
                 requests: [assertionRequest],
                 autoFill: true,
                 anchorProvider: anchorProvider
             )
+            armed = handle
+            // Cancel-before-arm. Only one `ASAuthorizationController` request
+            // can be live, and `cancelAutoFillSignIn()` can only reach the one
+            // handle this property holds — so overwriting a live handle would
+            // strand a second live controller with no way to cancel it.
+            autoFillHandle?.cancel()
             autoFillHandle = handle
             let authorization = try await handle.result()
-            autoFillHandle = nil
+            clearAutoFillHandle(handle)
             let target = try loginClient.loginTarget(identifier: nil, begun: begun)
             let assertion = try loginClient.packageAssertion(authorization)
             let response = try await loginClient.complete(target: target, assertion: assertion)
+            // Deliberately not gated on `Task.isCancelled`: the ceremony and
+            // the `complete` call both succeeded, so the session *is* signed
+            // in server-side. Dropping the state here because the view went
+            // away would leave the app showing signed-out over a live session.
             state = .signedIn(response.profile)
         } catch is CancellationError {
-            autoFillHandle = nil
+            if let armed { clearAutoFillHandle(armed) }
         } catch let error as PasskeyCeremonyError {
-            autoFillHandle = nil
+            if let armed { clearAutoFillHandle(armed) }
             if case .cancelled = error { return }
             if !isRetry {
                 await attemptAutoFillSignIn(anchorProvider: anchorProvider, isRetry: true)
             }
         } catch {
-            autoFillHandle = nil
+            if let armed { clearAutoFillHandle(armed) }
             if !isRetry {
                 await attemptAutoFillSignIn(anchorProvider: anchorProvider, isRetry: true)
             }

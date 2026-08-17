@@ -85,7 +85,14 @@
   (`performAutoFillAssistedRequests()` itself, the QuickType suggestion
   appearing, the one-shot silent re-arm on a 120s-TTL-expired challenge, the
   modal/autofill collision handling in `signIn`). CI never executes any of
-  that — see the note below. It ships human-reviewed only.
+  that — see the note below. It ships human-reviewed only. That includes the
+  cancellation invariant two independent reviews landed on: at most one live
+  `ASAuthorizationController` request, always reachable from
+  `cancelAutoFillSignIn()`. It is held by three things — cancel-before-arm in
+  `attemptAutoFillSignIn`, an identity-checked `clearAutoFillHandle` so an
+  overlapping attempt cannot drop a newer handle, and `autoFillReArmTask`
+  making the re-arm `signIn` spawns cancellable before it reaches the arm.
+  Reading is the only check any of that gets today.
 - CI coverage gap, stated plainly: the macOS host runs `swift test`, which
   compiles and runs every `#if os(iOS)` block's *non*-iOS-only siblings but
   cannot execute iOS-only code (`performAutoFillAssistedRequests()` doesn't
