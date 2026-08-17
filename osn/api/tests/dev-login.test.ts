@@ -1,4 +1,4 @@
-import { accounts, organisations, users } from "@osn/db/schema";
+import { accounts, organisationMembers, organisations, users } from "@osn/db/schema";
 import { generateArcKeyPair } from "@shared/crypto";
 import { createMemoryClient } from "@shared/redis";
 import { exportJWK } from "jose";
@@ -37,6 +37,16 @@ beforeAll(async () => {
 
 const SECRET = "d".repeat(32);
 
+/**
+ * `return_to` targets. Its own var — NOT the CORS allowlist, which also feeds
+ * the CSRF origin guard, so a redirect target added there would widen that
+ * guard for every route.
+ */
+const RETURN_ORIGINS = "http://localhost:4322,http://localhost:4326";
+
+/** An origin the local CORS fallback allows, so a POST clears the origin guard. */
+const ALLOWED_ORIGIN = "http://localhost:1422";
+
 /** A deployed env that satisfies every non-local guard, so the tier is what varies. */
 const deployedEnv = (osnEnv: string): Record<string, string> => ({
   OSN_ENV: osnEnv,
@@ -62,6 +72,21 @@ async function build(env: Record<string, string | undefined>) {
 }
 
 const get = (path: string) => new Request(`http://localhost${path}`);
+
+const post = (path: string, body: unknown, origin: string | null = ALLOWED_ORIGIN) =>
+  new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(origin ? { origin } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+
+const devLogin = (secret: string, returnTo?: string) =>
+  get(
+    `/dev/login?secret=${secret}` + (returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""),
+  );
 
 describe("dev-login gate", () => {
   it("derives the config from the env record, not process.env", async () => {
@@ -157,23 +182,212 @@ describe("dev-login", () => {
     expect(await db.select().from(organisations)).toHaveLength(1);
   });
 
-  it("redirects to an allowlisted return_to, carrying the cookie", async () => {
+  it("names the seeded owner by its literal id", async () => {
+    // Deliberately not `DEV_PRINCIPAL.profileId`: this string is a contract with
+    // `cire/db/seed/data/wedding.ts`, and a test that reads the constant would
+    // stay green through a rename that silently orphans the seeded wedding.
     const { app } = await build({ DEV_LOGIN_SECRET: SECRET });
-    const target = "http://localhost:4322/dashboard";
+    const body = (await (await app.handle(devLogin(SECRET))).json()) as {
+      profile: { id: string; handle: string };
+    };
+    expect(body.profile.id).toBe("usr_dev_bootstrap_owner");
+    expect(body.profile.handle).toBe("dev_bootstrap");
+  });
+
+  it("provisions the organisation membership the organiser portal reads", async () => {
+    const { app, db } = await build({ DEV_LOGIN_SECRET: SECRET });
+    await app.handle(devLogin(SECRET));
+
+    const [membership] = await db.select().from(organisationMembers);
+    expect(membership).toMatchObject({
+      id: DEV_PRINCIPAL.membershipId,
+      organisationId: DEV_PRINCIPAL.organisationId,
+      profileId: DEV_PRINCIPAL.profileId,
+      role: "admin",
+    });
+    const [organisation] = await db.select().from(organisations);
+    expect(organisation).toMatchObject({
+      handle: DEV_PRINCIPAL.organisationHandle,
+      ownerId: DEV_PRINCIPAL.profileId,
+    });
+  });
+
+  it("sets both session cookies, and keeps the secret out of the Referer", async () => {
+    const { app } = await build({ DEV_LOGIN_SECRET: SECRET });
+    const res = await app.handle(devLogin(SECRET));
+    const cookies = res.headers.getSetCookie();
+    expect(cookies.some((c) => c.startsWith("osn_session="))).toBe(true);
+    expect(cookies.some((c) => c.startsWith("osn_has_session=1"))).toBe(true);
+    // The secret rides in the query string, so this URL is a credential.
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("uses the __Host- prefixed Secure cookie on the dev tier", async () => {
+    const { app } = await build({ ...deployedEnv("dev"), DEV_LOGIN_SECRET: SECRET });
+    const session = await app
+      .handle(devLogin(SECRET))
+      .then((r) => r.headers.getSetCookie().find((c) => c.includes("osn_session=")));
+    expect(session).toContain("__Host-osn_session=");
+    expect(session).toContain("Secure");
+  });
+
+  it("mints a session cookie the /token grant actually redeems", async () => {
+    // The whole point of the bypass is that everything downstream runs
+    // untouched — so the cookie has to be a real rotating session, not a
+    // lookalike this route alone understands.
+    const { app } = await build({ DEV_LOGIN_SECRET: SECRET });
+    const cookie = (await app.handle(devLogin(SECRET))).headers
+      .getSetCookie()
+      .find((c) => c.startsWith("osn_session="))!
+      .match(/osn_session=([^;]+)/)![1]!;
+
     const res = await app.handle(
-      get(`/dev/login?secret=${SECRET}&return_to=${encodeURIComponent(target)}`),
+      new Request("http://localhost/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          origin: ALLOWED_ORIGIN,
+          cookie: `osn_session=${cookie}`,
+        },
+        body: JSON.stringify({ grant_type: "refresh_token" }),
+      }),
     );
+    expect(res.status).toBe(200);
+    const rotated = res.headers.getSetCookie();
+    expect(rotated.some((c) => c.startsWith("osn_session="))).toBe(true);
+  });
+
+  it("answers 500 when provisioning cannot land the principal", async () => {
+    // A squatted handle makes the `users` insert a no-op conflict, so the
+    // profile is still missing after provisioning. Better a loud 500 than a
+    // session for whoever holds the handle.
+    const { app, db } = await build({ DEV_LOGIN_SECRET: SECRET });
+    const now = new Date();
+    db.insert(accounts)
+      .values({
+        id: "acc_squatter",
+        email: "squatter@example.test",
+        passkeyUserId: "pku_squatter",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(users)
+      .values({
+        id: "usr_squatter",
+        accountId: "acc_squatter",
+        handle: DEV_PRINCIPAL.handle,
+        displayName: "Squatter",
+        isDefault: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const res = await app.handle(devLogin(SECRET));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "provisioning_failed" });
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("issues the same session over POST, behind the origin guard", async () => {
+    const { app } = await build({ DEV_LOGIN_SECRET: SECRET });
+    const res = await app.handle(post("/dev/login", { secret: SECRET }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    const body = (await res.json()) as { profile: { id: string } };
+    expect(body.profile.id).toBe(DEV_PRINCIPAL.profileId);
+
+    // No Origin header ⇒ the guard answers before the route ever runs.
+    const guarded = await app.handle(post("/dev/login", { secret: SECRET }, null));
+    expect(guarded.status).toBe(403);
+  });
+
+  it("rejects a POST with no secret in the body before touching the DB", async () => {
+    // 422 from the TypeBox body schema, not one of the declared responses —
+    // the secret is `t.String()` there rather than optional, so a bodyless
+    // caller never reaches the constant-time compare.
+    const { app, db } = await build({ DEV_LOGIN_SECRET: SECRET });
+    const res = await app.handle(post("/dev/login", {}));
+    expect(res.status).toBe(422);
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  it("redirects to an allowlisted return_to, carrying the cookie", async () => {
+    const { app } = await build({
+      DEV_LOGIN_SECRET: SECRET,
+      DEV_LOGIN_RETURN_ORIGINS: RETURN_ORIGINS,
+    });
+    const target = "http://localhost:4322/dashboard";
+    const res = await app.handle(devLogin(SECRET, target));
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(target);
     expect(res.headers.get("set-cookie") ?? "").toContain("osn_session=");
   });
 
-  it("refuses a return_to outside the CORS allowlist", async () => {
+  it("drives return_to off the dev tier's own origins", async () => {
+    const { app } = await build({
+      ...deployedEnv("dev"),
+      DEV_LOGIN_SECRET: SECRET,
+      DEV_LOGIN_RETURN_ORIGINS: "https://host.dev.cireweddings.com",
+    });
+    const target = "https://host.dev.cireweddings.com/dashboard";
+    expect((await app.handle(devLogin(SECRET, target))).headers.get("location")).toBe(target);
+    // The tier's CORS origin is a different list and grants nothing here.
+    const cors = await app.handle(devLogin(SECRET, "https://app.osn.test/x"));
+    expect(cors.status).toBe(400);
+  });
+
+  it("refuses every return_to when DEV_LOGIN_RETURN_ORIGINS is unset", async () => {
     const { app } = await build({ DEV_LOGIN_SECRET: SECRET });
-    const res = await app.handle(
-      get(`/dev/login?secret=${SECRET}&return_to=${encodeURIComponent("https://evil.test/x")}`),
-    );
+    const res = await app.handle(devLogin(SECRET, "http://localhost:4322/dashboard"));
     expect(res.status).toBe(400);
     expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("refuses a return_to outside DEV_LOGIN_RETURN_ORIGINS", async () => {
+    const { app } = await build({
+      DEV_LOGIN_SECRET: SECRET,
+      DEV_LOGIN_RETURN_ORIGINS: RETURN_ORIGINS,
+    });
+    const res = await app.handle(devLogin(SECRET, "https://evil.test/x"));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("refuses the open-redirect shapes that look allowlisted", async () => {
+    const { app } = await build({
+      DEV_LOGIN_SECRET: SECRET,
+      DEV_LOGIN_RETURN_ORIGINS: RETURN_ORIGINS,
+    });
+    const targets = [
+      "//evil.test/x", // protocol-relative: no origin at all
+      "http://localhost:4322.evil.test/x", // allowlisted host as a prefix
+      "http://evil.test/http://localhost:4322", // allowlisted origin in the path
+      "https://localhost:4322/x", // right host + port, wrong scheme
+      "http://user@localhost:4322@evil.test/x", // userinfo confusion
+      "javascript:alert(1)", // not http at all
+      "/dashboard", // relative: no origin to check
+    ];
+    // Keyed by target so a failure names the shape that got through.
+    const outcomes: Record<string, { status: number; location: string | null }> = {};
+    const expected: Record<string, { status: number; location: string | null }> = {};
+    for (const target of targets) {
+      const res = await app.handle(devLogin(SECRET, target));
+      outcomes[target] = { status: res.status, location: res.headers.get("location") };
+      expected[target] = { status: 400, location: null };
+    }
+    expect(outcomes).toEqual(expected);
+  });
+
+  it("refuses a return_to before it authenticates, so a wrong secret redirects nowhere", async () => {
+    const { app } = await build({
+      DEV_LOGIN_SECRET: SECRET,
+      DEV_LOGIN_RETURN_ORIGINS: RETURN_ORIGINS,
+    });
+    const res = await app.handle(devLogin("nope", "http://localhost:4322/dashboard"));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 });

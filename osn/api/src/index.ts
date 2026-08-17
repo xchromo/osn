@@ -99,6 +99,9 @@ export interface Env {
   // staging or production — the tier gate would ignore it, but do not rely on
   // that. `wrangler secret put DEV_LOGIN_SECRET --env dev`.
   DEV_LOGIN_SECRET?: string;
+  // Comma-separated origins a dev-login `return_to` may redirect to. Unset ⇒
+  // no redirect target is accepted (400). A plain var, not a secret.
+  DEV_LOGIN_RETURN_ORIGINS?: string;
 }
 
 const isNonLocal = (env: Env): boolean => !!env.OSN_ENV && env.OSN_ENV !== "local";

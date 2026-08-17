@@ -54,6 +54,9 @@ export const RESERVED_HANDLES = new Set([
   // provisioning insert would then be skipped as a conflict and the sign-in
   // would resolve nothing.
   "dev_bootstrap",
+  // Its organisation. Org creation consults this same set, so neither name can
+  // be squatted before provisioning runs.
+  "dev_bootstrap_org",
 ]);
 
 /**

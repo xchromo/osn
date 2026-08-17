@@ -24,7 +24,7 @@ import { accounts, organisationMembers, organisations, users } from "@osn/db/sch
 import { Db } from "@osn/db/service";
 import { timingSafeEqualString } from "@shared/crypto/timing-safe";
 import { commitBatch } from "@shared/db-utils";
-import { createRateLimiter } from "@shared/rate-limit";
+import { createRateLimiter, isUnresolvedIp } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 
@@ -60,23 +60,16 @@ export interface DevLoginConfig {
   /** `DEV_LOGIN_SECRET`. Compared in constant time. */
   secret: string;
   /**
-   * Origins a `return_to` may redirect to — the tier's own CORS allowlist, so
-   * the set is automatically right per tier and needs no extra config. An
-   * off-list `return_to` is a 400, never a redirect.
+   * Origins a `return_to` may redirect to, from `DEV_LOGIN_RETURN_ORIGINS`
+   * (comma-separated). Its own var rather than the tier's CORS allowlist: the
+   * portals that want a redirect (`host.dev.cireweddings.com`) are not the
+   * origins that make credentialed fetches to the identity Worker, and
+   * widening `OSN_CORS_ORIGIN` to cover them would widen the CSRF origin guard
+   * for every route. Empty ⇒ no `return_to` is ever accepted. An off-list
+   * target is a 400, never a redirect.
    */
   allowedReturnOrigins: readonly string[];
 }
-
-/**
- * Own limiter rather than `ctx.rateLimit`: that one denies outright on an
- * unresolved IP (correct for a public credential surface), and this route is
- * reached by `curl` and by tests driving `app.handle` with no socket peer and
- * no XFF chain — where the IP is always the unresolved sentinel. A shared
- * bucket is fine here because the surface only exists on `local`/`dev`. No
- * metric is emitted: `AuthRateLimitedEndpoint` is a bounded union and this
- * endpoint has no business appearing on the production auth dashboards.
- */
-const devLoginLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
 
 /** Idempotent across every sign-in and every deploy — `osn-db-dev` is never reset. */
 const provision = Effect.gen(function* () {
@@ -141,7 +134,56 @@ function returnToAllowed(target: string, allowed: readonly string[]): boolean {
 }
 
 export function createDevLoginRoutes(ctx: AuthRouteContext, config: DevLoginConfig) {
-  const { auth, run, handleError, socketIpOf, sessionMetaFrom, cookieConfig } = ctx;
+  const { auth, run, handleError, resolveIp, socketIpOf, sessionMetaFrom, cookieConfig } = ctx;
+
+  /**
+   * Own limiter rather than `ctx.rateLimit`: that one denies outright on an
+   * unresolved IP (correct for a public credential surface), and this route is
+   * reached by `curl` and by tests driving `app.handle` with no socket peer and
+   * no XFF chain — where the IP is always the unresolved sentinel. Unresolved
+   * callers therefore share one bucket instead of being denied, which is fine
+   * because the surface only exists on `local`/`dev`. Per route instance, not
+   * per module, so each app gets its own budget (`createDefaultAuthRateLimiters`
+   * does the same). No metric is emitted: `AuthRateLimitedEndpoint` is a
+   * bounded union and this endpoint has no business appearing on the production
+   * auth dashboards.
+   */
+  const limiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
+  const UNRESOLVED_BUCKET = "dev-login:unresolved";
+
+  /**
+   * Read first, provision only on a miss, issue the session — all inside one
+   * `run()` so a sign-in crosses the Effect boundary once instead of three
+   * times. Returns `null` when the row is still absent after provisioning,
+   * which the caller turns into a 500.
+   */
+  const signInEffect = (headers: Record<string, string | undefined>, socketIp: string | null) =>
+    Effect.gen(function* () {
+      // No `security_events` row: `SecurityEventKind` is a bounded union and
+      // this event has no place in the real account-security UI. The session
+      // row this call creates is the audit trail.
+      yield* Effect.logWarning("dev-login: minting a session for the dev principal", {
+        profileId: DEV_PRINCIPAL.profileId,
+      });
+
+      let profile = yield* auth.findProfileById(DEV_PRINCIPAL.profileId);
+      if (!profile) {
+        yield* provision;
+        profile = yield* auth.findProfileById(DEV_PRINCIPAL.profileId);
+      }
+      if (!profile) return null;
+
+      const session = yield* auth.issueTokens(
+        profile.id,
+        profile.accountId,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+        undefined,
+        sessionMetaFrom(headers, socketIp),
+      );
+      return { profile, session };
+    });
 
   /**
    * Shared body for both verbs. Returns either the session payload or a
@@ -153,41 +195,19 @@ export function createDevLoginRoutes(ctx: AuthRouteContext, config: DevLoginConf
     headers: Record<string, string | undefined>,
     socketIp: string | null,
   ) {
-    if (!devLoginLimiter.check("dev-login")) {
+    const ip = resolveIp(headers, socketIp);
+    if (!limiter.check(isUnresolvedIp(ip) ? UNRESOLVED_BUCKET : ip)) {
       return { ok: false, status: 429, body: { error: "rate_limited" } } as const;
     }
     if (!secret || !timingSafeEqualString(secret, config.secret)) {
       return { ok: false, status: 401, body: { error: "unauthorized" } } as const;
     }
 
-    await run(
-      Effect.gen(function* () {
-        // No `security_events` row: `SecurityEventKind` is a bounded union and
-        // this event has no place in the real account-security UI. The session
-        // row this call creates is the audit trail.
-        yield* Effect.logWarning("dev-login: minting a session for the dev principal", {
-          profileId: DEV_PRINCIPAL.profileId,
-        });
-        yield* provision;
-      }),
-    );
-
-    const profile = await run(auth.findProfileById(DEV_PRINCIPAL.profileId));
-    if (!profile) {
+    const result = await run(signInEffect(headers, socketIp));
+    if (!result) {
       return { ok: false, status: 500, body: { error: "provisioning_failed" } } as const;
     }
-
-    const session = await run(
-      auth.issueTokens(
-        profile.id,
-        profile.accountId,
-        profile.email,
-        profile.handle,
-        profile.displayName,
-        undefined,
-        sessionMetaFrom(headers, socketIp),
-      ),
-    );
+    const { profile, session } = result;
 
     return {
       ok: true,
@@ -215,6 +235,10 @@ export function createDevLoginRoutes(ctx: AuthRouteContext, config: DevLoginConf
       "/login",
       async ({ query, headers, set, server, request }) => {
         try {
+          // The secret rides in the query string, so it is in this URL. Keep it
+          // out of the `Referer` any redirect target would otherwise receive —
+          // same posture as the OIDC authorize endpoint.
+          set.headers["referrer-policy"] = "no-referrer";
           if (query.return_to && !returnToAllowed(query.return_to, config.allowedReturnOrigins)) {
             set.status = 400;
             return { error: "invalid_return_to" };
@@ -262,6 +286,7 @@ export function createDevLoginRoutes(ctx: AuthRouteContext, config: DevLoginConf
       "/login",
       async ({ body, headers, set, server, request }) => {
         try {
+          set.headers["referrer-policy"] = "no-referrer";
           const result = await signIn(body.secret, headers, socketIpOf({ server, request }));
           if (!result.ok) {
             set.status = result.status;

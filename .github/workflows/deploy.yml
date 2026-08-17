@@ -904,7 +904,23 @@ jobs:
             echo "::error::osn-api is missing required prod secret(s):$missing — set them with 'wrangler secret put <NAME> --env production' before deploying. osn-api fails closed on these, so deploying now would 503 every route."
             exit 1
           fi
-          echo "All required osn-api prod secrets are set."
+          # Secrets that must NOT exist here. DEV_LOGIN_SECRET is the
+          # passkey-less sign-in; the tier gate in build-deps.ts already keeps
+          # the route unmounted on production, but a secret sitting on the
+          # production Worker is one edit away from a credential bypass on live
+          # weddings, so refuse the deploy until it is deleted (S-L2).
+          forbidden="DEV_LOGIN_SECRET"
+          present=""
+          for name in $forbidden; do
+            if printf '%s\n' "$set_names" | grep -qx "$name"; then
+              present="$present $name"
+            fi
+          done
+          if [ -n "$present" ]; then
+            echo "::error::osn-api has forbidden prod secret(s) set:$present — delete with 'wrangler secret delete <NAME> --env production'. These exist only for the local/dev tiers."
+            exit 1
+          fi
+          echo "All required osn-api prod secrets are set, and no forbidden ones."
         working-directory: osn/api
 
       - name: Deploy osn/api Worker
