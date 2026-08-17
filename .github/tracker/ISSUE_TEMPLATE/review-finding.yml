@@ -1,5 +1,8 @@
 name: Review finding
 description: A security, performance, or compliance finding from a review.
+# Most findings are defects. Change a C-* compliance item, or anything filed at
+# severity:info, to Task after opening it.
+type: Bug
 title: "<ID> — "
 body:
   - type: input

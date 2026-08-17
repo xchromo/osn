@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 
 import { issueType } from "./issue-type";
 
-test("a feature row is a Feature", () => {
-  expect(issueType(["product:pulse", "area:feature"])).toBe("Feature");
+test("an item with no area is ordinary product work, so it is a Feature", () => {
+  expect(issueType(["product:pulse"])).toBe("Feature");
 });
 
 test("a security or performance finding is a Bug", () => {

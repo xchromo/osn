@@ -15,10 +15,10 @@ for repo in xchromo/osn xchromo/osn-tracker; do
   create "product:shared" "5319e7" "Shared packages and platform"
   create "product:landing" "c2e0c6" "Marketing sites"
 
-  # Exactly one area label per issue. The three finding areas exist on the
-  # public repo only so a mislabelled issue is visible as a mistake; nothing
-  # should ever carry one there.
-  create "area:feature" "ededed" "Product work"
+  # At most one area label per issue. There is no `area:feature`: an issue with
+  # no area is ordinary product work, and its type already says Feature. The
+  # three finding areas exist on the public repo only so a mislabelled issue is
+  # visible as a mistake; nothing should ever carry one there.
   create "area:security" "b60205" "Security finding"
   create "area:performance" "d4c5f9" "Performance finding"
   create "area:compliance" "006b75" "Compliance finding"

@@ -1,6 +1,6 @@
 name: Bug
 description: Something behaves wrong, and saying so in public is safe.
-labels: ["area:feature"]
+type: Bug
 body:
   - type: markdown
     attributes:

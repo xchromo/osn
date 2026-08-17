@@ -47,9 +47,16 @@ export function checkManifest(manifest: ManifestEntry[]): Violation[] {
       violations.push({ rule: "one-product-label", where: at(entry), detail: products.join(", ") });
     }
 
+    // Zero is the ordinary case for product work: there is no `area:feature`,
+    // because the issue type already says Feature. Two would mean a finding
+    // filed under a second area, which is a routing question, so it fails.
     const areas = entry.labels.filter((l) => l.startsWith("area:"));
-    if (areas.length !== 1) {
-      violations.push({ rule: "one-area-label", where: at(entry), detail: areas.join(", ") });
+    if (areas.length > 1) {
+      violations.push({
+        rule: "at-most-one-area-label",
+        where: at(entry),
+        detail: areas.join(", "),
+      });
     }
 
     const phases = phasesOf(entry);

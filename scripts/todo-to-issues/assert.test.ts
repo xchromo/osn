@@ -12,7 +12,7 @@ const ok: ManifestEntry = {
   title: "Guest list filtering",
   body: "",
   repo: "public",
-  labels: ["product:cire", "area:feature"],
+  labels: ["product:cire", "area:ops"],
   findingId: null,
   severity: null,
   issueTitle: "Guest list filtering",
@@ -48,14 +48,20 @@ test("an unrewritten wikilink is a violation", () => {
 });
 
 test("zero or two product labels are both violations", () => {
-  expect(rules([{ ...ok, labels: ["area:feature"] }])).toContain("one-product-label");
-  expect(rules([{ ...ok, labels: ["product:cire", "product:pulse", "area:feature"] }])).toContain(
+  expect(rules([{ ...ok, labels: ["area:ops"] }])).toContain("one-product-label");
+  expect(rules([{ ...ok, labels: ["product:cire", "product:pulse", "area:ops"] }])).toContain(
     "one-product-label",
   );
 });
 
-test("a missing area label is a violation", () => {
-  expect(rules([{ ...ok, labels: ["product:cire"] }])).toContain("one-area-label");
+test("no area label is fine -- product work carries none", () => {
+  expect(rules([{ ...ok, labels: ["product:cire"] }])).toEqual([]);
+});
+
+test("two area labels are a violation", () => {
+  expect(rules([{ ...ok, labels: ["product:cire", "area:ops", "area:schema"] }])).toContain(
+    "at-most-one-area-label",
+  );
 });
 
 test("a section no phase claims is a violation", () => {

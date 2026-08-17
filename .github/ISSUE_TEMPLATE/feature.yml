@@ -1,6 +1,6 @@
 name: Feature
 description: Planned work — a new capability, a change to an existing one, or a chore.
-labels: ["area:feature"]
+type: Feature
 body:
   - type: textarea
     id: what

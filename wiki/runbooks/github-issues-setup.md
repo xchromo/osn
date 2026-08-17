@@ -62,11 +62,17 @@ gh api repos/xchromo/osn-tracker/contents/.github/ISSUE_TEMPLATE/review-finding.
 ./scripts/todo-to-issues/labels.sh
 ```
 
-19 labels per repo: 6 `product:`, 7 `area:`, 5 `severity:`, and `epic`. The
+18 labels per repo: 6 `product:`, 6 `area:`, 5 `severity:`, and `epic`. The
 script uses `--force`, so re-running it is how a colour or description is
-changed. Every issue carries exactly one `product:` and one `area:`; only a
-finding carries a `severity:`, taken from the tier letter in its ID. The
+changed. Every issue carries exactly one `product:` and at most one `area:`;
+only a finding carries a `severity:`, taken from the tier letter in its ID. The
 manifest gate in `scripts/todo-to-issues/assert.ts` rejects anything else.
+
+**There is no `area:feature`.** An issue with no `area:` is ordinary product
+work, and its type already says `Feature` — a label repeating it would be a
+second thing to keep in step for no gain. The label existed on the first run
+and was deleted from both repos, which removed it from every issue carrying
+it.
 
 ## 4. Issue types
 
@@ -81,7 +87,7 @@ gh api orgs/xchromo/issue-types --jq '.[] | "\(.id)  \(.name)"'
 | Type | What gets it |
 |---|---|
 | `Bug` | An `S-*` or `P-*` finding — something behaves wrongly and wants fixing |
-| `Feature` | New capability, everything labelled `area:feature` |
+| `Feature` | New capability, and product work generally — everything carrying no `area:` label |
 | `Task` | The rest: compliance items, ops, schema, docs, epics, and any finding at `severity:info`, which records an observation and asks for no fix |
 
 The mapping lives in `scripts/todo-to-issues/issue-type.ts` and is the same one

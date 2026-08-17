@@ -77,7 +77,7 @@ test("a T- ID carries no area, so it routes on its section like any other item",
     item({ section: "Platform", title: "**T-M2** — no test for the retry path" }),
   );
   expect(gap.repo).toBe("public");
-  expect(gap.labels).toContain("area:feature");
+  expect(gap.labels.some((l) => l.startsWith("area:"))).toBe(false);
 });
 
 test("routes planned work to the public repo", () => {
@@ -100,11 +100,12 @@ test("assigns exactly one product label", () => {
   ]);
 });
 
-test("labels ops work in Up Next as ops, not feature", () => {
+test("labels ops work in Up Next as ops, and leaves product work unlabelled", () => {
   const ops = classify(item({ title: "**Deploy preflight for required secrets** — wrangler" }));
   expect(ops.labels).toContain("area:ops");
+  // There is no `area:feature`; the issue type carries that meaning instead.
   const feat = classify(item({ title: "**Guest list filtering** in the host dashboard" }));
-  expect(feat.labels).toContain("area:feature");
+  expect(feat.labels).toEqual(["product:osn-core"]);
 });
 
 test("attaches a severity label only to findings", () => {

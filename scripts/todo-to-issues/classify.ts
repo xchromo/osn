@@ -34,7 +34,14 @@ export function severityOf(id: string): Severity | null {
   return match ? SEVERITY[match[2]] : null;
 }
 
-function areaOf(item: Item, id: string | null): string {
+/**
+ * The area label an item carries, or null when none applies.
+ *
+ * There is no `area:feature`. An item that is none of the special areas is
+ * ordinary product work, and the issue *type* already says so -- a label
+ * repeating it would be one more thing to keep in step for no gain.
+ */
+function areaOf(item: Item, id: string | null): string | null {
   const { section, sourceFile } = item;
   // A finding carries its area in its ID wherever it was filed. Several live in
   // Up Next and Platform rather than a backlog section.
@@ -49,7 +56,7 @@ function areaOf(item: Item, id: string | null): string {
   if (section.startsWith("Compliance Backlog")) return "compliance";
   if (sourceFile.endsWith("todo/db.md")) return "schema";
   if (OPS.test(item.title)) return "ops";
-  return "feature";
+  return null;
 }
 
 function productOf(item: Item): string {
@@ -79,7 +86,8 @@ export function classify(item: Item): Classified {
   const override = overrideFor(item);
   const area = override?.area ?? areaOf(item, id);
   const severity = id ? severityOf(id) : null;
-  const labels = [`product:${override?.product ?? productOf(item)}`, `area:${area}`];
+  const labels = [`product:${override?.product ?? productOf(item)}`];
+  if (area) labels.push(`area:${area}`);
   if (severity) labels.push(`severity:${severity}`);
   const repo =
     area === "security" || area === "performance" || area === "compliance" ? "private" : "public";

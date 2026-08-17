@@ -21,7 +21,7 @@ test("creates an issue through gh api and returns number and id", async () => {
   const created = await createIssue(gh, "xchromo/osn", {
     title: "T",
     body: "B",
-    labels: ["product:cire", "area:feature"],
+    labels: ["product:cire", "area:ops"],
   });
   expect(created).toEqual({ number: 501, id: "99887766" });
   expect(calls[0]).toContain("repos/xchromo/osn/issues");

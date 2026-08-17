@@ -19,11 +19,12 @@ gh issue create --repo xchromo/osn \
   --title "<short imperative title>" \
   --type Feature \
   --label "product:<osn-core|pulse|cire|zap|shared|landing>" \
-  --label "area:feature" \
   --body "<what and why, in a couple of sentences>"
 ```
 
 `--type` is an org-level field the Project groups and filters on, separate from the labels. `Feature` for new capability, `Bug` for something already built behaving wrongly, `Task` for the rest — a migration, a chore, a piece of infrastructure.
+
+There is no `area:feature` label: an issue with no `area:` is ordinary product work, which is what the type already says. Add an `area:` only when the work is a finding, or is `ops`, `schema` or `docs`.
 
 Two things follow from the issue:
 
