@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { parseBoard, parseIssues, pending } from "./backfill-project";
+import { alreadyOnBoard, parseBoard, parseIssues, pending } from "./backfill-project";
 
 test("reads the issue URLs in a repo listing", () => {
   const json = JSON.stringify([
@@ -24,4 +24,15 @@ test("adds only what is missing, so a re-run is free", () => {
   const all = ["a", "b", "c"];
   expect(pending(all, new Set(["b"]))).toEqual(["a", "c"]);
   expect(pending(all, new Set(all))).toEqual([]);
+});
+
+test("an add that says the item is already there is not a failure", () => {
+  const duplicate = new Error(
+    "gh project failed (1): GraphQL: Content already exists in this project (addProjectV2ItemById)",
+  );
+  expect(alreadyOnBoard(duplicate)).toBe(true);
+  expect(
+    alreadyOnBoard(new Error("gh project failed (1): GraphQL: Could not resolve to a node")),
+  ).toBe(false);
+  expect(alreadyOnBoard("Content already exists in this project")).toBe(false);
 });

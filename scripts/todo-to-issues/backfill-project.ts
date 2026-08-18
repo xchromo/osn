@@ -43,6 +43,11 @@ export function parseBoard(json: string): Set<string> {
   return new Set((parsed.items ?? []).flatMap((i) => (i.content?.url ? [i.content.url] : [])));
 }
 
+/** The one `item-add` failure that means the work is already done. */
+export function alreadyOnBoard(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("Content already exists in this project");
+}
+
 export function pending(all: string[], onBoard: Set<string>): string[] {
   return all.filter((url) => !onBoard.has(url));
 }
@@ -101,11 +106,21 @@ if (import.meta.main) {
   // needs nothing like the gap between two `issue create` calls.
   const throttle = new Throttle(1_500);
   let done = 0;
+  let already = 0;
   for (const url of todo) {
     await throttle.wait();
-    await gh(["project", "item-add", project, "--owner", OWNER, "--url", url]);
-    done += 1;
-    if (done % 25 === 0) console.log(`${done}/${todo.length}`);
+    try {
+      await gh(["project", "item-add", project, "--owner", OWNER, "--url", url]);
+      done += 1;
+    } catch (error) {
+      // `item-list` pages, and a long run races the board it is reading, so an
+      // issue can be on the board and absent from the listing that decided this
+      // set. Adding it again is the no-op it sounds like -- the add is what makes
+      // the run idempotent, and dying on it strands every issue after this one.
+      if (!alreadyOnBoard(error)) throw error;
+      already += 1;
+    }
+    if ((done + already) % 25 === 0) console.log(`${done + already}/${todo.length}`);
   }
-  console.log(`added ${done}`);
+  console.log(`added ${done}${already > 0 ? `, ${already} were on the board already` : ""}`);
 }
