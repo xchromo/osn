@@ -48,6 +48,11 @@ export function alreadyOnBoard(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Content already exists in this project");
 }
 
+/** The GraphQL hourly allowance running out, which time alone fixes. */
+export function rateLimited(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("API rate limit already exceeded");
+}
+
 export function pending(all: string[], onBoard: Set<string>): string[] {
   return all.filter((url) => !onBoard.has(url));
 }
@@ -117,6 +122,13 @@ if (import.meta.main) {
       // issue can be on the board and absent from the listing that decided this
       // set. Adding it again is the no-op it sounds like -- the add is what makes
       // the run idempotent, and dying on it strands every issue after this one.
+      // The GraphQL allowance is hourly and every add spends from it, so a big
+      // board can outlast it. Nothing is lost -- what went on stays on -- so say
+      // how much is left and stop, rather than printing a stack trace.
+      if (rateLimited(error)) {
+        console.log(`rate limit reached after ${done + already} of ${todo.length}; re-run later`);
+        break;
+      }
       if (!alreadyOnBoard(error)) throw error;
       already += 1;
     }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { alreadyOnBoard, parseBoard, parseIssues, pending } from "./backfill-project";
+import { alreadyOnBoard, parseBoard, parseIssues, pending, rateLimited } from "./backfill-project";
 
 test("reads the issue URLs in a repo listing", () => {
   const json = JSON.stringify([
@@ -35,4 +35,15 @@ test("an add that says the item is already there is not a failure", () => {
     alreadyOnBoard(new Error("gh project failed (1): GraphQL: Could not resolve to a node")),
   ).toBe(false);
   expect(alreadyOnBoard("Content already exists in this project")).toBe(false);
+});
+
+test("the hourly allowance running out is told apart from a real failure", () => {
+  const spent = new Error(
+    "gh project failed (1): GraphQL: API rate limit already exceeded for user ID 12794440.",
+  );
+  expect(rateLimited(spent)).toBe(true);
+  expect(alreadyOnBoard(spent)).toBe(false);
+  expect(
+    rateLimited(new Error("gh project failed (1): GraphQL: Could not resolve to a node")),
+  ).toBe(false);
 });
