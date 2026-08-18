@@ -166,11 +166,21 @@ gh project field-create $N --owner xchromo --name "Effort" \
 
 ## 6. Workflows (UI only — no API)
 
-Project → Workflows:
+Project → the **⋯** menu, top right → **Workflows**. Each one is Edit, fill in,
+then **Save and turn on workflow**.
 
-1. **Auto-add to project** — enable once per repo, filter `is:issue is:open`,
-   for `xchromo/osn` and `xchromo/osn-tracker`.
-2. **Item added to project** — set `Status` = `Backlog`.
+1. **Auto-add to project** — filter `is:issue is:open`, one repo per workflow.
+   **`xchromo` is on GitHub Free, and Free allows one auto-add workflow per
+   project.** Two repos feed this board, so one of them gets it and the other
+   is swept by hand. Put it on `xchromo/osn-tracker`: findings arrive in bursts
+   at the end of a review and are the easy ones to forget, while a product
+   issue is opened deliberately. Sweeping the other repo is one command —
+   see the backfill below — and the choice is one edit to reverse.
+2. **Item added to project** — set `Status` = `Backlog`. This one is off; turn
+   it on whether or not auto-add is.
+
+**Auto-add sub-issues to project** is already on, so a sub-issue opened under
+an epic that is on the board joins it too.
 
 Do this **before** the migration runs if you can. Auto-add is what makes the
 migration cost zero Project API calls.
@@ -198,15 +208,41 @@ It took three runs to clear the whole board — see §Rate limits worth knowing 
 why, and expect the same of any later bulk add. The dry run now reports
 `676 issues, 676 on the board, 0 to add`.
 
+It stays useful after the migration: auto-add covers one repo, so run the dry
+run over the other now and then and `--apply` when it finds anything.
+
 ## 7. Views (UI only)
 
-| View | Layout | Setting |
-|---|---|---|
-| Board | Board | Group by Status |
-| By product | Table | Group by Labels |
-| By type | Table | Group by Type |
-| Review findings | Table | Filter `label:area:security,area:performance,area:compliance`, group by Labels |
-| Up Next | Board | Filter `status:"Up Next","In Progress"` |
+New view: the **+** at the right of the view tabs. Its settings are the **View**
+menu beside the search bar (layout, group, slice, fields), and its filter is the
+search bar itself — there is no filter dropdown, you type the query.
+
+| View | Layout | Settings | Filter to type |
+|---|---|---|---|
+| Board | Board | Group by **Status** | — |
+| By product | Table | **Slice by** → **Labels** | — |
+| By type | Table | Group by **Type** | — |
+| Review findings | Table | **Slice by** → **Labels** | `repo:xchromo/osn-tracker is:open` |
+| Up Next | Board | Group by **Status** | `status:"Up Next","In Progress"` |
+
+Three things about that table are not obvious, and each one cost a search:
+
+- **You cannot group by Labels.** GitHub excludes title, labels, reviewers and
+  linked pull requests from grouping, and the option simply is not in the list.
+  **Slice by** takes Labels — it puts a label list down the left and filters the
+  table to whichever one you click, which is what grouping by product was for.
+  Slice is per-view, so "By product" and "Review findings" can both use it.
+- **A colon inside a label name has to be quoted**, because the filter already
+  uses colons: `label:"product:cire"`, never `label:product:cire`. Comma between
+  values is OR, a space between qualifiers is AND —
+  `label:"area:security","area:performance"` is either of those two.
+- **Type is the org issue type**, not a project field, and it filters as
+  `type:"Bug"`. The board has no Product, Area or Severity field; those live on
+  the issues as labels, which is why the views reach for Slice by.
+
+`repo:` is what keeps "Review findings" honest — every issue in the tracker is a
+finding, so naming the repo beats listing three `area:` labels and missing the
+fourth.
 
 ## 8. Record the numbers
 
