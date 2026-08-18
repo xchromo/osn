@@ -42,6 +42,18 @@ import {
   createOrganiserWeddingsRoutes,
 } from "./routes/organiser-weddings";
 import { createPaymentWebhookSkeleton } from "./routes/payment-webhook";
+import {
+  createRegistryImageRoutes,
+  createRegistryImageServeRoutes,
+  createRegistryLinkPreviewRoutes,
+  createRegistryReadRoutes,
+  createRegistryWriteRoutes,
+} from "./routes/registry";
+import {
+  createRegistryGuestClaimRoutes,
+  createRegistryGuestMineRoutes,
+  createRegistryGuestRoutes,
+} from "./routes/registry-guest";
 import { createRsvpRoutes } from "./routes/rsvp";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
 import {
@@ -55,6 +67,7 @@ import { createDirectoryService } from "./services/directory";
 import { createEnquiryService } from "./services/enquiries";
 import type { AssetsBucket } from "./services/invite-assets";
 import type { ImagesBindingLike } from "./services/invite-image-transform";
+import type { LinkPreviewOptions } from "./services/link-preview";
 import type {
   OsnAccountResolver,
   OsnConnectionSearchResolver,
@@ -169,6 +182,43 @@ const defaultDirectoryLimiter = createRateLimiter({ maxRequests: 60, windowMs: 6
  * amplifier. Keys on `osnProfileId` so each organiser has an independent bucket.
  */
 const defaultEnquiryLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
+/**
+ * Default per-USER limiter for the registry link preview. Tighter than any other
+ * organiser write (10/min) because it is the only one that spends an OUTBOUND
+ * fetch on a URL the caller chose: without a cap, one authenticated organiser
+ * turns the Worker into a request amplifier aimed wherever they like. Ten is
+ * well past hand-use — an organiser pastes a shop link, looks at the images and
+ * picks one.
+ */
+const defaultRegistryPreviewLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
+/**
+ * Default per-USER limiter for saving a registry item's image — an upload from
+ * the organiser's machine, or a copy of one candidate the preview offered.
+ *
+ * Same 10/min as the preview and for the same reason on the from-url leg: it
+ * spends an outbound fetch on a caller-chosen URL. The upload leg shares the
+ * bucket rather than getting a looser one of its own, because both legs end in
+ * an R2 write, and a picture per item at hand-speed never approaches ten a
+ * minute. A stricter cap than the preview would be wrong the other way: the
+ * organiser has to preview before they can pick.
+ */
+const defaultRegistryImageLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
+/**
+ * Default per-IP limiter for the two GUEST registry writes (claim / release).
+ *
+ * Per-IP, not per-user: a guest has no user, only a household cookie — the same
+ * shape as `defaultClaimLimiter` and for the same reason. The budget is 20/min,
+ * sized like the account-link writes: a household picking gifts claims a few
+ * things, changes its mind about one, marks another purchased weeks later. It is
+ * deliberately looser than the 5/min claim-code budget (that one guards a
+ * guessable credential; this one sits BEHIND that credential) and tighter than
+ * the 60/min session probe (that one is a page load; these are writes).
+ *
+ * A NAT'd venue-wifi household shares an IP, hence 20 rather than 10 — still far
+ * below what it costs anyone else, since the conditional INSERT behind it is one
+ * indexed statement.
+ */
+const defaultRegistryGuestLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 /**
  * Default per-IP limiter for the pre-auth OIDC redirect legs (`/oidc/start`,
  * `/oidc/callback`). Tighter than the session probe below — these are the
@@ -375,6 +425,21 @@ export interface AppOptions {
   enquiryEmailLayer?: Layer.Layer<EmailService>;
   /** Override the couple-side enquiry write rate limiter (useful for testing). */
   enquiryLimiter?: RateLimiterBackend;
+  /** Override the registry link-preview rate limiter (useful for testing). */
+  registryPreviewLimiter?: RateLimiterBackend;
+  /** Override the registry image-save rate limiter (useful for testing). */
+  registryImageLimiter?: RateLimiterBackend;
+  /** Override the guest registry claim/release rate limiter (useful for testing). */
+  registryGuestLimiter?: RateLimiterBackend;
+  /**
+   * Test seam: injectable `fetch` + DNS resolver for the registry link-preview
+   * service, so its route tests reach no network. Production passes nothing and
+   * the service uses global `fetch` + Cloudflare DoH.
+   *
+   * The image save-from-url leg takes the SAME options, so one seam covers both
+   * halves of paste-link → pick → copy.
+   */
+  registryLinkPreviewOptions?: LinkPreviewOptions;
   /**
    * GrowthBook feature-flag provider, decorated onto the request context as
    * `flags` so any route can do `await flags.forRequest({ id }).then(f =>
@@ -432,6 +497,10 @@ export function createApp(db: Db, options: AppOptions = {}) {
     enquiryZapClient = null,
     enquiryEmailLayer: enquiryEmailLayerOption,
     enquiryLimiter = defaultEnquiryLimiter,
+    registryPreviewLimiter = defaultRegistryPreviewLimiter,
+    registryImageLimiter = defaultRegistryImageLimiter,
+    registryGuestLimiter = defaultRegistryGuestLimiter,
+    registryLinkPreviewOptions,
     // Key-optional default: an inert provider that serves registry defaults with
     // no network, so an app built without GrowthBook config behaves exactly as
     // it did before flags existed.
@@ -597,6 +666,19 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // cookie minted by a Turnstile-gated `/api/claim`, so a second bot check
       // here is pure friction. Claim + organiser login keep the gate.
       .use(createRsvpRoutes(db))
+      // Guest gift registry, three sibling instances by gate class: the public
+      // reads take no auth at all, `/registry/mine` needs the household cookie,
+      // and the two writes need that cookie PLUS a per-IP limiter an Elysia
+      // guard would otherwise spread over the read. Same no-Turnstile argument
+      // as RSVP above — the cookie came from a Turnstile-gated `/api/claim`.
+      //
+      // Every route here is invisible without the `registry` entitlement, which
+      // NO wedding holds: they answer 404 `registry_not_found`, not 402, because
+      // an unauthenticated caller must not learn which weddings have bought
+      // which features.
+      .use(createRegistryGuestRoutes(db, { assets, images }))
+      .use(createRegistryGuestMineRoutes(db))
+      .use(createRegistryGuestClaimRoutes(db, { limiter: registryGuestLimiter }))
       .use(createOrganiserWeddingsRoutes(db, osnAuthOptions))
       .use(createOrganiserExportRoutes(db, osnAuthOptions, exportLimiter))
       .use(createOrganiserWeddingCreateRoute(db, osnAuthOptions, weddingCreateLimiter))
@@ -645,6 +727,39 @@ export function createApp(db: Db, options: AppOptions = {}) {
       .use(createTaskWriteRoutes(db, osnAuthOptions))
       .use(createBudgetReadRoutes(db, osnAuthOptions))
       .use(createBudgetWriteRoutes(db, osnAuthOptions))
+      // Gift registry (platform Phase 4). Same read/write gate split as the
+      // modules above, plus an entitlement gate: the `registry` key is granted to
+      // NO wedding, so every route here answers 402 `payment_required` today and
+      // the portal renders its upsell panel instead of the module. Mounting it
+      // unconditionally is deliberate — the lock is the entitlement, not the
+      // absence of a route, so turning the feature on for one wedding is a single
+      // row and needs no deploy.
+      .use(createRegistryReadRoutes(db, osnAuthOptions))
+      // `assets` goes to the write factory for ONE reason: deleting an item has to
+      // reap the R2 object its `image_key` pointed at, and D1's cascade stops at
+      // the row.
+      .use(createRegistryWriteRoutes(db, osnAuthOptions, assets))
+      // Link preview is a third sibling instance, not part of the write group:
+      // it carries its own per-organiser limiter (it is the one registry route
+      // that makes an outbound fetch), and an Elysia guard would spread that
+      // limiter across every write above.
+      .use(
+        createRegistryLinkPreviewRoutes(db, osnAuthOptions, {
+          limiter: registryPreviewLimiter,
+          linkPreviewOptions: registryLinkPreviewOptions,
+        }),
+      )
+      // Image saves are a fourth sibling for the same reason as the preview —
+      // their own outbound-fetch limiter — and the SERVE route is a fifth,
+      // because it admits any member role while the saves need an editor.
+      .use(
+        createRegistryImageRoutes(db, osnAuthOptions, {
+          limiter: registryImageLimiter,
+          assets,
+          imageOptions: registryLinkPreviewOptions,
+        }),
+      )
+      .use(createRegistryImageServeRoutes(db, osnAuthOptions, { assets, images }))
       // Vendor CRM (platform Phase 1). Reads admit any member role (weddingMember);
       // writes require editor or owner (weddingEditor; viewer gets 403
       // read_only_role). Split into sibling instances so the read gate never

@@ -42,9 +42,9 @@ is_allowed() {
     # Native clients and the OpenAPI spec: no package.json, no version.
     shared/swift/* | shared/openapi/* | pulse/ios/* | osn/ios/*) return 0 ;;
     # Repo plumbing and prose: never bundled into a package's build output.
-    # `.claude/` is agent instructions -- commands, skills, settings. No build
-    # reads it, so no version can honestly claim to ship it.
-    .github/* | scripts/* | wiki/* | docs/* | .claude/*) return 0 ;;
+    # `.claude/` is agent instructions — slash-commands, skills, settings; it is
+    # read by the coding agent, never by a build.
+    .github/* | .claude/* | scripts/* | wiki/* | docs/*) return 0 ;;
   esac
 
   return 1

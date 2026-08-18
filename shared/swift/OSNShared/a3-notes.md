@@ -48,6 +48,66 @@
 - Every OSNAuth request runs through the shared `URLSession` /
   `SharedCookieJar` — no client constructs its own session or cookie
   storage.
+- `OSNSession` (new, `OSNAuth`) extracted as the app-agnostic sign-in owner;
+  `PulseFeature.PulseSession` now forwards to it (`state` is computed from
+  `auth.state`, never a synced stored copy — that would break `@Observable`
+  tracking). Covered by `OSNSessionTests`: a failing `TokenRefresher.refresh()`
+  during `restore()` lands on `.signedOut`, never `.failed`; `signOut()`
+  clears the Keychain access token; `ensureFreshAccessToken()` refreshes
+  when the stored token is missing or expires within 30s and is a no-op
+  (asserted via request count against `LoginMockURLProtocol`) when the
+  token is still fresh.
+- New `OSNAuthUI` target (`OSNAuth` + `OSNUI`) holds `PasskeySignInView`,
+  the app-name-parameterized, `OSNSession`-driven successor to
+  `PulseFeature`'s old `SignInView`. `PulseRootView` renders it against
+  `session.auth`; no other view changed.
+
+## Musubi (second client)
+
+- New `MusubiFeature` target (`OSNKit`/`OSNAuth`/`OSNUI`/`OSNAuthUI`, no API
+  client — Musubi talks to OSNAuth's clients only). `MusubiRootView` gates
+  directly on `OSNSession.state` (no `PulseSession`-style wrapper) and
+  reuses `PasskeySignInView` unmodified. `MusubiAccountView` is read-only:
+  lists passkeys, shows the profile when `.signedIn` carries one (`nil` on a
+  restored session — handled, not force-unwrapped), and a sign-out button.
+  No rename/delete UI — both need a step-up ceremony
+  (`wiki/systems/step-up.md`), out of scope.
+- `ensureFreshAccessToken()` runs immediately before every
+  `PasskeyManagementClient.list()` call in `MusubiAccountView`, per
+  `RequestHelpers.applyBearerAccessToken`'s no-expiry-check/no-401-retry
+  behavior. A load failure surfaces inline in the view (error text + Retry
+  button) and never touches `session.state`.
+- `osn/ios/` mirrors `pulse/ios/` (`project.yml`, `Sources/App.swift`):
+  bundle id `social.musubi.app`, same team/App-Group/associated-domain
+  entitlements. AASA
+  (`osn/social/public/.well-known/apple-app-site-association`) now lists
+  both `FV59Y8RSUH.social.musubi.pulse` and `FV59Y8RSUH.social.musubi.app`.
+  `ci-swift.yml`'s path filter and `swift` job now also generate/build the
+  `Musubi` scheme; the job's `name:` string is untouched (may be pinned by a
+  required status check).
+- **App Group container verified on simulator, 2026-08-17.** Both apps were
+  built signed for `iPhone 17 Pro` (iOS 26.3, `C9C6D823-…`), installed, and
+  launched. Three things came out of it:
+  - The entitlement reaches the bundle. A simulator build is
+    `adhoc, linker-signed`, so `codesign -d --entitlements` shows nothing and
+    is the wrong probe; the entitlements live in a `__TEXT,__entitlements`
+    section and in `<Scheme>.build/<App>.app-Simulated.xcent`. `plutil -p` on
+    those prints `com.apple.security.application-groups =>
+    ["group.social.musubi.session"]` for both, under
+    `FV59Y8RSUH.social.musubi.pulse` and `FV59Y8RSUH.social.musubi.app`.
+  - Both apps resolve the **same** container:
+    `xcrun simctl get_app_container … group.social.musubi.session` returns
+    `…/Containers/Shared/AppGroup/DBBDABDC-4232-4719-BAB3-A65F87FF9FA7` for
+    each bundle id.
+  - `SharedCookieJar.makeSession()` does not throw in either app. Both
+    render `PasskeySignInView`; neither shows `MusubiApp`/`PulseApp`'s
+    `Text(sessionError)` fallback, which is the only thing an
+    `OSNKitError.appGroupContainerUnavailable` would produce. A live process
+    alone proves nothing here — the throw is caught, not fatal — so this was
+    checked by screenshot, not by exit status.
+- What that check does **not** close: signing in on Pulse and confirming
+  Musubi restores signed-in through the shared jar. That needs a real passkey
+  ceremony, which is blocked — see §Not verified.
 
 ## Not verified
 
@@ -59,19 +119,60 @@
 - No confirmation against a live `osn-api` deployment. The shapes are now
   read off the server source rather than the brief (see Verified), but
   nothing has been checked against a captured production payload.
-- No conditional UI / passkey autofill: `PasskeyCeremonyRunner` never calls
-  `performAutoFillAssistedRequests()`. The discoverable-credential flow the
-  brief asked for works; the QuickType-bar suggestion does not exist yet.
-- Xcode build of the Pulse target with the new entitlements has not been
-  run (would fail regardless — see BLOCKED below) — `swift build`/`swift test`
-  only exercise the SPM package, not the Xcode project XcodeGen would
-  generate.
+- Conditional UI / passkey autofill (brief T3): `OSNSession.startAutoFillSignIn`
+  arms `performAutoFillAssistedRequests()` via a new `PasskeyCeremonyHandle`
+  (cancellable, `#if os(iOS)`-gated), and `PasskeySignInView` starts/cancels it
+  in `.task`/`.onDisappear`. The three `PasskeyLoginClient` helpers it reuses —
+  `beginLogin`, `makeAssertionRequest`, `loginTarget` — are machine-tested
+  (`PasskeyLoginClientHelpersTests`), as is `SingleResumeContinuation`'s
+  behaviour under a cancel/completion race. What is **not** machine-tested,
+  anywhere: `packageAssertion(_:)` (needs an `ASAuthorizationPlatformPublicKeyCredentialAssertion`,
+  which Apple vends only from a real ceremony and exposes no public
+  initializer for), and the full autofill runtime path end to end
+  (`performAutoFillAssistedRequests()` itself, the QuickType suggestion
+  appearing, the one-shot silent re-arm on a 120s-TTL-expired challenge, the
+  modal/autofill collision handling in `signIn`). CI never executes any of
+  that — see the note below. It ships human-reviewed only. That includes the
+  cancellation invariant two independent reviews landed on: at most one live
+  `ASAuthorizationController` request, always reachable from
+  `cancelAutoFillSignIn()`. It is held by three things — cancel-before-arm in
+  `attemptAutoFillSignIn`, an identity-checked `clearAutoFillHandle` so an
+  overlapping attempt cannot drop a newer handle, and `autoFillReArmTask`
+  making the re-arm `signIn` spawns cancellable before it reaches the arm.
+  Reading is the only check any of that gets today.
+- CI coverage gap, stated plainly: the macOS host runs `swift test`, which
+  compiles and runs every `#if os(iOS)` block's *non*-iOS-only siblings but
+  cannot execute iOS-only code (`performAutoFillAssistedRequests()` doesn't
+  exist on macOS) or drive a real `ASAuthorizationController` ceremony either
+  way. The iOS lane runs `xcodebuild ... build`, not `test` — a typecheck, not
+  a run. So no line of the autofill path executes in CI on either platform.
+  A simulator test lane that could exercise it is a separate task, not
+  started here.
+- The Xcode build of the Pulse target with the new entitlements has now been
+  run (`xcodegen generate` + `xcodebuild -scheme Pulse` against a concrete
+  iOS Simulator destination, signed, exit 0), and the resulting bundle
+  carries `com.apple.security.application-groups =>
+  ["group.social.musubi.session"]` under `FV59Y8RSUH.social.musubi.pulse`.
+  Probe it with `plutil -p <DerivedData>/Build/Intermediates.noindex/Pulse.build/Debug-iphonesimulator/Pulse.build/Pulse.app-Simulated.xcent`
+  — a simulator build is `adhoc, linker-signed`, so `codesign -d
+  --entitlements` prints nothing and proves nothing.
+  What that build does **not** cover: it typechecks the `#if os(iOS)`
+  autofill code that `swift build` compiles out, but it still never *runs*
+  it. See the CI coverage gap above — that stands.
 
 ## BLOCKED
 
-- `pulse/ios/project.yml`: `com.apple.developer.associated-domains`
-  (`webcredentials:musubi.social`) and App Group
-  `group.social.musubi.session` are declared in the entitlements block
-  but neither capability is registered in the Apple developer portal.
-  Xcode codesigning of the Pulse target will fail until both are added
-  there.
+Nothing. Cleared 2026-08-15: App ID `social.musubi.pulse` is registered
+under team FV59Y8RSUH with both capabilities the entitlements block
+declares — **Associated Domains**, and **App Groups** with
+`group.social.musubi.session` assigned. So Xcode codesigning of the Pulse
+target no longer fails on a missing capability, and
+`SharedCookieJar.makeSession()` no longer throws on a correctly signed
+build.
+
+The portal never takes the domain string itself. `webcredentials:musubi.social`
+is matched against `osn/social/public/.well-known/apple-app-site-association`,
+which now names `FV59Y8RSUH.social.musubi.pulse`. iOS reads that file through
+Apple's CDN and caches it up to ~24h; during development append
+`?mode=developer` to the entitlement and turn on Settings → Developer →
+Associated Domains Development to skip the cache. Strip it before TestFlight.

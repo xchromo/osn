@@ -225,6 +225,21 @@ Fill these in once, here:
 - Project number: `1` — <https://github.com/orgs/xchromo/projects/1> (private)
 - Tracker repo: <https://github.com/xchromo/osn-tracker>
 
+## What the parser missed
+
+The item pattern was `/^- \[( |x)\]\s+(.*)$/` — column 0, and either ` ` or
+`x` in the box. A `- [~]` line (in-progress, used in the cire checklists) is
+therefore not an item at all. It does not open one, so it never flushes, and
+its indented children were folded into whichever item came before it. Three
+issues had to be opened by hand afterwards and linked to their epics: #698 and
+#699 (the nested `Registry` children in `cire/wiki/todo/platform.md`) under
+epic #482, and #700 (the batch-import child in
+`cire/wiki/todo/spreadsheet-import.md`) under epic #456. They are recorded in
+`.migration/created.json` under their source lines like any other item.
+
+Nothing else in the sources used `[~]`. If these files are ever re-parsed from
+git history, widen the character class first.
+
 ## Rate limits worth knowing
 
 The primary limit (5,000 REST requests/hour) is not the one that bites. The
