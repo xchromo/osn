@@ -25,7 +25,7 @@ Read each in-scope file in full. Where a doc makes a factual claim about the cod
 
 - **Runbooks describing completed work as future work** — e.g. an "S2S migration" runbook that describes the transition as upcoming when `graphBridge.ts` already does HTTP+ARC. Either mark the runbook as historical or delete it.
 - **Duplicated detail between `CLAUDE.md` and a wiki page** — the CLAUDE.md Key Patterns row should be a one-line summary + a `[[wiki/...]]` link, not a paragraph that restates the wiki page. If both hold the same detail, one of them will drift.
-- **"Phase N" language without a decision** — deferred decisions or phase labels that have been live for months without a resolution. Suggest moving them to `wiki/TODO.md` Deferred Decisions or removing them.
+- **"Phase N" language without a decision** — deferred decisions or phase labels that have been live for months without a resolution. Suggest moving them to `wiki/deferred-decisions.md` or removing them.
 - **Defunct config / env / store references** — references to env vars, Redis namespaces, DB columns, or in-memory stores that no longer exist.
 - **Forward-looking "will migrate to" text** for migrations that already shipped.
 
@@ -50,7 +50,7 @@ Read each in-scope file in full. Where a doc makes a factual claim about the cod
 
 ## 5. Frontmatter — YAML metadata
 
-Every wiki page (`wiki/**/*.md` except `wiki/TODO.md` and `wiki/README.md`) must have YAML frontmatter between `---` fences with:
+Every wiki page (`wiki/**/*.md` except `wiki/README.md`) must have YAML frontmatter between `---` fences with:
 
 - `title` — human-readable page title (matches the top-level `#` heading)
 - `tags` — array of topic tags; used for Obsidian filtering
