@@ -4,7 +4,7 @@ tags: [runbooks, process, issues]
 related:
   - "[[review-findings]]"
   - "[[index]]"
-last-reviewed: 2026-08-17
+last-reviewed: 2026-08-18
 ---
 
 # GitHub Issues setup
@@ -130,14 +130,46 @@ gh project create --owner xchromo --title "OSN Platform"
 gh project list --owner xchromo   # note the number, $N below
 ```
 
-> **An org Project is created public.** Make it private in the UI
-> (Settings → Visibility → Private) **before** a single tracker issue is added.
-> A public Project lists the titles of every issue in it, including the private
-> ones — which is the whole disclosure the tracker repo exists to prevent.
+> **Check the visibility before adding a single tracker issue.** A public
+> Project lists the titles of every issue in it, including the private ones —
+> the whole disclosure the tracker repo exists to prevent. Ours came out
+> private, but `gh project create` has no `--visibility` flag to force it, so
+> read it back rather than assume:
+>
+> ```bash
+> gh project view $N --owner xchromo --format json --jq '.public'   # must be false
+> ```
+>
+> If it says `true`, fix it first: `gh project edit $N --owner xchromo --visibility PRIVATE`.
+
+A new Project already has a **Status** field, with options Todo / In Progress /
+Done. Creating a second one called "Status" is allowed and unhelpful — the board
+groups by the built-in one. Rewrite its options in place instead. Get the field
+id, then run the mutation:
 
 ```bash
-gh project field-create $N --owner xchromo --name "Status" \
-  --data-type SINGLE_SELECT --single-select-options "Backlog,Up Next,In Progress,In Review,Blocked,Done"
+gh project field-list $N --owner xchromo --format json \
+  --jq '.fields[] | select(.name == "Status") | .id'     # PVTSSF_…
+
+gh api graphql -F field=PVTSSF_… -f query='
+mutation($field: ID!) {
+  updateProjectV2Field(input: { fieldId: $field, singleSelectOptions: [
+    { name: "Backlog",     color: GRAY,   description: "Filed, not scheduled" }
+    { name: "Up Next",     color: BLUE,   description: "Scheduled for the current push" }
+    { name: "In Progress", color: YELLOW, description: "Someone is working on it" }
+    { name: "In Review",   color: PURPLE, description: "PR open, awaiting review" }
+    { name: "Blocked",     color: RED,    description: "Waiting on something outside the work" }
+    { name: "Done",        color: GREEN,  description: "Merged or closed" }
+  ]}) { projectV2Field { ... on ProjectV2SingleSelectField { name options { name } } } }
+}'
+```
+
+`singleSelectOptions` replaces the whole list, so name every option you want to
+keep. An option dropped here is cleared from every item that held it.
+
+The other two fields don't exist yet, so they are ordinary creates:
+
+```bash
 gh project field-create $N --owner xchromo --name "Priority" \
   --data-type SINGLE_SELECT --single-select-options "P0,P1,P2,P3"
 gh project field-create $N --owner xchromo --name "Effort" \
@@ -167,9 +199,14 @@ bun run scripts/todo-to-issues/backfill-project.ts $N          # dry run, prints
 bun run scripts/todo-to-issues/backfill-project.ts $N --apply
 ```
 
-It reads `.migration/created.json`, skips anything already on the board, and
-throttles at the same 8s gap the issue creation uses — an item-add is a
-content-creation mutation and counts against the same 500/hour.
+It enumerates both repos with `gh issue list` — not `.migration/created.json`.
+The migration's own records are no use here for the same reason `types` is inert:
+they were parsed from checklists that Phase 4 deleted. Reading GitHub also picks
+up issues filed by hand since, which belong on the board just as much.
+
+It skips anything already there, so a re-run costs nothing and the dry run is
+the check that it is finished. Adding an item is an ordinary mutation rather
+than content creation, so it throttles at 1.5s, not the 8s the issue writer uses.
 
 ## 7. Views (UI only)
 
@@ -185,7 +222,7 @@ content-creation mutation and counts against the same 500/hour.
 
 Fill these in once, here:
 
-- Project number: `TBD — fill at setup`
+- Project number: `1` — <https://github.com/orgs/xchromo/projects/1> (private)
 - Tracker repo: <https://github.com/xchromo/osn-tracker>
 
 ## Rate limits worth knowing
