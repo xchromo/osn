@@ -207,6 +207,9 @@ up issues filed by hand since, which belong on the board just as much.
 It skips anything already there, so a re-run costs nothing and the dry run is
 the check that it is finished. Adding an item is an ordinary mutation rather
 than content creation, so it throttles at 1.5s, not the 8s the issue writer uses.
+It took three runs to clear the whole board — see §Rate limits worth knowing for
+why, and expect the same of any later bulk add. The dry run now reports
+`676 issues, 676 on the board, 0 to add`.
 
 ## 7. Views (UI only)
 
@@ -247,6 +250,16 @@ secondary content-creation limit is: **80 creations per minute and 500 per
 hour**, counted across issues, comments and sub-issue links together. The
 migration writer self-throttles to 450/hour with an 8s gap. Exceeding it earns
 a 403 with a `Retry-After`, and repeatedly ignoring that earns a longer block.
+
+Putting issues on the board is a third limit again: `gh project item-add` is a
+GraphQL call, and GraphQL has its own **5,000 points per hour**. Backfilling all
+676 issues outspends one hour of it, so `backfill-project.ts` stops on the quota,
+prints how far it got, and leaves the rest to the next run — nothing is lost,
+because it reads the board each time and adds only what is missing. Two failures
+are expected there and neither is a fault: `Content already exists in this
+project` (the item list pages, so a long run races the board it read) is counted,
+and the quota message ends the run cleanly. Watching CI with `gh pr checks
+--watch` spends from the same GraphQL pool, so don't run one alongside a backfill.
 
 Other ceilings, none of them close: 50,000 items per Project, 100 sub-issues
 per parent, 8 levels of sub-issue nesting.
