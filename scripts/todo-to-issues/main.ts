@@ -217,7 +217,16 @@ if (import.meta.main) {
     console.log(`  public:  ${counts.public ?? 0}`);
     console.log(`  private: ${counts.private ?? 0}`);
   } else if (command === "verify") {
-    const violations = checkManifest(await plan());
+    // Phase 4 deleted the source checklists, so `plan()` now parses nothing and
+    // every whole-manifest gate fails on an empty set. That is the migration
+    // having finished, not a regression -- say so and stop, the way `types` and
+    // `resync` do. See wiki/runbooks/github-issues-setup.md.
+    const manifest = await plan();
+    if (manifest.length === 0) {
+      console.log("sources are gone -- nothing to verify (see the setup runbook)");
+      process.exit(0);
+    }
+    const violations = checkManifest(manifest);
     if (violations.length === 0) {
       console.log("manifest clear");
     } else {
