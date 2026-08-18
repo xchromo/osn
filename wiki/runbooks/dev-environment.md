@@ -327,11 +327,12 @@ dashboard-only.
    > network-touching command prints nothing and exits 0. Use plain `bunx wrangler`
    > (node), notwithstanding the repo-wide `bunx --bun` rule.
 
-4. **Set the dev `OSN_PAIRWISE_SALT`** with the **Set OSN_PAIRWISE_SALT**
-   workflow, `tier: dev`. It generates 64 random bytes in-job, never prints them,
-   and **refuses to rotate** an existing value. ✅ done — but set by hand with
-   `wrangler secret put`, because `workflow_dispatch` resolves the workflow file
-   against `main` and the `tier` input does not exist there until this branch
+4. **Set the dev `OSN_PAIRWISE_SALT`** with the **Set an osn-api Worker
+   secret** workflow, `secret: OSN_PAIRWISE_SALT`, `tier: dev`. It generates 64
+   random bytes in-job, never prints them, and **refuses to rotate** an existing
+   value. ✅ done — but set by hand with `wrangler secret put`, because
+   `workflow_dispatch` resolves the workflow file against `main` and neither the
+   `tier` input nor the generalised workflow exists there until this branch
    merges. Same effect; from the next dev bootstrap on, use the workflow.
 
    > ⚠️ The dev salt must never be rotated either. Rotation changes every pairwise
@@ -514,8 +515,11 @@ than a 401 that would admit the surface exists.
 # local (bun run dev): put DEV_LOGIN_SECRET + DEV_LOGIN_RETURN_ORIGINS in osn/api/.env
 open "http://localhost:4000/dev/login?secret=$SECRET&return_to=http://localhost:4322/dashboard"
 
-# deployed dev — one-time, then redeploy to cycle warm isolates
-printf '%s' "$SECRET" | wrangler secret put DEV_LOGIN_SECRET --env dev
+# deployed dev — one-time. Park the value on the dev GitHub Environment, then
+# let the workflow put it on the Worker; neither step prints it.
+gh secret set DEV_LOGIN_SECRET --repo xchromo/osn --env dev --body "$SECRET"
+gh workflow run set-osn-api-secret.yml -f secret=DEV_LOGIN_SECRET -f tier=dev
+# then redeploy osn-api to cycle warm isolates — deps are built once per isolate
 open "https://id.dev.musubi.social/dev/login?secret=$SECRET&return_to=https://host.dev.cireweddings.com/dashboard"
 ```
 

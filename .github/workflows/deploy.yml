@@ -821,7 +821,8 @@ jobs:
       # Same fail-closed secret preflight as prod (see that job for why). Dev
       # needs its OWN OSN_PAIRWISE_SALT — a dev value, and once set it must never
       # be rotated either, or every dev relying party sees its users as
-      # strangers. Set it with the `Set OSN_PAIRWISE_SALT` workflow (tier: dev).
+      # strangers. Set it with the `Set an osn-api Worker secret` workflow
+      # (secret: OSN_PAIRWISE_SALT, tier: dev).
       - name: Preflight — required dev secrets are set
         run: |
           set -euo pipefail
@@ -834,7 +835,7 @@ jobs:
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::osn-api-dev is missing required secret(s):$missing — run the 'Set OSN_PAIRWISE_SALT' workflow with tier=dev. osn-api fails closed on these, so deploying now would 503 every route."
+            echo "::error::osn-api-dev is missing required secret(s):$missing — run the 'Set an osn-api Worker secret' workflow with secret=OSN_PAIRWISE_SALT, tier=dev. osn-api fails closed on these, so deploying now would 503 every route."
             exit 1
           fi
           echo "All required osn-api dev secrets are set."
