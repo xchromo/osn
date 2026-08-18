@@ -226,7 +226,8 @@ turned into an open redirect. Nothing in code stops a human forwarding the link.
 So treat it like a password — never in an issue, a PR, or a chat, and rotate
 `DEV_LOGIN_SECRET` if it appears in one. This is acceptable **because of where it
 can exist**: the dev tier holds seeded weddings and no real guest data, and
-production cannot mount the route at all.
+production cannot mount the route at all. Filed open as `S-L3` in
+`xchromo/osn-tracker` (#437); the four-field write-up is the issue body.
 
 ## Enumeration safety (S-M1)
 

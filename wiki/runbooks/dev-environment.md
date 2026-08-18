@@ -544,7 +544,8 @@ secret-bearing URL never reaches the target as a `Referer`.
 > never paste it into an issue, a PR, or a chat, and rotate `DEV_LOGIN_SECRET` if
 > it turns up in one. Production is unreachable this way — the tier gate keeps
 > the route unmounted and the production deploy job **fails** while
-> `DEV_LOGIN_SECRET` is set on `osn-api-production`.
+> `DEV_LOGIN_SECRET` is set on `osn-api-production`. Tracked open as `S-L3` in
+> `xchromo/osn-tracker` (#437).
 
 > [!important] Why `GET`, and why no button
 > The origin guard rejects a POST without a matching `Origin` header, so GET is
