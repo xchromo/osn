@@ -7122,5 +7122,205 @@
   "type:wiki/TODO.md:945": {
     "number": 390,
     "id": "Task"
+  },
+  "gap:private:cire/wiki/todo/perf.md:21": {
+    "number": 420,
+    "id": "5178324674"
+  },
+  "gap:private:cire/wiki/todo/perf.md:22": {
+    "number": 421,
+    "id": "5178325565"
+  },
+  "gap:private:cire/wiki/todo/perf.md:27": {
+    "number": 422,
+    "id": "5178326488"
+  },
+  "gap:private:cire/wiki/todo/perf.md:40": {
+    "number": 423,
+    "id": "5178327440"
+  },
+  "gap:private:cire/wiki/todo/perf.md:45": {
+    "number": 424,
+    "id": "5178328182"
+  },
+  "gap:private:cire/wiki/todo/security.md:19": {
+    "number": 425,
+    "id": "5178328908"
+  },
+  "gap:private:cire/wiki/todo/security.md:27": {
+    "number": 426,
+    "id": "5178329569"
+  },
+  "gap:private:cire/wiki/todo/security.md:33": {
+    "number": 427,
+    "id": "5178330278"
+  },
+  "gap:private:cire/wiki/todo/security.md:44": {
+    "number": 428,
+    "id": "5178331095"
+  },
+  "gap:private:cire/wiki/todo/security.md:45": {
+    "number": 429,
+    "id": "5178331771"
+  },
+  "gap:private:cire/wiki/todo/security.md:46": {
+    "number": 430,
+    "id": "5178332523"
+  },
+  "gap:public:cire/wiki/todo/web.md:17": {
+    "number": 689,
+    "id": "5178333276"
+  },
+  "gap:public:wiki/TODO.md:250": {
+    "number": 690,
+    "id": "5178333980"
+  },
+  "gap:public:wiki/TODO.md:303": {
+    "number": 691,
+    "id": "5178334702"
+  },
+  "gap:public:wiki/TODO.md:529": {
+    "number": 692,
+    "id": "5178335400"
+  },
+  "gap:public:wiki/TODO.md:552": {
+    "number": 693,
+    "id": "5178336140"
+  },
+  "gap:public:wiki/TODO.md:993": {
+    "number": 695,
+    "id": "5178336814"
+  },
+  "epic:private:Performance Backlog — Host RSVP search + status filter (fix/cire-rsvp-filter-review, 2026-08-15)": {
+    "number": 431,
+    "id": "5178342939"
+  },
+  "type:epic:private:Performance Backlog — Host RSVP search + status filter (fix/cire-rsvp-filter-review, 2026-08-15)": {
+    "number": 431,
+    "id": "Task"
+  },
+  "epic:private:Performance Backlog — Registry item pictures — link preview + R2 copy (feat/cire-registry-preview, 2026-08-14)": {
+    "number": 432,
+    "id": "5178343617"
+  },
+  "type:epic:private:Performance Backlog — Registry item pictures — link preview + R2 copy (feat/cire-registry-preview, 2026-08-14)": {
+    "number": 432,
+    "id": "Task"
+  },
+  "epic:private:Performance Backlog — Registry module, organiser portal (feat/cire-registry-host, 2026-08-13)": {
+    "number": 433,
+    "id": "5178344373"
+  },
+  "type:epic:private:Performance Backlog — Registry module, organiser portal (feat/cire-registry-host, 2026-08-13)": {
+    "number": 433,
+    "id": "Task"
+  },
+  "epic:private:Security Backlog — Host RSVP search + status filter (fix/cire-rsvp-filter-review, 2026-08-15)": {
+    "number": 434,
+    "id": "5178345021"
+  },
+  "type:epic:private:Security Backlog — Host RSVP search + status filter (fix/cire-rsvp-filter-review, 2026-08-15)": {
+    "number": 434,
+    "id": "Task"
+  },
+  "epic:private:Security Backlog — Registry link preview (feat/cire-registry-preview, 2026-08-14)": {
+    "number": 435,
+    "id": "5178345715"
+  },
+  "type:epic:private:Security Backlog — Registry link preview (feat/cire-registry-preview, 2026-08-14)": {
+    "number": 435,
+    "id": "Task"
+  },
+  "epic:private:Security Backlog — Registry module, organiser portal (feat/cire-registry-host, 2026-08-13)": {
+    "number": 436,
+    "id": "5178346523"
+  },
+  "type:epic:private:Security Backlog — Registry module, organiser portal (feat/cire-registry-host, 2026-08-13)": {
+    "number": 436,
+    "id": "Task"
+  },
+  "epic:public:cire/invites": {
+    "number": 696,
+    "id": "5178347536"
+  },
+  "type:epic:public:cire/invites": {
+    "number": 696,
+    "id": "Task"
+  },
+  "epic:public:Auth Improvements (Copenhagen Book Audit) — Phase 3 — Defense-in-Depth (High)": {
+    "number": 697,
+    "id": "5178348485"
+  },
+  "type:epic:public:Auth Improvements (Copenhagen Book Audit) — Phase 3 — Defense-in-Depth (High)": {
+    "number": 697,
+    "id": "Task"
+  },
+  "gap:private:cire/wiki/todo/perf.md:21:linked": {
+    "number": 431,
+    "id": "5178342939"
+  },
+  "gap:private:cire/wiki/todo/perf.md:22:linked": {
+    "number": 431,
+    "id": "5178342939"
+  },
+  "gap:private:cire/wiki/todo/perf.md:27:linked": {
+    "number": 432,
+    "id": "5178343617"
+  },
+  "gap:private:cire/wiki/todo/perf.md:40:linked": {
+    "number": 433,
+    "id": "5178344373"
+  },
+  "gap:private:cire/wiki/todo/perf.md:45:linked": {
+    "number": 433,
+    "id": "5178344373"
+  },
+  "gap:private:cire/wiki/todo/security.md:19:linked": {
+    "number": 434,
+    "id": "5178345021"
+  },
+  "gap:private:cire/wiki/todo/security.md:27:linked": {
+    "number": 435,
+    "id": "5178345715"
+  },
+  "gap:private:cire/wiki/todo/security.md:33:linked": {
+    "number": 435,
+    "id": "5178345715"
+  },
+  "gap:private:cire/wiki/todo/security.md:44:linked": {
+    "number": 436,
+    "id": "5178346523"
+  },
+  "gap:private:cire/wiki/todo/security.md:45:linked": {
+    "number": 436,
+    "id": "5178346523"
+  },
+  "gap:private:cire/wiki/todo/security.md:46:linked": {
+    "number": 436,
+    "id": "5178346523"
+  },
+  "gap:public:cire/wiki/todo/web.md:17:linked": {
+    "number": 696,
+    "id": "5178347536"
+  },
+  "gap:public:wiki/TODO.md:250:linked": {
+    "number": 462,
+    "id": "5159316593"
+  },
+  "gap:public:wiki/TODO.md:303:linked": {
+    "number": 543,
+    "id": "5159431378"
+  },
+  "gap:public:wiki/TODO.md:529:linked": {
+    "number": 554,
+    "id": "5159436438"
+  },
+  "gap:public:wiki/TODO.md:552:linked": {
+    "number": 556,
+    "id": "5159437343"
+  },
+  "gap:public:wiki/TODO.md:993:linked": {
+    "number": 697,
+    "id": "5178348485"
   }
 }
