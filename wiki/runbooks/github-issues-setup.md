@@ -65,8 +65,9 @@ gh api repos/xchromo/osn-tracker/contents/.github/ISSUE_TEMPLATE/review-finding.
 18 labels per repo: 6 `product:`, 6 `area:`, 5 `severity:`, and `epic`. The
 script uses `--force`, so re-running it is how a colour or description is
 changed. Every issue carries exactly one `product:` and at most one `area:`;
-only a finding carries a `severity:`, taken from the tier letter in its ID. The
-manifest gate in `scripts/todo-to-issues/assert.ts` rejects anything else.
+only a finding carries a `severity:`, taken from the tier letter in its ID.
+The migration enforced that with a gate over its manifest; now that issues are
+filed by hand, `/prep-pr` and `/new-feat` carry the rule.
 
 **There is no `area:feature`.** An issue with no `area:` is ordinary product
 work, and its type already says `Feature` — a label repeating it would be a
@@ -90,8 +91,7 @@ gh api orgs/xchromo/issue-types --jq '.[] | "\(.id)  \(.name)"'
 | `Feature` | New capability, and product work generally — everything carrying no `area:` label |
 | `Task` | The rest: compliance items, ops, schema, docs, epics, and any finding at `severity:info`, which records an observation and asks for no fix |
 
-The mapping lives in `scripts/todo-to-issues/issue-type.ts` and is the same one
-`/prep-pr` and `/new-feat` follow when they file an issue by hand.
+`/prep-pr` and `/new-feat` follow that mapping when they file an issue.
 
 Epics take `Task` because a custom `Epic` type would need the `admin:org`
 scope, and `gh auth refresh` cannot be run by an agent. The `epic` label is
@@ -103,25 +103,13 @@ Setting a type on an issue that already exists:
 gh issue edit 450 --repo xchromo/osn --type Task
 ```
 
-To do that across everything the migration created — resumable, and it skips
-any issue already carrying the right type:
+The migration set a type on every issue it created, so nothing is outstanding.
+To find any that were filed since without one:
 
 ```bash
-bun run scripts/todo-to-issues/main.ts types
+gh issue list --repo xchromo/osn --state all --limit 2000 \
+  --json number,title,issueType --jq '.[] | select(.issueType == null) | "\(.number)  \(.title)"'
 ```
-
-> **That command does nothing now, and reports success.** `types`, `resync`
-> and `verify` all start by re-parsing the source checklists into a manifest,
-> and Phase 4 of the migration deleted those checklists. An empty manifest
-> means no targets, so the run prints `0 issues, 0 set this run` and exits 0.
-> Every issue was typed before the sources went, so nothing is outstanding —
-> but if a future issue needs one, set it with `gh issue edit --type`, or list
-> the untyped ones from GitHub itself:
->
-> ```bash
-> gh issue list --repo xchromo/osn --state all --limit 2000 \
->   --json number,title,issueType --jq '.[] | select(.issueType == null) | "\(.number)  \(.title)"'
-> ```
 
 ## 5. The Project
 
@@ -200,9 +188,8 @@ bun run scripts/todo-to-issues/backfill-project.ts $N --apply
 ```
 
 It enumerates both repos with `gh issue list` — not `.migration/created.json`.
-The migration's own records are no use here for the same reason `types` is inert:
-they were parsed from checklists that Phase 4 deleted. Reading GitHub also picks
-up issues filed by hand since, which belong on the board just as much.
+That file records only what the migration wrote, and issues filed by hand since
+belong on the board just as much.
 
 It skips anything already there, so a re-run costs nothing and the dry run is
 the check that it is finished. Adding an item is an ordinary mutation rather
@@ -227,6 +214,29 @@ Fill these in once, here:
 
 - Project number: `1` — <https://github.com/orgs/xchromo/projects/1> (private)
 - Tracker repo: <https://github.com/xchromo/osn-tracker>
+
+## What is left of the migration tool
+
+`scripts/todo-to-issues/` now holds three things, and they are the three that
+still run:
+
+| File | Why it stays |
+|---|---|
+| `labels.sh` | Recreates the label set in both repos, any time (§3) |
+| `backfill-project.ts` | Puts issues on the board until auto-add is enabled (§6) |
+| `throttle.ts` | The rate-limit gap the backfill uses |
+
+Everything else — the parser, the classifier, the link rewriter, the renderer,
+the manifest gate, the issue writer and the `main.ts` that drove them — read the
+checklists Phase 4 deleted. They could not be run again without them, so they
+were removed rather than left looking usable. The commands they backed
+(`migrate:plan`, `migrate:apply`, `migrate:verify`, `migrate:resync`) are gone
+from `package.json` with them. The code is in git history, and the plan and
+spec under `docs/superpowers/` describe it in full.
+
+`.migration/created.json` stays, tracked: it maps each source checklist line to
+the issue that replaced it, which is the only record of where an issue came
+from.
 
 ## What the parser missed
 

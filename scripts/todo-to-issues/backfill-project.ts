@@ -14,7 +14,7 @@
  *
  * Re-runnable: it reads what is already on the board and adds only the rest.
  */
-import { Throttle } from "./github";
+import { Throttle } from "./throttle";
 
 const OWNER = "xchromo";
 const REPOS = ["xchromo/osn", "xchromo/osn-tracker"];
