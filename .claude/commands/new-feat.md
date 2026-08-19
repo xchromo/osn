@@ -76,7 +76,7 @@ Every feature gets its own worktree and branch in the bare repo (`/Users/ac/.wor
    git worktree add /Users/ac/.work/osn.git/<dir-name> -b <branch-name> <parent-branch>
    git -C /Users/ac/.work/osn.git/<dir-name> config branch.<branch-name>.gh-merge-base <parent-branch>
    ```
-   Without that config, `/prep-pr` opens the PR against `main` and the stack has to be repaired by hand. See `[[wiki/conventions/stacked-prs]]`.
+   Without that config, `/prep-pr` opens the PR against `main` and the stack has to be repaired by hand. The base is only half of it -- `/prep-pr` also runs `gh stack link` so GitHub renders the stack. See `[[wiki/conventions/stacked-prs]]`.
 5. Run `bun install` inside the new worktree (fresh worktrees have no `node_modules`)
 6. Report the exact branch name, the base branch, and the worktree path created — **all feature work happens in that worktree**, not in `main/`
 

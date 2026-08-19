@@ -321,6 +321,24 @@ Confirm the base actually took:
 gh pr list --repo xchromo/osn --state open --json number,headRefName,baseRefName
 ```
 
-A stacked PR showing `main` in `baseRefName` is not stacked — fix it with `gh pr edit <n> --base <parent-branch>` rather than in the web UI. Merge order and rebase rules are in `[[wiki/conventions/stacked-prs]]`.
+A stacked PR showing `main` in `baseRefName` is not stacked — fix it with `gh pr edit <n> --base <parent-branch>` rather than in the web UI.
 
-Report the PR number, its base branch, and the issues it closes.
+### Register the stack
+
+A correct base gives a correct diff. It does **not** make GitHub render a stack — that is a separate object, and skipping this step is why stacks used to get built by hand in the web UI.
+
+Only when `$BASE` is not `main`, i.e. this PR sits on top of another:
+
+```bash
+gh stack --help >/dev/null 2>&1 || gh extension install github/gh-stack
+gh stack link <bottom-pr> [<middle-pr> …] <this-pr>      # bottom to top, PR numbers or branches
+gh stack view                                            # confirm
+```
+
+`gh stack link` needs no local stack state, which is what makes it the right command in a worktree layout. It reuses PRs that already exist and never drops one. Two arguments minimum, so the bottom PR of a stack has nothing to register until the second PR opens.
+
+If the extension is missing and cannot be installed (a remote environment with no network), say so and stop there. The base chain is already correct, so the diffs and merge order hold; the stack can be registered later from any machine.
+
+Merge order and rebase rules are in `[[wiki/conventions/stacked-prs]]`.
+
+Report the PR number, its base branch, whether the stack is registered, and the issues it closes.
