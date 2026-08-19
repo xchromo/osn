@@ -5,8 +5,9 @@ tags: [convention, workflow]
 related:
   - "[[commands]]"
   - "[[review-findings]]"
+  - "[[stacked-prs]]"
   - "[[testing-patterns]]"
-last-reviewed: 2026-08-17
+last-reviewed: 2026-08-19
 ---
 
 # Contributing
@@ -60,6 +61,7 @@ Always use the `bunx --bun` flag for tooling. This bypasses Node.js and runs dir
 - **PRs are required** to merge to main -- no direct pushes
 - **Always work on a feature branch** -- never commit directly to main
 - Create descriptive branch names (e.g. `feat/event-rsvp`, `fix/auth-otp-expiry`)
+- **One goal split across several PRs** -- stack them: each branch cut from the one below it, each PR based on its parent. GitHub does not infer this, so the base is set with the gh CLI at creation time. See [[stacked-prs]]
 
 ### Changesets
 
@@ -90,6 +92,7 @@ Versioning is **automatic**:
 Before opening a PR, verify:
 
 - [ ] Feature branch (not main)
+- [ ] Base branch correct -- `main`, or the parent branch if this PR is stacked ([[stacked-prs]])
 - [ ] Changeset included (`bun run changeset`)
 - [ ] Changeset package names match workspace `name` fields
 - [ ] Tests pass (`bun run --cwd <package> test:run`)
@@ -109,4 +112,5 @@ Every feature PR should also answer:
 
 - [[commands]] -- full CLI reference
 - [[review-findings]] -- finding ID system for PR reviews
+- [[stacked-prs]] -- opening a PR on top of another PR
 - [[testing-patterns]] -- test conventions and examples
