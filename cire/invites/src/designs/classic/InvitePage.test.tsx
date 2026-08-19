@@ -146,7 +146,7 @@ describe("InvitePage", () => {
     vi.stubGlobal("fetch", noSession(fetchMock));
     window.history.replaceState(null, "", "/?code=HOST-ABCDEF0123456789ABCDEF01");
 
-    const { getByText, getByRole, getByTestId } = render(() => (
+    const { getByText, findByRole, getByTestId } = render(() => (
       <InvitePage apiUrl="https://api.test" />
     ));
 
@@ -160,8 +160,10 @@ describe("InvitePage", () => {
       publicId: "HOST-ABCDEF0123456789ABCDEF01",
     });
 
-    // RSVP is NO LONGER disabled in preview — the host can try it.
-    const respond = getByRole("button", { name: /Respond/i }) as HTMLButtonElement;
+    // RSVP is NO LONGER disabled in preview — the host can try it. `findBy*`,
+    // not `getBy*`: the cards now arrive through a lazy import, so the button
+    // exists a microtask after the preview banner rather than in the same tick.
+    const respond = (await findByRole("button", { name: /Respond/i })) as HTMLButtonElement;
     expect(respond.disabled).toBe(false);
 
     // Opening it mounts the RSVP modal in preview mode, so submit is a no-op.
