@@ -59,7 +59,10 @@ try {
 }
 
 if (Object.keys(overrides).length > 0) {
-  console.log(`dev-env: ${self} -> ${process.env.PORTLESS_URL}`);
+  // stderr, not stdout: stdout belongs to the command being wrapped, and a
+  // banner in the middle of it would corrupt any `dev:app` whose output is
+  // piped or parsed. Turbo shows both streams either way.
+  console.error(`dev-env: ${self} -> ${process.env.PORTLESS_URL}`);
 }
 
 // `execve` takes a complete environment, and `process.env` is typed as holding
