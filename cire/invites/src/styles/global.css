@@ -1,5 +1,63 @@
 @import "tailwindcss";
 
+/* Self-hosted faces (tracker #98) — matches the weight set in
+   `src/designs/gala/Document.astro` (`ital,wght@0,300;0,400;0,600;0,700;1,300;1,400;1,700`
+   for Cormorant Garamond, `ital,wght@0,300;0,400;0,700;1,300;1,400;1,700` for Lato).
+   Cormorant 700 is load-bearing — organiser `headingWeight: "bold"` renders through it
+   (`components/invite-theme.ts`). */
+@import "@fontsource/cormorant-garamond/300.css";
+@import "@fontsource/cormorant-garamond/300-italic.css";
+@import "@fontsource/cormorant-garamond/400.css";
+@import "@fontsource/cormorant-garamond/400-italic.css";
+@import "@fontsource/cormorant-garamond/600.css";
+@import "@fontsource/cormorant-garamond/700.css";
+@import "@fontsource/cormorant-garamond/700-italic.css";
+@import "@fontsource/lato/300.css";
+@import "@fontsource/lato/300-italic.css";
+@import "@fontsource/lato/400.css";
+@import "@fontsource/lato/400-italic.css";
+@import "@fontsource/lato/700.css";
+@import "@fontsource/lato/700-italic.css";
+
+/*
+  Metric-matched fallback faces, so the fallback occupies the same box the
+  webfont will and the hero title doesn't reflow when the swap lands.
+
+  Formula (the one behind `@next/font`'s local-fallback generation and
+  Katie Hempenius's "Overriding font fallback metrics", web.dev 2021): match
+  average character width first, then re-derive the vertical metrics against
+  that adjusted scale.
+
+    sizeAdjust    = (webfont.xWidthAvg / webfont.unitsPerEm)
+                    / (fallback.xWidthAvg / fallback.unitsPerEm)
+    ascent-override    = (webfont.ascent  / webfont.unitsPerEm) / sizeAdjust
+    descent-override   = abs(webfont.descent / webfont.unitsPerEm) / sizeAdjust
+    line-gap-override  = (webfont.lineGap / webfont.unitsPerEm) / sizeAdjust
+
+  Source metrics, `@capsizecss/metrics` `entireMetricsCollection` (devDependency):
+    cormorantGaramond: ascent 924, descent -287, lineGap 0, unitsPerEm 1000, xWidthAvg 394
+    lato:              ascent 1974, descent -426, lineGap 0, unitsPerEm 2000, xWidthAvg 871
+    georgia:           unitsPerEm 2048, xWidthAvg 913
+    arial:             unitsPerEm 2048, xWidthAvg 913
+*/
+@font-face {
+  font-family: "Cormorant Garamond Fallback";
+  src: local("Georgia");
+  size-adjust: 88.38%;
+  ascent-override: 104.55%;
+  descent-override: 32.47%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: "Lato Fallback";
+  src: local("Arial");
+  size-adjust: 97.69%;
+  ascent-override: 101.03%;
+  descent-override: 21.8%;
+  line-gap-override: 0%;
+}
+
 /*
   The built-in scheme — the `evergreen` preset in `@cire/theme`, spelled out
   here as the Tailwind token defaults.
@@ -39,8 +97,8 @@
   --color-bloom-dim: oklch(70.5% 0.1123 24.5 / 0.3);
   --color-error: oklch(72% 0.1401 21.48);
   --color-success: oklch(64% 0.1421 146.94);
-  --font-display: "Cormorant Garamond", Georgia, serif;
-  --font-body: "Lato", system-ui, sans-serif;
+  --font-display: "Cormorant Garamond", "Cormorant Garamond Fallback", Georgia, serif;
+  --font-body: "Lato", "Lato Fallback", system-ui, sans-serif;
   --default-font-family: var(--font-body);
 
   /* The tick that confirms a recorded RSVP, drawing itself in behind the bloom
