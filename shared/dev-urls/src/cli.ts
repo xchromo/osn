@@ -86,12 +86,17 @@ if (!binary) {
   process.exit(127);
 }
 
-// `process.execve` arrived in Bun 1.3.12 and does not exist on Windows, so it
-// cannot be assumed: this repo's own `.bun-version` pins 1.3.10. Where it
-// exists, take it — replacing the process image means the dev server keeps this
-// pid, so portless and turbo signal it directly and its exit status is the
-// kernel's. `DEV_ENV_NO_EXECVE` forces the fallback, which is how the tests
-// reach it on a runtime that has execve.
+// `process.execve` arrived in Bun 1.3.14 — undefined in 1.3.13 and every
+// version below it, checked one by one — and does not exist on Windows at all.
+// `.bun-version` now pins 1.4.0, so the exec path is the one that runs here and
+// in CI: replacing the process image means the dev server keeps this pid, so
+// portless and turbo signal it directly and its exit status is the kernel's.
+//
+// The fallback below stays anyway. It is the difference between "your devloop
+// is a little different" and "your devloop refuses to start" for anyone on
+// Windows or an older Bun, and it costs a tested twenty lines.
+// `DEV_ENV_NO_EXECVE` forces it, which is how a runtime that has execve still
+// covers it.
 if (process.execve && !process.env.DEV_ENV_NO_EXECVE) {
   process.execve(binary, command, env);
 }

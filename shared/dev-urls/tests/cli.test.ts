@@ -113,11 +113,11 @@ describe("dev-env exit status", () => {
 });
 
 describe("dev-env exit status without execve", () => {
-  // `process.execve` arrived in Bun 1.3.12 and does not exist on Windows, and
-  // this repo's `.bun-version` pins 1.3.10 — so CI runs the supervising
-  // fallback while a developer on a newer Bun runs the exec path. Both have to
-  // honour the same contract, or the devloop behaves differently in the two
-  // places, which is exactly the kind of split nobody notices until it matters.
+  // `process.execve` arrived in Bun 1.3.14 and does not exist on Windows.
+  // `.bun-version` pins 1.4.0, so the exec path is what normally runs — but the
+  // fallback has to honour the same contract, or a Windows machine or an older
+  // Bun gets a devloop that behaves differently, which is exactly the kind of
+  // split nobody notices until it matters.
   const NO_EXECVE = { DEV_ENV_NO_EXECVE: "1" };
 
   it("passes the command's own exit code through", async () => {
