@@ -45,6 +45,11 @@ is_allowed() {
     # `.claude/` is agent instructions — slash-commands, skills, settings; it is
     # read by the coding agent, never by a build.
     .github/* | .claude/* | scripts/* | wiki/* | docs/*) return 0 ;;
+    # A nested `CLAUDE.md` is the same thing as `.claude/*` and the root
+    # `CLAUDE.md`: instructions read by the coding agent, and an input to no
+    # build. `cire/CLAUDE.md` is the one that exists today. The `..` guard
+    # above already rejects a path that only looks like it sits here.
+    */CLAUDE.md) return 0 ;;
     # cire kept a second vault at `cire/wiki/` until it folded into `wiki/`
     # on 2026-08-21. Same category as `wiki/`: prose, read by people, built
     # into nothing. The directory is gone, so this case can only ever match
