@@ -32,8 +32,15 @@ export interface ListAllVenuesParams {
   limit?: number;
 }
 
-const VENUES_DEFAULT_LIMIT = 20;
 const VENUES_MAX_LIMIT = 100;
+/**
+ * No-bbox default. Deliberately the same as the ceiling: the point of this
+ * change is that the query is BOUNDED, not that it returns fewer pins than
+ * it did yesterday. A smaller default would silently drop venues off the
+ * Explore map in the window between this landing and the client sending a
+ * viewport.
+ */
+const VENUES_DEFAULT_LIMIT = VENUES_MAX_LIMIT;
 
 /**
  * List venues for the map. Public surface — feeds the Explore map.
@@ -62,9 +69,10 @@ export const listAllVenues = (
       filters.push(gte(venues.longitude, params.minLng));
       filters.push(lte(venues.longitude, params.maxLng));
     }
-    const limit = params.limit
-      ? Math.min(Math.max(1, params.limit), VENUES_MAX_LIMIT)
-      : VENUES_DEFAULT_LIMIT;
+    const limit =
+      params.limit === undefined
+        ? VENUES_DEFAULT_LIMIT
+        : Math.min(Math.max(1, params.limit), VENUES_MAX_LIMIT);
 
     const rows = yield* Effect.tryPromise({
       try: (): Promise<VenuePin[]> =>
@@ -81,6 +89,10 @@ export const listAllVenues = (
           })
           .from(venues)
           .where(filters.length > 0 ? and(...filters) : undefined)
+          // A LIMIT with no ORDER BY lets SQLite return any subset it likes,
+          // and a different one per call — the map would flicker between pin
+          // sets on refresh. `id` is the only column guaranteed unique.
+          .orderBy(asc(venues.id))
           .limit(limit) as Promise<VenuePin[]>,
       catch: (cause) => new DatabaseError({ cause }),
     }).pipe(Effect.tapError((e) => Effect.logError("venue.list_all failed", e)));

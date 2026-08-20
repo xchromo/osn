@@ -253,13 +253,15 @@ it.effect("listAllVenues returns an empty array when there are no venues", () =>
   ),
 );
 
-it.effect("listAllVenues no-bbox path is bounded by the default limit", () =>
+it.effect("listAllVenues no-bbox path is bounded even with no caller limit", () =>
   provide(
     Effect.gen(function* () {
       const { db } = yield* Db;
       const now = new Date();
-      const rows = Array.from({ length: 25 }, (_, i) => ({
-        id: `v${i}`,
+      // More rows than the ceiling, so the bound has to come from the service
+      // rather than from the size of the table.
+      const rows = Array.from({ length: 130 }, (_, i) => ({
+        id: `v${String(i).padStart(3, "0")}`,
         orgHandle: "org-a",
         handle: `venue-${i}`,
         name: `Venue ${i}`,
@@ -268,9 +270,37 @@ it.effect("listAllVenues no-bbox path is bounded by the default limit", () =>
       }));
       yield* Effect.promise(() => db.insert(venues).values(rows));
       const result = yield* listAllVenues();
-      expect(result.length).toBe(20);
+      expect(result.length).toBe(100);
     }),
   ),
+);
+
+it.effect(
+  "listAllVenues returns the SAME bounded page on every call (ordered, not arbitrary)",
+  () =>
+    provide(
+      Effect.gen(function* () {
+        const { db } = yield* Db;
+        const now = new Date();
+        // A LIMIT with no ORDER BY is free to return a different subset each
+        // time — the map would show a different set of pins on every refresh.
+        const rows = Array.from({ length: 130 }, (_, i) => ({
+          id: `v${String(i).padStart(3, "0")}`,
+          orgHandle: "org-a",
+          handle: `venue-${i}`,
+          name: `Venue ${i}`,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        yield* Effect.promise(() => db.insert(venues).values(rows));
+
+        const first = yield* listAllVenues();
+        const second = yield* listAllVenues();
+        expect(second.map((v) => v.id)).toEqual(first.map((v) => v.id));
+        // And it is the ordering the service declares, not whatever fell out.
+        expect(first.map((v) => v.id)).toEqual(first.map((v) => v.id).toSorted());
+      }),
+    ),
 );
 
 it.effect("listAllVenues clamps a caller-supplied limit to the server ceiling", () =>
