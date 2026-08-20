@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lab</title>
+    <!-- Restore the last-used theme before first paint so the preview does not
+         flash the wrong background on reload. Mirrors readTheme() in
+         src/lab/state.ts. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("lab-theme") === "dark") {
+            document.documentElement.classList.add("dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/src/index.tsx" type="module"></script>
+  </body>
+</html>
