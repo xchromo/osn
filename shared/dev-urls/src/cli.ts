@@ -23,6 +23,7 @@
  * Everything worth testing lives in `./app-env.ts`; this file is the process
  * wrapper around it.
  */
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -84,12 +85,41 @@ if (!binary) {
   console.error(`dev-env: ${command[0]} not found`);
   process.exit(127);
 }
-if (!process.execve) {
-  // Windows has no execve. Rather than reintroduce a supervisor process for a
-  // platform nobody here develops on, say so: `dev:app` still runs directly.
-  console.error(
-    "dev-env: this runtime has no process.execve. Run the command in `dev:app` directly, or set the cross-app URLs by hand.",
-  );
-  process.exit(70);
+
+// `process.execve` arrived in Bun 1.3.12 and does not exist on Windows, so it
+// cannot be assumed: this repo's own `.bun-version` pins 1.3.10. Where it
+// exists, take it — replacing the process image means the dev server keeps this
+// pid, so portless and turbo signal it directly and its exit status is the
+// kernel's. `DEV_ENV_NO_EXECVE` forces the fallback, which is how the tests
+// reach it on a runtime that has execve.
+if (process.execve && !process.env.DEV_ENV_NO_EXECVE) {
+  process.execve(binary, command, env);
 }
-process.execve(binary, command, env);
+
+// Fallback: supervise a child and reproduce what execve would have given for
+// free — pass signals down so the dev server is not orphaned holding portless's
+// port, and report a signalled death the way a shell does.
+const SIGNAL_NUMBERS = {
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGTERM: 15,
+} satisfies Partial<Record<NodeJS.Signals, number>>;
+
+/** The signals named above; anything else lands in the 128+ range as 128. */
+type Known = keyof typeof SIGNAL_NUMBERS;
+
+const child = spawn(binary, command.slice(1), { stdio: "inherit", env });
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => child.kill(signal));
+}
+
+child.on("error", (error) => {
+  console.error(`dev-env: could not run ${command.join(" ")}:`, error.message);
+  process.exit(127);
+});
+child.on("exit", (code, signal) => {
+  const number = signal && signal in SIGNAL_NUMBERS ? SIGNAL_NUMBERS[signal as Known] : 0;
+  process.exit(signal ? 128 + number : (code ?? 0));
+});

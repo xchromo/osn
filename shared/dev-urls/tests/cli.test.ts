@@ -112,6 +112,37 @@ describe("dev-env exit status", () => {
   });
 });
 
+describe("dev-env exit status without execve", () => {
+  // `process.execve` arrived in Bun 1.3.12 and does not exist on Windows, and
+  // this repo's `.bun-version` pins 1.3.10 — so CI runs the supervising
+  // fallback while a developer on a newer Bun runs the exec path. Both have to
+  // honour the same contract, or the devloop behaves differently in the two
+  // places, which is exactly the kind of split nobody notices until it matters.
+  const NO_EXECVE = { DEV_ENV_NO_EXECVE: "1" };
+
+  it("passes the command's own exit code through", async () => {
+    const result = await run(["sh", "-c", "exit 3"], { env: NO_EXECVE });
+    expect(result.exitCode).toBe(3);
+  });
+
+  it("reports a signalled command as 128 + the signal", async () => {
+    const result = await run(["sh", "-c", "kill -TERM $$"], { env: NO_EXECVE });
+    expect(result.exitCode).toBe(143);
+  });
+
+  it("exits 0 when the command succeeds", async () => {
+    const result = await run(["sh", "-c", "exit 0"], { env: NO_EXECVE });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("still hands the derived origins to the command", async () => {
+    const result = await run(["sh", "-c", "echo $PUBLIC_CIRE_API_URL"], {
+      env: { ...NO_EXECVE, ...PORTLESS },
+    });
+    expect(result.stdout.trim()).toBe("https://my-branch.api.cire.localhost");
+  });
+});
+
 describe("dev-env environment", () => {
   it("hands the derived origins to the command", async () => {
     const result = await run(["sh", "-c", "echo $PUBLIC_CIRE_API_URL,$PUBLIC_OSN_ACCOUNT_URL"], {
