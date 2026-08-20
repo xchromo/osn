@@ -1,9 +1,9 @@
 ---
 title: Bun 1.4 migration
-description: The runtime bump landed with #745; this is the plan for the rest — bun-types, $ shell, catalogs, Bun.TOML, Bun.Image, supply-chain gates.
+description: What Bun 1.4 is worth using here, what was adopted, and what turned out to be impossible — everything deploys to workerd, so the surface is tooling.
 tags: [runbook, bun, tooling, migration, ci]
 severity: low
-status: planned
+status: in-progress
 related:
   - "[[monorepo-structure]]"
   - "[[dev-environment]]"
@@ -14,15 +14,18 @@ last-reviewed: 2026-08-21
 
 # Bun 1.4 migration
 
-The runtime bump already landed — the portless devloop (#745) needed
-`process.execve` and pinned `1.4.0` on the way past. This is the plan for the
-rest: which of 1.4's features are worth adopting here, which are ruled out by
-where our code runs, and what order to do them in. Release notes:
-<https://bun.com/blog/bun-v1.4>.
+The runtime bump landed on its own — the portless devloop (#745) needed
+`process.execve` and pinned `1.4.0` on the way past. This page is what came of
+going through the release notes afterwards: what was adopted, what was tried and
+does not work, and what is left. Release notes: <https://bun.com/blog/bun-v1.4>.
+
+Two recommendations written here before anyone ran them were wrong. Both are
+kept below, marked, with what actually happened — a runbook that quietly edits
+out its bad advice teaches nobody why it was bad.
 
 ## The constraint that shapes everything
 
-Every deployed package here runs on **workerd**, not Bun:
+Every deployed package runs on **workerd**, not Bun:
 
 | Runtime | Packages |
 | --- | --- |
@@ -37,276 +40,263 @@ server). Bun is our package manager, script runtime, test runner for three
 packages, and CI driver. **That is the whole adoption surface.** Anything
 proposed outside it is wrong by construction.
 
-Two things follow. First, the wins are real but they are tooling wins: faster
-installs, fewer bespoke shell scripts, real parsers instead of greps. Second,
-nobody has to weigh a runtime risk against a production incident — the blast
-radius of every item below stops at the developer's machine or the CI runner.
+The wins are real but they are tooling wins: faster installs, fewer bespoke
+shell scripts, real parsers instead of greps. Nothing below can take production
+down — the blast radius stops at a developer's machine or a CI runner.
 
 ---
 
-## Phase 0 — get on 1.4 (mostly landed)
+## Done
 
-The runtime bump arrived as a side effect of the portless devloop
-(`fe3ee5da`, #745), which needed `process.execve` — a 1.3.14 API. It pins:
+### Phase 0 — bun-types onto the 1.4 runtime
 
-- `.bun-version` → `1.4.0` ✅
-- `package.json` `packageManager` → `bun@1.4.0` ✅
-- `bun-types` → range `^1.3.14`, **locked at `1.3.14`** ❌
+`.bun-version` and `packageManager` moved to `1.4.0` with #745. `bun-types` did
+not, and the reason is worth keeping: `^1.3.14` already permits 1.4.x, and **bun
+does not re-resolve a range the lockfile already satisfies**. So the runtime
+moved, the types stayed at 1.3.14, and nothing complained. Widening the caret
+would have changed nothing; `bun update bun-types --latest` is what moves it.
 
-**The remaining gap is `bun-types`, and it blocks Phase 3.** `Bun.Image`,
-`Bun.TOML`, `Bun.JSONC` and `$`'s 1.4 additions are absent from the 1.3 type
-definitions, so every one of them typechecks as an error until the types move.
-We are running a 1.4.0 runtime against 1.3.14 types.
+That needed a `minimumReleaseAge` exception — 1.4.0 was published the same day,
+inside the three-day window. An earlier draft of this page said to wait it out
+rather than add an exclude. The exception was taken instead, on the grounds that
+`bun-types` is the mildest possible case: types only, no runtime code,
+devDependency, never bundled into a Worker. The entry in `bunfig.toml` carries
+its own drop-trigger — **remove `bun-types` from `minimumReleaseAgeExcludes`
+after 2026-08-23**, or it silently exempts every future release.
 
-Note *why* it lagged, because it is not the obvious reason: the range is
-already `^1.3.14`, which permits 1.4.x. Bun does not re-resolve a range the
-lockfile already satisfies, so #745 bumped the runtime and left
-`bun-types@1.3.14` pinned in `bun.lock`. Widening the caret changes nothing.
-The fix is to force the re-resolve:
+### Phase 1a — the two shell-outs onto `$`
 
-```bash
-bun update bun-types --latest
-```
+`scripts/todo-to-issues/backfill-project.ts` and `cire/db/seed/assets.ts` both
+hand-rolled what `$` does. Both now use it.
 
-One catch: `bunfig.toml` sets `minimumReleaseAge = 259200`, so a `bun-types`
-published inside the last three days will be refused. That is the gate working
-as designed — wait it out rather than adding an
-`minimumReleaseAgeExcludes` entry for a types package.
+**The trap, which cost the most time here:** a `ShellError`'s `.message` is
+exactly `"Failed with exit code 1"`. stderr is on `.stderr` and never reaches
+the message. `backfill-project.ts` classifies failures by matching stderr
+substrings — `alreadyOnBoard()`, `rateLimited()` — so letting `$` throw its own
+error makes both return `false`: a "content already exists" stops being the
+no-op it is and aborts the backfill, and a rate limit stops being a resumable
+pause. Silent, and only visible on a run against a board that already has items.
+The wrapper therefore uses `.nothrow()` and rebuilds the message, and two tests
+pin the shape.
 
-The version mismatch this section originally flagged — CI installing 1.3.10
-while the lockfile recorded 1.3.14 — is fixed. Nothing to do there.
+### Phase 3 (part) — `Bun.TOML` for the D1 guard
 
-**What has not been done is the deliberate look for 1.4 regressions.** #745
-was a devloop change that happened to move the floor; the suite went green,
-which is evidence but not the same as having checked the things below. Run
-the full gate once, on purpose:
+`scripts/check-d1-database-id.sh` was three greps, each matching a
+`database_id` line. `scripts/check-d1-database-id.ts` parses instead, which
+catches two shapes the greps could not:
 
-```bash
-bun install
-bun run lint && bun run fmt:check && bun run check
-bun run test && bun run test:d1 && bun run test:browser
-bash scripts/cire-dev-db-guard.test.sh
-```
+- **A named environment with no `[[d1_databases]]` block at all.**
+  `cire/api/wrangler.toml` records in its own comment that named environments do
+  NOT inherit the top-level block. Delete it from `[env.production]` and every
+  `database_id` in the file is still valid while production has no database. A
+  grep for a line that is not there cannot fire.
+- **A `database_id` that is neither placeholder nor empty but not an id** — a
+  database *name* pasted into the wrong field satisfied all three greps.
 
-What to watch for, in rough order of likelihood:
+The bash version advertised "grep only, no bun". That is traded away for the
+real parse, and it costs nothing: both callers in `deploy.yml` run `bun install`
+first.
 
-- **`node:zlib` now uses zlib-ng.** `cire/db/seed/assets.ts` calls
-  `deflateSync(raw, { level: 9 })` and the seed's docstring promises re-running
-  "overwrites them byte-for-byte". zlib-ng can emit a different byte stream at
-  the same compression level. The images still decode; the promise of
-  determinism may not. Nothing in CI would catch it — the seed is manual, run
-  once per bucket. Phase 3 deletes this code anyway, which closes the question
-  rather than answering it.
-- **`trustedDependencies` is npm-only now** — no auto-trust for `file:`,
-  `git:`, or `github:` sources. Check `bun.lock` for non-npm deps whose
-  postinstall we rely on. A silently skipped postinstall fails later and
-  somewhere else.
-- **Sourcemaps off by default in production HTML routes.** We don't use
-  `Bun.serve` HTML routes, so this should be inert. Confirm rather than assume.
-- Idle CPU, memory and startup all improved; nothing to do but enjoy it.
+### Two CI bugs found on the way
+
+- **The tests under `scripts/` ran nowhere.** `scripts/` is not a workspace, so
+  `turbo test` never reached it, and `test:migration` was declared in the root
+  `package.json` and called by no workflow. Renamed `test:scripts`, and the
+  Scripts job runs it — which matters more now the D1 guard's tests gate a
+  deploy.
+- **Both turbo caches were frozen.** They were keyed on `bun.lock`, and
+  `actions/cache` will not overwrite an existing key. Each was written once and
+  then never again: later runs restored that first snapshot, missed on
+  everything changed since, and saved nothing back — a cache reporting a hit
+  while being useless. Now keyed on the commit with a prefix restore-key, so they
+  follow the branch. The Chromium cache stays on `bun.lock`, where the browser
+  version really is a function of the lockfile and an exact hit has nothing new
+  to write.
 
 ---
 
-## Phase 1 — `Bun.$` for everything that shells out
+## Does not work — do not retry
 
-This is the largest single cleanup and the one with the clearest payoff:
-13 shell scripts (1007 lines, of which 393 are bespoke `.test.sh` harnesses)
-plus two hand-rolled `Bun.spawn` wrappers.
+### `Bun.Image` cannot replace the seed's PNG encoder
 
-### 1a. Replace the two `Bun.spawn` sites
+This page previously said `Bun.Image` would delete the ~80 lines of hand-rolled
+PNG encoding in `cire/db/seed/assets.ts` (CRC32 table, IHDR/IDAT/IEND framing,
+filter-0 scanlines). **It cannot.** `Bun.Image` only ever decodes an already
+encoded image:
 
-`scripts/todo-to-issues/backfill-project.ts:25` hand-rolls exactly what `$`
-does — spawn, pipe, drain both streams, check the exit code, throw with stderr:
-
-```ts
-// today: 8 lines
-export const gh: Run = async (args) => {
-  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([...]);
-  if (code !== 0) throw new Error(`gh ${args[0]} failed (${code}): ${err.trim()}`);
-  return out;
-};
-
-// with $: one line, same throw-on-nonzero semantics
-export const gh: Run = (args) => $`gh ${args}`.text();
+```
+Image() input must be a path string, data: URL, ArrayBuffer, TypedArray or Blob
+Image: unrecognised format (expected JPEG, PNG, WebP, GIF, BMP, TIFF, HEIC or AVIF)
 ```
 
-Keep the exported `Run` type — the tests inject a fake `gh`, and that stays
-true. `$` throws a `ShellError` carrying `exitCode`, `stdout` and `stderr`, so
-the error message is at least as good as the current one.
+There is no raw-pixel entry point — `fromRaw`, `fromPixels`, `create` and `from`
+are all undefined, and unlike Sharp there is no `{ raw: { width, height,
+channels } }` option. SVG is rejected too, both as bytes and as a data URL, so
+generating an SVG and rasterising it is not a way round.
 
-`cire/db/seed/assets.ts:186` spawns `bunx wrangler r2 object put` with a `cwd`
-and inherited stdio. That becomes `$\`bunx wrangler r2 object put ...\`.cwd(dir)`.
+The seed *generates* its pixels from a gradient function. It has no encoded
+bytes to hand `Bun.Image`, and producing them is precisely the job of the
+encoder being replaced. The encoder stays.
 
-### 1b. Convert the scripts that carry logic
+What `Bun.Image` could still do here is transcode the encoder's PNG to WebP for
+smaller objects. Not worth doing: eight placeholder images, written by hand once
+per bucket, into a dev bucket. Size is not a problem anyone has.
 
-Convert, worth it:
+This also leaves Phase 0's zlib-ng question open rather than closing it by
+deleting the code. `deflateSync(raw, { level: 9 })` may emit different bytes
+under zlib-ng, and the seed's docstring promises re-runs overwrite
+"byte-for-byte". Nothing in CI would notice — the seed is manual.
 
-| Script | Lines (+test) | Why |
-| --- | --- | --- |
-| `validate-changesets.sh` | 122 + 102 | Real parsing; its test harness becomes `bun test` |
-| `changeset-required.sh` | 68 + 88 | Same |
-| `cire-dev-db-guard.sh` | 120 + 203 | The guard that stands between an unattended reset and the live-wedding D1. Its failure mode is *passing*. Deserves the strongest test tier we have |
-| `check-d1-database-id.sh` | 60 | Three greps that approximate a TOML parse. See Phase 3 |
-| `cire-db-reset.sh`, `cire-db-seed.sh`, `db-reset.sh`, `ensure-pages-project.sh` | 34–75 | Straight command sequences; `$` is shorter and the errors are typed |
+### `Bun.JSONC` has nothing to check
+
+An earlier draft paired the TOML guard with a JSONC one for
+`cire/invites/wrangler.jsonc`. That file has no `d1_databases` and no
+`database_id`: cire/invites has no D1 binding at all. There is no assertion to
+make. Dropped.
+
+---
+
+## Still to do
+
+### The dev-db guard is the better `Bun.TOML` target
+
+`scripts/cire-dev-db-guard.sh` hand-rolls a TOML *block* parser in awk to pull
+`[env.dev]`'s `database_name` and `database_id` out of the same
+`cire/api/wrangler.toml`. It is the higher-stakes of the two by a distance: it
+fronts an unattended `db:reset:dev` that drops every table, and its failure mode
+is *passing*. Its own comments record that it has already failed open once, from
+exactly the asymmetry a real parser removes — extraction stripped quotes while
+the comparison expected them, so a single-quoted production id passed clean.
+
+Parsing it properly deletes most of what the shell is doing. Do this before
+converting it to `$`, or instead of it. It needs care and its 203 lines of bash
+tests need porting, which is why it is not in the same change as the rest.
+
+### `$` house rules
+
+Write these into `[[commands]]` when the next script is converted:
+
+- Interpolate **values**, never command fragments. `$` escapes an interpolated
+  value so it stays one argument.
+- **Escaping is not validation.** A value beginning with `-` is still read as a
+  *flag* by the program being run, fully escaped. Validate the shape before it
+  reaches `$` — a UUID regex for a `database_id`, `^@?[a-z0-9@/._-]+$` for a
+  package name — and put `--` before the first interpolated positional where the
+  command supports it. This matters for the scripts fed PR-author input:
+  `changeset-required.sh` takes changed file paths, `validate-changesets.sh`
+  parses package names out of frontmatter the author wrote.
+- Non-zero exit throws. Use `.nothrow()` where a failure is an expected branch,
+  then **branch on the specific exit code you expect** — `grep` returning 1 means
+  "no match", but 2 or more means the grep itself broke. Treat anything else as
+  fatal. `.nothrow()` on a whole pipeline while reading only stdout is how a
+  guard fails open.
+- A `ShellError`'s message does not contain stderr. If anything downstream reads
+  the message, build it yourself (see `backfill-project.ts`).
+
+### Scripts still on bash
+
+12 remain under `scripts/`, plus `scripts/todo-to-issues/labels.sh` — 14 before
+the D1 guard moved. The ones with real logic and bespoke `.test.sh` harnesses are
+the candidates, because converting them folds 393 lines of hand-written bash
+assertion into `bun test`:
+
+| Script | Lines (+test) |
+| --- | --- |
+| `validate-changesets.sh` | 122 + 102 |
+| `changeset-required.sh` | 68 + 88 |
+| `cire-dev-db-guard.sh` | 120 + 203 |
+
+`cire-db-reset.sh`, `cire-db-seed.sh`, `db-reset.sh`, `ensure-pages-project.sh`
+and `labels.sh` are straight command sequences — shorter under `$`, but there is
+no correctness argument for moving them.
+
+Leave `scripts/setup.sh` as bash: it is the bootstrap and runs on a machine that
+may have nothing.
 
 **Not a `$` target: `shared/dev-urls/src/cli.ts`.** It shells out, so it looks
-like one. It is not. The file hands the process over with `process.execve`
-rather than supervising a child, on purpose — the dev server inherits the pid
-so portless and turbo can signal it and its exit status comes from the kernel.
-`$` supervises. Rewriting it with `$` would undo the thing the file exists to
-do. Its `spawn` fallback is a deliberate twenty tested lines for Windows and
-older Bun, and is also not a `$` candidate for the same reason. Left here in
-writing because it is the one shell-out in the repo where the obvious advice is
-wrong.
+like one. It hands the process over with `process.execve` instead of supervising
+a child, on purpose — the dev server inherits the pid, so portless and turbo
+signal it directly and its exit status is the kernel's. `$` supervises.
+Converting it would undo the thing the file exists to do. Its `spawn` fallback
+(Windows, `DEV_ENV_NO_EXECVE=1`) forwards SIGINT/SIGTERM/SIGHUP by hand for the
+same reason, and is not a candidate either.
 
-Leave as bash:
+### Package manager
 
-- `scripts/setup.sh` — bootstrap. It runs on a machine that may have nothing.
-- `scripts/pre-push-typecheck.sh` — it exists *because* a fresh `git worktree
-  add` has no `node_modules`. A `$` script would in fact still run (Bun needs no
-  `node_modules` to execute one), so this is a judgement call, not a hard
-  blocker. Convert it last, or not at all.
+- **Catalogs.** 34 workspace packages repeat versions of `typescript`, `vitest`,
+  `effect`, `hono`, `drizzle-orm`. `bun add --catalog` plus `"catalog:"` puts the
+  version in one place. Its own PR — it touches every `package.json`.
+- **`bun dedupe --check`** as a CI gate. Run `bun dedupe` by hand first: the
+  `bun-types` re-resolve alone pruned an orphaned `rollup` and its 26 platform
+  binaries, which is evidence there is more.
+- **`bun pm licenses --prod --json`** behind a short allowlist — `wiki/compliance/`
+  has no automated licence check today.
+- **`bun audit fix --dry-run`** to generate an override rather than hand-writing
+  one. One caveat, because it is where the pressure lands: an advisory and its
+  patch arrive together, so the proposed upgrade is often inside the
+  `minimumReleaseAge` window. **A blocked `audit fix` is the gate working.** Wait
+  it out, or pin a transitive override to an already-aged version; add a
+  `minimumReleaseAgeExcludes` entry only for a confirmed-exploitable
+  high/critical, with a drop-trigger inline, as `fast-uri` has.
+- **`linker = "isolated"`** — the global virtual store, claimed 7x faster warm
+  installs. `bun install` runs 4 times across `ci.yml` and 23 times across all
+  workflows, 16 of them in `deploy.yml`, so the win is bigger than it looks and
+  so is the downside: a resolution break there is a failed deploy, not a red PR.
+  Isolated linking removes phantom hoisted dependencies, which is stricter and
+  therefore what breaks. **Trial it on `build-test` specifically** — that is where
+  the three fussy consumers live (vitest's browser provider, playwright, astro) —
+  and via the `bun install --linker=isolated` CLI flag, since the `bunfig.toml`
+  key is repo-wide and cannot be scoped to one job.
 
-Three of those scripts have `.test.sh` twins totalling 393 lines of hand-written
-bash assertion. Converting the scripts folds those into `bun test`, which
-deletes the `shell-tests` CI job entirely once `cire-dev-db-guard` moves.
+### Test runner
 
-### 1c. House rules for `$`
+Three packages use `bun test` (`cire/theme`, `cire/db`, `cire/api`); 30 use
+vitest, and `shared/typescript-config` has no tests. So this is narrow:
 
-Write them into `wiki/conventions/commands.md` at the same time:
-
-- Interpolate **values**, never command fragments: `` $`gh issue list --repo ${repo}` ``.
-  `$` escapes interpolated values; a spliced-in string of flags defeats that.
-- `.text()`, `.json()`, `.lines()`, `.blob()` for output; `.quiet()` to stop
-  the echo; `.cwd()` / `.env()` for context.
-- Non-zero exit is a **throw** by default. Use `.nothrow()` then read
-  `.exitCode` when a failure is an expected branch (the guard scripts need
-  this — `grep` returning 1 means "no match", not "broken").
-- Keep `set -euo pipefail` semantics in mind: `$` is throw-by-default, which
-  matches, but a pipeline's middle command is not checked. Split pipes.
-
----
-
-## Phase 2 — supply-chain and lockfile gates
-
-The repo already has a considered posture here: `minimumReleaseAge = 259200` in
-`bunfig.toml`, plus `bun audit --audit-level=high` on pre-push. 1.4 adds three
-gates that fit the same shape.
-
-**`bun dedupe --check` as a CI job.** The root `package.json` carries 18
-`overrides`, several of them ("clear the advisory") pins that upstream has since
-absorbed. `bun dedupe` collapses duplicate versions; `--check` fails when
-duplicates reappear. Run `bun dedupe` once by hand first — the diff tells you
-which of the 18 overrides are now redundant, which is a separate small PR.
-
-**`bun pm licenses --prod --json` as a compliance gate.** We have
-`wiki/compliance/` and no automated check that a dependency's licence is one we
-accept. A short allowlist script over that JSON closes it.
-
-**`bun audit fix --dry-run` in the advisory loop.** Today an advisory means
-hand-writing an entry in `overrides` and a comment explaining the drop-trigger.
-`audit fix` proposes the upgrade set; `--dry-run` shows it without applying.
-Use it to *generate* the override, keep writing the comment by hand.
-
-**Catalogs — the structural one.** Thirty-four packages repeat versions of
-`typescript`, `vitest`, `effect`, `hono`, `drizzle-orm` and friends, and drift
-between them is a recurring source of confusing failures. 1.4's
-`bun add <pkg> --catalog` plus `"catalog:"` in each workspace makes the root the
-single place a shared version is written. Do this as its own PR after Phase 0;
-it touches every `package.json` and wants a clean diff.
-
-**`linker = "isolated"` (global virtual store).** Claimed 7x faster warm CI
-installs by symlinking instead of copying. Genuinely attractive given five CI
-jobs each run `bun install`. But isolated linking breaks packages that quietly
-rely on hoisting, and we have three that are fussy about resolution: vitest's
-browser provider, playwright, and astro. **Trial on one CI job behind a branch,
-not repo-wide.** If it holds, roll it out; if not, drop it and lose nothing.
-
----
-
-## Phase 3 — new APIs that delete code we own
-
-**`Bun.Image` replaces the hand-rolled PNG encoder.** `cire/db/seed/assets.ts`
-contains a CRC32 table, IHDR/IDAT/IEND chunk framing, and filter-0 scanline
-packing — roughly 80 lines of image-format code written because there was no
-encoder to hand. `Bun.Image` encodes PNG (and WebP, which would make the seed
-assets smaller). The generated-gradient logic stays; the encoder goes. This also
-retires the zlib-ng determinism question from Phase 0.
-
-**`Bun.TOML` replaces the wrangler-config greps.** `check-d1-database-id.sh`
-runs three regexes against `cire/api/wrangler.toml` to catch a placeholder
-`database_id`. Regex two and three exist only because regex one isn't a parser.
-`Bun.TOML.parse()` gives the real thing: walk top-level `d1_databases` and every
-`[env.*]` block, assert each `database_id` is a UUID. Shorter, and it catches
-the case the greps miss — a *missing* binding rather than a placeholder one.
-`Bun.JSONC.parse()` does the same for `cire/invites/wrangler.jsonc`.
-
-**`Bun.WebView` for verification screenshots.** The current habit is headless
-Chrome with `--virtual-time-budget` to screenshot a dev server or Pages preview.
-`Bun.WebView` does `.navigate()` / `.screenshot()` / `.evaluate()` / `.cdp()`
-against system WebKit or an installed Chrome, with no Puppeteer dependency. Not
-a replacement for the vitest browser tier — that needs a real provider — but it
-is a direct replacement for the ad-hoc screenshot command.
-
-**`--no-orphans` — mostly already solved, don't reach for it.** The orphaned
-dev server was a real annoyance, and #745 fixed it properly: `dev-env` calls
-`process.execve` so the dev server *keeps the wrapper's pid*, which means
-portless and turbo signal it directly and there is no parent to outlive. The
-supervising fallback (Windows, or `DEV_ENV_NO_EXECVE=1`) forwards SIGINT,
-SIGTERM and SIGHUP by hand for the same reason. `--no-orphans` would only add
-anything on that fallback path, and it is a blunter instrument — SIGKILL to
-descendants rather than a forwarded signal the dev server can act on. Leave it
-alone unless the fallback path starts leaking processes in practice.
-
-**`--no-env-file` / `env = false` for CI.** `osn/api`, `cire/api`, `cire/db` and
-`pulse/api` all have committed `.env` files. Bun loads them automatically, which
-means a test that reads an env var can pass locally off a `.env` and fail in
-CI — or worse, pass in CI off a `.env` that shouldn't be there. Setting
-`env = false` for CI runs forces every CI environment variable to be declared in
-the workflow. This is a correctness gate, not a convenience.
-
----
-
-## Phase 4 — test runner (limited, be honest about it)
-
-Only three packages use `bun test`: `cire/theme`, `cire/db`, `cire/api`. The
-other thirty-one run vitest. So 1.4's test features apply to those three, the
-two `d1-integration.test.ts` files, and `scripts/todo-to-issues/`.
-
-Worth doing there:
-
-- **`jest.useFakeTimers()` / `setSystemTime()`** — `cire/api` is full of
-  time-dependent behaviour (token expiry, the refresh-rotation grace window,
-  rate-limit windows, the 04:00 cron sweep). Anywhere a test currently injects a
-  clock or sleeps, fake timers are cleaner and faster. Grep for `Date.now` seams
-  first; adopt where a seam already exists rather than inventing new ones.
-- **`test({ retry: n })`** — only for tests whose flakiness is understood and
-  documented. Retry on an unexplained failure hides the bug. Default: don't.
-- **`bun test --changed`** in the lefthook pre-push, beside the existing
-  typecheck and audit. Cheap, and it catches the "typechecks but broke a test"
-  push.
+- **`jest.useFakeTimers()` / `setSystemTime()`** in `cire/api`, which is full of
+  time-dependent behaviour — token expiry, the refresh-rotation grace window,
+  rate-limit windows, the 04:00 sweep. Adopt where a clock seam already exists;
+  do not invent new ones for it.
+- **`bun test --changed`** on pre-push, beside the existing typecheck and audit.
+- **`test({ retry: n })`** only where the flakiness is understood and written
+  down. Retrying an unexplained failure hides it.
 - **`--isolate`** if `cire/api` ever shows cross-file leakage. Not before.
 
-Explicitly not now:
+Not now: `--shard` / `--timings` balance CI across machines, and CI is not
+bun-test-bound — the test steps are `turbo test`, `test:d1` and `test:browser`,
+and the four `d1-integration.test.ts` files are pinned serial anyway.
 
-- `--shard` / `--timings` — these balance CI across machines, and our CI is not
-  bun-test-bound. Revisit only if we migrate off vitest.
-- `bun run --parallel` — turbo already schedules across the workspace. Adding a
-  second scheduler would fight the first.
+### `bun run --parallel`, narrowly
 
----
+Turbo already schedules `build`, `test`, `check` and `lint`, and a second
+scheduler there would fight the first. But two things run in sequence with no
+scheduler at all, because they are not turbo tasks: `ci.yml` runs
+`openapi:generate` for `pulse/api` and then `osn/api` back to back, and root
+`db:reset` chains four `--cwd` invocations with `&&`. `openapi:generate` is also
+one of the slow CI steps worth profiling. Either add it to `turbo.json` or run
+the pair in parallel.
 
-## Phase 5 — profiling, when something is slow
+### `--no-env-file` for CI
+
+An earlier draft of this page said four packages have "committed `.env` files".
+**They do not.** `.gitignore` ignores `.env`, and the only tracked env files are
+the `.env.example` set plus `pulse/web/.env.development` and
+`pulse/web/.env.production` (public URLs, no secrets). So the risk runs one way,
+not two: a test reading an env var can pass locally off a gitignored `.env` and
+fail in CI, never the reverse, and no secret is exposed.
+
+The recommendation survives in weaker form — declaring CI's environment
+explicitly is still right — but `env = false` would change how `pulse/web`
+builds, since its two tracked files are loaded by `NODE_ENV`. Check that before
+flipping it.
+
+### Profiling
 
 `--cpu-prof-md` and `--heap-prof-md` write a Markdown report rather than a
-`.cpuprofile` you have to load into DevTools, which means a profile can go
-straight into a PR description. Reach for them the next time a CI step is
-slow — the `openapi:generate` step and `bun run build` are the current
-candidates — rather than adopting them speculatively.
-
-`BUN_CPU_PROFILE=1` does the same without touching the command line, which is
-the easier thing to set on a CI step.
+`.cpuprofile`, so a profile can go straight into a PR. `BUN_CPU_PROFILE=1` does
+the same without touching the command line, which is easier to set on a CI step.
+Reach for these when a step is slow — `bun run build` and `openapi:generate` are
+the candidates — not speculatively.
 
 ---
 
@@ -315,29 +305,29 @@ the easier thing to set on a CI step.
 | Feature | Why not |
 | --- | --- |
 | `Bun.serve` static routes, HTTP/3 | Everything is served by Workers/Pages |
-| `Bun.Image` at request time | `cire/api` uses the Cloudflare Images binding against R2; that's the right layer |
-| `Bun.cron` | Prod schedules are Workers Cron Triggers (`osn/api` 6-hourly, `cire/api` 04:00) |
+| `Bun.Image` at request time | `cire/api` uses the Cloudflare Images binding against R2 |
+| `Bun.Image` in the seed | No raw-pixel or SVG input — see "Does not work" above |
+| `Bun.JSONC` | The one config it was aimed at has nothing to assert |
+| `Bun.cron` | Prod schedules are Workers Cron Triggers |
 | `--react-compiler`, `Bun.markdown.react()` | No React dependency in the repo |
 | `--compile`, `--asset`, bytecode | We ship Workers bundles, not binaries |
+| `--no-orphans` | #745 solved the orphaned dev server with the `execve` pid handover; the fallback forwards signals by hand |
 | `Bun.Archive`, `Bun.Terminal`, ANSI helpers | No use for them |
 | `CompressionStream` / `DecompressionStream` | Web standard; workerd already has it |
 | `bun prune --production` | Deploy bundling is wrangler's job |
 
 ---
 
-## Order and sizing
+## Order for what is left
 
-1. **Phase 0** — bump `bun-types` to `^1.4.0`, then run the gate on purpose.
-   One line plus a test run, and it blocks Phase 3 outright: the new APIs do
-   not typecheck against 1.3 types.
-2. **Phase 1a** — the two `Bun.spawn` sites. Tiny.
-3. **Phase 3** — `Bun.Image` in the seed, `Bun.TOML` in the D1 guard. Two small
-   PRs that each delete more than they add.
-4. **Phase 2 catalogs** — one wide, mechanical PR.
-5. **Phase 1b** — script conversions, one or two at a time, guard script last
-   and most carefully.
-6. **Phase 2 gates** — dedupe, licences, `env = false`.
-7. **Phase 4** — fake timers where a clock seam already exists.
-8. **Phase 5** — only when something is slow.
+1. **The dev-db guard onto `Bun.TOML`** — highest blast radius, and the parse
+   deletes more than the `$` conversion would.
+2. **Catalogs** — one wide, mechanical PR.
+3. **The remaining script conversions**, one or two at a time.
+4. **Package-manager gates** — dedupe, licences.
+5. **`linker = "isolated"`** trial on `build-test`.
+6. **Fake timers** in `cire/api` where a seam exists.
+7. **Profiling**, when something is slow.
 
-Phases 1b and 2-catalogs both touch many files; don't run them concurrently.
+Catalogs and the script conversions both touch many files; don't run them
+concurrently.
