@@ -107,4 +107,4 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[arc-token-debugging]] — verification failures, key rotation
 - [[event-visibility-bug]] — private event leaks, loadVisibleEvent
 - [[s2s-migration]] — historical record (HTTP+ARC migration is complete)
-- [[bun-1.4-migration]] — moving off Bun 1.3, and which of 1.4's features are worth adopting (`$` shell, catalogs, `Bun.TOML`, supply-chain gates) given everything deploys to workerd
+- [[bun-1.4-migration]] — the 1.4 bump landed with #745; which of its features are worth adopting next (`bun-types`, `$` shell, catalogs, `Bun.TOML`, supply-chain gates) given everything deploys to workerd

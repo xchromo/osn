@@ -1,20 +1,24 @@
 ---
 title: Bun 1.4 migration
-description: Plan for moving the monorepo to Bun 1.4 and adopting the parts that pay for themselves — $ shell, catalogs, Bun.TOML, Bun.Image, supply-chain gates.
+description: The runtime bump landed with #745; this is the plan for the rest — bun-types, $ shell, catalogs, Bun.TOML, Bun.Image, supply-chain gates.
 tags: [runbook, bun, tooling, migration, ci]
 severity: low
 status: planned
 related:
   - "[[monorepo-structure]]"
   - "[[dev-environment]]"
+  - "[[devloop-urls]]"
   - "[[commands]]"
 last-reviewed: 2026-08-21
 ---
 
 # Bun 1.4 migration
 
-Plan for moving the monorepo to Bun 1.4 and picking up the parts of it that pay
-for themselves. Release notes: <https://bun.com/blog/bun-v1.4>.
+The runtime bump already landed — the portless devloop (#745) needed
+`process.execve` and pinned `1.4.0` on the way past. This is the plan for the
+rest: which of 1.4's features are worth adopting here, which are ruled out by
+where our code runs, and what order to do them in. Release notes:
+<https://bun.com/blog/bun-v1.4>.
 
 ## The constraint that shapes everything
 
@@ -24,7 +28,7 @@ Every deployed package here runs on **workerd**, not Bun:
 | --- | --- |
 | workerd (Workers) | `osn/api`, `pulse/api`, `zap/api`, `cire/api`, `cire/invites` |
 | Pages / static build | `*/landing`, `pulse/web`, `cire/host`, `osn/social`, `cire/vendor` |
-| Bun | scripts, seeds, `bun test` suites, CI, local dev |
+| Bun | scripts, seeds, `bun test` suites, `shared/dev-urls`, CI, local dev |
 
 So none of Bun 1.4's headline runtime APIs — `Bun.serve` static routes, HTTP/3,
 `Bun.Image` at request time, `Bun.cron` — can ship in app code. Cloudflare
@@ -40,18 +44,42 @@ radius of every item below stops at the developer's machine or the CI runner.
 
 ---
 
-## Phase 0 — get on 1.4 (blocks everything else)
+## Phase 0 — get on 1.4 (mostly landed)
 
-The repo is on two different Bun versions today:
+The runtime bump arrived as a side effect of the portless devloop
+(`fe3ee5da`, #745), which needed `process.execve` — a 1.3.14 API. It pins:
 
-- `.bun-version` → `1.3.10` (what CI installs, via `bun-version-file`)
-- `package.json` `packageManager` → `bun@1.3.14`
-- `bun-types` → `^1.3.14`
+- `.bun-version` → `1.4.0` ✅
+- `package.json` `packageManager` → `bun@1.4.0` ✅
+- `bun-types` → range `^1.3.14`, **locked at `1.3.14`** ❌
 
-Fix all three to the same `1.4.x` in one commit. The mismatch is its own small
-bug: CI has been resolving a different Bun than the one the lockfile records.
+**The remaining gap is `bun-types`, and it blocks Phase 3.** `Bun.Image`,
+`Bun.TOML`, `Bun.JSONC` and `$`'s 1.4 additions are absent from the 1.3 type
+definitions, so every one of them typechecks as an error until the types move.
+We are running a 1.4.0 runtime against 1.3.14 types.
 
-**Then run the whole gate**, because 1.4 changed things underneath us:
+Note *why* it lagged, because it is not the obvious reason: the range is
+already `^1.3.14`, which permits 1.4.x. Bun does not re-resolve a range the
+lockfile already satisfies, so #745 bumped the runtime and left
+`bun-types@1.3.14` pinned in `bun.lock`. Widening the caret changes nothing.
+The fix is to force the re-resolve:
+
+```bash
+bun update bun-types --latest
+```
+
+One catch: `bunfig.toml` sets `minimumReleaseAge = 259200`, so a `bun-types`
+published inside the last three days will be refused. That is the gate working
+as designed — wait it out rather than adding an
+`minimumReleaseAgeExcludes` entry for a types package.
+
+The version mismatch this section originally flagged — CI installing 1.3.10
+while the lockfile recorded 1.3.14 — is fixed. Nothing to do there.
+
+**What has not been done is the deliberate look for 1.4 regressions.** #745
+was a devloop change that happened to move the floor; the suite went green,
+which is evidence but not the same as having checked the things below. Run
+the full gate once, on purpose:
 
 ```bash
 bun install
@@ -66,15 +94,16 @@ What to watch for, in rough order of likelihood:
   `deflateSync(raw, { level: 9 })` and the seed's docstring promises re-running
   "overwrites them byte-for-byte". zlib-ng can emit a different byte stream at
   the same compression level. The images still decode; the promise of
-  determinism may not survive. Phase 3 deletes this code anyway.
+  determinism may not. Nothing in CI would catch it — the seed is manual, run
+  once per bucket. Phase 3 deletes this code anyway, which closes the question
+  rather than answering it.
 - **`trustedDependencies` is npm-only now** — no auto-trust for `file:`,
   `git:`, or `github:` sources. Check `bun.lock` for non-npm deps whose
-  postinstall we rely on.
+  postinstall we rely on. A silently skipped postinstall fails later and
+  somewhere else.
 - **Sourcemaps off by default in production HTML routes.** We don't use
   `Bun.serve` HTML routes, so this should be inert. Confirm rather than assume.
 - Idle CPU, memory and startup all improved; nothing to do but enjoy it.
-
-Ship this alone, green, before touching anything below.
 
 ---
 
@@ -120,6 +149,16 @@ Convert, worth it:
 | `cire-dev-db-guard.sh` | 120 + 203 | The guard that stands between an unattended reset and the live-wedding D1. Its failure mode is *passing*. Deserves the strongest test tier we have |
 | `check-d1-database-id.sh` | 60 | Three greps that approximate a TOML parse. See Phase 3 |
 | `cire-db-reset.sh`, `cire-db-seed.sh`, `db-reset.sh`, `ensure-pages-project.sh` | 34–75 | Straight command sequences; `$` is shorter and the errors are typed |
+
+**Not a `$` target: `shared/dev-urls/src/cli.ts`.** It shells out, so it looks
+like one. It is not. The file hands the process over with `process.execve`
+rather than supervising a child, on purpose — the dev server inherits the pid
+so portless and turbo can signal it and its exit status comes from the kernel.
+`$` supervises. Rewriting it with `$` would undo the thing the file exists to
+do. Its `spawn` fallback is a deliberate twenty tested lines for Windows and
+older Bun, and is also not a `$` candidate for the same reason. Left here in
+writing because it is the one shell-out in the repo where the obvious advice is
+wrong.
 
 Leave as bash:
 
@@ -170,7 +209,7 @@ hand-writing an entry in `overrides` and a comment explaining the drop-trigger.
 `audit fix` proposes the upgrade set; `--dry-run` shows it without applying.
 Use it to *generate* the override, keep writing the comment by hand.
 
-**Catalogs — the structural one.** Thirty-three packages repeat versions of
+**Catalogs — the structural one.** Thirty-four packages repeat versions of
 `typescript`, `vitest`, `effect`, `hono`, `drizzle-orm` and friends, and drift
 between them is a recurring source of confusing failures. 1.4's
 `bun add <pkg> --catalog` plus `"catalog:"` in each workspace makes the root the
@@ -210,10 +249,15 @@ against system WebKit or an installed Chrome, with no Puppeteer dependency. Not
 a replacement for the vitest browser tier — that needs a real provider — but it
 is a direct replacement for the ad-hoc screenshot command.
 
-**`--no-orphans` for the dev loop.** There are committed `.env` files and
-per-worktree dev stacks (see `wiki/runbooks/dev-environment.md` and the portless
-devloop work). Dev servers outliving a killed parent is a live annoyance;
-`--no-orphans` makes Bun SIGKILL descendants when the parent dies.
+**`--no-orphans` — mostly already solved, don't reach for it.** The orphaned
+dev server was a real annoyance, and #745 fixed it properly: `dev-env` calls
+`process.execve` so the dev server *keeps the wrapper's pid*, which means
+portless and turbo signal it directly and there is no parent to outlive. The
+supervising fallback (Windows, or `DEV_ENV_NO_EXECVE=1`) forwards SIGINT,
+SIGTERM and SIGHUP by hand for the same reason. `--no-orphans` would only add
+anything on that fallback path, and it is a blunter instrument — SIGKILL to
+descendants rather than a forwarded signal the dev server can act on. Leave it
+alone unless the fallback path starts leaking processes in practice.
 
 **`--no-env-file` / `env = false` for CI.** `osn/api`, `cire/api`, `cire/db` and
 `pulse/api` all have committed `.env` files. Bun loads them automatically, which
@@ -227,7 +271,7 @@ the workflow. This is a correctness gate, not a convenience.
 ## Phase 4 — test runner (limited, be honest about it)
 
 Only three packages use `bun test`: `cire/theme`, `cire/db`, `cire/api`. The
-other thirty run vitest. So 1.4's test features apply to those three, the
+other thirty-one run vitest. So 1.4's test features apply to those three, the
 two `d1-integration.test.ts` files, and `scripts/todo-to-issues/`.
 
 Worth doing there:
@@ -283,7 +327,9 @@ the easier thing to set on a CI step.
 
 ## Order and sizing
 
-1. **Phase 0** — version alignment + full gate. Small, blocking, ship alone.
+1. **Phase 0** — bump `bun-types` to `^1.4.0`, then run the gate on purpose.
+   One line plus a test run, and it blocks Phase 3 outright: the new APIs do
+   not typecheck against 1.3 types.
 2. **Phase 1a** — the two `Bun.spawn` sites. Tiny.
 3. **Phase 3** — `Bun.Image` in the seed, `Bun.TOML` in the D1 guard. Two small
    PRs that each delete more than they add.
