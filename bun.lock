@@ -632,6 +632,7 @@
         "three": "^0.185.1",
       },
       "devDependencies": {
+        "@shared/dev-urls": "workspace:*",
         "@shared/typescript-config": "workspace:*",
         "@types/three": "^0.185.1",
         "typescript": "^6.0.3",

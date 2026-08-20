@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 
+import { devPort } from "@shared/dev-urls";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
@@ -18,8 +19,12 @@ export default defineConfig({
   // every import to one copy.
   resolve: { dedupe: ["solid-js", "solid-js/web", "solid-js/store"] },
   clearScreen: false,
+  // Portless assigns the port and passes it as `PORT`; the literal is the
+  // fallback for a devloop without portless (`PORTLESS=0`, or running `dev:app`
+  // directly). `strictPort` keeps the promise that the lab fails rather than
+  // silently moving somewhere the proxy is not looking.
   server: {
-    port: 4400,
+    port: devPort(4400),
     strictPort: true,
     fs: { allow: [repoRoot] },
   },

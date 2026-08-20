@@ -6,8 +6,13 @@ built on the stack this repo already uses (Vite, Solid, Tailwind v4) so there is
 no second toolchain to keep alive.
 
 ```bash
-bun run dev:lab          # http://localhost:4400
+bun run dev:lab          # https://lab.localhost
 ```
+
+Like every other dev server in the repo the lab runs behind portless, so its URL
+is a name rather than a port, and a worktree on a branch gets its own
+(`https://my-branch.lab.localhost`). `PORTLESS=0 bun run dev:lab` puts it back on
+`http://localhost:4400`. See [devloop URLs](../../wiki/conventions/devloop-urls.md).
 
 Nothing here ships. It is a dev tool.
 

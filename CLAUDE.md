@@ -77,7 +77,7 @@ gh issue create --repo xchromo/osn --type Feature --label product:cire --title "
 | Run the devloop (named HTTPS hosts per app, a stack per worktree, adding an app to it) | `[[wiki/conventions/devloop-urls]]` |
 | Split one goal across several PRs (stacked PRs — setting the base with the gh CLI, merge order, rebasing a stack) | `[[wiki/conventions/stacked-prs]]` |
 | Add or use UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
-| Prototype a component, a three.js scene or canvas work in isolation (`bun run dev:lab`, port 4400) | `[[wiki/conventions/component-lab]]`, `tools/lab/README.md` |
+| Prototype a component, a three.js scene or canvas work in isolation (`bun run dev:lab`, `https://lab.localhost`) | `[[wiki/conventions/component-lab]]`, `tools/lab/README.md` |
 | Work on a specific app/surface (osn-core, social, pulse, zap, cire, cire-landing, osn-landing, pulse-landing) | `[[wiki/apps/<name>]]` |
 | Build the OIDC consent screen (states, decision-error contract, login_required retry loop) | `[[wiki/apps/authorize-ui]]` |
 | Deploy osn-api + cire to production (secrets/vars, migrations, CI pipeline, smoke checks) | `[[wiki/runbooks/production-deploy]]` |

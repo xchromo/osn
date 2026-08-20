@@ -6,7 +6,8 @@ related:
   - "[[component-library]]"
   - "[[frontend-patterns]]"
   - "[[commands]]"
-last-reviewed: 2026-08-20
+  - "[[devloop-urls]]"
+last-reviewed: 2026-08-21
 ---
 
 # Component Lab
@@ -16,8 +17,13 @@ Storybook's shape (sidebar of stories, live preview, args panel) in roughly 600
 lines, on the stack the repo already runs.
 
 ```bash
-bun run dev:lab          # http://localhost:4400
+bun run dev:lab          # https://lab.localhost
 ```
+
+The lab is in the portless map like any other dev server, so it answers on a
+name and a branch worktree gets its own copy of it — see [[devloop-urls]]. Its
+`DEV_ENV` entry is empty: it renders components, not screens, so it has no
+sibling to address.
 
 Nothing here ships. Full usage is in `tools/lab/README.md`; this page records
 the decisions behind it.

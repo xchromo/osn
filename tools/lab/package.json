@@ -5,10 +5,15 @@
   "type": "module",
   "description": "Component lab — a Storybook-shaped scratchpad for spiking UI, three.js and canvas work",
   "scripts": {
-    "dev": "vite --port 4400",
+    "dev": "portless",
+    "dev:app": "dev-env vite dev",
     "build": "vite build",
     "preview": "vite preview --port 4400",
     "check": "tsc --noEmit"
+  },
+  "portless": {
+    "name": "lab",
+    "script": "dev:app"
   },
   "dependencies": {
     "@osn/ui": "workspace:*",
@@ -18,6 +23,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@shared/dev-urls": "workspace:*",
     "@shared/typescript-config": "workspace:*",
     "@types/three": "^0.185.1",
     "typescript": "^6.0.3",
