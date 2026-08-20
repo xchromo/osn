@@ -37,9 +37,9 @@ variants and states.
 
 App-level components — `pulse/web/src/components`, `cire/invites`,
 `osn/social` — are **not** catalogued. They read from an API client, a router
-and an auth session; standing those up in a story means the fixtures
-[[component-library]] and the no-mock-data rule keep out of app source. The path
-is open where a component needs no such context: `pulse/Icon` is catalogued from
+and an auth session; standing those up in a story means fixtures the repo
+deliberately keeps out of app source — see [[component-library]]. The path is
+open where a component needs no such context: `pulse/Icon` is catalogued from
 a story sitting in `pulse/web/src/components/Icon.story.tsx`, which imports
 nothing from the lab and so stays an ordinary file in its own package.
 

@@ -8,7 +8,7 @@
     "dev": "portless",
     "dev:app": "dev-env vite dev",
     "build": "vite build",
-    "preview": "vite preview --port 4400",
+    "preview": "vite preview",
     "check": "tsc --noEmit"
   },
   "portless": {

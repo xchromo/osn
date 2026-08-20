@@ -5,6 +5,7 @@ import {
   PerspectiveCamera,
   Scene,
   SRGBColorSpace,
+  Texture,
   WebGLRenderer,
   type Material,
   type Mesh,
@@ -58,14 +59,66 @@ export interface ThreeCanvasProps {
   maxDpr?: number;
 }
 
-/** Frees the GPU-side memory a scene holds. Cheap insurance against HMR leaks. */
+/**
+ * Frees the GPU-side memory a scene holds: geometries, materials, and the
+ * textures those materials point at.
+ *
+ * `Material.dispose()` does not touch its own textures, and a texture is the
+ * expensive upload — a remount that leaves them behind grows GPU memory every
+ * cycle, which in this tool means every save. Only the standard map slots are
+ * walked; a texture a story keeps somewhere else is that story's to free in
+ * `onDispose`.
+ */
+/**
+ * The texture slots a standard three.js material can carry. Not every material
+ * has every one — `MeshBasicMaterial` has no `roughnessMap` — so they are all
+ * optional and the read is a plain property access.
+ */
+interface TexturedMaterial {
+  map?: Texture | null;
+  alphaMap?: Texture | null;
+  aoMap?: Texture | null;
+  bumpMap?: Texture | null;
+  displacementMap?: Texture | null;
+  emissiveMap?: Texture | null;
+  envMap?: Texture | null;
+  lightMap?: Texture | null;
+  metalnessMap?: Texture | null;
+  normalMap?: Texture | null;
+  roughnessMap?: Texture | null;
+  specularMap?: Texture | null;
+}
+
+function disposeMaterial(material: Material) {
+  const textured = material as Material & TexturedMaterial;
+  const textures = [
+    textured.map,
+    textured.alphaMap,
+    textured.aoMap,
+    textured.bumpMap,
+    textured.displacementMap,
+    textured.emissiveMap,
+    textured.envMap,
+    textured.lightMap,
+    textured.metalnessMap,
+    textured.normalMap,
+    textured.roughnessMap,
+    textured.specularMap,
+  ];
+  // A slot can hold the same texture twice (map and emissiveMap, say).
+  // `dispose()` on an already-disposed texture is a no-op in three.js, so a
+  // second call costs nothing.
+  for (const texture of textures) texture?.dispose();
+  material.dispose();
+}
+
 function disposeScene(scene: Scene) {
   scene.traverse((object) => {
     const mesh = object as Mesh;
     mesh.geometry?.dispose?.();
     const material = mesh.material as Material | Material[] | undefined;
-    if (Array.isArray(material)) material.forEach((m) => m.dispose());
-    else material?.dispose();
+    if (Array.isArray(material)) material.forEach(disposeMaterial);
+    else if (material) disposeMaterial(material);
   });
   scene.clear();
 }
@@ -162,6 +215,12 @@ export function ThreeCanvas(props: ThreeCanvasProps) {
       disposeScene(scene);
       if (css3dScene) disposeScene(css3dScene);
       renderer.dispose();
+      // `dispose()` frees programs and buffers but keeps the GL context, which
+      // then lives until the detached canvas is collected. A browser allows
+      // only about sixteen at once and drops the oldest to make room — and the
+      // oldest may be the story on screen. Remount and hot reload both land
+      // here, so this path runs far more often than in an app.
+      renderer.forceContextLoss();
       renderer.domElement.remove();
       css3dRenderer?.domElement.remove();
     });

@@ -624,6 +624,7 @@
     },
     "tools/lab": {
       "name": "@tools/lab",
+      "version": "0.0.0",
       "dependencies": {
         "@osn/ui": "workspace:*",
         "@tailwindcss/vite": "^4.3.3",

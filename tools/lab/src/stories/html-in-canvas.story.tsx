@@ -73,10 +73,18 @@ export const Raster2D: Story<RasterArgs> = {
         // Re-rasterises whenever the text or colour changes. A raster is not
         // free, so this deliberately sits behind an effect rather than in the
         // frame loop.
+        //
+        // Rasters are async and nothing serialises them, so two quick edits can
+        // finish out of order and leave the older one on screen. The counter
+        // makes the newest request the only one allowed to land.
+        let latest = 0;
         createEffect(() => {
           const html = cardHtml(args.title, args.subtitle, args.accent);
+          const generation = ++latest;
           void (async () => {
-            source = await htmlToCanvas(html, { width: 420, height: 220, css: CARD_CSS });
+            const next = await htmlToCanvas(html, { width: 420, height: 220, css: CARD_CSS });
+            if (generation !== latest) return;
+            source = next;
           })();
         });
 
@@ -126,10 +134,20 @@ export const HtmlTexture: Story<TextureArgs> = {
         camera.position.set(0, 0, 5);
 
         let texture: CanvasTexture | undefined;
+        // Same ordering guard as Raster2D, and it matters more here: a stale
+        // raster landing late would dispose the texture the material is
+        // currently drawing, then assign the older one — a disposed texture on
+        // screen, and the wrong content after it.
+        let latest = 0;
         createEffect(() => {
           const html = cardHtml(args.title, "Rasterised into a CanvasTexture.", args.accent);
+          const generation = ++latest;
           void (async () => {
             const next = await htmlToTexture(html, { width: 420, height: 220, css: CARD_CSS });
+            if (generation !== latest) {
+              next.dispose();
+              return;
+            }
             // Dispose the outgoing texture: a slider drag would otherwise
             // leave a trail of orphaned GPU uploads.
             texture?.dispose();

@@ -105,6 +105,17 @@ export async function loadRegistry(): Promise<Registry> {
     }),
   );
 
+  // Two files can claim the same id — same `meta.title`, same export name.
+  // The sidebar keys on id and selection looks up the first match, so the
+  // second row would silently open the first row's story. Disambiguate with
+  // the file path rather than dropping one, since both are real stories.
+  const seen = new Map<string, number>();
+  for (const entry of entries) {
+    const count = seen.get(entry.id) ?? 0;
+    seen.set(entry.id, count + 1);
+    if (count > 0) entry.id = `${entry.id} (${entry.file})`;
+  }
+
   entries.sort((a, b) => a.id.localeCompare(b.id));
   failures.sort((a, b) => a.file.localeCompare(b.file));
   return { entries, failures };

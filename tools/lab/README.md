@@ -169,9 +169,11 @@ worth knowing before you blame the helper:
 - **The markup is parsed as XML.** Every tag closed, every attribute quoted. One
   stray `<br>` kills the whole image.
 
-The CSS3D story sets `innerHTML` from a template string. That is safe here and
-only here: the input is the story author's own literal, in a tool that never
-runs outside a dev server. Do not copy the pattern into app code.
+The CSS3D story sets `innerHTML` from a template string, and the args panel
+feeds that string — so anyone can type markup into a control and have it run.
+That is fine here and only here: it is your own browser, on a dev-only origin
+with no session and nothing worth stealing in storage, and none of it ships. Do
+not copy the pattern into app code.
 
 ## Styling
 

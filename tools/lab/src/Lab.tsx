@@ -114,6 +114,9 @@ export function Lab() {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const target = event.target as HTMLElement | null;
     if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+    // A CSS3D story renders live, editable DOM inside the preview; stepping
+    // the story list out from under someone mid-edit is the same papercut.
+    if (target?.isContentEditable) return;
     const list = entries();
     const index = list.findIndex((entry) => entry.id === current()?.id);
     const next = list[index + (event.key === "ArrowDown" ? 1 : -1)];

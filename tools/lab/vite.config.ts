@@ -28,6 +28,9 @@ export default defineConfig({
     strictPort: true,
     fs: { allow: [repoRoot] },
   },
+  // `vite preview` reads its own port, not the dev server's, so it needs the
+  // same treatment rather than the 4173 default.
+  preview: { port: devPort(4400), strictPort: true },
   // Nothing here ships. Sourcemaps and readable output are worth more than
   // bytes, and a spike gets thrown away long before size matters.
   build: { sourcemap: true, minify: false },

@@ -296,8 +296,8 @@ re-insert, so the hot cache-hit path stays O(1).
 The rank is a counter, not a clock. It was `Date.now()` until 2026-08-21, and
 milliseconds are too coarse: back-to-back accesses share one, the scan sees a
 tie, keeps whichever key it iterated first, and evicts an entry that was just
-used instead of the oldest. A counter is a total order by construction, and it
-is cheaper than reading the clock. `_publicKeyAccessRankForTest` exists so a
+used instead of the oldest. A counter cannot tie, and it is cheaper
+than reading the clock. `_publicKeyAccessRankForTest` exists so a
 test can assert that two accesses never compare equal, which is the property the
 scan depends on — asserting an eviction outcome instead only catches the bug on
 the runs where the timing happens to tie.
