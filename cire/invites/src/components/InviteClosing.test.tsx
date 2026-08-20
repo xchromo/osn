@@ -161,6 +161,38 @@ describe("InviteClosing", () => {
       expect(layer.style.getPropertyValue("max-height")).toBe("");
     });
 
+    it("splits the crop layer into a narrow and a wide element, one hidden at a time", () => {
+      const { container } = render(() => (
+        <InviteClosing
+          apiUrl={API}
+          imageUrl={IMG}
+          imageCrop={{ x: 0.1, y: 0.1, w: 0.5, h: 0.5, natW: 1000, natH: 500 }}
+        />
+      ));
+      const section = closing(container) as HTMLElement;
+
+      // Below `md:` a DPR-1 phone must resolve the 800w `card`; above it the
+      // band still needs the 1600w `hero`. A `display:none` layer never fetches
+      // its background, so exactly one of the two downloads.
+      const narrow = section.querySelector("[aria-hidden='true'].md\\:hidden") as HTMLElement;
+      expect(narrow).toBeTruthy();
+      // Same crop maths and box sizing as the wide layer — the split changes
+      // which file is fetched, never the framing.
+      expect(narrow.style.getPropertyValue("background-size")).toBe("200%");
+      expect(narrow.style.getPropertyValue("aspect-ratio")).toBe("2 / 1");
+
+      // The wide layer stays exactly today's single hero url.
+      const wide = wideCropLayer(section) as HTMLElement;
+      expect(wide.style.getPropertyValue("background-image")).toContain("variant=hero");
+      expect(wide.style.getPropertyValue("background-image")).not.toContain("image-set");
+
+      // The narrow layer's URLs are NOT asserted here on purpose: jsdom's CSS
+      // parser drops both `background-image` declarations rather than keeping
+      // the valid one, so the property reads empty no matter what was set. The
+      // string itself is pinned in `image-crop.test.ts`, and that a real engine
+      // parses the pair is pinned in `InviteClosing.browser.test.tsx`.
+    });
+
     it("asks for the hero width, the one a full-bleed band actually needs", () => {
       const { container } = render(() => (
         <InviteClosing

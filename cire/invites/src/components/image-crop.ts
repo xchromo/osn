@@ -203,19 +203,20 @@ export function cropBackgroundImageSetDeclaration(
   twoXUrl: string,
   crop: ImageCrop | null | undefined,
 ): string | null {
-  if (!isRenderableCrop(crop)) return null;
-  const { x, y, w, h } = crop;
-  const size = (100 / w).toFixed(4);
-  const posX = w >= 1 ? "0" : ((x / (1 - w)) * 100).toFixed(4);
-  const posY = h >= 1 ? "0" : ((y / (1 - h)) * 100).toFixed(4);
+  // Crop maths is never re-derived here — it is read back off the object
+  // helper, so the two can't drift apart under a later edit to one of them.
+  const base = cropBackgroundStyle(oneXUrl, crop);
+  if (!base) return null;
   const oneX = cssUrlValue(oneXUrl);
   const twoX = cssUrlValue(twoXUrl);
+  const rest = Object.entries(base)
+    .filter(([property]) => property !== "background-image")
+    .map(([property, value]) => `${property}:${value};`)
+    .join("");
   return (
     `background-image:url("${oneX}");` +
     `background-image:image-set(url("${oneX}") 1x, url("${twoX}") 2x);` +
-    `background-repeat:no-repeat;` +
-    `background-size:${size}%;` +
-    `background-position:${posX}% ${posY}%;`
+    rest
   );
 }
 
