@@ -201,12 +201,19 @@ jobs:
       # `scripts/` is not a workspace, so `turbo test` never reaches it and the
       # tests under it ran nowhere: `test:migration` was declared in the root
       # package.json and called by no workflow, so the throttle and backfill
-      # tests had never run in CI at all. `bun test scripts/` covers the lot,
-      # including the D1 guard's — which is the one that matters, since that
-      # guard now decides whether a deploy proceeds.
+      # tests had never run in CI at all. They do now, along with the D1
+      # guard's — which is the pair that matters, since that guard decides
+      # whether a deploy proceeds.
       #
-      # No `bun install`: these tests import nothing outside `scripts/` and the
-      # bun runtime, so the install would be a minute spent on nothing.
+      # The `./` in `bun test ./scripts/` is load-bearing. A bare `scripts/` is
+      # a SUBSTRING filter on the test path, not a directory, so it also picks
+      # up `cire/api/src/scripts/remint-family-codes.test.ts` — which imports
+      # drizzle and effect and therefore needs an install this job does not do.
+      # `./scripts/` anchors to the directory.
+      #
+      # No `bun install` on purpose: these three files import nothing but
+      # `bun:test` and each other, so an install here would be a minute spent
+      # on nothing.
       - name: Test the scripts
         run: bun run test:scripts
 
