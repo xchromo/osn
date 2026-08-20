@@ -257,8 +257,11 @@ describe("unlockRevealSequence (gala)", () => {
       });
 
       await vi.advanceTimersByTimeAsync(1000);
-      // Still waiting: the section has not been put back into the layout.
-      expect(eventsSection.style.display).toBe("none");
+      // Still waiting: nothing has been animated and nothing revealed. The
+      // signal is the animation, not `display` — that is cleared before the
+      // wait now, so the layout beat can run alongside it rather than after.
+      expect(animateMock.mock.calls.some(([target]) => target === eventsSection)).toBe(false);
+      expect(eventsSection.style.opacity).toBe("");
 
       eventsSection.innerHTML = "<div data-event-card></div>";
       releaseCards();
@@ -274,5 +277,48 @@ describe("unlockRevealSequence (gala)", () => {
       await p;
       expect(eventsSection.style.opacity).toBe("1");
     });
+  });
+
+  // The card stagger's length grows with the number of events, so a flat
+  // per-step cap reported it settled — and wrote the inline end state — while
+  // cards were still moving. Five events is already 1.08s of stagger in classic.
+  it("waits out the whole stagger on an invite with many events", async () => {
+    eventsSection.innerHTML = "<div data-event-card></div>".repeat(6);
+    const stalled: string[] = [];
+    animateMock.mockImplementation((target: unknown) => {
+      // Only the card step stalls, so the section's own step cannot mask it.
+      if (Array.isArray(target)) {
+        stalled.push("cards");
+        return { finished: new Promise<void>(() => {}) };
+      }
+      return { finished: Promise.resolve() };
+    });
+
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
+    await vi.advanceTimersByTimeAsync(1200);
+    const cards = [...eventsSection.querySelectorAll<HTMLElement>("[data-event-card]")];
+    // Past the flat one-animation cap, still inside this stagger's own.
+    expect(stalled).toEqual(["cards"]);
+    expect(cards[0]?.style.opacity).toBe("0");
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(cards.map((c) => c.style.opacity)).toEqual(["1", "1", "1", "1", "1", "1"]);
+  });
+
+  // The cards can render DURING the layout beat, so the snapshot has to be
+  // taken after it — a card missed by the hide loop is a card that arrives at
+  // full opacity while its siblings stagger.
+  it("hides cards that render during the layout beat", async () => {
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection, {
+      waitForEvents: async () => {
+        eventsSection.innerHTML = "<div data-event-card></div>";
+      },
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    expect(staggerMock).toHaveBeenCalled();
+    const card = eventsSection.querySelector<HTMLElement>("[data-event-card]");
+    expect(card?.style.opacity).toBe("1");
   });
 });

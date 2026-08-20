@@ -72,6 +72,35 @@ describe("awaitEventCards", () => {
     expect(settled).toHaveBeenCalled();
   });
 
+  // Polling for a card the chunk never delivered is dead wait bolted onto a
+  // reveal that has already been held for a second and a half.
+  it("does not poll for cards after the chunk itself timed out", async () => {
+    const started = Date.now();
+    let finished = 0;
+    const p = awaitEventCards(
+      () => new Promise(() => {}),
+      () => sectionWithCards(1),
+    ).then(() => {
+      finished = Date.now() - started;
+    });
+    await vi.advanceTimersByTimeAsync(CARD_CHUNK_TIMEOUT_MS + CARD_RENDER_TIMEOUT_MS + 100);
+    await p;
+    expect(finished).toBe(CARD_CHUNK_TIMEOUT_MS);
+  });
+
+  // The chunk race leaves a loser every time, and on the warm path that loser
+  // is a 1.5s timer holding its closure alive long after the reveal is done.
+  it("clears the chunk timeout when the chunk wins the race", async () => {
+    const section = sectionWithCards(1);
+    const p = awaitEventCards(
+      async () => {},
+      () => section,
+    );
+    await vi.advanceTimersByTimeAsync(16);
+    await p;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("gives up when the cards never render", async () => {
     const settled = vi.fn();
     const p = awaitEventCards(
