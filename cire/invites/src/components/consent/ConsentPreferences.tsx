@@ -43,9 +43,9 @@ const FOCUSABLE_SELECTOR = [
  * Vendors that the toggle does NOT govern (`enforcement: "always"` — today
  * Cloudflare Turnstile, which the claim form can't function without) are
  * listed separately under an explicit "loads on every visit" heading. Hiding
- * them would leave the dialog
- * quietly overstating what the switch controls; listing them under the switch
- * as though it applied would do the same thing more loudly.
+ * them would leave the dialog quietly overstating what the switch controls;
+ * listing them under the switch as though it applied would do the same thing
+ * more loudly.
  */
 export function ConsentPreferences() {
   const titleId = createUniqueId();
