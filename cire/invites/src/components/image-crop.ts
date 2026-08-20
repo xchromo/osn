@@ -180,6 +180,46 @@ function clamp01(n: number): number {
 }
 
 /**
+ * The `image-set()` sibling of {@link cropBackgroundStyle}, for a background
+ * layer that must vary by DEVICE-PIXEL-RATIO as well as crop. `image-set()`
+ * selects on DPR only — it cannot see viewport width — so a caller pairs this
+ * with a breakpoint (render it below the viewport cutoff, a plain
+ * {@link cropBackgroundStyle} hero-variant layer above it) to cover both axes.
+ *
+ * A style OBJECT cannot carry `background-image` twice, so this returns a CSS
+ * declaration STRING instead (Solid's `style` prop accepts a string, not just
+ * an object): the plain `url()` FIRST — Safari < 17 has no unprefixed
+ * `image-set`, and CSS drops a declaration it can't parse, so an unsupporting
+ * browser keeps this one — then `image-set()` SECOND, which a supporting
+ * browser parses and applies, overriding the first. `oneXUrl`/`twoXUrl` must
+ * already carry a bounded `?variant=` (`VARIANT_WIDTHS` in
+ * `invite-images.ts`) — this helper only renders the two URLs it's given, it
+ * does not choose or validate variant names. Every other declaration matches
+ * {@link cropBackgroundStyle}'s crop maths exactly, so the two stay
+ * byte-identical for the same crop.
+ */
+export function cropBackgroundImageSetDeclaration(
+  oneXUrl: string,
+  twoXUrl: string,
+  crop: ImageCrop | null | undefined,
+): string | null {
+  if (!isRenderableCrop(crop)) return null;
+  const { x, y, w, h } = crop;
+  const size = (100 / w).toFixed(4);
+  const posX = w >= 1 ? "0" : ((x / (1 - w)) * 100).toFixed(4);
+  const posY = h >= 1 ? "0" : ((y / (1 - h)) * 100).toFixed(4);
+  const oneX = cssUrlValue(oneXUrl);
+  const twoX = cssUrlValue(twoXUrl);
+  return (
+    `background-image:url("${oneX}");` +
+    `background-image:image-set(url("${oneX}") 1x, url("${twoX}") 2x);` +
+    `background-repeat:no-repeat;` +
+    `background-size:${size}%;` +
+    `background-position:${posX}% ${posY}%;`
+  );
+}
+
+/**
  * The hero's per-breakpoint crop layers (migration 0046). The hero is the one
  * full-bleed image rendered at both wide-desktop and tall-phone aspects, so the
  * organiser can save TWO focal rectangles: the desktop crop governs wide
