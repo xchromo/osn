@@ -76,16 +76,14 @@ describe("awaitEventCards", () => {
   // reveal that has already been held for a second and a half.
   it("does not poll for cards after the chunk itself timed out", async () => {
     const started = Date.now();
-    let finished = 0;
+    let finishedAt = 0;
     const p = awaitEventCards(
       () => new Promise(() => {}),
       () => sectionWithCards(1),
-    ).then(() => {
-      finished = Date.now() - started;
-    });
+    ).then(() => (finishedAt = Date.now()));
     await vi.advanceTimersByTimeAsync(CARD_CHUNK_TIMEOUT_MS + CARD_RENDER_TIMEOUT_MS + 100);
     await p;
-    expect(finished).toBe(CARD_CHUNK_TIMEOUT_MS);
+    expect(finishedAt - started).toBe(CARD_CHUNK_TIMEOUT_MS);
   });
 
   // The chunk race leaves a loser every time, and on the warm path that loser

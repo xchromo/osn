@@ -310,7 +310,7 @@ export default function InvitePage(props: InvitePageProps) {
     // sequence would not ask for the chunk until the form had finished fading
     // out, spending ~350ms of the cap before the request was even sent (P-W1).
     // `awaitEventCards` then joins a fetch already in flight.
-    const cardsReady = EventCard.preload().then(() => {});
+    const cardsReady = EventCard.preload().then(() => undefined);
     // A failed chunk is handled where it matters, in `awaitEventCards` — but
     // that handler attaches a beat later, so mark the rejection handled here to
     // keep an offline guest from tripping an unhandled-rejection report.
