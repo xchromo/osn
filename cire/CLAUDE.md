@@ -12,12 +12,14 @@ Auth is a **two-system model** (see `[[wiki/systems/cire-auth]]` in the OSN wiki
 
 - `README.md` → Human-readable spec, architecture, stack
 - `CLAUDE.md` → AI reference — patterns, conventions, commands
-- `wiki/TODO.md` → A pointer to GitHub Issues. Nothing is tracked in the wiki
-- `wiki/` → Obsidian knowledge graph — architecture docs, conventions, observability, changelogs, runbooks
+- `../wiki/TODO.md` → A pointer to GitHub Issues. Nothing is tracked in the wiki
+- `../wiki/` → the one Obsidian vault for the whole monorepo. Cire's own vault at
+  `cire/wiki/` folded into it on 2026-08-21; cire pages carry a `cire-` prefix where a
+  bare name would collide (`cire-vendors`, `cire-platform-plan`, `cire-invite-builder`)
 
 ## Where Cire Work Is Tracked
 
-GitHub Issues, filtered to `label:product:cire`. The per-area `wiki/todo/` shards were retired in the 2026-08-15 migration; every open item from them is an issue.
+GitHub Issues, filtered to `label:product:cire`. The per-area `cire/wiki/todo/` shards were retired in the 2026-08-15 migration; every open item from them is an issue. Cire's `deferred` and `future` shards now live in `[[wiki/deferred-decisions]]`.
 
 ```bash
 gh issue list --repo xchromo/osn --state open --label product:cire
@@ -32,11 +34,14 @@ Product work — guest site, organiser portal, API, schema, the platform build-o
 | If you need to...               | Read                                          |
 | ------------------------------- | --------------------------------------------- |
 | Understand monorepo layout      | `[[wiki/architecture/monorepo-structure]]`    |
+| Work on an organiser module (budget, checklist, entitlements, registry, vendors) | `[[wiki/systems/cire-budget]]`, `[[wiki/systems/cire-checklist-tasks]]`, `[[wiki/systems/cire-entitlements]]`, `[[wiki/systems/cire-registry]]`, `[[wiki/systems/cire-vendors]]` |
+| Change the invite itself (slots, images, theming, design selector) | `[[wiki/architecture/cire-invite-builder]]`, `[[wiki/systems/cire-invite-designs]]` |
+| See where cire is going | `[[wiki/architecture/cire-platform-plan]]` |
 | Check PR/branch conventions     | `[[wiki/conventions/contributing]]`           |
-| Add a third-party embed / script to the guest site | `[[wiki/architecture/consent]]` |
+| Add a third-party embed / script to the guest site | `[[wiki/architecture/cire-consent]]` |
 | Add drag-to-reorder to a list (solid-dnd + the keyboard path it lacks) | `[[wiki/architecture/drag-and-drop]]` |
 | Write a test that needs real CSS, layout or paint order | `[[wiki/conventions/browser-tests]]` |
-| Understand observability rules  | `[[wiki/observability/overview]]`             |
+| Understand observability rules  | `[[wiki/observability/cire-workerd]]` (cire on workerd), `[[wiki/observability/overview]]` (platform) |
 | Look up review finding IDs      | `[[wiki/conventions/review-findings]]`        |
 | Debug a production issue        | Browse `wiki/runbooks/`                       |
 | Check security or perf findings | `gh issue list --repo xchromo/osn-tracker --label product:cire`  |
@@ -44,16 +49,16 @@ Product work — guest site, organiser portal, API, schema, the platform build-o
 
 ### Querying the Wiki
 
-With Obsidian: open `wiki/` as a vault, use graph view and search.
+With Obsidian: open the repo-root `wiki/` as a vault, use graph view and search.
 
 Without Obsidian (CLI):
 
 ```bash
-# Find pages by tag
-rg "tags:.*security" wiki/ --glob "*.md"
+# Find every cire page
+rg "tags:.*cire" ../wiki/ --glob "*.md"
 
 # Find all pages linking to a topic
-rg "\[\[contributing\]\]" wiki/
+rg "\[\[cire-vendors\]\]" ../wiki/
 
 # Open work (issues, not files)
 gh issue list --repo xchromo/osn --state open --label product:cire
@@ -76,17 +81,17 @@ Flat sibling-package layout under the OSN repo root (no `apps/` / `packages/` ne
 
 ```
 cire/                 # workspace dir inside the OSN monorepo
-├── invites/          # @cire/invites — Astro + SolidJS guest site (port 4321)
-├── host/             # @cire/host — Astro + SolidJS organiser portal (port 4322)
-├── api/              # @cire/api — Elysia on CF Workers (port 8787, wrangler dev)
+├── invites/          # @cire/invites — Astro + SolidJS guest site (invite.cire.localhost)
+├── host/             # @cire/host — Astro + SolidJS organiser portal (host.cire.localhost)
+├── vendor/           # @cire/vendor — Astro + SolidJS vendor portal (vendor.cire.localhost)
+├── api/              # @cire/api — Elysia on CF Workers (api.cire.localhost)
 ├── db/               # @cire/db — Drizzle schema + D1 migrations
 ├── theme/            # @cire/theme — zero-dep shared theming validators (CSS-colour allow-list)
-├── wiki/             # Obsidian knowledge graph (cire-internal)
 ├── README.md
 └── CLAUDE.md         # this file
 ```
 
-OSN-facing integration docs live in the **root** wiki: `[[wiki/apps/cire]]` + `[[wiki/systems/cire-auth]]`.
+Every cire doc lives in the repo-root vault now — start at `[[wiki/apps/cire]]`, which lists the folded pages, then `[[wiki/systems/cire-auth]]` for the auth contract.
 
 ## Tech (one-liner)
 
@@ -103,7 +108,7 @@ OSN monorepo conventions apply since the merge (root `CLAUDE.md` is authoritativ
 - Package manager: `bun` — always use `bun run`, `bunx --bun`, `bun add`
 - Monorepo: bun workspaces; scope commands with `--cwd cire/invites` or `--cwd cire/api` (from the OSN repo root)
 - Cloudflare bindings (D1, R2, KV) are typed via `wrangler types` — regenerate after schema or binding changes
-- **Observability** (see `[[wiki/observability/overview]]` for full guide):
+- **Observability** (see `[[wiki/observability/cire-workerd]]` for what cire does differently, `[[wiki/observability/overview]]` for the platform guide):
   - No `console.*` in backend — use Effect structured logger (`Effect.logInfo`, `Effect.logWarning`, `Effect.logError`)
   - Log levels: debug (local only), info (happy path), warning (recoverable), error (unrecoverable)
   - Never log PII (email, tokens, passwords, passphrase values)

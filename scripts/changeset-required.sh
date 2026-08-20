@@ -45,11 +45,10 @@ is_allowed() {
     # `.claude/` is agent instructions — slash-commands, skills, settings; it is
     # read by the coding agent, never by a build.
     .github/* | .claude/* | scripts/* | wiki/* | docs/*) return 0 ;;
-    # cire keeps its own vault at `cire/wiki/`. Same category as `wiki/`:
-    # prose, read by people, built into nothing. It sits under `cire/` only
-    # because it documents cire, not because `@cire/*` ships it — the
-    # workspace packages are `cire/api`, `cire/host`, `cire/vendor`, and none
-    # of their build inputs reach outside their own directory.
+    # cire kept a second vault at `cire/wiki/` until it folded into `wiki/`
+    # on 2026-08-21. Same category as `wiki/`: prose, read by people, built
+    # into nothing. The directory is gone, so this case can only ever match
+    # the fold's own deletions — drop it once that PR has merged.
     cire/wiki/*) return 0 ;;
   esac
 

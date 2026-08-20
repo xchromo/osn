@@ -4,13 +4,12 @@ tags: [conventions, testing]
 related:
   - "[[contributing]]"
   - "[[review-findings]]"
-  - "[[index]]"
+  - "[[testing-patterns]]"
 packages:
   - "@cire/invites"
   - "@cire/host"
-last-reviewed: 2026-08-08
+last-reviewed: 2026-08-21
 ---
-
 # Browser Tests
 
 A second Vitest project — in `@cire/invites` and, since 2026-08-06, in
