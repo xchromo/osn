@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { Toaster } from "solid-toast";
 
+import { awaitEventCards } from "../../components/await-event-cards";
 import { createClaimCode } from "../../components/claim-code";
 import { createSessionRestore, noteClaimed, signOut } from "../../components/claim-session";
 import { createRsvpClosed } from "../../components/createRsvpClosed";
@@ -311,6 +312,17 @@ export default function InvitePage(props: InvitePageProps) {
         const { unlockRevealSequence } = await import("./UnlockReveal.motion");
         await unlockRevealSequence(loginFormRef, welcomeRef, eventsSectionRef, {
           onFormHidden: () => setRevealed(true),
+          // The cards come from a `lazy` component, so on a cold cache their
+          // chunk can still be in flight here. The sequence awaits this under
+          // the form fade-out, and the wait caps itself, so the entrance
+          // animates real cards instead of an empty section — and never stalls.
+          waitForEvents: () =>
+            awaitEventCards(
+              async () => {
+                await EventCard.preload();
+              },
+              () => eventsSectionRef,
+            ),
         });
       } else if (eventsSectionRef) {
         eventsSectionRef.style.opacity = "1";

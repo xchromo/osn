@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const { animateMock, staggerMock } = vi.hoisted(() => ({
-  animateMock: vi.fn(() => ({ finished: Promise.resolve() })),
+  // Typed with the parameters the real `animate` takes, so a test can assert on
+  // the target it was called with — and on the DOM state at that moment.
+  animateMock: vi.fn((_target?: unknown, _keyframes?: unknown, _options?: unknown) => ({
+    finished: Promise.resolve(),
+  })),
   staggerMock: vi.fn(
     (duration: number, opts: { startDelay: number }) => duration + opts.startDelay,
   ),
@@ -124,10 +128,13 @@ describe("unlockRevealSequence (gala)", () => {
     const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
     await vi.advanceTimersByTimeAsync(300);
     await p;
-    const h2Calls = animateMock.mock.calls.filter(
-      ([, keyframes]: [unknown, Record<string, unknown>]) =>
-        keyframes.opacity && JSON.stringify(keyframes.opacity) === JSON.stringify([0.5, 1, 0.9, 1]),
-    );
+    const h2Calls = animateMock.mock.calls.filter(([, keyframes]) => {
+      const frames = keyframes as Record<string, unknown> | undefined;
+      return (
+        frames?.opacity !== undefined &&
+        JSON.stringify(frames.opacity) === JSON.stringify([0.5, 1, 0.9, 1])
+      );
+    });
     expect(h2Calls).toHaveLength(0);
   });
 
@@ -174,6 +181,98 @@ describe("unlockRevealSequence (gala)", () => {
       expect(eventsSection.style.opacity).toBe("1");
       expect(animateMock).not.toHaveBeenCalled();
       expect(staggerMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // The reveal used to write the section's inline `opacity: 1` BEFORE starting
+  // the animation. Its base is the `opacity-0` class, so that painted one
+  // full-brightness frame of the whole invite, which the animation's first
+  // keyframe then dropped back to zero: the events blinked in, vanished, and
+  // faded in again. Measured in a real browser as a single frame at
+  // `opacity: 1` before the ramp — these two pin the order that avoids it.
+  it("never paints the events section at full opacity before animating it", async () => {
+    const seen: string[] = [];
+    animateMock.mockImplementation((target: unknown) => {
+      if (target === eventsSection) seen.push(eventsSection.style.opacity);
+      return { finished: Promise.resolve() };
+    });
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    expect(seen).toEqual([""]);
+  });
+
+  // Nothing hides a card — only their section carries `opacity-0` — so the
+  // stagger's 150ms `startDelay` left every card painted at full opacity from
+  // the moment the section became visible until Motion committed its first
+  // frame. They must be hidden before the section can paint.
+  it("hides the event cards before the section becomes visible", async () => {
+    eventsSection.innerHTML = "<div data-event-card></div><div data-event-card></div>";
+    const cards = [...eventsSection.querySelectorAll<HTMLElement>("[data-event-card]")];
+    const seen: string[] = [];
+    animateMock.mockImplementation((target: unknown) => {
+      if (target === eventsSection) seen.push(cards.map((c) => c.style.opacity).join(","));
+      return { finished: Promise.resolve() };
+    });
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    expect(seen).toEqual(["0,0"]);
+  });
+
+  // Same reason the section keeps an inline end state: Motion v12 reverts to
+  // base styles on finish, and a card's base is now the `0` written above.
+  it("persists each card's final opacity as an inline style", async () => {
+    eventsSection.innerHTML = "<div data-event-card></div><div data-event-card></div>";
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    const cards = [...eventsSection.querySelectorAll<HTMLElement>("[data-event-card]")];
+    expect(cards.map((c) => c.style.opacity)).toEqual(["1", "1"]);
+  });
+
+  it("reveals the cards even when their animation never settles", async () => {
+    eventsSection.innerHTML = "<div data-event-card></div>";
+    animateMock.mockImplementation(() => ({ finished: new Promise(() => {}) }));
+    const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection);
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    const card = eventsSection.querySelector<HTMLElement>("[data-event-card]");
+    expect(card?.style.opacity).toBe("1");
+  });
+
+  // The cards come from a `lazy` component, so on a cold cache their chunk can
+  // still be in flight when the claim resolves. Revealing then animates an
+  // empty section and the cards slam into the layout unanimated when the chunk
+  // lands — the "the events just appear" bug.
+  describe("waitForEvents", () => {
+    it("holds the events step until the cards are ready", async () => {
+      eventsSection.style.display = "none";
+      let releaseCards: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        releaseCards = resolve;
+      });
+      const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection, {
+        waitForEvents: () => ready,
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      // Still waiting: the section has not been put back into the layout.
+      expect(eventsSection.style.display).toBe("none");
+
+      eventsSection.innerHTML = "<div data-event-card></div>";
+      releaseCards();
+      await vi.advanceTimersByTimeAsync(300);
+      await p;
+      expect(eventsSection.style.display).toBe("");
+      expect(staggerMock).toHaveBeenCalled();
+    });
+
+    it("runs the sequence unchanged when no wait is supplied", async () => {
+      const p = unlockRevealSequence(loginForm, welcomeEl, eventsSection, {});
+      await vi.advanceTimersByTimeAsync(300);
+      await p;
+      expect(eventsSection.style.opacity).toBe("1");
     });
   });
 });

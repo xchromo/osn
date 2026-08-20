@@ -54,6 +54,20 @@ function settleRevealed(welcomeEl: HTMLElement, eventsSection: HTMLElement, hook
 export interface RevealHooks {
   /** Fired once the claim form has faded out and should leave the layout. */
   onFormHidden?: () => void;
+  /**
+   * Awaited just before the events step, so the entrance has something to
+   * animate. The event cards come from a `lazy` component, so on a cold cache
+   * their chunk can still be in flight when the claim resolves — see
+   * `awaitEventCards`, which is what the island passes here and which caps its
+   * own wait. Awaiting it HERE rather than before the sequence is deliberate:
+   * the wait then runs under the form's fade-out instead of on top of it, so a
+   * warm cache costs nothing and a cold one usually costs nothing either.
+   *
+   * Not awaited on the reduced-motion path: there is no entrance to protect
+   * there, and holding a reveal back for an animation the guest has asked not
+   * to see is the wrong trade.
+   */
+  waitForEvents?: () => Promise<void>;
 }
 
 /**
@@ -129,33 +143,59 @@ export async function unlockRevealSequence(
     );
   }
 
-  // 3. Reveal events column with staggered cards. The inline opacity is the
-  // real reveal (it outlives the animation and overrides the `opacity-0`
-  // class); the keyframes replay 0 → 1 on top of it for the entrance.
+  // 3. Reveal events column with staggered cards. There is nothing to
+  // animate until the cards are in the DOM, so wait for them first — the
+  // caller caps that wait.
+  await hooks?.waitForEvents?.();
+
+  // The ORDER here is the whole trick, and getting it wrong flashes. The
+  // column's base is the `opacity-0` class, so writing the inline `1` BEFORE
+  // starting the animation paints one full-brightness frame of the entire
+  // column — the animation commits its own first keyframe a tick later and
+  // drops it back to zero, so the guest sees the invite blink in, vanish, then
+  // fade in. The cards flashed for far longer: nothing hides a card (only their
+  // column carries `opacity-0`), so the stagger's 100ms `startDelay` left every
+  // card painted at full opacity from the moment the column became visible
+  // until Motion committed its first frame.
+  //
+  // So the cards are hidden inline BEFORE the column can paint, both animations
+  // run, and the inline end state — the real reveal, since Motion v12 reverts
+  // to base styles on finish — is written once they have settled.
+  const cards = [...eventsSection.querySelectorAll<HTMLElement>("[data-event-card]")];
+  for (const card of cards) card.style.opacity = "0";
+
   eventsSection.style.display = "";
   await new Promise((r) => setTimeout(r, 150));
-  eventsSection.style.opacity = "1";
 
-  void tryAnimate(() =>
-    animate(
-      eventsSection,
-      { opacity: [0, 1], transform: ["translateY(20px)", "translateY(0)"] },
-      { duration: 0.4, ease: [0.16, 1, 0.3, 1] },
-    ),
-  );
-
-  const cards = eventsSection.querySelectorAll("[data-event-card]");
-  if (cards.length > 0) {
-    void tryAnimate(() =>
-      animate(
-        cards as NodeListOf<HTMLElement>,
-        { opacity: [0, 1], transform: ["translateY(16px)", "translateY(0)"] },
-        {
-          duration: 0.35,
-          ease: [0.16, 1, 0.3, 1],
-          delay: stagger(0.08, { startDelay: 0.1 }),
-        },
+  try {
+    await Promise.all([
+      tryAnimate(() =>
+        animate(
+          eventsSection,
+          { opacity: [0, 1], transform: ["translateY(20px)", "translateY(0)"] },
+          { duration: 0.4, ease: [0.16, 1, 0.3, 1] },
+        ),
       ),
-    );
+      cards.length > 0
+        ? tryAnimate(() =>
+            animate(
+              cards,
+              { opacity: [0, 1], transform: ["translateY(16px)", "translateY(0)"] },
+              {
+                duration: 0.35,
+                ease: [0.16, 1, 0.3, 1],
+                delay: stagger(0.08, { startDelay: 0.1 }),
+              },
+            ),
+          )
+        : Promise.resolve(),
+    ]);
+  } finally {
+    // Never leave a card on the `0` written above — that is the same
+    // invisible-invite failure the inline end state exists to prevent, and
+    // `tryAnimate` already caps every step, so this runs even when an animation
+    // stalls or throws.
+    eventsSection.style.opacity = "1";
+    for (const card of cards) card.style.opacity = "1";
   }
 }
