@@ -12,6 +12,10 @@
     "test": "vitest run",
     "test:run": "vitest run"
   },
+  "portless": {
+    "name": "www.pulse",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@astrojs/solid-js": "^7.0.1",
     "@shared/legal": "workspace:*",

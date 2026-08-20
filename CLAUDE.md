@@ -270,7 +270,7 @@ bun run check            # Type-check all packages (turbo)
 
 ### Local URLs
 
-Every dev server runs behind [portless](https://github.com/vercel-labs/portless): each app answers on a named HTTPS host instead of a port, so there are no port numbers to remember and no clashes between stacks. Each package's `dev` script is `portless`, which reads `portless.json` at the repo root and runs the package's real `dev:app` command behind the proxy.
+Every dev server runs behind [portless](https://github.com/vercel-labs/portless): each app answers on a named HTTPS host instead of a port, so there are no port numbers to remember and no clashes between stacks. Each package's `dev` script is `portless`, which reads that package's own `"portless"` key and runs its real `dev:app` command behind the proxy.
 
 One-time setup on a new machine — it binds port 443, adds a local CA to the system trust store and writes an `/etc/hosts` block, so it asks for sudo:
 
@@ -301,7 +301,7 @@ The names mirror production hostnames, and the nesting is load-bearing: a WebAut
 
 **Worktrees get their own stack.** In a linked worktree portless prepends the branch, so the same `bun run dev` gives `https://my-branch.host.cire.localhost` and friends. Two worktrees can run the full devloop at once without colliding. The `main` worktree keeps the bare names.
 
-Because those hostnames differ per worktree, no app can be told where its siblings live from a committed `.env`. Each `dev:app` runs through the `dev-env` launcher (`@shared/dev-urls`), which derives every sibling's origin from the app's own `PORTLESS_URL` and exports the same env vars the deployed tiers set (`OSN_ISSUER_URL`, `WEB_ORIGIN`, `PUBLIC_API_URL`, …). Those values win over `.env`. Adding an app means adding it in two places: `portless.json` and `DEV_APPS` in `shared/dev-urls/src/index.ts`, plus its env-var map in `src/cli.ts`.
+Because those hostnames differ per worktree, no app can be told where its siblings live from a committed `.env`. Each `dev:app` runs through the `dev-env` launcher (`@shared/dev-urls`), which derives every sibling's origin from the app's own `PORTLESS_URL` and exports the same env vars the deployed tiers set (`OSN_ISSUER_URL`, `WEB_ORIGIN`, `PUBLIC_API_URL`, …). Those values win over `.env`. Adding an app means the `"portless"` key in its `package.json` and an entry in `DEV_APPS` (`shared/dev-urls/src/index.ts`), plus its env-var map in `src/app-env.ts`; a test asserts the first two agree.
 
 To run without the proxy, on the fixed ports the repo used before (`:4000` osn-api, `:8787` cire-api, `:1422` musubi, …):
 

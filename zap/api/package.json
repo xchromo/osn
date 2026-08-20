@@ -21,6 +21,10 @@
     "test:run": "bunx --bun vitest run",
     "test:d1": "bun test src/d1-integration.test.ts"
   },
+  "portless": {
+    "name": "zap.cire",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@elysiajs/cors": "^1.4.2",
     "@elysiajs/eden": "^1.4.9",

@@ -14,7 +14,7 @@ last-reviewed: 2026-08-20
 
 Every dev server in this repo runs behind [portless](https://github.com/vercel-labs/portless). Each app answers on a named HTTPS host instead of a port number, and each git worktree gets its own complete stack.
 
-Each package's `dev` script is `portless`. It reads `portless.json` at the repo root and runs that package's real command — `dev:app` — behind the proxy.
+Each package's `dev` script is `portless`. It reads that package's own `"portless"` key (name + script) and runs its real command — `dev:app` — behind the proxy.
 
 ## Setup
 
@@ -81,9 +81,9 @@ No app source knows portless exists; every app keeps reading the variables it al
 
 Three places, all of which must agree:
 
-1. `portless.json` — the name the proxy registers.
+1. The `"portless"` key in that package's `package.json` — the name the proxy registers, and `"script": "dev:app"`.
 2. `DEV_APPS` in `shared/dev-urls/src/index.ts` — the same name, plus the port the app falls back to without portless.
-3. `DEV_ENV` in `shared/dev-urls/src/cli.ts` — which sibling URLs that app needs, keyed by the env var it already reads.
+3. `DEV_ENV` in `shared/dev-urls/src/app-env.ts` — which sibling URLs that app needs, keyed by the env var it already reads.
 
 ## Running without the proxy
 
@@ -92,7 +92,7 @@ PORTLESS=0 bun run dev                # whole devloop on the old fixed ports
 bun run --cwd cire/host dev:app       # one app, no proxy at all
 ```
 
-The ports the frontends lost from their `dev` scripts moved into `astro.config.mjs` / `vite.config.ts` as `Number(process.env.PORT) || <old port>`. Portless assigns a port and passes it as `PORT`; without portless the literal keeps the four Astro apps from all landing on 4321.
+The ports the frontends lost from their `dev` scripts moved into `astro.config.mjs` / `vite.config.ts` as `devPort(<old port>)`. Portless assigns a port and passes it as `PORT`; without portless the literal keeps the four Astro apps from all landing on 4321.
 
 > [!warning] Agents: Astro backgrounds itself
 > Astro 7 detects an agent environment and puts `astro dev` in the background. Control returns to portless, portless deregisters the route as soon as its child exits, and the URL 404s while a stray daemon still holds the port. Run `CLAUDECODE= bun run dev` to keep it in the foreground, and clear a stray with `bunx astro dev stop`. A human terminal is unaffected.

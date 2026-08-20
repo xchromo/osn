@@ -12,6 +12,10 @@
     "test:run": "vitest run",
     "check": "bunx --bun astro check"
   },
+  "portless": {
+    "name": "www.musubi",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@astrojs/solid-js": "^7.0.1",
     "@shared/legal": "workspace:*",

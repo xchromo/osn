@@ -1,5 +1,5 @@
 /**
- * `DEV_APPS`, `portless.json` and the twelve app `package.json`s all describe
+ * `DEV_APPS` and the twelve app `package.json`s both describe
  * the same devloop, and nothing but this file makes them agree.
  *
  * A rename in one place only is silent: the app's `PORTLESS_URL` stops
@@ -21,33 +21,32 @@ const workspaceDir = (id: DevAppId) => id.replace(/^@/, "");
 
 const readJson = (path: string) => JSON.parse(readFileSync(resolve(REPO_ROOT, path), "utf-8"));
 
-const portlessConfig = readJson("portless.json") as {
-  apps: Record<string, { name: string; script: string }>;
-};
-
 const packageJson = (id: DevAppId) =>
   readJson(`${workspaceDir(id)}/package.json`) as {
     name: string;
     scripts: Record<string, string>;
     devDependencies?: Record<string, string>;
+    portless?: { name?: string; script?: string };
   };
 
 const ids = Object.keys(DEV_APPS) as DevAppId[];
 
-describe("portless.json", () => {
-  it("registers exactly the apps DEV_APPS knows", () => {
-    expect(Object.keys(portlessConfig.apps).toSorted()).toEqual(ids.map(workspaceDir).toSorted());
-  });
-
-  it("uses the same hostname for each app as DEV_APPS", () => {
+describe("the portless key", () => {
+  // It has to be here rather than in one root `portless.json`: portless reads
+  // its config from the current directory only, and turbo runs each package's
+  // `dev` script from that package's directory, so a root config is never seen.
+  // Without it portless falls back to inferring the name from the package name,
+  // which makes `@osn/api` and `@cire/api` both `api.localhost` — the second one
+  // to start dies on "already registered".
+  it("names every app the same as DEV_APPS", () => {
     for (const id of ids) {
-      expect(portlessConfig.apps[workspaceDir(id)]?.name).toBe(DEV_APPS[id].name);
+      expect(packageJson(id).portless?.name).toBe(DEV_APPS[id].name);
     }
   });
 
   it("points every app at its dev:app script", () => {
     for (const id of ids) {
-      expect(portlessConfig.apps[workspaceDir(id)]?.script).toBe("dev:app");
+      expect(packageJson(id).portless?.script).toBe("dev:app");
     }
   });
 });

@@ -12,6 +12,10 @@
     "types": "wrangler types",
     "test:d1": "bun test src/db/d1-integration.test.ts"
   },
+  "portless": {
+    "name": "api.cire",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@cire/db": "workspace:*",
     "@cire/invite-designs": "workspace:*",

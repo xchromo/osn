@@ -12,6 +12,10 @@
     "test:browser": "bunx --bun vitest run --project browser",
     "check": "bunx --bun astro check"
   },
+  "portless": {
+    "name": "host.cire",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@astrojs/solid-js": "^7.0.1",
     "@cire/invite-designs": "workspace:*",

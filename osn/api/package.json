@@ -17,6 +17,10 @@
     "test:run": "bunx --bun vitest run",
     "test:d1": "bun test src/d1-integration.test.ts"
   },
+  "portless": {
+    "name": "id.musubi",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@elysiajs/cors": "^1.4.2",
     "@elysiajs/openapi": "1.4.15",

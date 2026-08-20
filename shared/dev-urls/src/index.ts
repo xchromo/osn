@@ -26,7 +26,7 @@
 
 /** Portless app name + the port that app listens on when portless is off. */
 export interface DevApp {
-  /** Name registered with the portless proxy (see `portless.json`). */
+  /** Name registered with the portless proxy (the `"portless"` key in that package's package.json). */
   readonly name: string;
   /** Fixed port used when the devloop runs without portless. */
   readonly port: number;
@@ -39,8 +39,9 @@ export interface DevApp {
  * `id.musubi` for `id.musubi.social`, `host.cire` for `host.cireweddings.com`.
  * That nesting is also what keeps WebAuthn working — see {@link devRpId}.
  *
- * Keep in step with `portless.json` at the repo root; that file is what the
- * proxy reads, this map is what the apps read.
+ * Keep in step with the `"portless"` key in each app's `package.json`: that is
+ * what the proxy reads, this map is what the apps read. `tests/manifest.test.ts`
+ * asserts the two agree.
  */
 export const DEV_APPS = {
   "@osn/social": { name: "musubi", port: 1422 },
@@ -81,9 +82,9 @@ interface ProxyAddress {
  * Recover the prefix/TLD around `name` in `url`.
  *
  * Returns null when the URL is unparseable or does not contain the app's own
- * name as a whole label run, which is the "someone renamed an app in
- * portless.json but not here" case. Callers fall back to fixed ports rather
- * than inventing a hostname that resolves nowhere.
+ * name as a whole label run — the case where an app was renamed in its
+ * `"portless"` key but not here. Callers fall back to fixed ports rather than
+ * inventing a hostname that resolves nowhere.
  */
 function splitHost(url: string, name: string): ProxyAddress | null {
   let parsed: URL;

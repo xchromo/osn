@@ -13,6 +13,10 @@
     "test": "bunx --bun vitest",
     "test:run": "bunx --bun vitest run"
   },
+  "portless": {
+    "name": "musubi",
+    "script": "dev:app"
+  },
   "license": "GPL-3.0",
   "dependencies": {
     "@osn/client": "workspace:*",

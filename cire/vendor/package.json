@@ -11,6 +11,10 @@
     "test": "bunx --bun vitest",
     "test:run": "bunx --bun vitest run"
   },
+  "portless": {
+    "name": "vendor.cire",
+    "script": "dev:app"
+  },
   "dependencies": {
     "@astrojs/solid-js": "^7.0.1",
     "@cire/theme": "workspace:*",

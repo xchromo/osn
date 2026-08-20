@@ -129,7 +129,7 @@ export function buildDevEnv(self: DevAppId, env: DevEnv = process.env): Record<s
 export function resolveSelfId(packageName: string | undefined): DevAppId {
   if (!packageName || !(packageName in DEV_APPS)) {
     throw new Error(
-      `dev-env: ${packageName || "this package"} is not in DEV_APPS (shared/dev-urls/src/index.ts). Add it there, in portless.json, and in DEV_ENV (src/app-env.ts).`,
+      `dev-env: ${packageName || "this package"} is not in DEV_APPS (shared/dev-urls/src/index.ts). Add it there, in that package's "portless" key, and in DEV_ENV (src/app-env.ts).`,
     );
   }
   return packageName as DevAppId;
