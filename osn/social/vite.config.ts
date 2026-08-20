@@ -1,3 +1,4 @@
+import { devPort } from "@shared/dev-urls";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 import solid from "vite-plugin-solid";
@@ -60,7 +61,7 @@ export default defineConfig(async () => ({
   // `dev:app` directly). `strictPort` keeps the old promise that the app
   // fails rather than silently moving to another port.
   server: {
-    port: Number(process.env.PORT) || 1422,
+    port: devPort(1422),
     strictPort: true,
   },
 }));

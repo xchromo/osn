@@ -1,3 +1,4 @@
+import { devPort } from "@shared/dev-urls";
 import { solidStart } from "@solidjs/start/config";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
@@ -18,7 +19,7 @@ export default defineConfig({
   // `dev:app` directly). `strictPort` keeps the old promise that the app
   // fails rather than silently moving to another port.
   server: {
-    port: Number(process.env.PORT) || 1420,
+    port: devPort(1420),
     strictPort: true,
   },
 });

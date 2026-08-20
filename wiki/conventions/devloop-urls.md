@@ -23,7 +23,11 @@ Once per machine. It binds port 443, adds a local CA to the system trust store a
 ```bash
 bunx portless proxy start        # or: bunx portless service install (starts at boot)
 bunx portless doctor             # proxy, routes, DNS, CA trust
+bunx portless clean              # undo it all: state, CA trust entry, hosts block
 ```
+
+> [!warning] That CA is a machine-level change
+> A trusted root CA can sign a certificate for any host the machine talks to, production dashboards included. `portless` is therefore pinned with a tilde (`~0.15.5`), not a caret — it is pre-1.0, and a version bump is a change to review rather than a lockfile refresh. Nothing installs or starts it for you: the package has no lifecycle scripts, and the proxy refuses to start without a TTY or under `CI`. `portless clean` reverses the whole footprint.
 
 ## The names
 

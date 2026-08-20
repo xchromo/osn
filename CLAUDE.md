@@ -277,7 +277,10 @@ One-time setup on a new machine — it binds port 443, adds a local CA to the sy
 ```bash
 bunx portless proxy start     # or: bunx portless service install (starts at boot)
 bunx portless doctor          # check proxy, routes, DNS, CA trust
+bunx portless clean           # undo it all: state, CA trust entry, hosts block
 ```
+
+That CA is a TLS-interception primitive for every host the machine talks to, so `portless` is pinned with a tilde (`~0.15.5`) rather than a caret: it is pre-1.0, and a version bump is a change to review, not a lockfile refresh. Nothing installs or starts it for you — the package has no lifecycle scripts, and it refuses to run without a TTY or under `CI`.
 
 | App | URL |
 | --- | --- |

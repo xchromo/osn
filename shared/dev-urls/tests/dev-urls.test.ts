@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEV_APPS, devOriginList, devRpId, devUrl, devUrls } from "../src/index";
+import { DEV_APPS, devOriginList, devPort, devRpId, devUrl, devUrls } from "../src/index";
 
 const portless = (url: string) => ({ PORTLESS_URL: url });
 
@@ -40,6 +40,15 @@ describe("devUrls", () => {
     // `api.cire.localhost` and yield a bogus prefix.
     const urls = devUrls("@cire/landing", portless("https://cire.localhost"));
     expect(urls["@cire/api"]).toBe("https://api.cire.localhost");
+  });
+
+  it("takes the app name from the right when a worktree prefix repeats it", () => {
+    // A branch called `cire` puts `@cire/landing` on cire.cire.localhost. Read
+    // left to right, the prefix looks like the name and every sibling comes out
+    // as `<name>.cire.cire.localhost`, which resolves nowhere.
+    const urls = devUrls("@cire/landing", portless("https://cire.cire.localhost"));
+    expect(urls["@cire/api"]).toBe("https://cire.api.cire.localhost");
+    expect(urls["@cire/landing"]).toBe("https://cire.cire.localhost");
   });
 
   it("falls back when the URL does not contain the caller's own name", () => {
@@ -86,6 +95,36 @@ describe("devRpId", () => {
 
   it("follows a custom TLD", () => {
     expect(devRpId("@osn/api", portless("https://id.musubi.local.test"))).toBe("musubi.local.test");
+  });
+
+  it("stays a suffix of both the app that enrols the passkey and the API that verifies it", () => {
+    const rpId = devRpId("@osn/api", portless("https://my-branch.id.musubi.localhost"));
+    for (const host of [
+      "my-branch.musubi.localhost",
+      "my-branch.id.musubi.localhost",
+      "musubi.localhost",
+      "id.musubi.localhost",
+    ]) {
+      expect(host === rpId || host.endsWith(`.${rpId}`)).toBe(true);
+    }
+  });
+});
+
+describe("devPort", () => {
+  it("uses the port portless assigned", () => {
+    expect(devPort(4321, { PORT: "4567" })).toBe(4567);
+  });
+
+  it("falls back without portless", () => {
+    expect(devPort(4321, {})).toBe(4321);
+  });
+
+  it("falls back rather than binding somewhere nothing is proxied", () => {
+    // An unusable PORT must not silently become port 0 (a random free port),
+    // which portless would not be forwarding to.
+    for (const port of ["", "0", "abc", "-1", "70000", "4321.5"]) {
+      expect(devPort(4321, { PORT: port })).toBe(4321);
+    }
   });
 });
 

@@ -93,9 +93,13 @@ function splitHost(url: string, name: string): ProxyAddress | null {
     return null;
   }
   const host = parsed.hostname;
-  const index = host.indexOf(`${name}.`);
+  // `lastIndexOf`, not `indexOf`: the app name sits immediately before the TLD,
+  // and a worktree prefix can repeat it. On a branch called `cire`, `@cire/landing`
+  // is served at `cire.cire.localhost`, where a left-to-right search takes the
+  // prefix for the name and derives siblings nobody is serving.
+  const index = host.lastIndexOf(`${name}.`);
   // Must start a label: either the host begins with the name, or the character
-  // before it is a dot. Without this `cire` would match inside `api.cire.dev`.
+  // before it is a dot. Without this `cire` would match inside `apicire.dev`.
   if (index < 0 || (index > 0 && host[index - 1] !== ".")) return null;
   const tld = host.slice(index + name.length + 1);
   if (!tld) return null;
@@ -148,6 +152,20 @@ export function devRpId(self: DevAppId, env: DevEnv = process.env): string {
   // name, which every `*.musubi` app shares.
   const root = DEV_APPS["@osn/social"].name.split(".").pop();
   return `${root}.${address.tld}`;
+}
+
+/**
+ * The port a dev server should listen on: the one portless assigned, or the
+ * app's own fixed port when the devloop runs without it.
+ *
+ * Every `astro.config.mjs` / `vite.config.ts` in the repo calls this, so the
+ * coercion lives in one tested place rather than eight copies. A `PORT` that is
+ * not a usable port number (empty, `0`, non-numeric, out of range) falls back
+ * rather than binding somewhere nobody is proxying to.
+ */
+export function devPort(fallback: number, env: DevEnv = process.env): number {
+  const port = Number(env.PORT);
+  return Number.isInteger(port) && port > 0 && port < 65_536 ? port : fallback;
 }
 
 /** Comma-joined origins, the format every `*_ORIGIN` / `*_CORS_ORIGIN` var in this repo takes. */
