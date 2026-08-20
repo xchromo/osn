@@ -85,6 +85,24 @@ Three places, all of which must agree:
 2. `DEV_APPS` in `shared/dev-urls/src/index.ts` — the same name, plus the port the app falls back to without portless.
 3. `DEV_ENV` in `shared/dev-urls/src/app-env.ts` — which sibling URLs that app needs, keyed by the env var it already reads.
 
+## What the proxy costs
+
+Measured 2026-08-21 on this machine, page load timed in headless Chrome from `Page.navigate` to `Page.loadEventFired`, fresh browser profile each time.
+
+| App | Load | Through the proxy | Direct | Cost |
+| --- | --- | --- | --- | --- |
+| `@pulse/web` | steady state (median of 5) | 186 ms | 148 ms | +38 ms |
+| `@osn/social` | steady state (median of 5) | 274 ms | 259 ms | +15 ms |
+| `@pulse/web` | first load after a cold start | ~2.9 s | ~0.87 s | **+2 s** |
+| `@osn/social` | first load after a cold start | 569 ms | 262 ms | +307 ms |
+
+Steady state costs a small, roughly constant amount — the TLS handshake and the extra hop. Nothing to think about.
+
+The **first** load after a cold start is the one to know about: on `@pulse/web` it is about three times slower through the proxy. Under HTTP/2 the browser's six-connections-per-origin limit disappears, so a cold Vite start fires its whole unbundled module graph at a single-threaded dev server at once, through one proxy event loop shared with every other app in the devloop. The multiplexing that helps a warm load hurts a cold one.
+
+> [!tip] If you are iterating on cold starts
+> `PORTLESS=0 bun run dev` takes the proxy out of the path entirely, which is the fastest cold loop and a fair baseline to measure against. The cold-start figures above are three clean samples per app-mode, each the first navigation after a fresh boot with `node_modules/.vite` cleared.
+
 ## Running without the proxy
 
 ```bash

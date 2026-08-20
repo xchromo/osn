@@ -303,6 +303,8 @@ The names mirror production hostnames, and the nesting is load-bearing: a WebAut
 
 Because those hostnames differ per worktree, no app can be told where its siblings live from a committed `.env`. Each `dev:app` runs through the `dev-env` launcher (`@shared/dev-urls`), which derives every sibling's origin from the app's own `PORTLESS_URL` and exports the same env vars the deployed tiers set (`OSN_ISSUER_URL`, `WEB_ORIGIN`, `PUBLIC_API_URL`, …). Those values win over `.env`. Adding an app means the `"portless"` key in its `package.json` and an entry in `DEV_APPS` (`shared/dev-urls/src/index.ts`), plus its env-var map in `src/app-env.ts`; a test asserts the first two agree.
 
+**What it costs.** A steady-state page load is 15–40 ms slower through the proxy — the TLS handshake and the hop. The *first* load after a cold start is the one to know about: about 3× slower on `@pulse/web` (~2.9 s vs ~0.87 s), because HTTP/2 drops the browser's per-origin connection cap and Vite's whole unbundled module graph arrives at a single-threaded dev server at once. Numbers and method are in `[[wiki/conventions/devloop-urls]]`.
+
 To run without the proxy, on the fixed ports the repo used before (`:4000` osn-api, `:8787` cire-api, `:1422` musubi, …):
 
 ```bash
