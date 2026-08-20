@@ -30,7 +30,14 @@ export type Theme = "light" | "dark";
 /** Kept in sync with the pre-paint script in index.html. */
 export const THEME_KEY = "lab-theme";
 
+/**
+ * `?theme=dark` wins over the stored preference. The toggle is a click, and a
+ * screenshot tool cannot click — without this, only one of the two themes can
+ * ever be captured.
+ */
 export function readTheme(): Theme {
+  const requested = new URLSearchParams(location.search).get("theme");
+  if (requested === "dark" || requested === "light") return requested;
   try {
     return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
   } catch {

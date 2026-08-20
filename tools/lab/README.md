@@ -11,6 +11,28 @@ bun run dev:lab          # http://localhost:4400
 
 Nothing here ships. It is a dev tool.
 
+## The catalogue
+
+Open **`osn/ui` → Everything** for every component `@osn/ui` exports on one
+page, each with the import path to copy. That is the "what do we already have"
+view. For a component's full range of variants and states, open its own group:
+
+| Group | Covers |
+| --- | --- |
+| `osn/ui` | Everything, one state each |
+| `osn/ui/Button` | All variants, all sizes, live playground |
+| `osn/ui/display` | Badge, Avatar, Card |
+| `osn/ui/forms` | Input, Label, Textarea, Checkbox, RadioGroup, UsernameInput, OtpInput |
+| `osn/ui/overlays` | Dialog, DropdownMenu, Popover, Tabs |
+| `pulse/Icon` | The Pulse glyph set, every icon at every size |
+
+App-level components (`pulse/web/src/components`, `cire/invites`,
+`osn/social`) are not catalogued: they read from an API client, a router and an
+auth session, and standing those up means fixtures the repo deliberately keeps
+out of app source. A story for one of them belongs next to it, supplying real
+context — `pulse/web/src/components/Icon.story.tsx` is the pattern, and it is
+catalogued precisely because it needs none.
+
 ## Writing a story
 
 Any file named `*.story.tsx` is picked up. The shortest one is a component:
@@ -74,6 +96,11 @@ Adding a new workspace root means adding a line to the glob list in
 `src/lab/registry.ts`; Vite resolves `import.meta.glob` at build time and cannot
 see through a variable.
 
+A co-located story is loaded by the lab and by nothing else — no app imports it,
+so it never reaches a bundle. Keep it free of lab imports (a bare component
+export needs none) and it stays a plain file in its own package, typechecked and
+linted there like any other.
+
 ## Chrome
 
 - **backdrop** — app / paper / ink / grid / checker. Transparency is invisible
@@ -83,7 +110,8 @@ see through a variable.
 - **remount** — tears the story down and rebuilds it. What you want after
   editing a canvas that holds a WebGL context.
 - **open** — the story on its own at `?bare`, no chrome. Also what to point a
-  screenshot tool at.
+  screenshot tool at. `?theme=dark` forces a theme, since a screenshot tool
+  cannot click the toggle.
 - Arrow keys step through the list. The selected story is in the URL fragment,
   so a reload keeps its place and the link can be pasted into a PR.
 

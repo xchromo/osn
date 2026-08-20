@@ -1,6 +1,6 @@
 import { Button } from "@osn/ui/ui/button";
 
-import type { Story, StoryArgs } from "../lab/types.ts";
+import type { Story, StoryArgs } from "../../lab/types.ts";
 
 export const meta = { title: "osn/ui/Button" };
 

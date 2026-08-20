@@ -22,6 +22,21 @@ bun run dev:lab          # http://localhost:4400
 Nothing here ships. Full usage is in `tools/lab/README.md`; this page records
 the decisions behind it.
 
+## The catalogue
+
+`osn/ui` → **Everything** is every component `@osn/ui` exports on one page, each
+with its import path — the "what do we already have" view. Per-component groups
+(`osn/ui/Button`, `osn/ui/display`, `osn/ui/forms`, `osn/ui/overlays`) carry the
+variants and states.
+
+App-level components — `pulse/web/src/components`, `cire/invites`,
+`osn/social` — are **not** catalogued. They read from an API client, a router
+and an auth session; standing those up in a story means the fixtures
+[[component-library]] and the no-mock-data rule keep out of app source. The path
+is open where a component needs no such context: `pulse/Icon` is catalogued from
+a story sitting in `pulse/web/src/components/Icon.story.tsx`, which imports
+nothing from the lab and so stays an ordinary file in its own package.
+
 ## Why not Storybook
 
 Storybook's Solid support (`storybook-solidjs-vite`) is community-maintained and
@@ -59,8 +74,18 @@ imports its own CSS.
 
 **No iframe.** Stories render in the same document as the chrome. Hot reload
 stays instant and the code stays small; the trade is isolation — a story that
-sets global CSS affects the chrome. `?bare` is the escape hatch, and is also what
-a screenshot tool should be pointed at.
+sets global CSS affects the chrome, and Dialog, DropdownMenu and Popover content
+portals into `document.body`, so an open one covers the whole lab window.
+`?bare` is the escape hatch, and is also what a screenshot tool should be
+pointed at; `?theme=dark` forces a theme, since a screenshot tool cannot click
+the toggle.
+
+**Solid is deduped in the lab's Vite config.** Bun installs `solid-js` into each
+workspace's own `node_modules` rather than hoisting it, so a story imported from
+`pulse/web` resolves a second copy of the runtime. Two Solid instances do not
+share a reactive graph — context reads come back undefined and effects silently
+never fire. `resolve.dedupe` pins every import to one copy. Any new cross-package
+import into the lab depends on this.
 
 **Every export except `meta` is a story.** That is what makes
 `export const Thing = () => <div />` work with no config. It also means an
