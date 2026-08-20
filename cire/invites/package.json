@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
+    "dev": "portless",
+    "dev:app": "dev-env astro dev",
     "build": "astro build",
     "preview": "astro preview",
     "test": "vitest run --project unit",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@capsizecss/metrics": "^4.2.0",
+    "@shared/dev-urls": "workspace:*",
     "@shared/typescript-config": "workspace:*",
     "@solidjs/testing-library": "^0.8.10",
     "@testing-library/jest-dom": "^6.10.0",

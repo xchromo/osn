@@ -55,10 +55,12 @@ export default defineConfig(async () => ({
   plugins: [tailwindcss(), solid(), issuerPreconnect()],
 
   clearScreen: false,
-  // Fixed port so dependent tooling can rely on it; fail rather than
-  // silently move to another port.
+  // Portless assigns the port and passes it as `PORT`; the literal is the
+  // fallback for a devloop without portless (`PORTLESS=0`, or running
+  // `dev:app` directly). `strictPort` keeps the old promise that the app
+  // fails rather than silently moving to another port.
   server: {
-    port: 1422,
+    port: Number(process.env.PORT) || 1422,
     strictPort: true,
   },
 }));

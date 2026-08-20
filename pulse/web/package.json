@@ -5,7 +5,8 @@
   "description": "Pulse - Events platform for OSN",
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "portless",
+    "dev:app": "dev-env vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
@@ -32,6 +33,7 @@
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
+    "@shared/dev-urls": "workspace:*",
     "@shared/typescript-config": "workspace:*",
     "@solidjs/testing-library": "^0.8.10",
     "@testing-library/jest-dom": "^6.10.0",

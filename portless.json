@@ -1,0 +1,18 @@
+{
+  "apps": {
+    "osn/social": { "name": "musubi", "script": "dev:app" },
+    "osn/api": { "name": "id.musubi", "script": "dev:app" },
+    "osn/landing": { "name": "www.musubi", "script": "dev:app" },
+
+    "pulse/web": { "name": "pulse", "script": "dev:app" },
+    "pulse/api": { "name": "api.pulse", "script": "dev:app" },
+    "pulse/landing": { "name": "www.pulse", "script": "dev:app" },
+
+    "cire/landing": { "name": "cire", "script": "dev:app" },
+    "cire/invites": { "name": "invite.cire", "script": "dev:app" },
+    "cire/host": { "name": "host.cire", "script": "dev:app" },
+    "cire/vendor": { "name": "vendor.cire", "script": "dev:app" },
+    "cire/api": { "name": "api.cire", "script": "dev:app" },
+    "zap/api": { "name": "zap.cire", "script": "dev:app" }
+  }
+}
