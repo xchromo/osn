@@ -2,20 +2,6 @@ import { For, Match, Show, Switch } from "solid-js";
 
 import type { ArgValue, ControlSpec, StoryArgs } from "./types.ts";
 
-const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-
-/**
- * Picks a control from the initial value, so a story that just writes
- * `args: { label: "Hi", rounded: true }` gets a text box and a checkbox for
- * free. An explicit `controls` entry always wins.
- */
-export function inferControl(value: ArgValue): ControlSpec {
-  if (typeof value === "boolean") return { kind: "boolean" };
-  if (typeof value === "number") return { kind: "number" };
-  if (HEX.test(value)) return { kind: "color" };
-  return value.length > 40 ? { kind: "textarea" } : { kind: "text" };
-}
-
 interface ControlRowProps {
   name: string;
   spec: ControlSpec;

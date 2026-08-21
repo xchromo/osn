@@ -63,7 +63,8 @@ addons, or if the design system needs published docs for people outside the repo
 | --- | --- | --- |
 | Discovery | `src/lab/registry.ts` | `import.meta.glob` over `*.story.tsx`. Globs are literal — a new workspace root means a new line. |
 | Story contract | `src/lab/types.ts` | Args are `string \| number \| boolean` — exactly what a control can edit. |
-| Args panel | `src/lab/controls.tsx` | Editor inferred from the initial value; `controls` overrides. |
+| Args panel | `src/lab/controls.tsx` | The panel itself. |
+| Control inference | `src/lab/infer-control.ts` | Editor inferred from the initial value; `controls` overrides. Kept JSX-free so it can be tested. |
 | three / canvas | `src/lab/three.tsx` | `ThreeCanvas`, `Canvas2D`, `htmlToCanvas`, `htmlToTexture`, CSS3D layer. |
 | Shell | `src/Lab.tsx` | Sidebar, backdrops, viewports, theme, remount, `?bare`. |
 
@@ -97,10 +98,18 @@ import into the lab depends on this.
 `export const Thing = () => <div />` work with no config. It also means an
 exported helper shows up in the sidebar — keep helpers unexported.
 
-**Stories are not tests and carry no gate.** The lab has no `test` script and
-nothing in CI renders a story. `check` typechecks it, `lint` and `fmt:check`
-cover it. A component whose behaviour matters still needs a real test — see
-[[testing-patterns]].
+**Stories are not tests and carry no gate.** Nothing in CI renders a story.
+`check` typechecks the lab, `lint` and `fmt:check` cover it. A component whose
+behaviour matters still needs a real test — see [[testing-patterns]].
+
+The `test` script that does exist covers two pure helpers, `titleFromPath` and
+`inferControl`, because both fail quietly: a wrong title still renders a row, a
+wrong control still accepts input. Its config leaves out `vite-plugin-solid`,
+which every other Solid package here uses. The plugin adds a
+`@testing-library/jest-dom` setup file to any test run and the run dies without
+that dependency, which a tool testing two pure functions should not carry. The
+price is that no test here can import a `.tsx` file, and it is why
+`inferControl` sits in `infer-control.ts` rather than beside the panel it feeds.
 
 ## HTML in canvas
 

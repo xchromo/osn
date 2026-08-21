@@ -9,7 +9,8 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 
-import { ControlsPanel, inferControl } from "./lab/controls.tsx";
+import { ControlsPanel } from "./lab/controls.tsx";
+import { inferControl } from "./lab/infer-control.ts";
 import { loadRegistry, storyFileCount } from "./lab/registry.ts";
 import {
   BACKDROPS,

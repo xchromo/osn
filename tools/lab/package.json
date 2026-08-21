@@ -9,7 +9,9 @@
     "dev:app": "dev-env vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bunx --bun vitest",
+    "test:run": "bunx --bun vitest run"
   },
   "portless": {
     "name": "lab",
@@ -28,6 +30,7 @@
     "@types/three": "^0.185.1",
     "typescript": "^6.0.3",
     "vite": "^8.1.5",
-    "vite-plugin-solid": "^2.11.14"
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^4.1.10"
   }
 }
