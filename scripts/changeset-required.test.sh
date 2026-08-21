@@ -45,10 +45,10 @@ run_case "cire wiki plus a cire source file" required \
   'cire/wiki/index.md
 cire/host/src/lib/osn.ts'
 
-run_case "nested CLAUDE.md only" skip \
+run_case "retired cire/CLAUDE.md alone" skip \
   'cire/CLAUDE.md'
 
-run_case "nested CLAUDE.md plus a source file" required \
+run_case "retired cire/CLAUDE.md plus a source file" required \
   'cire/CLAUDE.md
 cire/api/src/index.ts'
 

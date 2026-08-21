@@ -24,7 +24,9 @@ Phase 1 surfaces:
 ## File Responsibilities
 
 - `README.md` → Project spec, vision, features, tech stack, contributing (human-readable)
-- `CLAUDE.md` → AI entry point: quick context, conventions, commands, wiki nav
+- `CLAUDE.md` → **the** AI entry point: quick context, conventions, commands, wiki nav.
+  There is exactly one, at the repo root. A product with build conventions of its own
+  gets a wiki page — `wiki/apps/<product>-development.md` — not a second `CLAUDE.md`
 - `pulse/DESIGN.md` → Pulse visual design system: typography, color tokens, component catalog, layout patterns
 - `wiki/TODO.md` → A pointer to GitHub Issues. No work is tracked in the wiki
 - `wiki/` → Obsidian knowledge graph: architecture, systems, observability, runbooks, compliance. One vault for the whole monorepo — cire included
@@ -78,6 +80,8 @@ gh issue create --repo xchromo/osn --type Feature --label product:cire --title "
 | Split one goal across several PRs (stacked PRs — setting the base with the gh CLI, merge order, rebasing a stack) | `[[wiki/conventions/stacked-prs]]` |
 | Add or use UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
 | Work on a specific app/surface (osn-core, social, pulse, zap, cire, cire-landing, osn-landing, pulse-landing) | `[[wiki/apps/<name>]]` |
+| Build cire itself (Elysia `aot: false`, the middleware/role gates, the two test tiers, the by-hand deploy) | `[[wiki/apps/cire-development]]` |
+| Hit a Solid/Motion/Tailwind rendering bug the unit tests cannot see (computed classes, `createMemo` TDZ, `transform` breaking `position: fixed`, Motion One's leftover inline styles, sticky offsets) | `[[wiki/architecture/frontend-patterns]]` §Rendering and animation gotchas |
 | Build the OIDC consent screen (states, decision-error contract, login_required retry loop) | `[[wiki/apps/authorize-ui]]` |
 | Work on a cire organiser module (budget, checklist, entitlements, registry, vendors, RSVP deadline) | `[[wiki/systems/cire-budget]]`, `[[wiki/systems/cire-checklist-tasks]]`, `[[wiki/systems/cire-entitlements]]`, `[[wiki/systems/cire-registry]]`, `[[wiki/systems/cire-vendors]]`, `[[wiki/systems/cire-rsvp-deadline]]` |
 | Change the cire invite (slots, images, theming, design selector) | `[[wiki/architecture/cire-invite-builder]]`, `[[wiki/systems/cire-invite-designs]]` |
@@ -187,6 +191,11 @@ So: tables and mermaid for anything a reader might hit through GitHub; the Obsid
 ### Wiki maintenance rules
 
 - **New system or pattern** → create wiki page, link from table above and `[[wiki/index]]`.
+- **Product-specific build conventions** → `wiki/apps/<product>-development.md`, linked from
+  that product's overview page. Never a nested `CLAUDE.md`. Put a fact there only if it is
+  genuinely that product's alone — anything true of another Solid or Workers package belongs
+  in `[[wiki/architecture/frontend-patterns]]`, `[[wiki/architecture/backend-patterns]]` or
+  `[[wiki/conventions/testing-patterns]]`, where the next person will actually find it.
 - **Modify existing pattern** → update wiki page in same PR.
 - **Every wiki page must have YAML frontmatter** with `title`, `tags`, `related`, `last-reviewed`.
 - **Use `[[wiki links]]`** between wiki pages; never relative markdown links. `wiki/` is the only vault — the second one at `cire/wiki/` folded into it on 2026-08-21, and every cire page is now a plain wikilink (`[[cire-vendors]]`, `[[cire-platform-plan]]`, `[[cire-invite-builder]]`). Cire pages carry a `cire-` prefix where a bare name would collide.

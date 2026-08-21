@@ -150,7 +150,10 @@ path that resolves nowhere:
 - Systems — [[cire-organiser]], [[cire-budget]], [[cire-checklist-tasks]], [[cire-entitlements]], [[cire-invite-designs]], [[cire-registry]], [[cire-rsvp-deadline]], [[cire-vendors]], [[feature-flags]]
 - Observability — [[cire-workerd]] · Conventions — [[browser-tests]]
 
-`cire/CLAUDE.md` remains the in-tree AI entry point for the `cire/` workspace.
+Cire's build conventions — the backend patterns, the two test tiers, and the
+commands that differ from the platform defaults — are in [[cire-development]].
+There is no `cire/CLAUDE.md` any more: the root `CLAUDE.md` is the one AI entry
+point, and everything product-specific is a wiki page.
 
 ## Marketing site + platform roadmap
 
