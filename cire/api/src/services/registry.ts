@@ -44,6 +44,8 @@ export class FamilyNotInWedding extends Data.TaggedError("FamilyNotInWedding") {
 export class ImageKeyNotInWedding extends Data.TaggedError("ImageKeyNotInWedding") {}
 /** Cash gifts asked for without a Stripe account that can take charges. 409-class. */
 export class StripeNotReady extends Data.TaggedError("StripeNotReady") {}
+/** A guest asked to give money to a couple who are not taking it. 409-class. */
+export class CashGiftsUnavailable extends Data.TaggedError("CashGiftsUnavailable") {}
 /** The wedding is at its item ceiling. 409-class. */
 export class RegistryItemLimitReached extends Data.TaggedError("RegistryItemLimitReached") {}
 /**
@@ -84,6 +86,13 @@ const MAX_CLAIM_QUANTITY = 99;
 
 export type RegistryItemKind = "product" | "cash_fund";
 export type RegistryClaimStatus = "reserved" | "purchased" | "released";
+/**
+ * A contribution's lifecycle, mirroring `registry_contributions.status`. Only
+ * `succeeded` and `pending` are ever written today: Stripe's Checkout answers
+ * one of the two at completion, and the refund/failure states arrive with the
+ * events that produce them.
+ */
+export type RegistryContributionStatus = "pending" | "succeeded" | "failed" | "refunded";
 /** Which table a gift-log row came from — the discriminator the portal reads. */
 export type GiftKind = "claim" | "contribution";
 
@@ -795,6 +804,184 @@ export const registryService = {
     }).pipe(Effect.withSpan("cire.registry.applyStripeAccountState"));
   },
 
+  /**
+   * Everything a guest's "give money" request needs before it may reach Stripe:
+   * the wedding, the account the charge belongs to, and the currency it is in.
+   *
+   * The gates are all here, in one read, because each of them is the difference
+   * between a payment and a refund:
+   *
+   *  - the registry must be visible (published, entitled, real slug);
+   *  - the family must belong to THIS wedding — a session names a household,
+   *    not a wedding;
+   *  - the couple must have said yes (`cash_gifts_enabled`) AND Stripe must be
+   *    able to take the charge today (`stripe_charges_enabled`) AND there must
+   *    be an account to take it into. All three, or the guest is sent away
+   *    before their card is.
+   *
+   * A missing registry and a foreign family both fail as `RegistryNotVisible`,
+   * which the route answers as the same 404 everything else does. Only the
+   * cash-specific refusal is its own failure, because it is the one a guest
+   * looking at a contribute button can actually act on.
+   */
+  contributionContext(input: {
+    slug: string;
+    familyId: string;
+  }): Effect.Effect<
+    { weddingId: string; stripeAccountId: string; currency: string },
+    RegistryNotVisible | CashGiftsUnavailable,
+    DbService
+  > {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const { settings, weddingId } = yield* resolveVisibleRegistry(input.slug);
+      const familyRows = yield* dbQuery(() =>
+        db
+          .select({ id: families.id })
+          .from(families)
+          .where(and(eq(families.id, input.familyId), eq(families.weddingId, weddingId)))
+          .all(),
+      );
+      if (!(familyRows as Array<{ id: string }>)[0]) {
+        return yield* Effect.fail(new RegistryNotVisible());
+      }
+      if (!settings.cashGiftsEnabled || !settings.stripeChargesEnabled) {
+        return yield* Effect.fail(new CashGiftsUnavailable());
+      }
+      const stripeAccountId = settings.stripeAccountId;
+      if (!stripeAccountId) return yield* Effect.fail(new CashGiftsUnavailable());
+      const currency = yield* primaryCurrency(weddingId);
+      return { weddingId, stripeAccountId, currency };
+    }).pipe(Effect.withSpan("cire.registry.contributionContext"));
+  },
+
+  /** Whether an item id is one of this wedding's — for a contribution TOWARDS a gift. */
+  itemBelongsToWedding(input: {
+    weddingId: string;
+    itemId: string;
+  }): Effect.Effect<boolean, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const rows = yield* dbQuery(() =>
+        db
+          .select({ id: registryItems.id })
+          .from(registryItems)
+          .where(
+            and(eq(registryItems.id, input.itemId), eq(registryItems.weddingId, input.weddingId)),
+          )
+          .all(),
+      );
+      return (rows as Array<{ id: string }>).length > 0;
+    }).pipe(Effect.withSpan("cire.registry.itemBelongsToWedding"));
+  },
+
+  /**
+   * Write the gift a completed Checkout Session paid for.
+   *
+   * IDEMPOTENT ON THE SESSION ID, which is `unique` on the column: Stripe
+   * retries a delivery until it gets a 2xx, and at-least-once means a duplicate
+   * is the ordinary case, not the edge. A second delivery of the same session
+   * writes nothing and reports `false`.
+   *
+   * THE METADATA IS NOT TRUSTED ON ITS OWN. We wrote it at session creation, but
+   * the event arrives on a webhook endpoint that also hears about sessions the
+   * connected account created for itself — where the metadata is whatever the
+   * account owner typed. So the wedding must actually own the account the event
+   * came from, and the family must belong to that wedding. Either failing means
+   * the row is not written and the caller is told, rather than a gift being
+   * recorded against a household that never gave one.
+   *
+   * FX IS LEFT NULL, deliberately. The primary-currency equivalent comes from
+   * the balance transaction's `exchange_rate`, which is not on this event; the
+   * schema's four FX columns are all-or-nothing and null is the honest state
+   * until that read lands. A gift in the wedding's own currency — the common
+   * case — never needs them at all.
+   */
+  recordContribution(input: {
+    stripeAccountId: string;
+    checkoutSessionId: string;
+    paymentIntentId: string | null;
+    weddingId: string;
+    familyId: string;
+    itemId: string | null;
+    amountMinor: number;
+    currency: string;
+    status: RegistryContributionStatus;
+    message: string | null;
+    displayName: string | null;
+  }): Effect.Effect<"recorded" | "duplicate" | "rejected", never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const owns = yield* dbQuery(() =>
+        db
+          .select({ weddingId: registrySettings.weddingId })
+          .from(registrySettings)
+          .where(
+            and(
+              eq(registrySettings.weddingId, input.weddingId),
+              eq(registrySettings.stripeAccountId, input.stripeAccountId),
+            ),
+          )
+          .all(),
+      );
+      if (!(owns as Array<{ weddingId: string }>)[0]) return "rejected";
+
+      const familyRows = yield* dbQuery(() =>
+        db
+          .select({ id: families.id })
+          .from(families)
+          .where(and(eq(families.id, input.familyId), eq(families.weddingId, input.weddingId)))
+          .all(),
+      );
+      if (!(familyRows as Array<{ id: string }>)[0]) return "rejected";
+
+      // An item id that is not this wedding's is dropped rather than refusing
+      // the whole gift: the money arrived, and which line it was aimed at is
+      // the less important half of that fact.
+      let itemId = input.itemId;
+      if (itemId) {
+        const itemRows = yield* dbQuery(() =>
+          db
+            .select({ id: registryItems.id })
+            .from(registryItems)
+            .where(
+              and(
+                eq(registryItems.id, itemId as string),
+                eq(registryItems.weddingId, input.weddingId),
+              ),
+            )
+            .all(),
+        );
+        if (!(itemRows as Array<{ id: string }>)[0]) itemId = null;
+      }
+
+      const now = new Date();
+      const rows = yield* dbQuery(() =>
+        db
+          .insert(registryContributions)
+          .values({
+            id: `rct_${crypto.randomUUID()}`,
+            weddingId: input.weddingId,
+            itemId,
+            familyId: input.familyId,
+            status: input.status,
+            amountMinor: input.amountMinor,
+            currency: input.currency,
+            stripeCheckoutSessionId: input.checkoutSessionId,
+            stripePaymentIntentId: input.paymentIntentId,
+            message: input.message,
+            displayName: input.displayName,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing({ target: registryContributions.stripeCheckoutSessionId })
+          .returning({ id: registryContributions.id })
+          .all(),
+      );
+      return (rows as Array<{ id: string }>).length > 0 ? "recorded" : "duplicate";
+    }).pipe(Effect.withSpan("cire.registry.recordContribution"));
+  },
+
   createItem(
     input: CreateRegistryItemInput,
   ): Effect.Effect<
@@ -1258,6 +1445,13 @@ export interface PublicRegistryItemDto {
 export interface PublicRegistryDto {
   headline: string | null;
   message: string | null;
+  /**
+   * Whether a guest may give money RIGHT NOW — the couple's intent AND Stripe's
+   * capability, ANDed here so the guest surface never has to reason about the
+   * two separately. A contribute button the couple meant to offer but Stripe
+   * cannot honour is a refund and a support case; one they never meant to offer
+   * is worse.
+   */
   cashGiftsEnabled: boolean;
   /** The wedding's primary currency — what every `priceMinor` is denominated in. */
   currency: string;
@@ -1444,7 +1638,8 @@ export const registryGuestService = {
       return {
         headline: settings.headline,
         message: settings.message,
-        cashGiftsEnabled: settings.cashGiftsEnabled,
+        // Intent AND capability. See the DTO.
+        cashGiftsEnabled: settings.cashGiftsEnabled && settings.stripeChargesEnabled,
         currency,
         items: (itemRows as ItemRow[]).map((r) =>
           toPublicItemDto(weddingId, r, claimed.get(r.id) ?? 0),

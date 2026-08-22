@@ -110,6 +110,25 @@ Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That m
 
 **The webhook check is four things, and all four matter.** The raw request TEXT is the subject (a body parsed and re-serialised has already lost the property being checked); the header must parse; the digest is compared without a length- or value-dependent early exit, against every `v1` Stripe sent (secret rotation); and the timestamp must be inside a 300-second window, because a valid signature is valid forever and without a window a captured delivery can be replayed at any point in the future. A 200 does not mean "handled" — an event type this product does not act on is acknowledged, because the endpoint belongs to the platform account and a non-2xx buys days of retries for something nobody was going to do anything with.
 
+### Giving money (built)
+
+| Route | Gate |
+|---|---|
+| `POST /api/invite/:slug/registry/contribute` | `sessionAuth` + family-in-wedding + its own per-IP limiter (5/min) |
+| `POST /api/stripe/webhook` → `checkout.session.completed` | Stripe signature |
+
+**The gates run before Stripe does.** `contributionContext` resolves the visible registry, checks the household belongs to THIS wedding, and requires `cash_gifts_enabled` AND `stripe_charges_enabled` AND an account id. A guest is turned away before their card is, or not at all. The cash-specific refusal is its own 409 `cash_gifts_unavailable`, because it is the one a guest looking at the panel can understand; everything else is the same 404 as always.
+
+**Its own limiter, tighter than the claim one** (5/min per IP vs 20): every call is an outbound Stripe request — the "amplifier" shape the link-preview route is limited for — and it is the one guest route that can cost money to be wrong about.
+
+**Nothing is recorded at checkout time.** A session is an intention. `registry_contributions` is written by the webhook, because Stripe is the only party that knows whether the money moved. That write is idempotent on `stripe_checkout_session_id` (at-least-once delivery makes a duplicate ordinary), and it re-checks what the metadata claims: the wedding must own the account the event arrived on (`event.account`), and the household must belong to that wedding. An item id from another wedding is dropped rather than refusing the gift — the money arrived, and which line it was aimed at is the smaller half.
+
+**FX stays NULL for now.** The primary-currency equivalent comes from the balance transaction's `exchange_rate`, which is not on the checkout event; the four FX columns are all-or-nothing, and a gift in the wedding's own currency — the common case — never needs them.
+
+**The guest surface** (`GiftMoneyPanel`) sits above the shelves and OUTSIDE the items-exist branch, on purpose: a guest who finds every gift taken has not stopped wanting to give something, and an option that appears only once the list runs dry reads as a consolation prize. It takes no card details — the button hands off to Stripe's hosted page — and it says so before the guest presses, along with who reads the name and note they typed (the couple; never the other guests). Amounts are typed in MAJOR units and converted once through the currency's real exponent (`parseGiftAmountMinor`): JPY has none and KWD has three, so a fixed ×100 is wrong by 100× on a payment screen. Coming back, `?gift=thanks` says the gift is *on its way* rather than that it landed — the row is the webhook's to write, and it may be a second behind the guest.
+
+`PublicRegistryDto.cashGiftsEnabled` is the couple's intent **ANDed** with Stripe's capability, so the guest surface never has to reason about the two separately.
+
 ---
 
 ## Claim concurrency
@@ -401,5 +420,6 @@ Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **log
 ## Still to land
 
 - Organiser settings form: the publish toggle, the shipping address, cash gifts — the three fields the guest surface already reads and cannot yet be set from the portal
-- Stripe Connect: **hosted Checkout** and the `checkout.session.completed` handler that writes a `registry_contributions` row with the balance-transaction FX capture described under [Money](#money) — onboarding and the `account.updated` webhook are built (see [Connecting the account](#connecting-the-account-built))
-- The guest-side "give money" surface on the gift page, which is what all of that is for: a way to give whether or not anything is left on the list
+- **The organiser's own connect panel** in the portal: the couple can be connected through the API, but nothing in `@cire/host` yet offers the button — nor the publish toggle, shipping address and cash-gifts switch beside it
+- **The FX capture**: `checkout.session.completed` carries no balance transaction, so the four FX columns are still NULL. The `exchange_rate` read described under [Money](#money) needs its own event or a follow-up call
+- Refunds and failures: `registry_contributions.status` has `failed` and `refunded`, and nothing writes them yet

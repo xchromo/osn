@@ -32,10 +32,25 @@ import { verifyStripeWebhook } from "../services/stripe";
  * the wedding's registry settings, keyed on the ACCOUNT id. It never touches
  * `cash_gifts_enabled`: that column is the couple's intent, and a capability
  * lapsing is not them changing their mind.
+ *
+ * **What it does with `checkout.session.completed`.** Writes the gift. This is
+ * the ONLY place a contribution row is created: a checkout session is an
+ * intention, and only Stripe knows whether the money moved. Two things make it
+ * safe to write from:
+ *
+ *  - **Idempotent on the session id**, which is `unique` on the column. Stripe
+ *    delivers at least once and retries until it gets a 2xx, so a duplicate is
+ *    the ordinary case rather than the edge.
+ *  - **The metadata is not trusted on its own.** We wrote it when the session
+ *    was created, but this endpoint also hears about sessions the connected
+ *    account created for itself, where the metadata is whatever its owner
+ *    typed. So the wedding must actually own the account the event came from
+ *    (`event.account`), and the household must belong to that wedding.
  */
 
 /** Events this product acts on. Everything else is acknowledged and dropped. */
-const HANDLED_EVENTS = new Set(["account.updated"]);
+const ACCOUNT_UPDATED = "account.updated";
+const CHECKOUT_COMPLETED = "checkout.session.completed";
 
 export interface StripeWebhookDeps {
   /** Stripe's signing secret for this endpoint. Absent ⇒ do not mount. */
@@ -44,7 +59,30 @@ export interface StripeWebhookDeps {
 
 interface StripeEventEnvelope {
   type?: unknown;
+  /** The connected account a Connect event happened on. Absent on platform events. */
+  account?: unknown;
   data?: { object?: unknown };
+}
+
+/** The fields this product reads off a completed Checkout Session. */
+interface CheckoutSessionObject {
+  id?: unknown;
+  payment_intent?: unknown;
+  amount_total?: unknown;
+  currency?: unknown;
+  payment_status?: unknown;
+  metadata?: {
+    weddingId?: unknown;
+    familyId?: unknown;
+    itemId?: unknown;
+    message?: unknown;
+    displayName?: unknown;
+  };
+}
+
+/** A metadata value Stripe gave back: a string, or nothing usable. */
+function metaString(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
@@ -67,31 +105,75 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
           });
           const envelope = event as StripeEventEnvelope;
           const type = typeof envelope.type === "string" ? envelope.type : "";
-          if (!HANDLED_EVENTS.has(type)) {
-            // Acknowledged, not handled. See the header: a retry storm of
-            // events we were never going to act on helps nobody.
-            return { received: true };
+
+          if (type === ACCOUNT_UPDATED) {
+            const account = envelope.data?.object as {
+              id?: unknown;
+              charges_enabled?: unknown;
+              payouts_enabled?: unknown;
+            };
+            if (typeof account?.id !== "string") {
+              // Signed by Stripe but not shaped like an account. Nothing to
+              // write and nothing a retry would fix.
+              return { received: true };
+            }
+            const matched = yield* registryService.applyStripeAccountState({
+              id: account.id,
+              chargesEnabled: account.charges_enabled === true,
+              payoutsEnabled: account.payouts_enabled === true,
+            });
+            // An account this platform knows nothing about is not an error —
+            // the endpoint is shared with whatever else the platform does.
+            return { received: true, matched };
           }
 
-          const account = envelope.data?.object as {
-            id?: unknown;
-            charges_enabled?: unknown;
-            payouts_enabled?: unknown;
-          };
-          if (typeof account?.id !== "string") {
-            // Signed by Stripe but not shaped like an account. Nothing to write
-            // and nothing a retry would fix.
-            return { received: true };
+          if (type === CHECKOUT_COMPLETED) {
+            const session = envelope.data?.object as CheckoutSessionObject;
+            const stripeAccountId = metaString(envelope.account);
+            const sessionId = metaString(session?.id);
+            const weddingId = metaString(session?.metadata?.weddingId);
+            const familyId = metaString(session?.metadata?.familyId);
+            const amountMinor = session?.amount_total;
+            const currency = metaString(session?.currency);
+            if (
+              !stripeAccountId ||
+              !sessionId ||
+              !weddingId ||
+              !familyId ||
+              !currency ||
+              typeof amountMinor !== "number"
+            ) {
+              // A completed session that is not one of ours — no connected
+              // account, or none of the metadata we write. Acknowledged: a
+              // retry cannot add fields Stripe never sent.
+              return { received: true, recorded: false };
+            }
+
+            const outcome = yield* registryService.recordContribution({
+              stripeAccountId,
+              checkoutSessionId: sessionId,
+              paymentIntentId: metaString(session?.payment_intent),
+              weddingId,
+              familyId,
+              itemId: metaString(session?.metadata?.itemId),
+              amountMinor,
+              // Stripe answers lower-case; the gift log and the budget both
+              // read currency codes upper-case.
+              currency: currency.toUpperCase(),
+              // `paid` is the only status that means the money moved. Anything
+              // else Stripe calls complete-but-unpaid (a delayed bank debit) is
+              // recorded as pending, so the couple see it without being told it
+              // has landed.
+              status: session?.payment_status === "paid" ? "succeeded" : "pending",
+              message: metaString(session?.metadata?.message),
+              displayName: metaString(session?.metadata?.displayName),
+            });
+            return { received: true, outcome };
           }
 
-          const matched = yield* registryService.applyStripeAccountState({
-            id: account.id,
-            chargesEnabled: account.charges_enabled === true,
-            payoutsEnabled: account.payouts_enabled === true,
-          });
-          // An account this platform knows nothing about is not an error — the
-          // endpoint is shared with whatever else the platform account does.
-          return { received: true, matched };
+          // Acknowledged, not handled. See the header: a retry storm of events
+          // we were never going to act on helps nobody.
+          return { received: true };
         }).pipe(
           Effect.provideService(DbService, db),
           Effect.catchTag("StripeSignatureError", (error) =>

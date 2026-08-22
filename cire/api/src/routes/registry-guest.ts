@@ -7,7 +7,7 @@ import type { Db } from "../db";
 import { sessionAuth } from "../middleware/auth";
 import { rateLimitMiddleware } from "../middleware/rate-limit";
 import { runCire } from "../observability";
-import { ClaimItemBody } from "../schemas/registry";
+import { ClaimItemBody, ContributeBody } from "../schemas/registry";
 import { versionFromKey } from "../services/event-image";
 import { AssetsR2Service, REGISTRY_IMAGE_NAME } from "../services/invite-assets";
 import type { AssetsBucket } from "../services/invite-assets";
@@ -18,6 +18,7 @@ import {
 } from "../services/invite-image-transform";
 import type { ImagesBindingLike } from "../services/invite-image-transform";
 import { registryGuestService, registryService } from "../services/registry";
+import type { StripeClient } from "../services/stripe";
 
 // Sentinel parse hook — the handler parses by hand so a malformed payload
 // degrades to the schema's 400 (same idiom as every other cire write route).
@@ -217,6 +218,122 @@ export const createRegistryGuestMineRoutes = (db: Db) =>
         ),
       );
     });
+
+/** Options for {@link createRegistryContributeRoutes}. */
+export interface RegistryContributeDeps {
+  /** Absent ⇒ the route is not mounted; a guest is never offered a dead button. */
+  readonly stripe: StripeClient;
+  /** Its OWN limiter, tighter than the claim one — see the route header. */
+  readonly limiter: RateLimiterBackend;
+  /** Guest-site origin, for the two URLs Stripe returns the guest to. */
+  readonly guestOrigin: string;
+}
+
+/**
+ * GIVING MONEY:
+ *
+ *   POST /api/invite/:slug/registry/contribute  (sessionAuth + limiter)
+ *
+ * Answers with a hosted Stripe Checkout URL for the guest to be sent to. The
+ * charge is DIRECT on the couple's connected account: the money is theirs from
+ * the moment it is taken, and cire never holds it.
+ *
+ * **Its own limiter, and a tight one.** Every call here is an outbound Stripe
+ * request — the same "amplifier" shape the link-preview route is limited for,
+ * and the one guest route that can cost money to be wrong about.
+ *
+ * **The gates that matter run before Stripe does** (`contributionContext`): the
+ * registry must be visible, the household must belong to THIS wedding, the
+ * couple must have said yes, and Stripe must be able to take the charge today.
+ * A guest is turned away before their card is, or not at all.
+ *
+ * **Nothing is recorded here.** A session is an intention, not a gift. The row
+ * in `registry_contributions` is written by the webhook when Stripe says the
+ * money moved — which is the only party that knows.
+ */
+export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeDeps) =>
+  new Elysia({ prefix: "/api/invite" })
+    .use(sessionAuth(db))
+    .use(rateLimitMiddleware(deps.limiter))
+    .post(
+      "/:slug/registry/contribute",
+      async ({ params, familyId, request, set }) => {
+        if (!familyId) return unauthorisedSync(set);
+        const raw: unknown = await request.json().catch(() => null);
+        return runCire(
+          Effect.gen(function* () {
+            const body = yield* Schema.decodeUnknown(ContributeBody)(raw);
+            const context = yield* registryService.contributionContext({
+              slug: params.slug,
+              familyId,
+            });
+
+            // An item id that is not this wedding's is dropped rather than
+            // refused: what the guest is doing is giving money, and which line
+            // they aimed it at is the smaller half of that.
+            const itemId =
+              body.itemId &&
+              (yield* registryService.itemBelongsToWedding({
+                weddingId: context.weddingId,
+                itemId: body.itemId,
+              }))
+                ? body.itemId
+                : null;
+
+            const giftUrl = `${deps.guestOrigin.replace(/\/+$/, "")}/${encodeURIComponent(params.slug)}/registry`;
+            const session = yield* deps.stripe.createCheckoutSession({
+              accountId: context.stripeAccountId,
+              amountMinor: body.amountMinor,
+              currency: context.currency,
+              // Deliberately generic. It is what the guest sees on the Stripe
+              // page and on their statement, and a gift's line item is not the
+              // place to publish what a couple asked for.
+              productName: "Wedding gift",
+              successUrl: `${giftUrl}?gift=thanks`,
+              cancelUrl: `${giftUrl}?gift=cancelled`,
+              metadata: {
+                weddingId: context.weddingId,
+                familyId,
+                itemId,
+                // Trimmed at the schema, so neither can exceed Stripe's 500
+                // characters and bounce the guest mid-payment.
+                message: body.message,
+                displayName: body.displayName,
+              },
+              // Keyed on WHAT is being given, not on when. A double-tapped
+              // button inside Stripe's 24h idempotency window returns the same
+              // payment page instead of a second one; the cost is that an
+              // identical second gift (same amount, same words, same day) would
+              // too, which is the rarer and cheaper mistake of the two.
+              idempotencyKey: `cire-gift-${familyId}-${itemId ?? "none"}-${body.amountMinor}-${(body.message ?? "").length}`,
+            });
+
+            return { url: session.url };
+          }).pipe(
+            Effect.provideService(DbService, db),
+            Effect.catchTag("ParseError", () => badRequest(set)),
+            Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
+            Effect.catchTag("CashGiftsUnavailable", () =>
+              Effect.sync(() => {
+                set.status = 409;
+                return { error: "cash_gifts_unavailable" };
+              }),
+            ),
+            Effect.catchTag("StripeError", () =>
+              Effect.sync(() => {
+                // Stripe refusing is not the guest's fault and not a broken
+                // list: 502, so the page can offer the button again.
+                set.status = 502;
+                return { error: "stripe_unavailable" };
+              }),
+            ),
+            Effect.tapDefect(logDefect),
+            Effect.catchAllDefect(() => internal(set)),
+          ),
+        );
+      },
+      manualParse,
+    );
 
 /** Options for {@link createRegistryGuestClaimRoutes}. */
 export interface RegistryGuestClaimDeps {
