@@ -21,6 +21,7 @@ import {
   type GiftRegistryWrite,
 } from "../../lib/gift-registry";
 import { CLAIM_SESSION_EVENT, hasClaimedHint } from "../claim-session";
+import { GiftMoneyPanel } from "./GiftMoneyPanel";
 import { GiftRegistryItemCard } from "./GiftRegistryItemCard";
 
 /**
@@ -144,6 +145,13 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
   const [mine, setMine] = createSignal<GiftRegistryHouseholdFetch | null>(null);
   const [status, setStatus] = createSignal("");
   const [busyItem, setBusyItem] = createSignal<string | null>(null);
+  /**
+   * Where a guest coming back from Stripe landed: `thanks` or `cancelled`, read
+   * once from the URL the payment page returned them to. Read on mount rather
+   * than reactively — it describes an arrival, not a state that changes while
+   * they are here.
+   */
+  const [payment, setPayment] = createSignal<"thanks" | "cancelled" | null>(null);
 
   async function loadList(): Promise<void> {
     const result = await fetchGiftRegistry(props.apiUrl, props.slug);
@@ -171,6 +179,9 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
   }
 
   onMount(() => {
+    const arrived = new URLSearchParams(window.location.search).get("gift");
+    if (arrived === "thanks" || arrived === "cancelled") setPayment(arrived);
+
     // Both reads on mount, in parallel — neither needs the other, and both are
     // credentialed, so this is the first moment either can run at all.
     void loadList();
@@ -379,6 +390,23 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
           </Match>
 
           <Match when={registry()}>
+            {/* Back from Stripe. "Thanks" is deliberately careful about what
+                it claims: the money is Stripe's to confirm, and the gift log
+                is written by the webhook — which may be a second behind the
+                guest. So it says the gift is on its way, not that it landed. */}
+            <Show when={payment()}>
+              {(arrival) => (
+                <p
+                  data-gift-payment={arrival()}
+                  class="border-gold/40 bg-gold/5 text-gold-ink font-body mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center text-[0.85rem] leading-[1.6]"
+                >
+                  {arrival() === "thanks"
+                    ? "Thank you — your gift is on its way to them."
+                    : "Nothing was charged. The list is still here whenever you want it."}
+                </p>
+              )}
+            </Show>
+
             <Show when={intro()}>
               {(text) => (
                 <p class="font-body text-text-muted mx-auto mb-8 max-w-[34rem] text-center text-[0.92rem] leading-[1.7] break-words whitespace-pre-line">
@@ -435,6 +463,22 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
             >
               {status()}
             </p>
+
+            {/* Giving money sits ABOVE the shelves and outside the
+                items-exist branch on purpose: a guest who finds every gift
+                taken has not stopped wanting to give something, and an option
+                that only appears once the list runs dry reads as a
+                consolation prize. Shown only when the couple are actually
+                taking money — the API ANDs their intent with Stripe's
+                capability before it ever reaches here. */}
+            <Show when={registry()?.cashGiftsEnabled && signedIn()}>
+              <GiftMoneyPanel
+                apiUrl={props.apiUrl}
+                slug={props.slug}
+                currency={registry()?.currency ?? ""}
+                inviteHref={props.inviteHref}
+              />
+            </Show>
 
             <Show
               when={items().length > 0}

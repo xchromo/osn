@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, registrySettings } from "@cire/db";
+import {
+  BOOTSTRAP_WEDDING_ID,
+  families,
+  registryContributions,
+  registryItems,
+  registrySettings,
+  weddings,
+} from "@cire/db";
 import { eq } from "drizzle-orm";
 
 import { createApp } from "../app";
@@ -41,10 +48,29 @@ async function hmacHex(secret: string, payload: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * A seeded household of the bootstrap wedding. Read from the database rather
+ * than hardcoded: the seed mints family ids as uuids, so the only honest way to
+ * name one is to look it up.
+ */
+const ITEM_ID = "reg_pan";
+
 function buildApp({ secret = SECRET as string | null } = {}) {
   const db = createDb(":memory:");
   seedDb(db);
   const now = new Date();
+  db.insert(registryItems)
+    .values({
+      id: ITEM_ID,
+      weddingId: BOOTSTRAP_WEDDING_ID,
+      kind: "product",
+      title: "Copper pan",
+      quantityWanted: 1,
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
   // A wedding whose registry already knows its connected account.
   db.insert(registrySettings)
     .values({
@@ -58,8 +84,9 @@ function buildApp({ secret = SECRET as string | null } = {}) {
       updatedAt: now,
     })
     .run();
+  const familyId = db.select({ id: families.id }).from(families).get()?.id as string;
   const app = createApp(db, { stripeWebhookSecret: secret });
-  return { app, db };
+  return { app, db, familyId };
 }
 type App = ReturnType<typeof buildApp>["app"];
 
@@ -257,6 +284,167 @@ describe("account.updated", () => {
     const payload = JSON.stringify({ id: "evt_2", type: "account.updated", data: { object: {} } });
     const res = await deliver(app, payload);
     expect(res.status).toBe(200);
+  });
+});
+
+const checkoutCompleted = (
+  familyId: string,
+  overrides: {
+    account?: string | null;
+    session?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  } = {},
+) =>
+  JSON.stringify({
+    id: "evt_gift",
+    type: "checkout.session.completed",
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "cs_1",
+        payment_intent: "pi_1",
+        amount_total: 12_500,
+        currency: "aud",
+        payment_status: "paid",
+        metadata: {
+          weddingId: BOOTSTRAP_WEDDING_ID,
+          familyId,
+          ...overrides.metadata,
+        },
+        ...overrides.session,
+      },
+    },
+  });
+
+async function gifts(db: ReturnType<typeof buildApp>["db"]) {
+  return db.select().from(registryContributions).all();
+}
+
+describe("checkout.session.completed — the only place a gift is written", () => {
+  it("records what Stripe says was paid", async () => {
+    const { app, db, familyId } = buildApp();
+    const res = await deliver(
+      app,
+      checkoutCompleted(familyId, { metadata: { message: "Enjoy Japan" } }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "recorded" });
+
+    const [gift] = await gifts(db);
+    expect(gift?.weddingId).toBe(BOOTSTRAP_WEDDING_ID);
+    expect(gift?.familyId).toBe(familyId);
+    expect(gift?.amountMinor).toBe(12_500);
+    // Stripe answers lower-case; the gift log and the budget read it upper.
+    expect(gift?.currency).toBe("AUD");
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
+    expect(gift?.stripePaymentIntentId).toBe("pi_1");
+    expect(gift?.message).toBe("Enjoy Japan");
+    // FX stays null: the primary-currency equivalent comes from the balance
+    // transaction, which is not on this event, and the four columns are
+    // all-or-nothing.
+    expect(gift?.primaryAmountMinor).toBeNull();
+    expect(gift?.fxRate).toBeNull();
+  });
+
+  it("writes once however many times Stripe delivers it", async () => {
+    // At-least-once delivery makes a duplicate the ordinary case, not the edge.
+    const { app, db, familyId } = buildApp();
+    const payload = checkoutCompleted(familyId);
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "recorded",
+    });
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "duplicate",
+    });
+    expect(await gifts(db)).toHaveLength(1);
+  });
+
+  it("records an unpaid-but-complete session as pending, not as money that arrived", async () => {
+    const { app, db, familyId } = buildApp();
+    await deliver(app, checkoutCompleted(familyId, { session: { payment_status: "unpaid" } }));
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("pending");
+  });
+
+  it("keeps the item a gift was aimed at, and drops one from another wedding", async () => {
+    const { app, db, familyId } = buildApp();
+    await deliver(app, checkoutCompleted(familyId, { metadata: { itemId: ITEM_ID } }));
+    expect((await gifts(db))[0]?.itemId).toBe(ITEM_ID);
+
+    await deliver(
+      app,
+      checkoutCompleted(familyId, {
+        session: { id: "cs_2" },
+        metadata: { itemId: "reg_someone_elses" },
+      }),
+    );
+    const second = (await gifts(db)).find((g) => g.stripeCheckoutSessionId === "cs_2");
+    // The money arrived; which line it was aimed at is the smaller half.
+    expect(second?.itemId).toBeNull();
+    expect(second?.amountMinor).toBe(12_500);
+  });
+
+  /**
+   * THE METADATA IS NOT TRUSTED ON ITS OWN. This endpoint also hears about
+   * sessions a connected account created for itself, where the metadata is
+   * whatever its owner typed.
+   */
+  it("refuses a gift whose wedding does not own the account it came from", async () => {
+    const { app, db, familyId } = buildApp();
+    const res = await deliver(app, checkoutCompleted(familyId, { account: "acct_someone_else" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+
+  it("refuses a gift whose household belongs to another wedding", async () => {
+    const { app, db, familyId } = buildApp();
+    const now = new Date();
+    db.insert(weddings)
+      .values({
+        id: "wed_other",
+        slug: "other-wedding",
+        displayName: "Other",
+        ownerOsnProfileId: "usr_bob",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(families)
+      .values({
+        id: "fam_other",
+        weddingId: "wed_other",
+        publicId: "OTHERWD-ELM-EE55",
+        familyName: "Elmwood",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const res = await deliver(
+      app,
+      checkoutCompleted(familyId, { metadata: { familyId: "fam_other" } }),
+    );
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+
+  it("acknowledges a completed session that is not one of ours at all", async () => {
+    const { app, db } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_x",
+      type: "checkout.session.completed",
+      account: ACCOUNT,
+      data: { object: { id: "cs_9", amount_total: 100, currency: "aud", metadata: {} } },
+    });
+    const res = await deliver(app, payload);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, recorded: false });
+    expect(await gifts(db)).toHaveLength(0);
   });
 });
 

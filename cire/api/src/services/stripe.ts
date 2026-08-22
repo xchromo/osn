@@ -94,11 +94,44 @@ export interface CreateAccountLinkInput {
   returnUrl: string;
 }
 
+export interface CreateCheckoutSessionInput {
+  /** The couple's connected account. The charge is DIRECT — see the header. */
+  accountId: string;
+  amountMinor: number;
+  /** The wedding's primary currency, lower-cased for Stripe. */
+  currency: string;
+  /** What the guest sees on the Stripe page and on their statement line. */
+  productName: string;
+  successUrl: string;
+  cancelUrl: string;
+  /**
+   * Carried through the payment and handed back by the webhook. Small and
+   * bounded: Stripe caps metadata at 50 keys and 500 characters per value, and
+   * anything longer is rejected — so the caller trims before it gets here.
+   */
+  metadata: StripeFormParams;
+  /**
+   * Makes a retried create return the FIRST session rather than a second one.
+   * The caller owns it because only the caller knows what "the same attempt"
+   * means — here, one guest's one press.
+   */
+  idempotencyKey: string;
+}
+
+/** A hosted Checkout page, waiting for a card. */
+export interface StripeCheckoutSession {
+  id: string;
+  url: string;
+}
+
 /** Everything this product asks Stripe to do. Injected, so tests need no network. */
 export interface StripeClient {
   createAccount(input: CreateAccountInput): Effect.Effect<StripeAccount, StripeError>;
   createAccountLink(input: CreateAccountLinkInput): Effect.Effect<StripeAccountLink, StripeError>;
   retrieveAccount(accountId: string): Effect.Effect<StripeAccount, StripeError>;
+  createCheckoutSession(
+    input: CreateCheckoutSessionInput,
+  ): Effect.Effect<StripeCheckoutSession, StripeError>;
 }
 
 export class StripeService extends Context.Tag("StripeService")<StripeService, StripeClient>() {}
@@ -178,6 +211,12 @@ export function createStripeClient(config: StripeConfig): StripeClient {
     path: string,
     params: StripeFormParams = {},
     idempotencyKey?: string,
+    /**
+     * Act AS a connected account (`Stripe-Account`), which is what makes a
+     * charge direct: the money is the couple's from the moment it is taken, and
+     * the platform never appears in the balance it lands in.
+     */
+    stripeAccount?: string,
   ): Effect.Effect<unknown, StripeError> {
     return Effect.gen(function* () {
       // A `Headers` rather than an object literal: the set is conditional
@@ -192,6 +231,7 @@ export function createStripeClient(config: StripeConfig): StripeClient {
       // An idempotency key makes a retried POST return the FIRST result rather
       // than creating a second connected account. Stripe keys them for 24h.
       if (idempotencyKey) headers.set("idempotency-key", idempotencyKey);
+      if (stripeAccount) headers.set("stripe-account", stripeAccount);
 
       const res = yield* Effect.tryPromise({
         try: () => doFetch(`${base}${path}`, { method, headers, body }),
@@ -282,6 +322,45 @@ export function createStripeClient(config: StripeConfig): StripeClient {
           return typeof link?.url === "string" && typeof link.expires_at === "number"
             ? Effect.succeed({ url: link.url, expiresAt: link.expires_at })
             : Effect.fail(new StripeError({ reason: "unexpected account link payload" }));
+        }),
+      );
+    },
+
+    createCheckoutSession(input) {
+      return request(
+        "POST",
+        "/v1/checkout/sessions",
+        {
+          mode: "payment",
+          success_url: input.successUrl,
+          cancel_url: input.cancelUrl,
+          // One line item, priced inline: there is no catalogue behind a gift,
+          // and a `price_data` avoids creating a Product per contribution on
+          // the couple's own account.
+          line_items: {
+            0: {
+              quantity: 1,
+              price_data: {
+                currency: input.currency.toLowerCase(),
+                unit_amount: input.amountMinor,
+                product_data: { name: input.productName },
+              },
+            },
+          },
+          metadata: input.metadata,
+          // The same metadata on the PaymentIntent, so a couple looking at the
+          // charge in their own Stripe dashboard can see which wedding and
+          // which gift it belongs to without the session in front of them.
+          payment_intent_data: { metadata: input.metadata },
+        },
+        input.idempotencyKey,
+        input.accountId,
+      ).pipe(
+        Effect.flatMap((payload) => {
+          const session = payload as { id?: unknown; url?: unknown };
+          return typeof session?.id === "string" && typeof session.url === "string"
+            ? Effect.succeed({ id: session.id, url: session.url })
+            : Effect.fail(new StripeError({ reason: "unexpected checkout session payload" }));
         }),
       );
     },
