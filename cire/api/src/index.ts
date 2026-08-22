@@ -25,6 +25,7 @@ import {
 } from "./services/osn-bridge";
 import { retentionService } from "./services/retention";
 import { sessionService } from "./services/session";
+import { createStripeClientFromEnv } from "./services/stripe";
 import { createZapChatClientFromEnv } from "./services/zap-bridge";
 
 // Worker bindings + vars. Mirrors `wrangler.toml` ([[d1_databases]], [[r2_buckets]],
@@ -122,6 +123,20 @@ export interface Env {
   // RSVP endpoints require a valid Turnstile token (fail-closed); unset ⇒ those
   // gates are skipped. `wrangler secret put TURNSTILE_SECRET_KEY`.
   TURNSTILE_SECRET_KEY?: string;
+  // Stripe Connect for gift contributions (KEY-OPTIONAL, and the two halves are
+  // independent). `STRIPE_SECRET_KEY` set ⇒ the organiser can connect a Stripe
+  // account from the portal; unset ⇒ those routes are not mounted at all, so a
+  // deployment with no Stripe account has no payment surface rather than a
+  // broken one. `STRIPE_WEBHOOK_SECRET` set ⇒ `/api/stripe/webhook` exists and
+  // verifies every delivery; unset ⇒ it does not exist, because nothing could
+  // be verified and an endpoint that writes from unverified bodies is an
+  // unauthenticated write API. Both: `wrangler secret put …`.
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  // Two-letter country for a NEW connected account (`AU` unless set). Stripe
+  // fixes an account's country at creation, so this is a per-deployment default
+  // and not something a couple can change afterwards.
+  STRIPE_ACCOUNT_COUNTRY?: string;
   // Resend API key for transactional email (vendor claim-invite emails). When
   // set, the vendor list-in-directory endpoint dispatches via Resend; absent ⇒
   // falls back to LogEmailLive (emails captured in-memory / logged). Fail-soft:
@@ -354,6 +369,9 @@ const handler: ExportedHandler<Env> = {
       // claim + rsvp gates are skipped. The secret is read here and never
       // logged or placed anywhere but Cloudflare's siteverify endpoint.
       const turnstileVerifier = createTurnstileVerifier(env.TURNSTILE_SECRET_KEY);
+      // `null` without a key, exactly like the Turnstile verifier above: the
+      // absence of configuration is a state this product supports, not a fault.
+      const stripe = createStripeClientFromEnv(env);
       // GrowthBook feature flags (KEY-OPTIONAL). Unset client key ⇒ an inert
       // provider that serves registry defaults with no network. Built once per
       // isolate alongside the app so its payload cache is isolate-lived. No
@@ -414,6 +432,9 @@ const handler: ExportedHandler<Env> = {
         resolveOsnHandleSearch,
         resolveOsnConnectionSearch,
         turnstileVerifier,
+        stripe,
+        stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET ?? null,
+        stripeAccountCountry: env.STRIPE_ACCOUNT_COUNTRY,
         flags,
         orgMembership,
         profileOrgs,

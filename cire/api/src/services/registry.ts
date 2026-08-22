@@ -714,6 +714,115 @@ export const registryService = {
     }).pipe(Effect.withSpan("cire.registry.updateSettings"));
   },
 
+  /**
+   * The settings row alone — one PK-indexed read, and the defaults when there
+   * is no row.
+   *
+   * `get` returns the whole snapshot: every item, a page of the gift log, the
+   * currency. Reading that to look at two Stripe booleans is the shape P-C2
+   * already caught once on the settings write. A caller that only needs the
+   * settings asks for the settings.
+   */
+  settingsOnly(weddingId: string): Effect.Effect<RegistrySettingsDto, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const [row] = yield* dbQuery(() =>
+        db.select().from(registrySettings).where(eq(registrySettings.weddingId, weddingId)).all(),
+      );
+      return row ? toSettingsDto(row as SettingsRow) : defaultSettings(weddingId);
+    }).pipe(Effect.withSpan("cire.registry.settingsOnly"));
+  },
+
+  /**
+   * Remember the connected account this wedding just got, and its capabilities
+   * as Stripe reported them at creation.
+   *
+   * `stripe_account_id` is written ONLY when the column is null. A wedding's
+   * connected account is the couple's bank account by another name: overwriting
+   * it would silently point every future gift at a different one, and the row it
+   * replaced is the only record of where the last ones went. A wedding that
+   * already has an account never reaches Stripe again — the caller reads this
+   * row first and mints a fresh onboarding link for the account it finds.
+   */
+  attachStripeAccount(
+    weddingId: string,
+    account: { id: string; chargesEnabled: boolean; payoutsEnabled: boolean },
+  ): Effect.Effect<RegistrySettingsDto, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const now = new Date();
+      const [row] = yield* dbQuery(() =>
+        db
+          .insert(registrySettings)
+          .values({
+            weddingId,
+            stripeAccountId: account.id,
+            stripeChargesEnabled: account.chargesEnabled,
+            stripePayoutsEnabled: account.payoutsEnabled,
+            stripeAccountUpdatedAt: now,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: registrySettings.weddingId,
+            set: {
+              // `coalesce` on the EXISTING value, so a second create can only
+              // ever fill a null — never repoint a couple's payouts.
+              stripeAccountId: sql`coalesce(${registrySettings.stripeAccountId}, ${account.id})`,
+              stripeChargesEnabled: account.chargesEnabled,
+              stripePayoutsEnabled: account.payoutsEnabled,
+              stripeAccountUpdatedAt: now,
+              updatedAt: now,
+            },
+          })
+          .returning()
+          .all(),
+      );
+      return toSettingsDto(row as SettingsRow);
+    }).pipe(Effect.withSpan("cire.registry.attachStripeAccount"));
+  },
+
+  /**
+   * Cache what an `account.updated` webhook said about a connected account.
+   *
+   * Keyed on the ACCOUNT, not the wedding: the webhook names an account and
+   * nothing else, and resolving it through metadata would trust a field the
+   * couple's own onboarding can rewrite. Returns whether a row matched, so the
+   * route can answer 200 either way (an event for an account we do not know is
+   * not an error — it is a webhook endpoint shared with whatever else the
+   * platform account does) while still saying so in a span.
+   *
+   * `cash_gifts_enabled` is deliberately NOT touched. That column is the
+   * couple's INTENT; `stripe_charges_enabled` is Stripe's CAPABILITY. Clearing
+   * intent because a capability lapsed would quietly turn the feature off for
+   * good, and turning it back on when the capability returns would be us making
+   * a decision they never made. The guest surface reads both.
+   */
+  applyStripeAccountState(account: {
+    id: string;
+    chargesEnabled: boolean;
+    payoutsEnabled: boolean;
+  }): Effect.Effect<boolean, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const now = new Date();
+      const rows = yield* dbQuery(() =>
+        db
+          .update(registrySettings)
+          .set({
+            stripeChargesEnabled: account.chargesEnabled,
+            stripePayoutsEnabled: account.payoutsEnabled,
+            stripeAccountUpdatedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(registrySettings.stripeAccountId, account.id))
+          .returning({ weddingId: registrySettings.weddingId })
+          .all(),
+      );
+      return (rows as Array<{ weddingId: string }>).length > 0;
+    }).pipe(Effect.withSpan("cire.registry.applyStripeAccountState"));
+  },
+
   createItem(
     input: CreateRegistryItemInput,
   ): Effect.Effect<

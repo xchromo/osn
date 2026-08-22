@@ -56,7 +56,9 @@ import {
   createRegistryGuestListRoutes,
   createRegistryGuestMineRoutes,
 } from "./routes/registry-guest";
+import { createRegistryStripeRoutes } from "./routes/registry-stripe";
 import { createRsvpRoutes } from "./routes/rsvp";
+import { createStripeWebhookRoutes } from "./routes/stripe-webhook";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
 import {
   createVendorDirectoryReadRoutes,
@@ -80,6 +82,7 @@ import type {
   OsnProfileOrgsResolver,
 } from "./services/osn-bridge";
 import type { R2Bucket } from "./services/r2-imports";
+import type { StripeClient } from "./services/stripe";
 import type { ZapChatClient } from "./services/zap-bridge";
 
 /** Default per-IP rate limiter for the claim endpoint: 5 attempts per minute. */
@@ -434,6 +437,23 @@ export interface AppOptions {
   /** Override the guest registry claim/release rate limiter (useful for testing). */
   registryGuestLimiter?: RateLimiterBackend;
   /**
+   * Stripe Connect. BOTH halves are key-optional and independent, because in
+   * practice they arrive at different moments: the client can be configured
+   * before an endpoint has a signing secret, and a signing secret is useless
+   * without the client.
+   *
+   *  - `stripe` absent ⇒ the organiser onboarding routes are not mounted, so a
+   *    deployment with no Stripe account has no payment surface at all rather
+   *    than one that 500s.
+   *  - `stripeWebhookSecret` absent ⇒ the webhook route is not mounted, because
+   *    nothing could be verified and an endpoint that writes from unverified
+   *    bodies is an unauthenticated write API.
+   */
+  stripe?: StripeClient | null;
+  stripeWebhookSecret?: string | null;
+  /** Country for a newly created connected account (`AU` unless overridden). */
+  stripeAccountCountry?: string;
+  /**
    * Test seam: injectable `fetch` + DNS resolver for the registry link-preview
    * service, so its route tests reach no network. Production passes nothing and
    * the service uses global `fetch` + Cloudflare DoH.
@@ -502,6 +522,9 @@ export function createApp(db: Db, options: AppOptions = {}) {
     registryPreviewLimiter = defaultRegistryPreviewLimiter,
     registryImageLimiter = defaultRegistryImageLimiter,
     registryGuestLimiter = defaultRegistryGuestLimiter,
+    stripe = null,
+    stripeWebhookSecret = null,
+    stripeAccountCountry,
     registryLinkPreviewOptions,
     // Key-optional default: an inert provider that serves registry defaults with
     // no network, so an app built without GrowthBook config behaves exactly as
@@ -741,6 +764,18 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // reap the R2 object its `image_key` pointed at, and D1's cascade stops at
       // the row.
       .use(createRegistryWriteRoutes(db, osnAuthOptions, assets))
+      // Stripe Connect onboarding — its own instance because its gate is
+      // `weddingOwner`, not `weddingEditor`: it names the bank account the money
+      // lands in. Mounted only when Stripe is configured at all.
+      .use(
+        stripe
+          ? createRegistryStripeRoutes(db, osnAuthOptions, {
+              stripe,
+              organiserOrigin,
+              defaultCountry: stripeAccountCountry,
+            })
+          : new Elysia(),
+      )
       // Link preview is a third sibling instance, not part of the write group:
       // it carries its own per-organiser limiter (it is the one registry route
       // that makes an outbound fetch), and an Elysia guard would spread that
@@ -854,5 +889,12 @@ export function createApp(db: Db, options: AppOptions = {}) {
   // accumulated route-type surface here caps the depth; it's runtime-inert
   // (`.use()` only needs an Elysia instance) and scoped to this final mount.
   const rootApp: AnyElysia = app;
-  return paymentWebhookEnabled ? rootApp.use(createPaymentWebhookSkeleton()) : rootApp;
+  // Stripe's own deliveries. Mounted only with a signing secret: nothing else
+  // authenticates this endpoint, so without one it must not exist.
+  const withStripeWebhook: AnyElysia = stripeWebhookSecret
+    ? rootApp.use(createStripeWebhookRoutes(db, { webhookSecret: stripeWebhookSecret }))
+    : rootApp;
+  return paymentWebhookEnabled
+    ? withStripeWebhook.use(createPaymentWebhookSkeleton())
+    : withStripeWebhook;
 }

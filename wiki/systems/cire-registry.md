@@ -90,6 +90,26 @@ The rate comes from **Stripe's balance transaction** (`exchange_rate`), not a th
 
 Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That module also knows each currency's **real minor-unit exponent** — JPY has none (1000 minor units is ¥1000, not ¥10) and KWD/BHD/JOD use three. The old fixed `/ 100` was invisible while every wedding was in AUD and is wrong by 100× the moment a gift arrives in yen.
 
+### Connecting the account (built)
+
+`cire/api/src/services/stripe.ts` is the client: three REST calls and a signature check over `fetch`, with **no `stripe` package**. The official SDK is built around Node's http stack and cire-api ships inside a 1MB compressed Worker budget it already shares with Elysia, Drizzle and Effect — a trade to re-run if this file ever grows past the handful of calls the gift flow needs, not a principle.
+
+| Route | Gate | What it does |
+|---|---|---|
+| `POST …/registry/stripe/session` | `weddingOwner` + entitlement | Creates the connected account (Express, `card_payments` + `transfers`) if there isn't one, then mints a hosted onboarding link |
+| `POST …/registry/stripe/refresh` | `weddingOwner` + entitlement | One live `GET /v1/accounts/:id`, and caches what it says |
+| `POST /api/stripe/webhook` | Stripe signature | `account.updated` → caches the capability booleans |
+
+**Owner-only, not editor.** Every other registry write is `weddingEditor`, because adding a gift is ordinary help. This names the bank account the money lands in, and sits on the same side of the role line as codes, deletion and co-host removal.
+
+**Create-or-resume, never create-again.** Onboarding is a form people abandon and come back to. The route reads the settings row first and reuses any account on it; `stripe_account_id` is written through a `coalesce` so a second create can only fill a null, never repoint a couple's payouts. Stripe's idempotency key (`cire-account-<weddingId>`) is the second belt against a double-tapped button.
+
+**Intent and capability are different columns.** `cash_gifts_enabled` is the couple's decision; `stripe_charges_enabled` is Stripe's. The webhook never touches the first — clearing intent because a capability lapsed would quietly turn the feature off for good, and restoring it later would be us deciding something they never did. `PUT /registry/settings` still refuses to enable cash gifts while Stripe cannot take a charge (`stripe_not_ready`).
+
+**Both halves are key-optional, independently.** No `STRIPE_SECRET_KEY` ⇒ the onboarding routes are not mounted, so a deployment without a Stripe account has no payment surface rather than a broken one. No `STRIPE_WEBHOOK_SECRET` ⇒ the webhook route does not exist: nothing else authenticates it, so an endpoint that writes from unverified bodies would be an unauthenticated write API.
+
+**The webhook check is four things, and all four matter.** The raw request TEXT is the subject (a body parsed and re-serialised has already lost the property being checked); the header must parse; the digest is compared without a length- or value-dependent early exit, against every `v1` Stripe sent (secret rotation); and the timestamp must be inside a 300-second window, because a valid signature is valid forever and without a window a captured delivery can be replayed at any point in the future. A 200 does not mean "handled" — an event type this product does not act on is acknowledged, because the endpoint belongs to the platform account and a non-2xx buys days of retries for something nobody was going to do anything with.
+
 ---
 
 ## Claim concurrency
@@ -389,4 +409,5 @@ Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **log
 ## Still to land
 
 - Organiser settings form: the publish toggle, the shipping address, cash gifts — the three fields the guest surface already reads and cannot yet be set from the portal
-- Stripe Connect (Express): onboarding, hosted Checkout, the webhook, and the balance-transaction FX capture described under [Money](#money)
+- Stripe Connect: **hosted Checkout** and the `checkout.session.completed` handler that writes a `registry_contributions` row with the balance-transaction FX capture described under [Money](#money) — onboarding and the `account.updated` webhook are built (see [Connecting the account](#connecting-the-account-built))
+- The guest-side "give money" surface on the gift page, which is what all of that is for: a way to give whether or not anything is left on the list
