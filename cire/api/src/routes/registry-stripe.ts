@@ -1,0 +1,179 @@
+import { Effect } from "effect";
+import { Elysia } from "elysia";
+
+import { DbService } from "../db";
+import type { Db } from "../db";
+import { osnAuth } from "../middleware/osn-auth";
+import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { weddingEntitlement } from "../middleware/wedding-entitlement";
+import { weddingOwner } from "../middleware/wedding-owner";
+import { runCire } from "../observability";
+import { registryService } from "../services/registry";
+import type { StripeClient } from "../services/stripe";
+
+/**
+ * CONNECTING A COUPLE'S BANK ACCOUNT — Stripe Connect onboarding, from the
+ * organiser portal.
+ *
+ *   POST /api/organiser/weddings/:weddingId/registry/stripe/session  (weddingOwner)
+ *   POST /api/organiser/weddings/:weddingId/registry/stripe/refresh  (weddingOwner)
+ *
+ * **Owner-only, not editor.** Every other registry write is `weddingEditor`,
+ * because adding a gift is ordinary help. This is not: it names the bank account
+ * the money lands in, and a co-host with edit rights has no business pointing a
+ * couple's gifts at anything. The role split already exists for exactly this
+ * kind of line (codes, deletion, co-host removal), and this belongs on the same
+ * side of it.
+ *
+ * **Create-or-resume, never create-again.** Onboarding is a form people abandon
+ * and come back to, and every return trip runs through this route. It reads the
+ * settings row first: an account already on it is reused and only the hosted
+ * link is fresh. Stripe's idempotency key is the second belt — a double-tapped
+ * button cannot mint two connected accounts for one couple, which is the
+ * failure that needs a human at Stripe to unpick.
+ *
+ * **Nothing here turns cash gifts ON.** Connecting an account and offering
+ * guests a contribute button are two decisions, and the second is the couple's:
+ * `PUT /registry/settings` still owns it, still refuses while Stripe cannot take
+ * a charge (`stripe_not_ready`), and this route deliberately does not reach over
+ * and set it for them.
+ *
+ * **Key-optional.** With no `STRIPE_SECRET_KEY` the client is `null` and these
+ * routes are not mounted at all, so a deployment without Stripe has no payment
+ * surface rather than a broken one. The portal probes and hides the panel — the
+ * same shape as the account-linking flag.
+ */
+
+const badGateway = (set: { status?: number | string }) =>
+  Effect.sync(() => {
+    set.status = 502;
+    return { error: "stripe_unavailable" };
+  });
+
+const internal = (set: { status?: number | string }) =>
+  Effect.sync(() => {
+    set.status = 500;
+    return { error: "Internal error" };
+  });
+
+function internalSync(set: { status?: number | string }) {
+  set.status = 500;
+  return { error: "Internal error" };
+}
+
+/**
+ * Annotated with `weddingId` and nothing else. A defect here can carry a Stripe
+ * account id or an onboarding URL, and neither belongs in a log line.
+ */
+const logDefect = (weddingId: string) => (cause: unknown) =>
+  Effect.logError("registry stripe handler defect", cause).pipe(Effect.annotateLogs({ weddingId }));
+
+export interface RegistryStripeDeps {
+  /** Absent ⇒ these routes are never mounted. See the header. */
+  readonly stripe: StripeClient;
+  /** Portal origin, for the two URLs Stripe sends the couple back to. */
+  readonly organiserOrigin: string;
+  /** Two-letter country for a new connected account. */
+  readonly defaultCountry?: string;
+}
+
+/** Where Stripe returns the couple: their own registry module, in the portal. */
+function portalRegistryUrl(origin: string, weddingId: string): string {
+  return `${origin.replace(/\/+$/, "")}/#/w/${encodeURIComponent(weddingId)}/registry`;
+}
+
+export const createRegistryStripeRoutes = (
+  db: Db,
+  osnAuthOptions: OsnAuthOptions,
+  deps: RegistryStripeDeps,
+) =>
+  new Elysia({ prefix: "/api/organiser" })
+    .use(osnAuth(osnAuthOptions))
+    .group("/weddings/:weddingId", (group) =>
+      group
+        .use(weddingOwner(db))
+        .use(weddingEntitlement(db, "registry"))
+        .post("/registry/stripe/session", ({ weddingId, set }) => {
+          if (!weddingId) return internalSync(set);
+          return runCire(
+            Effect.gen(function* () {
+              const settings = yield* registryService.settingsOnly(weddingId);
+              // An account already on the row is REUSED. It is the couple's
+              // bank account by another name, and a second one would silently
+              // repoint every future gift; only the hosted link is fresh.
+              let accountId = settings.stripeAccountId;
+              let chargesEnabled = settings.stripeChargesEnabled;
+              let payoutsEnabled = settings.stripePayoutsEnabled;
+              if (!accountId) {
+                const created = yield* deps.stripe.createAccount({
+                  country: deps.defaultCountry ?? "AU",
+                  weddingId,
+                });
+                const saved = yield* registryService.attachStripeAccount(weddingId, created);
+                accountId = saved.stripeAccountId ?? created.id;
+                chargesEnabled = saved.stripeChargesEnabled;
+                payoutsEnabled = saved.stripePayoutsEnabled;
+              }
+
+              const returnUrl = portalRegistryUrl(deps.organiserOrigin, weddingId);
+              const link = yield* deps.stripe.createAccountLink({
+                accountId,
+                // Stripe uses `refresh_url` when the link it was given has
+                // expired — pointing it back at the portal means the couple
+                // land on the button that mints a fresh one, rather than on a
+                // Stripe error page.
+                refreshUrl: returnUrl,
+                returnUrl,
+              });
+
+              return {
+                url: link.url,
+                expiresAt: link.expiresAt,
+                status: { connected: true, chargesEnabled, payoutsEnabled },
+              };
+            }).pipe(
+              Effect.provideService(DbService, db),
+              // Stripe refusing, or being unreachable, is not this API's
+              // fault and not the couple's: 502 says so, and the portal can
+              // offer the button again rather than reporting a broken account.
+              Effect.catchTag("StripeError", () => badGateway(set)),
+              Effect.tapDefect(logDefect(weddingId)),
+              Effect.catchAllDefect(() => internal(set)),
+            ),
+          );
+        })
+        .post("/registry/stripe/refresh", ({ weddingId, set }) => {
+          if (!weddingId) return internalSync(set);
+          return runCire(
+            Effect.gen(function* () {
+              const settings = yield* registryService.settingsOnly(weddingId);
+              const accountId = settings.stripeAccountId;
+              if (!accountId) {
+                return {
+                  connected: false,
+                  chargesEnabled: false,
+                  payoutsEnabled: false,
+                };
+              }
+              // A live read, unlike the cached columns every other surface
+              // uses. It exists for one moment: the couple have just come back
+              // from onboarding and the `account.updated` webhook may be
+              // seconds behind them. Asking Stripe once, here, is the
+              // difference between "connected" and a panel that still says
+              // "finish setting up" to someone who just did.
+              const account = yield* deps.stripe.retrieveAccount(accountId);
+              yield* registryService.applyStripeAccountState(account);
+              return {
+                connected: true,
+                chargesEnabled: account.chargesEnabled,
+                payoutsEnabled: account.payoutsEnabled,
+              };
+            }).pipe(
+              Effect.provideService(DbService, db),
+              Effect.catchTag("StripeError", () => badGateway(set)),
+              Effect.tapDefect(logDefect(weddingId)),
+              Effect.catchAllDefect(() => internal(set)),
+            ),
+          );
+        }),
+    );
