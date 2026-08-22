@@ -88,7 +88,7 @@ function lastUrl(): string {
 }
 
 describe("fetchGiftRegistry", () => {
-  it("reads the public list without credentials and without cache", async () => {
+  it("reads the list with credentials and without cache", async () => {
     fetchMock.mockResolvedValueOnce(
       json({
         headline: null,
@@ -113,11 +113,19 @@ describe("fetchGiftRegistry", () => {
     });
     expect(lastUrl()).toBe(`${API}/api/invite/${SLUG}/registry`);
     expect(lastInit().cache).toBe("no-store");
-    // The public read must NOT carry the household cookie.
-    expect(lastInit().credentials).toBeUndefined();
+    // The list is for the couple's guests, so the read carries the household
+    // cookie — and `cire_session` is host-scoped to the API ORIGIN, a different
+    // origin from the guest site, so on the default `same-origin` mode it is
+    // dropped silently and every read reads as signed out forever.
+    expect(lastInit().credentials).toBe("include");
   });
 
-  it("treats 404 as hidden — unpublished, unentitled and unknown-slug alike", async () => {
+  it("treats 401 as signed out — a way in, not a failure", async () => {
+    fetchMock.mockResolvedValueOnce(json({ error: "Unauthorized" }, 401));
+    expect(await fetchGiftRegistry(API, SLUG)).toEqual({ kind: "signed-out" });
+  });
+
+  it("treats 404 as hidden — unpublished, unentitled, unknown-slug and another wedding alike", async () => {
     fetchMock.mockResolvedValueOnce(json({ error: "registry_not_found" }, 404));
     expect(await fetchGiftRegistry(API, SLUG)).toEqual({ kind: "hidden" });
   });

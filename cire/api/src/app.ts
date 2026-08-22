@@ -52,8 +52,9 @@ import {
 } from "./routes/registry";
 import {
   createRegistryGuestClaimRoutes,
+  createRegistryGuestImageRoutes,
+  createRegistryGuestListRoutes,
   createRegistryGuestMineRoutes,
-  createRegistryGuestRoutes,
 } from "./routes/registry-guest";
 import { createRsvpRoutes } from "./routes/rsvp";
 import { createTaskReadRoutes, createTaskWriteRoutes } from "./routes/tasks";
@@ -677,7 +678,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
       // NO wedding holds: they answer 404 `registry_not_found`, not 402, because
       // an unauthenticated caller must not learn which weddings have bought
       // which features.
-      .use(createRegistryGuestRoutes(db, { assets, images }))
+      .use(createRegistryGuestImageRoutes(db, { assets, images }))
+      .use(createRegistryGuestListRoutes(db))
       .use(createRegistryGuestMineRoutes(db))
       .use(createRegistryGuestClaimRoutes(db, { limiter: registryGuestLimiter }))
       .use(createOrganiserWeddingsRoutes(db, osnAuthOptions))

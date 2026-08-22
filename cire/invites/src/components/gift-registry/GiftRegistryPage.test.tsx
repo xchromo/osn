@@ -14,14 +14,14 @@ import {
  * The gift list's own page.
  *
  * What is asserted here is what the spec calls load-bearing:
+ *   - the list is for the couple's GUESTS: a 401 is a way in, not an error, and
+ *     nothing of the list is on the page beside it;
  *   - counts reach the DOM, claimant identities never do;
  *   - the 409 race refetches and TELLS the guest, and is never painted as a
  *     success that did not happen;
- *   - a signed-out visitor sees the list and a way back to the invitation that
- *     holds their code, not a dead button;
+ *   - a failed re-read leaves what is on screen — on a page of its own,
+ *     blanking on a blip blanks everything;
  *   - a shipping address renders only when the API actually sent one;
- *   - the page is seeded by the server and a FAILED re-read leaves what is on
- *     screen — on a page of its own, blanking on a blip blanks everything;
  *   - the couple's own shelves survive a refetch with the forms open under them.
  */
 
@@ -70,9 +70,8 @@ function json(body: unknown, status = 200): Response {
  * of counting calls in mount order. Queued answers pop in order; the last one
  * repeats, which is what makes the "refetch after a 409" tests readable.
  *
- * The list route defaults to answering with the same list the page was seeded
- * with: the page's on-mount re-read is not the subject of most of these tests,
- * and a default 404 would close the list under every one of them.
+ * Both reads default to what a claimed household of this wedding gets, because
+ * that is the state most of these tests are about; the gate has its own block.
  */
 function routedFetch(routes: {
   list?: Response[];
@@ -82,11 +81,11 @@ function routedFetch(routes: {
 }) {
   const queues = {
     list: [...(routes.list ?? [json(registry())])],
-    mine: [...(routes.mine ?? [json({ error: "unauthorised" }, 401)])],
+    mine: [...(routes.mine ?? [json({ claims: [] })])],
     claim: [...(routes.claim ?? [json({ ok: true })])],
     release: [...(routes.release ?? [json({ ok: true })])],
   };
-  const calls: { url: string; method: string }[] = [];
+  const calls: { url: string; method: string; credentials?: RequestCredentials }[] = [];
 
   const take = (key: keyof typeof queues) => {
     const queue = queues[key];
@@ -97,7 +96,7 @@ function routedFetch(routes: {
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
-    calls.push({ url, method });
+    calls.push({ url, method, credentials: init?.credentials });
     if (url.endsWith("/claim")) return take(method === "DELETE" ? "release" : "claim");
     if (url.endsWith("/registry/mine")) return take("mine");
     return take("list");
@@ -109,14 +108,13 @@ function routedFetch(routes: {
 
 function renderPage(props: Partial<GiftRegistryPageProps> = {}) {
   return render(() => (
-    <GiftRegistryPage
-      apiUrl={API}
-      slug={SLUG}
-      inviteHref={INVITE_HREF}
-      initialRegistry={registry()}
-      {...props}
-    />
+    <GiftRegistryPage apiUrl={API} slug={SLUG} inviteHref={INVITE_HREF} {...props} />
   ));
+}
+
+/** Resolves once the list has landed and its first card is on the page. */
+function whenListed() {
+  return screen.findByText("Copper pan");
 }
 
 /** Pretend this browser has claimed before, which is what gates the /mine read. */
@@ -124,36 +122,77 @@ function setClaimedHint() {
   document.cookie = "cire_claimed=1; Path=/";
 }
 
-/** The signed-out prompt, whose copy is split around a link back to the invite. */
-function signedOutPrompt(container: HTMLElement) {
-  return container.querySelector("[data-gift-signed-out]");
-}
-
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
-  document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+  setClaimedHint();
 });
 
 afterEach(() => {
   cleanup();
+  document.cookie = "cire_claimed=; Path=/; Max-Age=0";
   globalThis.fetch = realFetch;
   vi.restoreAllMocks();
 });
 
-describe("what the page paints", () => {
-  /**
-   * The route fetched the list to decide the page exists at all, so the guest
-   * gets the gifts in the first paint. A page that waited for its own fetch
-   * would show an empty frame to someone who opened the link in a shop.
-   */
-  it("paints the server's list before any fetch has answered", () => {
-    routedFetch({});
-    const { container } = renderPage({
-      initialRegistry: registry({ items: [item({ title: "Copper pan" })] }),
+describe("the gate", () => {
+  it("sends a visitor with no claim to the invitation, and shows them no list", async () => {
+    document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+    routedFetch({
+      list: [json({ error: "Unauthorized" }, 401)],
+      mine: [json({ error: "Unauthorized" }, 401)],
     });
-    expect(container.querySelector("[data-gift-item]")).toBeTruthy();
-    expect(container.textContent).toContain("Copper pan");
+    const { container } = renderPage();
+
+    await waitFor(() => expect(container.querySelector("[data-gift-locked]")).toBeTruthy());
+    expect(screen.getByRole("link", { name: "Open the invitation" }).getAttribute("href")).toBe(
+      INVITE_HREF,
+    );
+    // Not one word of the couple's list is on the page beside the way in.
+    expect(container.querySelector("[data-gift-item]")).toBeNull();
+    expect(container.querySelector("[data-gift-availability]")).toBeNull();
+    expect(container.textContent).not.toContain("Copper pan");
+    // And it is not dressed as a failure — nothing has gone wrong.
+    expect(container.querySelector("[data-gift-unreachable]")).toBeNull();
+  });
+
+  it("reads the list with credentials, or the cookie never leaves the browser", async () => {
+    const { calls } = routedFetch({});
+    renderPage();
+    await whenListed();
+    // `cire_session` is host-scoped to the API origin, which is a different
+    // origin from the guest site: on the default `same-origin` mode the cookie
+    // is dropped silently and every read is a 401 forever.
+    const list = calls.find((c) => c.url.endsWith("/registry"));
+    expect(list?.credentials).toBe("include");
+  });
+
+  it("opens without a reload when the session arrives in this tab", async () => {
+    document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+    routedFetch({
+      list: [json({ error: "Unauthorized" }, 401), json(registry())],
+      mine: [json({ error: "Unauthorized" }, 401), json({ claims: [] })],
+    });
+    const { container } = renderPage();
+    await waitFor(() => expect(container.querySelector("[data-gift-locked]")).toBeTruthy());
+
+    // Exactly what the invitation does the moment a claim lands.
+    setClaimedHint();
+    noteClaimed();
+
+    await whenListed();
+    expect(container.querySelector("[data-gift-locked]")).toBeNull();
+  });
+});
+
+describe("what the page paints", () => {
+  it("names the wait rather than showing an empty frame", () => {
+    routedFetch({});
+    const { container } = renderPage();
+    // The read is credentialed, so it cannot start until this island hydrates.
+    const waiting = container.querySelector("[data-gift-waiting]");
+    expect(waiting).toBeTruthy();
+    expect(waiting?.getAttribute("aria-live")).toBe("polite");
   });
 
   /**
@@ -161,15 +200,27 @@ describe("what the page paints", () => {
    * dropping to nothing cost a section nobody had scrolled to; here it would
    * blank the page under someone reading it.
    */
-  it("keeps the list on screen when the revalidation fails outright", async () => {
-    const { calls } = routedFetch({ list: [json({}, 500)] });
+  it("keeps the list on screen when a later read fails outright", async () => {
+    const { calls } = routedFetch({ list: [json(registry()), json({}, 500)] });
     const { container } = renderPage();
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/registry"))).toBe(true));
+    await whenListed();
+
+    noteClaimed(); // any session change re-reads both routes
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url.endsWith("/registry")).length).toBeGreaterThan(1),
+    );
     expect(container.querySelector("[data-gift-item]")).toBeTruthy();
-    expect(container.querySelector("[data-gift-closed]")).toBeNull();
+    expect(container.querySelector("[data-gift-unreachable]")).toBeNull();
   });
 
-  it("says so, with a way back, when the couple close the list while it is open", async () => {
+  it("says the list could not be reached when that is the FIRST answer", async () => {
+    routedFetch({ list: [json({}, 500)] });
+    const { container } = renderPage();
+    await waitFor(() => expect(container.querySelector("[data-gift-unreachable]")).toBeTruthy());
+    expect(container.querySelector("[data-gift-locked]")).toBeNull();
+  });
+
+  it("says so, with a way back, when the couple close the list", async () => {
     routedFetch({ list: [json({ error: "registry_not_found" }, 404)] });
     const { container } = renderPage();
 
@@ -182,11 +233,24 @@ describe("what the page paints", () => {
 
   it("has its own note for a PUBLISHED list with nothing on it yet", async () => {
     routedFetch({ list: [json(registry({ items: [] }))] });
-    const { container } = renderPage({ initialRegistry: registry({ items: [] }) });
+    const { container } = renderPage();
     await screen.findByText("The couple haven’t added any gifts yet.");
     // Not the closed state, and no ledger line summarising nothing as "0 of 0".
     expect(container.querySelector("[data-gift-closed]")).toBeNull();
     expect(container.querySelector("[data-gift-availability]")).toBeNull();
+  });
+
+  it("carries the couple's intro, the invite's copy first and the module's second", async () => {
+    routedFetch({ list: [json(registry({ message: "No boxed gifts, please." }))] });
+    const first = renderPage();
+    await screen.findByText("No boxed gifts, please.");
+    first.unmount();
+    cleanup();
+
+    routedFetch({ list: [json(registry({ message: "No boxed gifts, please." }))] });
+    renderPage({ inviteBody: "Your presence is the present." });
+    await screen.findByText("Your presence is the present.");
+    expect(screen.queryByText("No boxed gifts, please.")).toBeNull();
   });
 });
 
@@ -195,9 +259,8 @@ describe("the ledger line", () => {
     routedFetch({
       list: [json(registry({ items: [item({ quantityWanted: 4, quantityClaimed: 1 })] }))],
     });
-    const { container } = renderPage({
-      initialRegistry: registry({ items: [item({ quantityWanted: 4, quantityClaimed: 1 })] }),
-    });
+    const { container } = renderPage();
+    await whenListed();
 
     expect(container.querySelector("[data-gift-availability]")?.textContent).toBe(
       "3 of 4 still available",
@@ -207,7 +270,6 @@ describe("the ledger line", () => {
   });
 
   it("tells a household what it has reserved, in quantities and never in names", async () => {
-    setClaimedHint();
     routedFetch({
       list: [json(registry({ items: [item({ quantityWanted: 4, quantityClaimed: 2 })] }))],
       mine: [
@@ -224,9 +286,7 @@ describe("the ledger line", () => {
         }),
       ],
     });
-    const { container } = renderPage({
-      initialRegistry: registry({ items: [item({ quantityWanted: 4, quantityClaimed: 2 })] }),
-    });
+    const { container } = renderPage();
 
     await waitFor(() =>
       expect(container.querySelector("[data-gift-claimed-count]")?.textContent).toBe(
@@ -240,7 +300,7 @@ describe("the ledger line", () => {
 });
 
 describe("the couple's shelves", () => {
-  it("keeps their own categories, in their own order, with the unlabelled tail last", () => {
+  it("keeps their own categories, in their own order, with the unlabelled tail last", async () => {
     const items = [
       item({ id: "a", title: "Copper pan", category: "Kitchen", sortOrder: 0 }),
       item({ id: "b", title: "Picnic rug", category: null, sortOrder: 1 }),
@@ -248,7 +308,8 @@ describe("the couple's shelves", () => {
       item({ id: "d", title: "Linen sheets", category: "Bedroom", sortOrder: 3 }),
     ];
     routedFetch({ list: [json(registry({ items }))] });
-    const { container } = renderPage({ initialRegistry: registry({ items }) });
+    const { container } = renderPage();
+    await whenListed();
 
     const shelves = [...container.querySelectorAll("[data-gift-shelf]")];
     expect(shelves.map((shelf) => shelf.getAttribute("data-gift-shelf"))).toEqual([
@@ -260,9 +321,10 @@ describe("the couple's shelves", () => {
     expect(container.textContent).toContain("More gifts");
   });
 
-  it("labels nothing when the couple grouped nothing", () => {
+  it("labels nothing when the couple grouped nothing", async () => {
     routedFetch({});
     const { container } = renderPage();
+    await whenListed();
     expect(container.querySelectorAll("[data-gift-shelf]")).toHaveLength(1);
     expect(container.querySelector("h2")).toBeNull();
     expect(container.textContent).not.toContain("More gifts");
@@ -273,9 +335,7 @@ describe("the privacy property", () => {
   it("puts counts in the DOM and no claimant identity anywhere", async () => {
     routedFetch({
       list: [json(registry({ items: [item({ quantityWanted: 2, quantityClaimed: 1 })] }))],
-      mine: [json({ claims: [] })],
     });
-    setClaimedHint();
     const { container } = renderPage();
 
     await screen.findByText("1 of 2 left");
@@ -284,83 +344,50 @@ describe("the privacy property", () => {
     expect(container.querySelector("[data-gift-mine]")).toBeNull();
   });
 
-  it("never asks for anything but counts on the public read", async () => {
+  it("skips the household read entirely without the claim hint", async () => {
+    document.cookie = "cire_claimed=; Path=/; Max-Age=0";
     const { calls } = routedFetch({});
     renderPage();
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
-    // One public read, and no credentialed read for a browser with no hint.
-    expect(calls.filter((c) => c.url.endsWith("/registry"))).toHaveLength(1);
+    await whenListed();
+    // A browser that never claimed here can only get a 401 from `…/mine`, and
+    // this page is a shareable link: the wasted call would scale with page
+    // views rather than with guests.
     expect(calls.some((c) => c.url.endsWith("/registry/mine"))).toBe(false);
   });
 });
 
-describe("the signed-out path", () => {
-  it("shows the list and the way to the code, not a dead button", async () => {
-    routedFetch({});
+describe("a session that ends mid-visit", () => {
+  it("explains the missing controls when only the household read lost the session", async () => {
+    routedFetch({ mine: [json({ error: "Unauthorized" }, 401)] });
     const { container } = renderPage();
 
-    await waitFor(() => expect(signedOutPrompt(container)).toBeTruthy());
-    expect(signedOutPrompt(container)?.textContent).toContain("enter your invite code");
-    // The code lives on the invitation, which is now a different document — so
-    // this has to be a link, never "scroll up".
-    expect(signedOutPrompt(container)?.querySelector("a")?.getAttribute("href")).toBe(INVITE_HREF);
-    expect(screen.getByText("1 of 2 left")).toBeTruthy();
-    // No claim/release controls exist to be pressed.
+    await whenListed();
+    // The list read had a session, so the page is not the locked one; the
+    // controls are gone, and the reason is on the page instead.
+    expect(container.querySelector("[data-gift-locked]")).toBeNull();
+    expect(container.querySelector("[data-gift-signed-out]")?.textContent).toContain(
+      "Your invite session has ended",
+    );
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("skips the credentialed read entirely without the claim hint", async () => {
-    const { calls } = routedFetch({});
-    renderPage();
-    await screen.findByText("1 of 2 left");
-    expect(calls.some((c) => c.url.endsWith("/registry/mine"))).toBe(false);
-  });
-
-  /**
-   * THE SESSION CASE. The claim itself now happens in another DOCUMENT (the
-   * invitation), so this page usually learns about it by being loaded fresh.
-   * The event still matters for a session that starts or ends in THIS tab —
-   * without it the guest keeps a prompt for a code they have already entered.
-   */
-  it("notices a session change in this tab, with no reload", async () => {
-    const { calls } = routedFetch({ mine: [json({ claims: [] })] });
+  it("drops back to the gate when the guest signs out in this tab", async () => {
+    routedFetch({
+      list: [json(registry()), json({ error: "Unauthorized" }, 401)],
+      mine: [json({ claims: [] }), json({ error: "Unauthorized" }, 401)],
+    });
     const { container } = renderPage();
-
-    await waitFor(() => expect(signedOutPrompt(container)).toBeTruthy());
-    expect(calls.some((c) => c.url.endsWith("/registry/mine"))).toBe(false);
-
-    // Exactly what `InvitePage` does the moment a claim lands.
-    noteClaimed();
-
     await screen.findByRole("button", { name: "Reserve" });
-    expect(calls.some((c) => c.url.endsWith("/registry/mine"))).toBe(true);
-    expect(signedOutPrompt(container)).toBeNull();
-  });
 
-  it("drops back to the prompt when the guest signs out", async () => {
-    setClaimedHint();
-    routedFetch({ mine: [json({ claims: [] })] });
-    const { container } = renderPage();
-
-    await screen.findByRole("button", { name: "Reserve" });
     await signOut(API);
 
-    await waitFor(() => expect(container.querySelectorAll("button")).toHaveLength(0));
-    expect(signedOutPrompt(container)).toBeTruthy();
-  });
-
-  it("reads the household when the browser has claimed before", async () => {
-    setClaimedHint();
-    const { calls } = routedFetch({ mine: [json({ claims: [] })] });
-    renderPage();
-    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/registry/mine"))).toBe(true));
-    await screen.findByRole("button", { name: "Reserve" });
+    await waitFor(() => expect(container.querySelector("[data-gift-locked]")).toBeTruthy());
+    expect(container.querySelector("[data-gift-item]")).toBeNull();
   });
 });
 
 describe("this household's own claims", () => {
   it("merges its own claim into the list", async () => {
-    setClaimedHint();
     routedFetch({
       list: [json(registry({ items: [item({ quantityWanted: 2, quantityClaimed: 1 })] }))],
       mine: [
@@ -384,10 +411,7 @@ describe("this household's own claims", () => {
   });
 
   it("renders the shipping address only when the API actually sent one", async () => {
-    setClaimedHint();
-    routedFetch({
-      mine: [json({ claims: [], shippingAddress: "12 Rose Lane\nSydney" })],
-    });
+    routedFetch({ mine: [json({ claims: [], shippingAddress: "12 Rose Lane\nSydney" })] });
     const first = renderPage();
     await waitFor(() => expect(first.container.querySelector("[data-gift-shipping]")).toBeTruthy());
     expect(first.container.querySelector("[data-gift-shipping]")?.textContent).toContain(
@@ -396,7 +420,7 @@ describe("this household's own claims", () => {
     first.unmount();
     cleanup();
 
-    routedFetch({ mine: [json({ claims: [] })] });
+    routedFetch({});
     const second = renderPage();
     await screen.findByRole("button", { name: "Reserve" });
     // Absent means "you may not see it" and "there isn't one" at once, so the
@@ -408,7 +432,6 @@ describe("this household's own claims", () => {
 
 describe("claiming", () => {
   it("re-reads both routes after a successful claim rather than guessing", async () => {
-    setClaimedHint();
     const { calls } = routedFetch({
       list: [
         json(registry({ items: [item({ quantityWanted: 2, quantityClaimed: 0 })] })),
@@ -424,9 +447,7 @@ describe("claiming", () => {
       ],
       claim: [json({ ok: true })],
     });
-    const { container } = renderPage({
-      initialRegistry: registry({ items: [item({ quantityWanted: 2, quantityClaimed: 0 })] }),
-    });
+    const { container } = renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
@@ -447,7 +468,6 @@ describe("claiming", () => {
   });
 
   it("handles the 409 race honestly: refetched counts, a plain message, no fake success", async () => {
-    setClaimedHint();
     const { calls } = routedFetch({
       list: [
         // What this guest was looking at: the last one is free.
@@ -455,7 +475,6 @@ describe("claiming", () => {
         // What is true by the time they press: another household took it.
         json(registry({ items: [item({ quantityWanted: 2, quantityClaimed: 2 })] })),
       ],
-      mine: [json({ claims: [] })],
       claim: [json({ error: "item_fully_claimed" }, 409)],
     });
     const { container } = renderPage();
@@ -488,7 +507,6 @@ describe("claiming", () => {
    * shelf and take the open form — and the words typed into it — down with it.
    */
   it("keeps the form open, on its own shelf, after a 409 that still leaves something", async () => {
-    setClaimedHint();
     const shelved = (claimed: number) =>
       registry({
         items: [item({ category: "Kitchen", quantityWanted: 3, quantityClaimed: claimed })],
@@ -502,10 +520,9 @@ describe("claiming", () => {
         // close must key on the CEILING and never on the 409 itself.
         json(shelved(2)),
       ],
-      mine: [json({ claims: [] })],
       claim: [json({ error: "item_fully_claimed" }, 409)],
     });
-    const { container } = renderPage({ initialRegistry: shelved(0) });
+    const { container } = renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
     const name = container.querySelector('input[type="text"]') as HTMLInputElement;
@@ -523,12 +540,8 @@ describe("claiming", () => {
     expect(container.querySelector('[data-gift-shelf="Kitchen"]')).toBeTruthy();
   });
 
-  it("drops to the signed-out surface when the session lapsed mid-visit", async () => {
-    setClaimedHint();
-    routedFetch({
-      mine: [json({ claims: [] })],
-      claim: [json({ error: "unauthorised" }, 401)],
-    });
+  it("says the session lapsed when the write is the thing that finds out", async () => {
+    routedFetch({ claim: [json({ error: "unauthorised" }, 401)] });
     const { container } = renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
@@ -538,14 +551,12 @@ describe("claiming", () => {
       "Your invite session has ended. Enter your invite code again to reserve a gift.",
     );
     await waitFor(() => expect(container.querySelectorAll("button")).toHaveLength(0));
+    // The list they were reading is still there — only the controls are gone.
+    expect(container.querySelector("[data-gift-item]")).toBeTruthy();
   });
 
   it("does not re-read anything when the write never reached the server", async () => {
-    setClaimedHint();
-    const { calls } = routedFetch({
-      mine: [json({ claims: [] })],
-      claim: [json({ error: "rate_limited" }, 429)],
-    });
+    const { calls } = routedFetch({ claim: [json({ error: "rate_limited" }, 429)] });
     const { container } = renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
@@ -556,7 +567,6 @@ describe("claiming", () => {
   });
 
   it("releases a claim and re-reads", async () => {
-    setClaimedHint();
     const { calls } = routedFetch({
       mine: [
         json({
@@ -581,7 +591,7 @@ describe("the status line", () => {
   it("is a polite live region at the page root, not an overlay", async () => {
     routedFetch({});
     const { container } = renderPage();
-    await screen.findByText("1 of 2 left");
+    await whenListed();
 
     const status = container.querySelector("[data-gift-status]") as HTMLElement;
     expect(status.getAttribute("role")).toBe("status");

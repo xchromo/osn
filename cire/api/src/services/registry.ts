@@ -1283,11 +1283,40 @@ export const registryGuestService = {
     );
   },
 
-  /** The published list, with per-item claimed totals. No identities, ever. */
-  publicView(slug: string): Effect.Effect<PublicRegistryDto, RegistryNotVisible, DbService> {
+  /**
+   * The published list for one of THIS wedding's households, with per-item
+   * claimed totals. No identities, ever.
+   *
+   * **It takes a `familyId` because the list is not public.** A gift list names
+   * what a couple want and what they cost, and they only ever showed it to the
+   * people they invited — so it is gated on the same `cire_session` the rest of
+   * the invitation is, and a guest who has not entered their code gets a 401
+   * rather than the list.
+   *
+   * The family is checked against the WEDDING, not merely required to exist: a
+   * `cire_session` names a household, not a wedding, so without this one
+   * leaked code would open every couple's list on the platform. A family from
+   * another wedding fails `RegistryNotVisible` — the same failure, and so the
+   * same 404, as a registry that is unpublished or unentitled. A distinct code
+   * would confirm to any cookie-holder which weddings have a list.
+   */
+  guestView(input: {
+    slug: string;
+    familyId: string;
+  }): Effect.Effect<PublicRegistryDto, RegistryNotVisible, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      const { settings, weddingId } = yield* resolveVisibleRegistry(slug);
+      const { settings, weddingId } = yield* resolveVisibleRegistry(input.slug);
+      const familyRows = yield* dbQuery(() =>
+        db
+          .select({ id: families.id })
+          .from(families)
+          .where(and(eq(families.id, input.familyId), eq(families.weddingId, weddingId)))
+          .all(),
+      );
+      if (!(familyRows as Array<{ id: string }>)[0]) {
+        return yield* Effect.fail(new RegistryNotVisible());
+      }
       const { claimed, currency, itemRows } = yield* Effect.all(
         {
           itemRows: dbQuery(() =>
@@ -1312,7 +1341,7 @@ export const registryGuestService = {
           toPublicItemDto(weddingId, r, claimed.get(r.id) ?? 0),
         ),
       };
-    }).pipe(Effect.withSpan("cire.registry.publicView"));
+    }).pipe(Effect.withSpan("cire.registry.guestView"));
   },
 
   /**

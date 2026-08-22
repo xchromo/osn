@@ -8,14 +8,17 @@ import {
   type GiftRegistry,
   type GiftRegistryItem,
 } from "../../lib/gift-registry";
+import { noteClaimed } from "../claim-session";
 import { GiftRegistryTeaser } from "./GiftRegistryTeaser";
 
 /**
  * The band the gift list leaves behind on the invite.
  *
  * What is load-bearing here:
- *   - it renders NOTHING for a wedding with no published list, and still ships
- *     an element child so `client:visible` can hydrate it at all;
+ *   - it renders NOTHING for a visitor who has not entered their code, and
+ *     nothing for a wedding with no published list — while still shipping an
+ *     element child so `client:visible` can hydrate it at all;
+ *   - it appears the moment a claim lands in the other island, with no reload;
  *   - it links to the list's own page, at the encoded slug;
  *   - the peek shows real gifts (never empty frames), and the fourth tile is
  *     laid out only where a fourth fits;
@@ -61,10 +64,16 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function stubFetch(response: Response) {
-  const mock = vi.fn(async () => response.clone());
+function stubFetch(...responses: Response[]) {
+  const queue = [...responses];
+  const calls: RequestInit[] = [];
+  const mock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(init ?? {});
+    const next = queue.length > 1 ? queue.shift() : queue[0];
+    return (next as Response).clone();
+  });
   globalThis.fetch = mock as unknown as typeof fetch;
-  return mock;
+  return Object.assign(mock, { calls });
 }
 
 function renderTeaser(props: Partial<Parameters<typeof GiftRegistryTeaser>[0]> = {}) {
@@ -75,11 +84,37 @@ const realFetch = globalThis.fetch;
 
 afterEach(() => {
   cleanup();
+  document.cookie = "cire_claimed=; Path=/; Max-Age=0";
   globalThis.fetch = realFetch;
   vi.restoreAllMocks();
 });
 
 describe("what renders at all", () => {
+  it("renders nothing for a visitor who has not entered their code", async () => {
+    // The list is for the couple's guests, so the band advertising it is too —
+    // the same silence every other claim-gated section of the invitation keeps,
+    // rather than a link to a page they cannot open.
+    const mock = stubFetch(json({ error: "Unauthorized" }, 401));
+    const { container } = renderTeaser();
+    await waitFor(() => expect(mock).toHaveBeenCalled());
+    expect(container.querySelector("[data-gift-teaser]")).toBeNull();
+    // And the read carried the cookie, or it could only ever be a 401.
+    expect(mock.calls[0]?.credentials).toBe("include");
+  });
+
+  it("appears the moment a claim lands in the other island, with no reload", async () => {
+    stubFetch(json({ error: "Unauthorized" }, 401), json(registry()));
+    const { container } = renderTeaser();
+    await waitFor(() => expect(container.querySelector("[data-gift-teaser]")).toBeNull());
+
+    // Exactly what `InvitePage` does the moment a claim lands. The invitation
+    // reveals in place and navigates nowhere, so without this the band the
+    // couple wrote would stay missing for the rest of the visit.
+    noteClaimed();
+
+    await screen.findByRole("link", { name: "See the gift list" });
+  });
+
   it("renders nothing for a wedding whose list is unpublished, unentitled or absent", async () => {
     stubFetch(json({ error: "registry_not_found" }, 404));
     const { container } = renderTeaser();

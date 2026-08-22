@@ -78,16 +78,23 @@ export interface GiftRegistryHousehold {
 }
 
 /**
- * The public list read.
+ * The list read. CREDENTIALED — the list is for the couple's guests.
+ *
+ * `signed-out` is the 401 a visitor with no `cire_session` gets: a gift list
+ * names what a couple want and what it costs, and they only ever showed it to
+ * the people they invited, so it sits behind the same claim the rest of the
+ * invitation does.
  *
  * `hidden` is the API's single 404 `registry_not_found`, which covers unknown
- * slug, unentitled wedding, and a registry that exists but is not published —
- * one code on purpose, so the public surface cannot be used to probe which. The
- * section renders NOTHING on `hidden`; that is a different thing from a
- * published registry with no items, which renders its heading and an empty note.
+ * slug, unentitled wedding, a registry that exists but is not published, and a
+ * household of ANOTHER wedding — one code on purpose, so no caller can probe
+ * which. The band on the invite renders NOTHING on either `hidden` or
+ * `signed-out`; that is a different thing from a published registry with no
+ * items, which renders its heading and an empty note.
  */
 export type GiftRegistryFetch =
   | { kind: "ok"; registry: GiftRegistry }
+  | { kind: "signed-out" }
   | { kind: "hidden" }
   | { kind: "error" };
 
@@ -182,14 +189,18 @@ async function writeFailure(res: Response): Promise<GiftRegistryWrite> {
 }
 
 /**
- * The public registry for a slug. No credentials — this route is public, and
- * sending the household cookie would buy nothing while widening what a cached
- * intermediary could key on. `no-store` matches the route's own header: the
- * counts here are live, and a stale list shows a claimed gift as available.
+ * This wedding's gift list. Credentialed — see the module header for why the
+ * cookie mode is load-bearing, and `GiftRegistryFetch` for why the list needs
+ * one at all. `no-store` matches the route's own header: the counts here are
+ * live, and a stale list shows a claimed gift as available.
  */
 export async function fetchGiftRegistry(apiUrl: string, slug: string): Promise<GiftRegistryFetch> {
   try {
-    const res = await fetch(registryBase(apiUrl, slug), { cache: "no-store" });
+    const res = await fetch(registryBase(apiUrl, slug), {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (res.status === 401) return { kind: "signed-out" };
     if (res.status === 404) return { kind: "hidden" };
     if (!res.ok) return { kind: "error" };
     return { kind: "ok", registry: (await res.json()) as GiftRegistry };

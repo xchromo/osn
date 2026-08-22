@@ -79,41 +79,65 @@ function unauthorisedSync(set: { status?: number | string }) {
 const logDefect = (cause: unknown) => Effect.logError("registry guest handler defect", cause);
 
 /**
- * Guest registry — PUBLIC READS (no auth), mounted under /api/invite:
+ * Guest registry — THE LIST, mounted under /api/invite:
  *
- *   GET /api/invite/:slug/registry             → the published list
- *   GET /api/invite/:slug/registry/image/:name → a gift's image bytes
+ *   GET /api/invite/:slug/registry  (sessionAuth)
  *
- * A sibling Elysia instance to `createInvitePublicRoutes` rather than more
- * routes on it: this pair is the only part of the invite surface that must
- * disappear when the `registry` entitlement is absent, and keeping it separate
- * means that gate can never leak onto the invite's own routes (or fail to cover
- * one of these two).
+ * **The list is not public.** It names what a couple want and what it costs,
+ * and they only ever showed it to the people they invited — so it sits behind
+ * the same `cire_session` the rest of the invitation does. A visitor with no
+ * claim gets 401 and the guest site sends them to the invitation to enter their
+ * code; a household of ANOTHER wedding gets the same 404 as an unpublished one
+ * (`registryGuestService.guestView` checks the family against the wedding, so
+ * one leaked code cannot open every couple's list).
  *
- * The gate itself lives in `registryGuestService`, not here, so the read routes
- * and the write routes below cannot drift into different ideas of "visible".
+ * Its own instance, and not merged into the `…/mine` one below, for the reason
+ * that split exists: the writes carry a limiter this read must not, and the
+ * entitlement gate must cover every registry route without ever leaking onto
+ * the invite's own public routes.
  */
-export const createRegistryGuestRoutes = (
-  db: Db,
-  deps: { readonly assets?: AssetsBucket; readonly images?: ImagesBindingLike } = {},
-) =>
+export const createRegistryGuestListRoutes = (db: Db) =>
   new Elysia({ prefix: "/api/invite" })
-    .get("/:slug/registry", ({ params, set }) => {
+    .use(sessionAuth(db))
+    .get("/:slug/registry", ({ params, familyId, set }) => {
+      // The sessionAuth plugin guarantees this; the check is a runtime net.
+      if (!familyId) return unauthorisedSync(set);
       // Same reasoning as the invite payload it sits beside: this JSON carries
       // live claim totals and the couple's copy, and a guest revalidates it on
       // mount. Served stale it would show a gift as available that someone
       // claimed an hour ago — two households buying the same pan.
       set.headers["cache-control"] = "no-store";
       return runCire(
-        registryGuestService.publicView(params.slug).pipe(
+        registryGuestService.guestView({ slug: params.slug, familyId }).pipe(
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
           Effect.tapDefect(logDefect),
           Effect.catchAllDefect(() => internal(set)),
         ),
       );
-    })
-    .get("/:slug/registry/image/:name", ({ params, query, request, set }) => {
+    });
+
+/**
+ * Guest registry — GIFT IMAGE BYTES, mounted under /api/invite:
+ *
+ *   GET /api/invite/:slug/registry/image/:name  (no auth)
+ *
+ * **Deliberately still unauthenticated, though the list above is not.** A name
+ * is `registry-<uuid>`, minted per save and reachable only from the list, so
+ * the bytes are not enumerable without the very read the session now gates —
+ * while authenticating them would put a session lookup on every image request
+ * on the page, the one place on the guest surface where requests come in
+ * dozens. If the couple's pictures ever become sensitive on their own, this is
+ * the route to move, and `visibility: "public"` below is the line to change
+ * with it.
+ */
+export const createRegistryGuestImageRoutes = (
+  db: Db,
+  deps: { readonly assets?: AssetsBucket; readonly images?: ImagesBindingLike } = {},
+) =>
+  new Elysia({ prefix: "/api/invite" }).get(
+    "/:slug/registry/image/:name",
+    ({ params, query, request, set }) => {
       if (!REGISTRY_IMAGE_NAME.test(params.name)) return notVisibleSync(set);
       // Bounded, allowlisted variant (?variant=) + Accept-negotiated format,
       // both collapsing to a fixed value, so the transform-URL cardinality per
@@ -149,7 +173,8 @@ export const createRegistryGuestRoutes = (
             cacheSlot: `${params.slug}:registry:${params.name}`,
             variant,
             format,
-            // Public: a published registry's images are as public as its slug.
+            // Public, and the one part of the gift surface that still is —
+            // see the route header above for why the uuid name is the gate.
             visibility: "public",
             images: deps.images,
           });
@@ -164,7 +189,8 @@ export const createRegistryGuestRoutes = (
           Effect.catchAllDefect(() => internal(set)),
         ),
       );
-    });
+    },
+  );
 
 /**
  * Guest registry — THIS HOUSEHOLD'S READ:

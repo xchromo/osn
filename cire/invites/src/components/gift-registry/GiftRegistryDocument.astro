@@ -11,19 +11,18 @@
 // of this file. If a pack ever forks the gift surfaces, this shell takes the
 // pack as a prop rather than being duplicated.
 //
-// WHAT IS SERVER-RENDERED HERE, and why. The route already fetched the list to
-// decide whether this page exists at all (an unpublished list is a 404, not an
-// empty page) — so the masthead's copy and the list itself are rendered from
-// that same payload. A guest opening the link in a shop gets the gifts in the
-// first paint, not after a hydrate-then-fetch waterfall.
+// WHAT IS SERVER-RENDERED HERE, and what cannot be. The masthead comes from the
+// invite's own public payload, so the page paints the couple's band, colours and
+// heading immediately. The LIST cannot: it is gated on `cire_session`, a cookie
+// host-scoped to the API origin, which the browser therefore never sends to this
+// Worker. There is no household for the server to be, so the list is the
+// island's to fetch — see `GiftRegistryPage`.
 import '../../styles/global.css'
 import { apiPreconnectHref } from '../../lib/api-origin'
 import {
   giftPageTitle,
-  giftRegistryBody,
   giftRegistryEyebrow,
   giftRegistryHeading,
-  type GiftRegistry,
 } from '../../lib/gift-registry'
 import { invitePath } from '../../lib/invite'
 import { Z_CLASS } from '../../lib/z-index'
@@ -42,15 +41,17 @@ interface Props {
   slug: string
   /** Invite customisation for this slug — the couple's copy, theme and hero photo. */
   invite: InviteCustomisation | null
-  /** The published list, fetched server-side by the route. */
-  registry: GiftRegistry
 }
 
-const { apiUrl, slug, invite, registry } = Astro.props
+const { apiUrl, slug, invite } = Astro.props
 
+// The masthead's own copy, from the invite payload — public, and the same words
+// the band on the invitation carries. The registry module's own `headline` /
+// `message` are the second half of that chain, and they arrive with the list, so
+// the island renders the intro paragraph rather than this shell. The heading
+// therefore resolves invite-copy-then-built-in here, and nowhere twice.
 const eyebrow = giftRegistryEyebrow(invite?.registry?.eyebrow)
-const heading = giftRegistryHeading(invite?.registry?.heading, registry.headline)
-const body = giftRegistryBody(invite?.registry?.body, registry.message)
+const heading = giftRegistryHeading(invite?.registry?.heading, null)
 const pageTitle = giftPageTitle(heading, invite?.hero.title)
 const inviteHref = invitePath(slug)
 
@@ -87,8 +88,9 @@ const apiPreconnect = apiPreconnectHref(apiUrl)
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <title>{pageTitle}</title>
     {/* Both pools, for the same reasons the invite document warms both: the gift
-        pictures and the credentialed `…/registry/mine` read go to this origin
-        without `crossorigin`, the anonymous list revalidation goes with it. */}
+        pictures go to this origin without `crossorigin`, while the two
+        credentialed reads the island makes on mount are CORS requests and use
+        the other one. Both are on the critical path of this page. */}
     {apiPreconnect && <link rel="preconnect" href={apiPreconnect} />}
     {apiPreconnect && <link rel="preconnect" href={apiPreconnect} crossorigin />}
     {mastheadSrc && <link rel="preload" as="image" href={mastheadSrc} />}
@@ -156,23 +158,19 @@ const apiPreconnect = apiPreconnectHref(apiUrl)
         <h1 class="font-display text-gold max-w-full pb-1 text-[calc(clamp(2.25rem,6vw,3.5rem)*var(--invite-heading-scale,1))] leading-[1.15] [font-weight:var(--invite-heading-weight,300)] break-words [font-style:var(--invite-heading-style,normal)]">
           {heading}
         </h1>
-        {body && (
-          <p class="font-body text-text mt-5 max-w-[34rem] text-[0.92rem] leading-[1.7] break-words whitespace-pre-line">
-            {body}
-          </p>
-        )}
       </div>
     </header>
 
-    {/* `client:load`, not `client:visible`: this island IS the page, it carries
-        the reserve controls, and it is already server-rendered with the real
-        list — there is nothing to wait for. */}
+    {/* `client:load`, not `client:visible`: this island IS the page, and its
+        first job is a credentialed read that only it can make. Waiting for the
+        viewport would mean waiting to find out whether the guest is even
+        allowed in. */}
     <GiftRegistryPage
       client:load
       apiUrl={apiUrl}
       slug={slug}
       inviteHref={inviteHref}
-      initialRegistry={registry}
+      inviteBody={invite?.registry?.body ?? null}
       themeVars={registryVars}
     />
 

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import {
   fetchGiftRegistry,
@@ -12,6 +12,7 @@ import {
   type GiftRegistry,
   type GiftRegistryItem,
 } from "../../lib/gift-registry";
+import { CLAIM_SESSION_EVENT } from "../claim-session";
 import { buildSrcSet, variantSrc } from "../invite-images";
 
 /**
@@ -24,10 +25,18 @@ import { buildSrcSet, variantSrc } from "../invite-images";
  * story again. What is left behind has to earn its band: a peek at the actual
  * gifts, not a bare "we have a registry" line.
  *
- * IT RENDERS NOTHING unless the public read answers `ok`. That read 404s for a
- * wedding with no registry, one that is not entitled, and one whose list is
- * unpublished — one code, on purpose, so the public surface cannot be used to
- * tell them apart. Nothing is the permanent state for all three.
+ * IT RENDERS NOTHING unless the read answers `ok`, and the read is CREDENTIALED:
+ * the list is for the couple's guests, so a visitor who has not entered their
+ * code gets a 401 and no band at all — the same silence every other section of
+ * the invitation keeps behind the claim gate, rather than a band advertising a
+ * list they cannot open. A 404 covers a wedding with no registry, one that is
+ * not entitled, and one whose list is unpublished: one code, on purpose, so
+ * nothing here can be used to tell them apart.
+ *
+ * THE CLAIM HAPPENS IN THE OTHER ISLAND, and it navigates nowhere — `InvitePage`
+ * reveals the invitation in place. So this listens for `CLAIM_SESSION_EVENT` and
+ * re-reads: without it, a guest who enters their code would have to reload
+ * before the band the couple wrote appeared.
  *
  * NO COUNTS OF WHO. Same rule as the page: the availability line is quantities
  * only. Names and totals are the couple's.
@@ -50,16 +59,26 @@ export interface GiftRegistryTeaserProps {
 }
 
 export function GiftRegistryTeaser(props: GiftRegistryTeaserProps) {
-  // `null` means "not answered yet". Until the public read answers `ok`, this
-  // component renders NOTHING — which is also the permanent state for a registry
-  // that is unpublished, unentitled or absent, since all three 404.
+  // `null` means "no band". Until the read answers `ok` this component renders
+  // NOTHING — the state for a visitor who has not claimed (401), and the
+  // permanent one for a registry that is unpublished, unentitled or absent
+  // (404, one code for all three).
   const [registry, setRegistry] = createSignal<GiftRegistry | null>(null);
 
+  async function load(): Promise<void> {
+    const result = await fetchGiftRegistry(props.apiUrl, props.slug);
+    // Only an `ok` changes what is on screen. A 401 before a claim and a 401
+    // after a session lapses are the same answer — no band — and a transport
+    // failure must not take away a band that is already reading.
+    if (result.kind === "ok") setRegistry(result.registry);
+    else if (result.kind === "signed-out" || result.kind === "hidden") setRegistry(null);
+  }
+
   onMount(() => {
-    void (async () => {
-      const result = await fetchGiftRegistry(props.apiUrl, props.slug);
-      if (result.kind === "ok") setRegistry(result.registry);
-    })();
+    void load();
+    const onSessionChange = () => void load();
+    window.addEventListener(CLAIM_SESSION_EVENT, onSessionChange);
+    onCleanup(() => window.removeEventListener(CLAIM_SESSION_EVENT, onSessionChange));
   });
 
   const items = createMemo(() => sortGiftRegistryItems(registry()?.items ?? []));
@@ -97,7 +116,7 @@ export function GiftRegistryTeaser(props: GiftRegistryTeaserProps) {
      * `display: contents` and has no box of its own to intersect with.
      *
      * Everything below is inside `<Show when={registry()}>`, and the registry is
-     * `null` until a fetch that only runs after hydration — so on the server this
+     * `null` until a credentialed fetch that only runs after hydration — so on the server this
      * component renders nothing, the island ships zero element children, the
      * observer is handed nothing to watch and hydration NEVER fires. The whole
      * band is then absent from both design packs, in production only: a unit

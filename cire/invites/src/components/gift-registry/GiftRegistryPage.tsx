@@ -1,10 +1,11 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 
 import {
   claimGiftRegistryItem,
   fetchGiftRegistry,
   fetchGiftRegistryHousehold,
   giftRegistryAvailabilityCopy,
+  giftRegistryBody,
   giftRegistryClaimedCopy,
   giftRegistryImageBase,
   groupGiftRegistryItems,
@@ -13,6 +14,7 @@ import {
   sortGiftRegistryItems,
   type GiftRegistry,
   type GiftRegistryClaimBody,
+  type GiftRegistryFetch,
   type GiftRegistryHouseholdClaim,
   type GiftRegistryHouseholdFetch,
   type GiftRegistryItem,
@@ -27,9 +29,11 @@ import { GiftRegistryItemCard } from "./GiftRegistryItemCard";
  *
  * This is the BODY of `/<slug>/registry`, its own page since the list left the
  * foot of the invite. The page shell (`GiftRegistryDocument.astro`) owns the
- * masthead — eyebrow, heading, the couple's intro — and hands this island the
- * list it already fetched server-side, so the first paint is the real list
- * rather than a spinner over a fetch that could only start after hydration.
+ * masthead — the eyebrow and heading, which come from the invite's own public
+ * copy and can therefore be server-rendered. Everything that needs the list
+ * itself is here, because the list is CREDENTIALED and the server has no way to
+ * fetch it: `cire_session` is host-scoped to the API origin, so the browser
+ * never sends it to the guest site and the SSR render has no household to be.
  *
  * NAMING: `src/designs/registry.ts` is the invite DESIGN-PACK map and predates
  * this feature. Everything here is `gift-registry` / `GiftRegistry*` so the two
@@ -56,10 +60,12 @@ import { GiftRegistryItemCard } from "./GiftRegistryItemCard";
  * this component for exactly that reason: the counts a guest reads are always
  * ones the server just sent.
  *
- * THE PAGE IS PUBLIC. The list reads without a claim, so a guest who has not
- * entered their code still sees the gifts — and a line telling them where to
- * enter it, pointing back at the invitation, instead of a button that could only
- * ever 401.
+ * THE PAGE IS FOR THE COUPLE'S GUESTS. A gift list names what they want and
+ * what it costs, and they only ever showed it to the people they invited — so
+ * the API gates the read on the same `cire_session` the rest of the invitation
+ * uses, and a visitor without one is told where to enter their code rather than
+ * shown the list. The gate is the API's; this component's job is to make the
+ * 401 read as an invitation rather than as a failure.
  */
 
 export type GiftRegistryAction = "claim" | "release";
@@ -106,25 +112,35 @@ export interface GiftRegistryPageProps {
   slug: string;
   /** Back to the couple's invitation — the page this list left. */
   inviteHref: string;
-  /** The list as the route fetched it server-side. Re-read on mount. */
-  initialRegistry: GiftRegistry;
+  /**
+   * The couple's intro, from the invite's own registry copy. It lives HERE
+   * rather than in the server-rendered masthead so one paragraph can carry the
+   * whole precedence chain: the invite's copy when they wrote it there, the
+   * registry module's `message` when they only wrote it there. The module's
+   * words arrive with the list, which the server cannot read.
+   */
+  inviteBody?: string | null;
   /** Validated CSS-variable map for this surface (`sectionVars(theme, "registry")`). */
   themeVars?: Record<string, string>;
 }
 
 export function GiftRegistryPage(props: GiftRegistryPageProps) {
   /**
-   * The list, seeded from the server render. It is replaced only by an answer
-   * the server actually gave: a failed revalidation (offline, API blip) LEAVES
-   * WHAT IS ON SCREEN. As a section at the foot of the invite, dropping to
-   * nothing on a failed re-read cost a band nobody had scrolled to yet; on a
-   * page of its own it would blank the whole page a guest is reading — the
-   * worst possible answer to a transient blip. `closed` is the one thing that
-   * does empty it, because it is a real answer: the couple unpublished the list
-   * while this page was open.
+   * The list, and what the server last said about it.
+   *
+   * `registry` holds the last list the server actually sent; `outcome` holds the
+   * last ANSWER. They are separate because a failed re-read is not an answer: a
+   * transport error (offline in a shop, an API blip) leaves both the list and
+   * the outcome alone, so what is on screen stays on screen. Every other kind
+   * IS an answer and replaces the outcome — including `signed-out`, which is
+   * what a 30-day session lapsing mid-visit looks like.
+   *
+   * `null` is the state before the first answer: the page is server-rendered
+   * without a list (the read is credentialed, so the server cannot make it) and
+   * says so for the moment the fetch takes.
    */
-  const [registry, setRegistry] = createSignal<GiftRegistry>(props.initialRegistry);
-  const [closed, setClosed] = createSignal(false);
+  const [registry, setRegistry] = createSignal<GiftRegistry | null>(null);
+  const [outcome, setOutcome] = createSignal<GiftRegistryFetch["kind"] | null>(null);
   const [mine, setMine] = createSignal<GiftRegistryHouseholdFetch | null>(null);
   const [status, setStatus] = createSignal("");
   const [busyItem, setBusyItem] = createSignal<string | null>(null);
@@ -133,10 +149,12 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
     const result = await fetchGiftRegistry(props.apiUrl, props.slug);
     if (result.kind === "ok") {
       setRegistry(result.registry);
-      setClosed(false);
-    } else if (result.kind === "hidden") {
-      setClosed(true);
+      setOutcome("ok");
+      return;
     }
+    // A transport failure is not an answer — keep whatever the last one was.
+    if (result.kind === "error" && outcome() !== null) return;
+    setOutcome(result.kind);
   }
 
   async function loadHousehold(): Promise<void> {
@@ -152,26 +170,29 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
   }
 
   onMount(() => {
-    // Both reads on mount, in parallel — neither needs the other. The list read
-    // repeats what the route already did server-side, deliberately: the page is
-    // `no-store` on both sides, and a guest who left this tab open in a shop
-    // must not act on counts from whenever they opened it.
+    // Both reads on mount, in parallel — neither needs the other, and both are
+    // credentialed, so this is the first moment either can run at all.
     void loadList();
     void loadHousehold();
 
-    // A claim happens on the INVITE, in another document. `CLAIM_SESSION_EVENT`
-    // still matters here for the case that shares this one: a session ending
-    // (or being restored) in this tab. Re-reading the server, rather than
-    // trusting the event, keeps the rule that the state a guest reads is always
-    // one the server just sent.
-    const onSessionChange = () => void loadHousehold();
+    // A claim happens on the INVITE, in another document, so this page usually
+    // learns about one by being loaded fresh. The event still matters for a
+    // session that changes in THIS tab — a session restored, or one ended by
+    // signing out — and it re-reads BOTH: the list is gated on the same cookie,
+    // so a locked page becomes an open one (or the reverse) without a reload.
+    // Re-reading the server, rather than trusting the event, keeps the rule that
+    // the state a guest reads is always one the server just sent.
+    const onSessionChange = () => {
+      void loadList();
+      void loadHousehold();
+    };
     window.addEventListener(CLAIM_SESSION_EVENT, onSessionChange);
     onCleanup(() => window.removeEventListener(CLAIM_SESSION_EVENT, onSessionChange));
   });
 
   // Sorted client-side by `sortOrder` then `id`, so a refetched list keeps the
   // same order whatever order the rows arrive in.
-  const items = createMemo(() => sortGiftRegistryItems(registry().items));
+  const items = createMemo(() => sortGiftRegistryItems(registry()?.items ?? []));
 
   /**
    * The list is rendered over IDS, not over the item objects.
@@ -207,6 +228,12 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
     for (const claim of household()?.claims ?? []) map.set(claim.itemId, claim);
     return map;
   });
+
+  /**
+   * The couple's intro: their invite copy when they wrote it there, the registry
+   * module's own message when they only wrote it there. `null` ⇒ no paragraph.
+   */
+  const intro = createMemo(() => giftRegistryBody(props.inviteBody, registry()?.message));
 
   /** The two halves of the ledger line: what is free, and what is already theirs. */
   const availabilityCopy = createMemo(() => giftRegistryAvailabilityCopy(items()));
@@ -286,11 +313,46 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
       }}
     >
       <div class="mx-auto max-w-[540px] md:max-w-[64rem]">
-        <Show
-          when={!closed()}
+        <Switch
           fallback={
-            /* Unpublished while this page was open. The list is gone, so say so
-               and hand back the one link that still leads somewhere. */
+            /* Before the first answer. The read is credentialed, so it cannot
+               start until this island hydrates — a moment the page should name
+               rather than fill with an empty frame. A live region, because for
+               a screen reader this IS the page until it resolves. */
+            <p
+              data-gift-waiting
+              role="status"
+              aria-live="polite"
+              class="font-body text-text-muted py-10 text-center text-[0.88rem]"
+            >
+              Opening the couple’s list…
+            </p>
+          }
+        >
+          <Match when={outcome() === "signed-out"}>
+            {/* THE GATE, as the guest meets it. The list is for the people the
+                couple invited, and the code that proves it lives on the
+                invitation — a different document now, so this is a link, never
+                "scroll up". Not an error: nothing has gone wrong. */}
+            <div data-gift-locked class="mx-auto max-w-[34rem] py-10 text-center">
+              <p class="font-body text-text mb-4 text-[0.95rem] leading-[1.7]">
+                This gift list is for the couple’s guests. Enter your invite code on the invitation
+                and it opens here.
+              </p>
+              <a
+                href={props.inviteHref}
+                class="border-gold font-body text-gold-ink hover:bg-gold hover:text-bg inline-block rounded-sm border bg-transparent px-6 py-3.5 text-[0.88rem] tracking-[0.12em] uppercase transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--invite-focus)]"
+              >
+                Open the invitation
+              </a>
+            </div>
+          </Match>
+
+          <Match when={outcome() === "hidden"}>
+            {/* Unpublished, unentitled, or a cookie for another wedding — the
+                API answers one code for all three on purpose. The list is not
+                here, so say that and hand back the link that still leads
+                somewhere. */}
             <div data-gift-closed class="py-10 text-center">
               <p class="font-body text-text mb-4 text-[0.95rem] leading-[1.7]">
                 The couple have closed their gift list.
@@ -302,135 +364,159 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
                 Back to the invitation
               </a>
             </div>
-          }
-        >
-          {/* Signed out: the list still reads, but the code lives on the
-              invitation — which is now a different document, so this has to be
-              a link rather than "scroll up". */}
-          <Show when={!signedIn()}>
+          </Match>
+
+          <Match when={outcome() === "error"}>
+            {/* Only reachable as the FIRST answer: once a list has landed, a
+                transport failure is not allowed to replace it. */}
             <p
-              data-gift-signed-out
-              class="border-gold/40 bg-gold/5 text-gold-ink font-body mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center text-[0.8rem] leading-[1.6]"
+              data-gift-unreachable
+              class="font-body text-text-muted py-10 text-center text-[0.9rem] leading-[1.7]"
             >
-              To reserve a gift, enter your invite code on{" "}
-              <a
-                href={props.inviteHref}
-                class="focus-visible:ring-gold/60 rounded-sm underline underline-offset-4 focus:outline-none focus-visible:ring-2"
-              >
-                the invitation
-              </a>
-              .
+              Could not reach the gift list. Check your connection and refresh the page.
             </p>
-          </Show>
+          </Match>
 
-          <Show when={shippingAddress()}>
-            {(address) => (
-              <div
-                data-gift-shipping
-                class="border-border mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center"
+          <Match when={registry()}>
+            <Show when={intro()}>
+              {(text) => (
+                <p class="font-body text-text-muted mx-auto mb-8 max-w-[34rem] text-center text-[0.92rem] leading-[1.7] break-words whitespace-pre-line">
+                  {text()}
+                </p>
+              )}
+            </Show>
+
+            {/* The list read needed a session, so reaching here means there was
+                one. This says the OTHER read lost it — a 30-day session lapsing
+                between the two, or on a later re-read — which is why the
+                reserve controls are gone. */}
+            <Show when={!signedIn()}>
+              <p
+                data-gift-signed-out
+                class="border-gold/40 bg-gold/5 text-gold-ink font-body mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center text-[0.8rem] leading-[1.6]"
               >
-                <p class="font-body text-text-muted mb-1 text-[0.72rem] tracking-[0.14em] uppercase">
-                  Send gifts to
-                </p>
-                <p class="font-body text-text text-[0.88rem] leading-[1.6] break-words whitespace-pre-line">
-                  {address()}
-                </p>
-              </div>
-            )}
-          </Show>
-
-          {/* One status line for the whole page, at its root — a live region so
-              a screen reader hears the 409 the same moment a sighted guest reads
-              it. Never an overlay: page-level fixed positioning is trapped by any
-              ancestor `transform`. */}
-          <p
-            data-gift-status
-            role="status"
-            aria-live="polite"
-            class="font-body text-text mx-auto mb-8 min-h-[1.25rem] max-w-[34rem] text-center text-[0.82rem] leading-[1.6]"
-          >
-            {status()}
-          </p>
-
-          <Show
-            when={items().length > 0}
-            fallback={
-              /* PUBLISHED BUT EMPTY — a real state, and not the same as an
-                 unpublished list, which 404s the route entirely. */
-              <p class="font-body text-text-muted py-10 text-center text-[0.88rem]">
-                The couple haven’t added any gifts yet.
+                Your invite session has ended. Enter your invite code again on{" "}
+                <a
+                  href={props.inviteHref}
+                  class="focus-visible:ring-gold/60 rounded-sm underline underline-offset-4 focus:outline-none focus-visible:ring-2"
+                >
+                  the invitation
+                </a>{" "}
+                to reserve a gift.
               </p>
-            }
-          >
-            {/* The ledger: what is left, and what is already yours. The one place
-                on the page that reads the WHOLE list at once, which is exactly
-                what a page (rather than a section) is for — a guest scrolling a
-                long list should never have to count it themselves. Counts only. */}
-            <div class="border-border font-body mb-10 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b pb-3 text-[0.72rem] tracking-[0.14em] uppercase">
-              <p data-gift-availability class="text-text-muted">
-                {availabilityCopy()}
-              </p>
-              <Show when={claimedCopy()}>
-                {(copy) => (
-                  <p data-gift-claimed-count class="text-gold-ink">
-                    {copy()}
+            </Show>
+
+            <Show when={shippingAddress()}>
+              {(address) => (
+                <div
+                  data-gift-shipping
+                  class="border-border mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center"
+                >
+                  <p class="font-body text-text-muted mb-1 text-[0.72rem] tracking-[0.14em] uppercase">
+                    Send gifts to
                   </p>
-                )}
-              </Show>
-            </div>
+                  <p class="font-body text-text text-[0.88rem] leading-[1.6] break-words whitespace-pre-line">
+                    {address()}
+                  </p>
+                </div>
+              )}
+            </Show>
 
-            <For each={groupKeys()}>
-              {(key, index) => (
-                <Show when={groupsByKey().get(key)}>
-                  {(group) => (
-                    <section
-                      data-gift-shelf={group().category ?? ""}
-                      class={index() === 0 ? "" : "mt-14"}
-                    >
-                      {/* The shelf label is the couple's own word for these
-                          gifts, with a rule running out to the edge — the list's
-                          only structural device, and it encodes something real:
-                          where their grouping starts. Absent when they grouped
-                          nothing, since one unlabelled shelf is just a list. */}
-                      <Show when={showShelfLabels()}>
-                        <h2 class="font-body text-gold-ink mb-6 flex items-center gap-4 text-[0.72rem] tracking-[0.2em] uppercase">
-                          <span>{group().category ?? "More gifts"}</span>
-                          <span class="border-border h-px flex-1 border-t" aria-hidden="true" />
-                        </h2>
-                      </Show>
-                      {/* `items-start`, so a card is its own height. Stretching the row
-                          instead would hand a gift with no picture the height of
-                          one that has a picture — a card that is mostly empty
-                          box, which reads as something failing to load. */}
-                      <ul class="grid list-none grid-cols-1 items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
-                        <For each={group().items.map((item) => item.id)}>
-                          {(id) => (
-                            <li class="flex">
-                              <Show when={itemsById().get(id)}>
-                                {(item) => (
-                                  <GiftRegistryItemCard
-                                    item={item()}
-                                    currency={registry().currency}
-                                    imageBase={imageBase(item())}
-                                    claim={claims().get(id)}
-                                    canClaim={signedIn()}
-                                    busy={busyItem() === id}
-                                    onClaim={(claimBody) => claimItem(id, item().title, claimBody)}
-                                    onRelease={() => void releaseItem(id, item().title)}
-                                  />
-                                )}
-                              </Show>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </section>
+            {/* One status line for the whole page, at its root — a live region so
+                a screen reader hears the 409 the same moment a sighted guest reads
+                it. Never an overlay: page-level fixed positioning is trapped by any
+                ancestor `transform`. */}
+            <p
+              data-gift-status
+              role="status"
+              aria-live="polite"
+              class="font-body text-text mx-auto mb-8 min-h-[1.25rem] max-w-[34rem] text-center text-[0.82rem] leading-[1.6]"
+            >
+              {status()}
+            </p>
+
+            <Show
+              when={items().length > 0}
+              fallback={
+                /* PUBLISHED BUT EMPTY — a real state, and not the same as an
+                   unpublished list, which answers the 404 above. */
+                <p class="font-body text-text-muted py-10 text-center text-[0.88rem]">
+                  The couple haven’t added any gifts yet.
+                </p>
+              }
+            >
+              {/* The ledger: what is left, and what is already yours. The one place
+                  on the page that reads the WHOLE list at once, which is exactly
+                  what a page (rather than a section) is for — a guest scrolling a
+                  long list should never have to count it themselves. Counts only. */}
+              <div class="border-border font-body mb-10 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b pb-3 text-[0.72rem] tracking-[0.14em] uppercase">
+                <p data-gift-availability class="text-text-muted">
+                  {availabilityCopy()}
+                </p>
+                <Show when={claimedCopy()}>
+                  {(copy) => (
+                    <p data-gift-claimed-count class="text-gold-ink">
+                      {copy()}
+                    </p>
                   )}
                 </Show>
-              )}
-            </For>
-          </Show>
-        </Show>
+              </div>
+
+              <For each={groupKeys()}>
+                {(key, index) => (
+                  <Show when={groupsByKey().get(key)}>
+                    {(group) => (
+                      <section
+                        data-gift-shelf={group().category ?? ""}
+                        class={index() === 0 ? "" : "mt-14"}
+                      >
+                        {/* The shelf label is the couple's own word for these
+                            gifts, with a rule running out to the edge — the list's
+                            only structural device, and it encodes something real:
+                            where their grouping starts. Absent when they grouped
+                            nothing, since one unlabelled shelf is just a list. */}
+                        <Show when={showShelfLabels()}>
+                          <h2 class="font-body text-gold-ink mb-6 flex items-center gap-4 text-[0.72rem] tracking-[0.2em] uppercase">
+                            <span>{group().category ?? "More gifts"}</span>
+                            <span class="border-border h-px flex-1 border-t" aria-hidden="true" />
+                          </h2>
+                        </Show>
+                        {/* `items-start`, so a card is its own height. Stretching the row
+                            instead would hand a gift with no picture the height of
+                            one that has a picture — a card that is mostly empty
+                            box, which reads as something failing to load. */}
+                        <ul class="grid list-none grid-cols-1 items-start gap-6 md:grid-cols-2 lg:grid-cols-3">
+                          <For each={group().items.map((item) => item.id)}>
+                            {(id) => (
+                              <li class="flex">
+                                <Show when={itemsById().get(id)}>
+                                  {(item) => (
+                                    <GiftRegistryItemCard
+                                      item={item()}
+                                      currency={registry()?.currency ?? ""}
+                                      imageBase={imageBase(item())}
+                                      claim={claims().get(id)}
+                                      canClaim={signedIn()}
+                                      busy={busyItem() === id}
+                                      onClaim={(claimBody) =>
+                                        claimItem(id, item().title, claimBody)
+                                      }
+                                      onRelease={() => void releaseItem(id, item().title)}
+                                    />
+                                  )}
+                                </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </section>
+                    )}
+                  </Show>
+                )}
+              </For>
+            </Show>
+          </Match>
+        </Switch>
       </div>
     </section>
   );
