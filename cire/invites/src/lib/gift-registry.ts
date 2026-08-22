@@ -388,3 +388,171 @@ export function formatGiftPrice(priceMinor: number | null, currency: string): st
   const exponent = formatter.resolvedOptions().maximumFractionDigits ?? 2;
   return formatter.format(priceMinor / 10 ** exponent);
 }
+
+/* ------------------------------------------------------------------------- *
+ * The gift list's own page
+ *
+ * The registry used to be the last section of the invite. It is now its own
+ * route, `/<slug>/registry`, because it is the one part of an invitation a
+ * guest comes BACK to — to see what is still free, to change what they
+ * reserved, to open it in a shop on a phone. As a section at the bottom of a
+ * long invite every one of those is a scroll past the whole story; as a page it
+ * is a link, and a link is something a couple can send on its own.
+ *
+ * The helpers below are the parts of that page that must hold without a DOM:
+ * where it lives, what it is called, and how the list is read out.
+ * ------------------------------------------------------------------------- */
+
+/** The wedding's gift-list page. Encoded like every other slug in a URL here. */
+export function giftRegistryPath(slug: string): string {
+  return `/${encodeURIComponent(slug)}/registry`;
+}
+
+/** Built-in copy when the organiser set none. */
+export const DEFAULT_GIFT_REGISTRY_EYEBROW = "With Love";
+export const DEFAULT_GIFT_REGISTRY_HEADING = "Gift Registry";
+
+/**
+ * First usable line of copy, or `null`.
+ *
+ * Blank counts as unset, not as an answer. The old inline `??` chain took the
+ * first NON-NULL value, so a heading saved as `""` won over both the registry
+ * module's own headline and the built-in default — an empty `<h1>` on the
+ * invite, and on this page an empty `<title>` in the browser tab and in every
+ * link preview of it.
+ */
+function firstCopy(...candidates: (string | null | undefined)[]): string | null {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+  }
+  return null;
+}
+
+/** Section eyebrow — the invite's copy, else the built-in. */
+export function giftRegistryEyebrow(inviteCopy: string | null | undefined): string {
+  return firstCopy(inviteCopy) ?? DEFAULT_GIFT_REGISTRY_EYEBROW;
+}
+
+/**
+ * Section heading. The invite's own copy wins when the organiser wrote it (it is
+ * section furniture, themed with every other section header); the registry
+ * module's `headline` fills in when they only wrote copy there.
+ */
+export function giftRegistryHeading(
+  inviteCopy: string | null | undefined,
+  headline: string | null | undefined,
+): string {
+  return firstCopy(inviteCopy, headline) ?? DEFAULT_GIFT_REGISTRY_HEADING;
+}
+
+/** Intro body, same precedence as the heading. `null` ⇒ render no paragraph. */
+export function giftRegistryBody(
+  inviteCopy: string | null | undefined,
+  message: string | null | undefined,
+): string | null {
+  return firstCopy(inviteCopy, message);
+}
+
+/**
+ * The gift page's `<title>`, shaped like the invite's own (`inviteTitle`):
+ * the couple first, then where on their invitation you are.
+ */
+export function giftPageTitle(heading: string, heroTitle: string | null | undefined): string {
+  return heroTitle ? `${heroTitle} — ${heading}` : heading;
+}
+
+/** How many gifts are free, out of how many the couple asked for. */
+export interface GiftRegistryAvailability {
+  available: number;
+  total: number;
+}
+
+/**
+ * The list read as counts. Quantities, not rows: a couple who asked for six wine
+ * glasses wrote one row, and "5 of 6 still available" is what a guest can act on.
+ */
+export function giftRegistryAvailability(
+  items: readonly GiftRegistryItem[],
+): GiftRegistryAvailability {
+  let available = 0;
+  let total = 0;
+  for (const item of items) {
+    available += giftRegistryRemaining(item);
+    // Guard the row itself: a negative or non-finite `quantityWanted` would
+    // otherwise put a nonsense number in the one line that summarises the page.
+    total += Math.max(0, Number.isFinite(item.quantityWanted) ? item.quantityWanted : 0);
+  }
+  return { available, total };
+}
+
+/**
+ * The page's ledger line. COUNTS ONLY — the same rule the cards keep: how many
+ * are left, never who took what.
+ *
+ * `null` for an empty list, which has its own copy ("no gifts yet") and must not
+ * be summarised as "0 of 0".
+ */
+export function giftRegistryAvailabilityCopy(items: readonly GiftRegistryItem[]): string | null {
+  const { available, total } = giftRegistryAvailability(items);
+  if (total === 0) return null;
+  if (available === 0) return "Every gift has been reserved";
+  return `${available} of ${total} still available`;
+}
+
+/** This household's own reservations, counted for the ledger line. */
+export function giftRegistryClaimedCopy(
+  claims: readonly GiftRegistryHouseholdClaim[],
+): string | null {
+  let count = 0;
+  for (const claim of claims) count += Math.max(0, claim.quantity);
+  if (count === 0) return null;
+  return count === 1 ? "You reserved 1 gift" : `You reserved ${count} gifts`;
+}
+
+/** One shelf of the list: the couple's own label, and what sits under it. */
+export interface GiftRegistryGroup {
+  /** The couple's category, trimmed. `null` is the ungrouped tail. */
+  category: string | null;
+  items: GiftRegistryItem[];
+}
+
+/**
+ * Group a sorted list by the couple's own categories.
+ *
+ * Categories are the couple's words, not a taxonomy we impose, so the order they
+ * appear in is the order the list already carries (`sortOrder`) — first mention
+ * wins, and nothing is alphabetised behind their back. Items with no category go
+ * last, in one unlabelled tail: on a page a guest scans, a run of gifts under no
+ * heading reads as "and these", which is what it is.
+ *
+ * A blank category is no category. Pass an already-sorted list
+ * (`sortGiftRegistryItems`) — this preserves order, it does not impose one.
+ */
+export function groupGiftRegistryItems(items: readonly GiftRegistryItem[]): GiftRegistryGroup[] {
+  const labelled = new Map<string, GiftRegistryItem[]>();
+  const tail: GiftRegistryItem[] = [];
+  for (const item of items) {
+    const category = typeof item.category === "string" ? item.category.trim() : "";
+    if (category === "") {
+      tail.push(item);
+      continue;
+    }
+    const bucket = labelled.get(category);
+    if (bucket) bucket.push(item);
+    else labelled.set(category, [item]);
+  }
+  const groups: GiftRegistryGroup[] = [...labelled].map(([category, groupItems]) => ({
+    category,
+    items: groupItems,
+  }));
+  if (tail.length > 0) groups.push({ category: null, items: tail });
+  return groups;
+}
+
+/**
+ * Whether the shelf labels are worth painting. One unlabelled group is a plain
+ * list — heading it "More gifts" would name a distinction the couple never made.
+ */
+export function hasGiftRegistryCategories(groups: readonly GiftRegistryGroup[]): boolean {
+  return groups.some((group) => group.category !== null);
+}

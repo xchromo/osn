@@ -167,7 +167,7 @@ export function GiftRegistryItemCard(props: GiftRegistryItemCardProps) {
   return (
     <article
       data-gift-item={props.item.id}
-      class="border-border bg-surface-raised flex flex-col overflow-hidden rounded-sm border text-left"
+      class="border-border bg-surface-raised flex w-full flex-col overflow-hidden rounded-sm border text-left"
       // Reserve roughly a card while the section is skipped by
       // `content-visibility`, so scrolling into a long list doesn't jump.
       style={{ "contain-intrinsic-size": "auto 22rem" }}

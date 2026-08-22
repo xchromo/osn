@@ -1,0 +1,60 @@
+---
+// Server-rendered, per-request gift-list route: `/<slug>/registry`.
+//
+// The list used to be the last section of `/<slug>`. It has its own page because
+// it is the one part of an invitation a guest RETURNS to — to see what is left,
+// to change what they reserved, to open it in a shop — and none of that should
+// mean scrolling the whole invitation again. It is also, now, a link a couple
+// can send on its own.
+//
+// TWO READS, IN PARALLEL, both per-request and both `no-store`:
+//  - the invite, for the couple's copy, colours, faces and hero photo;
+//  - the list itself, which decides whether this page exists at all.
+//
+// WHAT EACH FAILURE MEANS HERE. The public list read answers ONE 404 code for
+// "no registry", "not entitled" and "not published" — deliberately, so the
+// public surface cannot be used to tell them apart. This route keeps that: all
+// three are a 404 page with the same words. An unreachable API is NOT a 404 —
+// the list may be perfectly fine — so that is a 503 which invites a retry.
+// A failed INVITE read is neither: the list is what this page is for, so it
+// still renders, with the built-in theme and copy.
+import { fetchGiftRegistry } from '../../lib/gift-registry'
+import { fetchInvite, API_URL } from '../../lib/invite'
+import GiftRegistryDocument from '../../components/gift-registry/GiftRegistryDocument.astro'
+import NotFoundDocument from '../../components/NotFoundDocument.astro'
+
+const { slug } = Astro.params
+
+// A missing slug can't happen for `[slug]/registry` (Astro wouldn't match), but
+// guard so neither fetch ever runs with `undefined`.
+const [inviteResult, registryResult] = slug
+  ? await Promise.all([fetchInvite(slug), fetchGiftRegistry(API_URL, slug)])
+  : ([{ kind: 'not-found' }, { kind: 'hidden' }] as const)
+
+const unknownWedding = inviteResult.kind === 'not-found' || registryResult.kind === 'hidden'
+const unreachable = !unknownWedding && registryResult.kind !== 'ok'
+
+if (unknownWedding) {
+  Astro.response.status = 404
+} else if (unreachable) {
+  Astro.response.status = 503
+}
+
+const invite = inviteResult.kind === 'ok' ? inviteResult.invite : null
+const registry = registryResult.kind === 'ok' ? registryResult.registry : null
+---
+{unknownWedding ? (
+  <NotFoundDocument
+    heading="No gift list here"
+    body="This couple haven't opened a gift list, or the link has changed. Open your invitation to see what they've asked for."
+  />
+) : registry === null ? (
+  /* The same quiet message document, for the one failure that is not the
+     guest's link: we could not reach the list. Say so, and say what to do. */
+  <NotFoundDocument
+    heading="The gift list didn't load"
+    body="We couldn't reach it just now. Refresh the page in a moment, or open your invitation and try the link again."
+  />
+) : (
+  <GiftRegistryDocument apiUrl={API_URL} slug={slug!} invite={invite} registry={registry} />
+)}
