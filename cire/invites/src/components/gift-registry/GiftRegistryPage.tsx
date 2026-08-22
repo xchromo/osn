@@ -128,11 +128,11 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
   /**
    * The list, and what the server last said about it.
    *
-   * `registry` holds the last list the server actually sent; `outcome` holds the
-   * last ANSWER. They are separate because a failed re-read is not an answer: a
+   * `registry` holds the last list the server actually sent; `answer` holds the
+   * last one the server gave. They are separate because a failed re-read is not an answer: a
    * transport error (offline in a shop, an API blip) leaves both the list and
    * the outcome alone, so what is on screen stays on screen. Every other kind
-   * IS an answer and replaces the outcome — including `signed-out`, which is
+   * IS an answer and replaces it — including `signed-out`, which is
    * what a 30-day session lapsing mid-visit looks like.
    *
    * `null` is the state before the first answer: the page is server-rendered
@@ -140,7 +140,7 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
    * says so for the moment the fetch takes.
    */
   const [registry, setRegistry] = createSignal<GiftRegistry | null>(null);
-  const [outcome, setOutcome] = createSignal<GiftRegistryFetch["kind"] | null>(null);
+  const [answer, setAnswer] = createSignal<GiftRegistryFetch["kind"] | null>(null);
   const [mine, setMine] = createSignal<GiftRegistryHouseholdFetch | null>(null);
   const [status, setStatus] = createSignal("");
   const [busyItem, setBusyItem] = createSignal<string | null>(null);
@@ -149,12 +149,12 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
     const result = await fetchGiftRegistry(props.apiUrl, props.slug);
     if (result.kind === "ok") {
       setRegistry(result.registry);
-      setOutcome("ok");
+      setAnswer("ok");
       return;
     }
     // A transport failure is not an answer — keep whatever the last one was.
-    if (result.kind === "error" && outcome() !== null) return;
-    setOutcome(result.kind);
+    if (result.kind === "error" && answer() !== null) return;
+    setAnswer(result.kind);
   }
 
   async function loadHousehold(): Promise<void> {
@@ -329,7 +329,7 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
             </p>
           }
         >
-          <Match when={outcome() === "signed-out"}>
+          <Match when={answer() === "signed-out"}>
             {/* THE GATE, as the guest meets it. The list is for the people the
                 couple invited, and the code that proves it lives on the
                 invitation — a different document now, so this is a link, never
@@ -348,7 +348,7 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
             </div>
           </Match>
 
-          <Match when={outcome() === "hidden"}>
+          <Match when={answer() === "hidden"}>
             {/* Unpublished, unentitled, or a cookie for another wedding — the
                 API answers one code for all three on purpose. The list is not
                 here, so say that and hand back the link that still leads
@@ -366,7 +366,7 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
             </div>
           </Match>
 
-          <Match when={outcome() === "error"}>
+          <Match when={answer() === "error"}>
             {/* Only reachable as the FIRST answer: once a list has landed, a
                 transport failure is not allowed to replace it. */}
             <p
