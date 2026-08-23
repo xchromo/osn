@@ -24,7 +24,6 @@ let auth: OsnTestAuth;
 let bearer: string;
 
 const CHANGES_BASE = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/changes`;
-const IMPORT_BASE = `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/import`;
 
 beforeAll(async () => {
   auth = await makeOsnTestAuth();
@@ -76,16 +75,14 @@ describe("POST /changes/preview + /apply — spreadsheet (CSV) front door", () =
     expect(previewRes.status).toBe(200);
     const preview = (await previewRes.json()) as {
       changeId: string;
-      importId: string;
       baseRevision: string;
       plan: { familyCreates: unknown[] };
     };
-    expect(preview.changeId).toBe(preview.importId);
     // Fresh wedding — no applied change yet, so the head is genesis.
     expect(preview.baseRevision).toBe("genesis");
     expect(preview.plan.familyCreates).toHaveLength(2);
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: preview.changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: preview.changeId });
     expect(applyRes.status).toBe(200);
     expect(db.select().from(events).all()).toHaveLength(2);
     expect(db.select().from(families).all()).toHaveLength(2);
@@ -109,7 +106,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
       guestsCsv: GUESTS_CSV,
     });
     const { changeId } = (await previewRes.json()) as { changeId: string };
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(200);
   }
 
@@ -124,7 +121,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
       scope: string;
       plan: Record<string, unknown[]>;
     };
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: preview.changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: preview.changeId });
     expect(applyRes.status).toBe(200);
     return { preview, summary: ((await applyRes.json()) as { summary: unknown }).summary };
   }
@@ -249,7 +246,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
     });
     const { changeId } = (await previewRes.json()) as { changeId: string };
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(200);
 
     // The apply path re-reads the stored sheets; the guests slot holds "" for an
@@ -283,7 +280,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
       .where(eq(imports.id, changeId))
       .run();
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(200);
     expect(db.select().from(events).all()).toHaveLength(2);
     expect(db.select().from(families).all()).toHaveLength(2);
@@ -311,7 +308,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
     const [mehndi] = db.select().from(events).where(eq(events.name, "Mehndi")).all();
     db.delete(events).where(eq(events.id, mehndi!.id)).run();
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(422);
     expect(await applyRes.json()).toMatchObject({
       error: "Unmatched event column",
@@ -367,7 +364,7 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
     expect(db.select().from(events).all()).toHaveLength(3);
 
     const revertRes = await ownerPost(app, `${CHANGES_BASE}/revert`, {
-      importId: preview.changeId,
+      changeId: preview.changeId,
     });
     expect(revertRes.status).toBe(200);
     // Back to the two seeded events, with the guest list still whole.
@@ -479,7 +476,7 @@ describe("POST /changes/preview — parse errors locate the problem", () => {
       ].join("\n"),
     );
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(422);
     expect(await applyRes.json()).toEqual({
       error: "Malformed spreadsheet",
@@ -536,7 +533,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       plan: { warnings: unknown[] };
     };
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: preview.changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: preview.changeId });
     expect(applyRes.status).toBe(200);
     expect(db.select().from(events).all()).toHaveLength(1);
     expect(db.select().from(families).all()).toHaveLength(1);
@@ -558,7 +555,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       guestsCsv: GUESTS_CSV,
     });
     await ownerPost(app, `${CHANGES_BASE}/apply`, {
-      importId: ((await seed.json()) as { changeId: string }).changeId,
+      changeId: ((await seed.json()) as { changeId: string }).changeId,
     });
     expect(db.select().from(families).all()).toHaveLength(2);
 
@@ -567,7 +564,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
     // source='import' and absent (removeManual is implicit for the editor).
     const preview = await ownerPost(app, `${CHANGES_BASE}/preview`, { desiredState });
     await ownerPost(app, `${CHANGES_BASE}/apply`, {
-      importId: ((await preview.json()) as { changeId: string }).changeId,
+      changeId: ((await preview.json()) as { changeId: string }).changeId,
     });
 
     const remaining = db.select().from(families).all();
@@ -594,7 +591,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
     // Seed through the editor front door, then read back what a draft loads.
     const seed = await ownerPost(app, `${CHANGES_BASE}/preview`, { desiredState });
     await ownerPost(app, `${CHANGES_BASE}/apply`, {
-      importId: ((await seed.json()) as { changeId: string }).changeId,
+      changeId: ((await seed.json()) as { changeId: string }).changeId,
     });
     const before = db.select().from(families).all()[0]!;
     const guestBefore = db.select().from(guests).all()[0]!;
@@ -634,7 +631,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
     expect(previewBody.plan.familyRemoves).toHaveLength(0);
 
     const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, {
-      importId: previewBody.changeId,
+      changeId: previewBody.changeId,
     });
     expect(applyRes.status).toBe(200);
 
@@ -679,7 +676,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       };
       const preview = await ownerPost(app, `${CHANGES_BASE}/preview`, { desiredState: seedState });
       const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, {
-        importId: ((await preview.json()) as { changeId: string }).changeId,
+        changeId: ((await preview.json()) as { changeId: string }).changeId,
       });
       expect(applyRes.status).toBe(200);
       return {
@@ -738,7 +735,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       };
       expect(plan.guestRemoves.map((g) => g.id)).toEqual([doomed.id]);
 
-      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
       expect(applyRes.status).toBe(200);
       expect(
         db
@@ -769,7 +766,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       expect(plan.guestRemoves.map((g) => g.id)).toEqual([doomed.id]);
       expect(plan.guestCreates).toHaveLength(1);
 
-      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
       expect(applyRes.status).toBe(200);
       const after = db.select().from(guests).all();
       // The old "Bo" is gone — the new one is a different row entirely.
@@ -794,7 +791,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
         ]),
       });
       const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, {
-        importId: ((await preview.json()) as { changeId: string }).changeId,
+        changeId: ((await preview.json()) as { changeId: string }).changeId,
       });
       expect(applyRes.status).toBe(200);
       expect(
@@ -839,7 +836,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
         .where(eq(imports.id, changeId))
         .run();
 
-      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
       expect(applyRes.status).toBe(200);
       // kind = 'editor' ⇒ id-authoritative ⇒ the deletion still lands.
       expect(
@@ -858,7 +855,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
         guestsCsv: GUESTS_CSV,
       }).then(async (r) =>
         ownerPost(app, `${CHANGES_BASE}/apply`, {
-          importId: ((await r.json()) as { changeId: string }).changeId,
+          changeId: ((await r.json()) as { changeId: string }).changeId,
         }),
       );
       const before = db.select().from(guests).all();
@@ -877,7 +874,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
         .where(eq(imports.id, changeId))
         .run();
 
-      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+      const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
       expect(applyRes.status).toBe(200);
       // Same rows, same ids — not a remove+create of the whole roster.
       expect(
@@ -930,7 +927,7 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
         desiredState: draftWithout(family, guestRows, () => true),
       });
       const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, {
-        importId: ((await preview.json()) as { changeId: string }).changeId,
+        changeId: ((await preview.json()) as { changeId: string }).changeId,
       });
       expect(applyRes.status).toBe(200);
       expect(db.select().from(guests).all()).toHaveLength(0);
@@ -961,11 +958,11 @@ describe("POST /changes/apply — 409 on stale baseRevision", () => {
       guestsCsv: GUESTS_CSV,
     });
     const idB = ((await previewB.json()) as { changeId: string }).changeId;
-    const applyB = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: idB });
+    const applyB = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: idB });
     expect(applyB.status).toBe(200);
 
     // Applying A now must 409 — the wedding changed under it since preview.
-    const applyA = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: idA });
+    const applyA = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: idA });
     expect(applyA.status).toBe(409);
     const body = (await applyA.json()) as { error: string; currentRevision: string };
     expect(body.error).toBe("State changed — re-preview");
@@ -985,7 +982,7 @@ describe("POST /changes/apply — 409 on stale baseRevision", () => {
       eventsCsv: EVENTS_CSV,
       guestsCsv: GUESTS_CSV,
     });
-    const applyA = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: idA });
+    const applyA = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: idA });
     expect(applyA.status).toBe(200);
   });
 });
@@ -1001,10 +998,10 @@ describe("POST /changes/revert", () => {
       guestsCsv: GUESTS_CSV,
     });
     const id = ((await preview.json()) as { changeId: string }).changeId;
-    await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: id });
+    await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: id });
     expect(db.select().from(families).all()).toHaveLength(2);
 
-    const revert = await ownerPost(app, `${CHANGES_BASE}/revert`, { importId: id });
+    const revert = await ownerPost(app, `${CHANGES_BASE}/revert`, { changeId: id });
     expect(revert.status).toBe(200);
     // Before-image was the empty pre-import state → revert clears the families.
     expect(db.select().from(families).all()).toHaveLength(0);
@@ -1024,7 +1021,7 @@ describe("POST /changes/preview — provenance default + removeManual toggle", (
       guestsCsv: GUESTS_CSV,
     });
     await ownerPost(app, `${CHANGES_BASE}/apply`, {
-      importId: ((await preview.json()) as { changeId: string }).changeId,
+      changeId: ((await preview.json()) as { changeId: string }).changeId,
     });
     const now = new Date();
     db.insert(families)
@@ -1067,57 +1064,6 @@ describe("POST /changes/preview — provenance default + removeManual toggle", (
       (await preview.json()) as { plan: { familyRemoves: Array<{ familyName: string }> } }
     ).plan;
     expect(plan.familyRemoves.map((f) => f.familyName)).toContain("Handadded");
-  });
-});
-
-// ── Alias: /changes and /import serve identically ───────────────────────────
-
-describe("one-release alias — /import/* and /changes/* serve identically", () => {
-  it("a CSV preview through /import matches one through /changes (same plan counts)", async () => {
-    const { app } = buildApp();
-
-    const viaChanges = await ownerPost(app, `${CHANGES_BASE}/preview`, {
-      eventsCsv: EVENTS_CSV,
-      guestsCsv: GUESTS_CSV,
-    });
-    const viaImport = await ownerPost(app, `${IMPORT_BASE}/preview`, {
-      eventsCsv: EVENTS_CSV,
-      guestsCsv: GUESTS_CSV,
-    });
-    expect(viaChanges.status).toBe(200);
-    expect(viaImport.status).toBe(200);
-
-    const c = (await viaChanges.json()) as {
-      plan: Record<string, unknown[]>;
-      baseRevision: string;
-    };
-    const i = (await viaImport.json()) as { plan: Record<string, unknown[]>; baseRevision: string };
-    // Same pipeline → same plan counts + same baseRevision.
-    expect(i.baseRevision).toBe(c.baseRevision);
-    for (const key of Object.keys(c.plan)) {
-      expect((i.plan[key] ?? []).length).toBe((c.plan[key] ?? []).length);
-    }
-  });
-
-  it("the editor DesiredState front door works through the /import alias too", async () => {
-    const { app, db } = buildApp();
-    const previewRes = await ownerPost(app, `${IMPORT_BASE}/preview`, {
-      desiredState: {
-        events: [],
-        families: [
-          {
-            publicId: "ALIAS-FAM-0001",
-            familyName: "Aliasedit",
-            guests: [{ firstName: "Pat", lastName: "Aliasedit", nickname: null, eventNames: [] }],
-          },
-        ],
-      },
-    });
-    expect(previewRes.status).toBe(200);
-    const id = ((await previewRes.json()) as { changeId: string }).changeId;
-    const applyRes = await ownerPost(app, `${IMPORT_BASE}/apply`, { importId: id });
-    expect(applyRes.status).toBe(200);
-    expect(db.select().from(families).all()).toHaveLength(1);
   });
 });
 
@@ -1182,7 +1128,7 @@ describe("authz — /changes gate", () => {
     const applyRes = await appRequest(app, `${CHANGES_BASE}/apply`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${editorBearer}` },
-      body: JSON.stringify({ importId: id }),
+      body: JSON.stringify({ changeId: id }),
     });
     expect(applyRes.status).toBe(200);
   });
@@ -1214,7 +1160,7 @@ describe("authz — /changes gate", () => {
     const applyOther = await appRequest(app, `/api/organiser/weddings/${OTHER}/changes/apply`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
-      body: JSON.stringify({ importId: id }),
+      body: JSON.stringify({ changeId: id }),
     });
     expect(applyOther.status).toBe(404);
   });
@@ -1246,7 +1192,7 @@ describe("POST /changes/apply — 402 on capacity breach", () => {
     expect(previewRes.status).toBe(200);
     const { changeId } = (await previewRes.json()) as { changeId: string };
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(402);
     const body = (await applyRes.json()) as Record<string, unknown>;
     expect(body.error).toBe("payment_required");
@@ -1291,34 +1237,8 @@ describe("POST /changes/apply — 402 on capacity breach", () => {
     });
     const { changeId } = (await previewRes.json()) as { changeId: string };
 
-    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(200);
     expect(db.select().from(guests).all()).toHaveLength(101);
-  });
-
-  it("the /import alias also returns 402 on capacity breach — full contract + atomicity", async () => {
-    const { app, db } = buildApp();
-
-    const guestsCsv = buildLargeGuestsCsv(101);
-
-    const previewRes = await ownerPost(app, `${IMPORT_BASE}/preview`, {
-      eventsCsv: EVENTS_CSV,
-      guestsCsv,
-    });
-    expect(previewRes.status).toBe(200);
-    const { importId } = (await previewRes.json()) as { importId: string };
-
-    const applyRes = await ownerPost(app, `${IMPORT_BASE}/apply`, { importId });
-    expect(applyRes.status).toBe(402);
-    const body = (await applyRes.json()) as Record<string, unknown>;
-    // Full 402 body contract — must match /changes/apply exactly.
-    expect(body.error).toBe("payment_required");
-    expect(body.entitlement).toBe("capacity");
-    expect(body.limit).toBe(100);
-    expect(typeof body.current).toBe("number");
-
-    // Atomic: neither guests nor families persisted via the /import alias.
-    expect(db.select().from(guests).all()).toHaveLength(0);
-    expect(db.select().from(families).all()).toHaveLength(0);
   });
 });
