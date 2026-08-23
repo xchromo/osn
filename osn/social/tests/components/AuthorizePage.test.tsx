@@ -169,6 +169,19 @@ describe("<AuthorizePage />", () => {
     expect(mocks.getContext).toHaveBeenCalledWith(REQUEST_ID, withAbortSignal);
   });
 
+  it("does not resolve a scope named after an inherited Object property", async () => {
+    // "constructor" is not an own SCOPE_COPY entry — it is inherited from
+    // Object.prototype. `isKnownScope` checks membership with
+    // `Object.hasOwn`, not `in`, so this must fall back to the raw scope name
+    // rather than resolving to `Object.prototype.constructor`.
+    mocks.getContext.mockResolvedValue(context({ scopes: ["openid", "constructor"] }));
+
+    renderPage();
+
+    expect(await screen.findByText("Confirm who you are")).toBeDefined();
+    expect(screen.getByText("constructor")).toBeDefined();
+  });
+
   it("posts an approval with the selected profile and assigns the redirect verbatim", async () => {
     const redirectTo = "https://app.example.com/cb?code=abc&state=xyz";
     mocks.getContext.mockResolvedValue(context());
