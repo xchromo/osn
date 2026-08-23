@@ -2421,6 +2421,18 @@ describe("auth routes", () => {
       expect(typeof json.events[0]!.createdAt).toBe("number");
     });
 
+    // tracker#346: the list is per-user and names auth events — nothing may
+    // cache or store it.
+    it("GET /account/security-events sets cache-control: private, no-store", async () => {
+      const { app: freshApp, accessToken } = await setupWithRecovery();
+      const res = await freshApp.handle(
+        new Request("http://localhost/account/security-events", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+      );
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+    });
+
     // S-M1: an access-token-only ack would let an XSS silently dismiss the
     // very banner that warns about its own compromise.
     it("POST /account/security-events/:id/ack without a step-up token returns 403", async () => {
