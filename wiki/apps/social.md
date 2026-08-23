@@ -16,7 +16,7 @@ related:
   - "[[identity-model]]"
   - "[[passkey-primary]]"
   - "[[rate-limiting]]"
-last-reviewed: 2026-08-06
+last-reviewed: 2026-08-24
 ---
 
 # Social
@@ -73,7 +73,7 @@ Pages talk to `@osn/api` via three plain-fetch clients factored out of `@osn/cli
 - `createOrgClient` — org CRUD and membership (`osn/client/src/organisations.ts`)
 - `createRecommendationClient` — contact suggestions + search (`osn/client/src/recommendations.ts`). `search` returns people and organisations together and takes an `AbortSignal` because it backs typeahead: the caller aborts the in-flight request when the query changes, so a slow early keystroke can't land after a fast later one.
 
-All three share the same hardening: `authGet/authPost/authPatch/authDelete` with `safeJson` wrapping (no `SyntaxError` leakage), capped error strings, and per-module typed error classes. These helpers are duplicated per module; factoring them out is tracked as P-I1.
+All three share the same hardening: `authGet/authPost/authPatch/authDelete` with `safeJson` wrapping (no `SyntaxError` leakage), capped error strings, and per-module typed error classes. The helpers now live once in `osn/client/src/auth-fetch.ts`; each module calls `createAuthFetchers(ErrorCtor)` and gets back the set bound to its own error class. The module is internal — `index.ts` does not export it, so the package's public surface is unchanged. It uses plain `fetch`, not `sessionFetch`: these clients send a bearer token in the `Authorization` header, so there is no session cookie for the native transport seam to supply.
 
 ## Dev
 
