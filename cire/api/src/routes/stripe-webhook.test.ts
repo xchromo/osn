@@ -67,6 +67,7 @@ const accountUpdated = (overrides: Record<string, unknown> = {}) =>
   JSON.stringify({
     id: "evt_1",
     type: "account.updated",
+    created: nowSeconds(),
     data: {
       object: {
         id: ACCOUNT,
@@ -183,6 +184,65 @@ describe("account.updated", () => {
     // a decision they never made. The guest surface reads both columns.
     expect(row?.cashGiftsEnabled).toBe(true);
     expect(row?.published).toBe(true);
+  });
+
+  /**
+   * S-H1. Stripe does not guarantee delivery order and retries a failed
+   * delivery for three days, so an older event carrying `charges_enabled: true`
+   * can arrive AFTER Stripe has disabled the account. This column is the only
+   * gate on whether a couple may show guests a contribute button, so applying
+   * it would re-open a payment surface Stripe has shut.
+   */
+  it("refuses an event older than what the row already holds", async () => {
+    const { app, db } = buildApp();
+    const late = nowSeconds();
+
+    // What Stripe said most recently: the account can no longer charge.
+    await deliver(
+      app,
+      JSON.stringify({
+        id: "evt_disable",
+        type: "account.updated",
+        created: late,
+        account: ACCOUNT,
+        data: { object: { id: ACCOUNT, charges_enabled: false, payouts_enabled: false } },
+      }),
+    );
+    expect((await settings(db))?.stripeChargesEnabled).toBe(false);
+
+    // An OLDER delivery, retried into the window, saying the opposite.
+    const res = await deliver(
+      app,
+      JSON.stringify({
+        id: "evt_enable",
+        type: "account.updated",
+        created: late - 120,
+        account: ACCOUNT,
+        data: { object: { id: ACCOUNT, charges_enabled: true, payouts_enabled: true } },
+      }),
+    );
+
+    // Acknowledged — Stripe must not retry it — but not applied.
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, matched: false });
+    expect((await settings(db))?.stripeChargesEnabled).toBe(false);
+  });
+
+  it("applies an event newer than what the row holds", async () => {
+    const { app, db } = buildApp();
+    const first = nowSeconds() - 300;
+    await deliver(
+      app,
+      JSON.stringify({
+        id: "evt_old",
+        type: "account.updated",
+        created: first,
+        account: ACCOUNT,
+        data: { object: { id: ACCOUNT, charges_enabled: false, payouts_enabled: false } },
+      }),
+    );
+    await deliver(app, accountUpdated());
+    expect((await settings(db))?.stripeChargesEnabled).toBe(true);
   });
 
   it("acknowledges an account this platform knows nothing about", async () => {

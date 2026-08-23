@@ -6,6 +6,7 @@ import {
   weddingEntitlements,
   weddingHosts,
 } from "@cire/db";
+import { createRateLimiter } from "@shared/rate-limit";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
@@ -82,7 +83,12 @@ function stripeStub(
 function buildApp({
   grantRegistry = true,
   stripe,
-}: { grantRegistry?: boolean; stripe?: StripeClient | null } = {}) {
+  limiter,
+}: {
+  grantRegistry?: boolean;
+  stripe?: StripeClient | null;
+  limiter?: ReturnType<typeof createRateLimiter>;
+} = {}) {
   const db = createDb(":memory:");
   seedDb(db);
   const now = new Date();
@@ -113,6 +119,10 @@ function buildApp({
     osnTestKey: auth.key,
     organiserOrigin: "https://host.test",
     stripe: stripe === undefined ? stripeStub().client : stripe,
+    // A FRESH limiter per app: the module-level default is shared process-wide,
+    // so without this the eleventh call in this file would 429 whichever test
+    // happened to run last.
+    registryStripeLimiter: limiter ?? createRateLimiter({ maxRequests: 1000, windowMs: 60_000 }),
   });
   return { app, db };
 }
@@ -311,6 +321,23 @@ describe("refreshing what Stripe says", () => {
     await req(failing.app, `${base}/session`, OWNER);
     const res = await req(failing.app, `${base}/refresh`, OWNER);
     expect(res.status).toBe(502);
+  });
+});
+
+describe("the outbound-call budget", () => {
+  it("throttles onboarding, because every press spends a Stripe call", async () => {
+    // Owner-auth caps the blast radius to one wedding; it does not cap the
+    // RATE, and the quota being spent is the platform's (S-M1).
+    const { app } = buildApp({ limiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }) });
+    expect((await req(app, `${base}/session`, OWNER)).status).toBe(200);
+    expect((await req(app, `${base}/session`, OWNER)).status).toBe(429);
+  });
+
+  it("throttles after the gates, so a stranger cannot spend the couple's budget", async () => {
+    const { app } = buildApp({ limiter: createRateLimiter({ maxRequests: 1, windowMs: 60_000 }) });
+    expect((await req(app, `${base}/session`, STRANGER)).status).toBe(403);
+    // The owner's first call still lands: the stranger never reached the limiter.
+    expect((await req(app, `${base}/session`, OWNER)).status).toBe(200);
   });
 });
 

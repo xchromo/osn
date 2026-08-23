@@ -224,6 +224,9 @@ const defaultRegistryImageLimiter = createRateLimiter({ maxRequests: 10, windowM
  * indexed statement.
  */
 const defaultRegistryGuestLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
+// Per-organiser, and sized like the image limiter beside it: an authenticated
+// couple at hand-speed, whose every press costs an outbound Stripe call.
+const defaultRegistryStripeLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
 /**
  * Default per-IP limiter for the pre-auth OIDC redirect legs (`/oidc/start`,
  * `/oidc/callback`). Tighter than the session probe below — these are the
@@ -453,6 +456,8 @@ export interface AppOptions {
   stripeWebhookSecret?: string | null;
   /** Country for a newly created connected account (`AU` unless overridden). */
   stripeAccountCountry?: string;
+  /** Override the Stripe onboarding limiter (useful for testing). */
+  registryStripeLimiter?: RateLimiterBackend;
   /**
    * Test seam: injectable `fetch` + DNS resolver for the registry link-preview
    * service, so its route tests reach no network. Production passes nothing and
@@ -525,6 +530,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     stripe = null,
     stripeWebhookSecret = null,
     stripeAccountCountry,
+    registryStripeLimiter = defaultRegistryStripeLimiter,
     registryLinkPreviewOptions,
     // Key-optional default: an inert provider that serves registry defaults with
     // no network, so an app built without GrowthBook config behaves exactly as
@@ -771,15 +777,16 @@ export function createApp(db: Db, options: AppOptions = {}) {
         stripe
           ? createRegistryStripeRoutes(db, osnAuthOptions, {
               stripe,
+              limiter: registryStripeLimiter,
               organiserOrigin,
               defaultCountry: stripeAccountCountry,
             })
           : new Elysia(),
       )
-      // Link preview is a third sibling instance, not part of the write group:
-      // it carries its own per-organiser limiter (it is the one registry route
-      // that makes an outbound fetch), and an Elysia guard would spread that
-      // limiter across every write above.
+      // Link preview is another sibling instance, not part of the write group:
+      // it carries its own per-organiser limiter (it makes an outbound fetch,
+      // as the Stripe routes above now do), and an Elysia guard would spread
+      // that limiter across every write above.
       .use(
         createRegistryLinkPreviewRoutes(db, osnAuthOptions, {
           limiter: registryPreviewLimiter,

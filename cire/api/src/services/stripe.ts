@@ -44,6 +44,9 @@ export const STRIPE_API_VERSION = "2025-03-31.basil";
  */
 export const WEBHOOK_TOLERANCE_SECONDS = 300;
 
+/** How long any one Stripe call may take before it is a failure. */
+export const STRIPE_CALL_TIMEOUT = "10 seconds";
+
 /** A Stripe call that did not do what it was asked. */
 export class StripeError extends Data.TaggedError("StripeError")<{
   readonly reason: string;
@@ -193,7 +196,16 @@ export function createStripeClient(config: StripeConfig): StripeClient {
       const res = yield* Effect.tryPromise({
         try: () => doFetch(`${base}${path}`, { method, headers, body }),
         catch: () => new StripeError({ reason: "unreachable" }),
-      });
+      }).pipe(
+        // A hung connection would otherwise hold a Worker request open for the
+        // full subrequest limit, which turns one slow Stripe into a queue of
+        // stuck isolates. Ten seconds is far past Stripe's own p99 and far
+        // short of anything a person waits through.
+        Effect.timeoutFail({
+          duration: STRIPE_CALL_TIMEOUT,
+          onTimeout: () => new StripeError({ reason: "timeout" }),
+        }),
+      );
 
       const payload: unknown = yield* Effect.tryPromise({
         try: () => res.json(),

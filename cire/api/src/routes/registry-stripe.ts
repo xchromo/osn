@@ -1,3 +1,4 @@
+import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 
@@ -5,11 +6,12 @@ import { DbService } from "../db";
 import type { Db } from "../db";
 import { osnAuth } from "../middleware/osn-auth";
 import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
 import { weddingEntitlement } from "../middleware/wedding-entitlement";
 import { weddingOwner } from "../middleware/wedding-owner";
 import { runCire } from "../observability";
 import { registryService } from "../services/registry";
-import type { StripeClient } from "../services/stripe";
+import type { StripeClient, StripeError } from "../services/stripe";
 
 /**
  * CONNECTING A COUPLE'S BANK ACCOUNT — Stripe Connect onboarding, from the
@@ -44,11 +46,29 @@ import type { StripeClient } from "../services/stripe";
  * same shape as the account-linking flag.
  */
 
-const badGateway = (set: { status?: number | string }) =>
-  Effect.sync(() => {
-    set.status = 502;
-    return { error: "stripe_unavailable" };
-  });
+/**
+ * Stripe would not play. 502, and a log line naming WHICH — a revoked key, a
+ * withdrawn Connect capability and a Stripe outage otherwise produce an
+ * identical bare 502 with nothing to tell them apart, on the surface that
+ * decides where a couple's gift money lands (S-L1).
+ *
+ * `status` and `code` only. `StripeError` carries no message precisely because
+ * Stripe's is written for a developer's console and quotes the request into it.
+ */
+const badGateway = (set: { status?: number | string }, weddingId: string) => (error: StripeError) =>
+  Effect.logWarning("stripe call failed").pipe(
+    Effect.annotateLogs({
+      weddingId,
+      stripeStatus: error.status ?? "none",
+      stripeCode: error.code ?? "none",
+    }),
+    Effect.zipRight(
+      Effect.sync(() => {
+        set.status = 502;
+        return { error: "stripe_unavailable" };
+      }),
+    ),
+  );
 
 const internal = (set: { status?: number | string }) =>
   Effect.sync(() => {
@@ -71,6 +91,14 @@ const logDefect = (weddingId: string) => (cause: unknown) =>
 export interface RegistryStripeDeps {
   /** Absent ⇒ these routes are never mounted. See the header. */
   readonly stripe: StripeClient;
+  /**
+   * Per-organiser limiter. Every request here spends an outbound Stripe call,
+   * which is the shape the link-preview route already carries one for: an owner
+   * holding the button, or a portal bug polling `refresh`, would otherwise burn
+   * the PLATFORM's Stripe quota — a cross-tenant denial of service reached from
+   * one tenant's credentials (S-M1).
+   */
+  readonly limiter: RateLimiterBackend;
   /** Portal origin, for the two URLs Stripe sends the couple back to. */
   readonly organiserOrigin: string;
   /** Two-letter country for a new connected account. */
@@ -93,6 +121,9 @@ export const createRegistryStripeRoutes = (
       group
         .use(weddingOwner(db))
         .use(weddingEntitlement(db, "registry"))
+        // Gate order: owner (403) → entitlement (402) → limiter (429), so a
+        // stranger never spends the couple's budget.
+        .use(rateLimitMiddlewareByUser(deps.limiter))
         .post("/registry/stripe/session", ({ weddingId, set }) => {
           if (!weddingId) return internalSync(set);
           return runCire(
@@ -109,7 +140,21 @@ export const createRegistryStripeRoutes = (
                   country: deps.defaultCountry ?? "AU",
                   weddingId,
                 });
-                const saved = yield* registryService.attachStripeAccount(weddingId, created);
+                // S-L3: if this write fails the account still exists at Stripe
+                // and nothing records its id — and Stripe's idempotency key
+                // expires after 24h, so a later retry would mint a SECOND
+                // account for this couple. Logging the id at the one moment it
+                // would otherwise be lost turns an unrecoverable orphan into a
+                // manual fix. It is an account identifier, not a credential.
+                const saved = yield* registryService
+                  .attachStripeAccount(weddingId, created)
+                  .pipe(
+                    Effect.tapDefect(() =>
+                      Effect.logError("stripe account created but not stored").pipe(
+                        Effect.annotateLogs({ weddingId, stripeAccountId: created.id }),
+                      ),
+                    ),
+                  );
                 accountId = saved.stripeAccountId ?? created.id;
                 chargesEnabled = saved.stripeChargesEnabled;
                 payoutsEnabled = saved.stripePayoutsEnabled;
@@ -136,7 +181,7 @@ export const createRegistryStripeRoutes = (
               // Stripe refusing, or being unreachable, is not this API's
               // fault and not the couple's: 502 says so, and the portal can
               // offer the button again rather than reporting a broken account.
-              Effect.catchTag("StripeError", () => badGateway(set)),
+              Effect.catchTag("StripeError", badGateway(set, weddingId)),
               Effect.tapDefect(logDefect(weddingId)),
               Effect.catchAllDefect(() => internal(set)),
             ),
@@ -170,7 +215,7 @@ export const createRegistryStripeRoutes = (
               };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("StripeError", () => badGateway(set)),
+              Effect.catchTag("StripeError", badGateway(set, weddingId)),
               Effect.tapDefect(logDefect(weddingId)),
               Effect.catchAllDefect(() => internal(set)),
             ),

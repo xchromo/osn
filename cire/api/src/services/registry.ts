@@ -25,7 +25,7 @@ import {
   registrySettings,
   weddings,
 } from "@cire/db";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { commitGroupedBatches, DbService, dbQuery } from "../db";
@@ -769,8 +769,13 @@ export const registryService = {
               // `coalesce` on the EXISTING value, so a second create can only
               // ever fill a null — never repoint a couple's payouts.
               stripeAccountId: sql`coalesce(${registrySettings.stripeAccountId}, ${account.id})`,
-              stripeChargesEnabled: account.chargesEnabled,
-              stripePayoutsEnabled: account.payoutsEnabled,
+              // And the capabilities follow the id (S-L2). Writing them
+              // unconditionally would leave a row describing account A's id
+              // beside account B's capabilities — the invariant that saves that
+              // today lives in the caller, and a caller that does not exist yet
+              // cannot be relied on to repeat it.
+              stripeChargesEnabled: sql`case when ${registrySettings.stripeAccountId} is null then ${account.chargesEnabled} else ${registrySettings.stripeChargesEnabled} end`,
+              stripePayoutsEnabled: sql`case when ${registrySettings.stripeAccountId} is null then ${account.payoutsEnabled} else ${registrySettings.stripePayoutsEnabled} end`,
               stripeAccountUpdatedAt: now,
               updatedAt: now,
             },
@@ -802,20 +807,43 @@ export const registryService = {
     id: string;
     chargesEnabled: boolean;
     payoutsEnabled: boolean;
+    /**
+     * When STRIPE said it, in seconds — the event's own `created`, never our
+     * clock. Absent only for the live `…/stripe/refresh` read, which is by
+     * definition current.
+     */
+    observedAt?: number;
   }): Effect.Effect<boolean, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
       const now = new Date();
+      const observed = account.observedAt === undefined ? now : new Date(account.observedAt * 1000);
       const rows = yield* dbQuery(() =>
         db
           .update(registrySettings)
           .set({
             stripeChargesEnabled: account.chargesEnabled,
             stripePayoutsEnabled: account.payoutsEnabled,
-            stripeAccountUpdatedAt: now,
+            stripeAccountUpdatedAt: observed,
             updatedAt: now,
           })
-          .where(eq(registrySettings.stripeAccountId, account.id))
+          .where(
+            and(
+              eq(registrySettings.stripeAccountId, account.id),
+              // MONOTONIC, and this is the whole point (S-H1). Stripe does not
+              // guarantee order and retries a failed delivery for three days,
+              // so an older event carrying `charges_enabled: true` can arrive
+              // after Stripe has disabled the account — and this column is the
+              // only gate on whether a couple may show guests a contribute
+              // button. Applying it would re-open a payment surface Stripe has
+              // shut. A row is written only by something Stripe said LATER than
+              // what it already holds.
+              or(
+                isNull(registrySettings.stripeAccountUpdatedAt),
+                lte(registrySettings.stripeAccountUpdatedAt, observed),
+              ),
+            ),
+          )
           .returning({ weddingId: registrySettings.weddingId })
           .all(),
       );
