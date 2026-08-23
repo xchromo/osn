@@ -169,17 +169,39 @@ describe("<AuthorizePage />", () => {
     expect(mocks.getContext).toHaveBeenCalledWith(REQUEST_ID, withAbortSignal);
   });
 
-  it("does not resolve a scope named after an inherited Object property", async () => {
-    // "constructor" is not an own SCOPE_COPY entry — it is inherited from
-    // Object.prototype. `isKnownScope` checks membership with
-    // `Object.hasOwn`, not `in`, so this must fall back to the raw scope name
-    // rather than resolving to `Object.prototype.constructor`.
-    mocks.getContext.mockResolvedValue(context({ scopes: ["openid", "constructor"] }));
+  it("does not resolve a scope that is only an inherited Object property", async () => {
+    // S-L1. `isKnownScope` must test OWN membership: `in` walks the prototype
+    // chain, so an inherited entry would be read as real consent copy.
+    //
+    // A scope named after a stock Object.prototype key ("constructor") does not
+    // prove that — `scopeLabel` is `scopeCopy(scope)?.label ?? scope`, and no
+    // Object.prototype member carries a `label`, so both guards fall through to
+    // the raw name and the test passes either way. The difference only shows
+    // when the inherited value is shaped like a ScopeCopy, so put one there.
+    // Non-enumerable, so no `for...in` in the renderer can see it, and removed
+    // again in `finally`.
+    const proto = Object.prototype as Record<string, unknown>;
+    expect(Object.hasOwn(proto, "inheritedScope")).toBe(false);
+    Object.defineProperty(proto, "inheritedScope", {
+      value: { label: "Leaked copy", detail: "Leaked detail" },
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+    try {
+      mocks.getContext.mockResolvedValue(context({ scopes: ["openid", "inheritedScope"] }));
 
-    renderPage();
+      renderPage();
 
-    expect(await screen.findByText("Confirm who you are")).toBeDefined();
-    expect(screen.getByText("constructor")).toBeDefined();
+      expect(await screen.findByText("Confirm who you are")).toBeDefined();
+      // With `in`, the page would render the inherited copy. With
+      // `Object.hasOwn`, an unknown scope shows as its raw name.
+      expect(screen.getByText("inheritedScope")).toBeDefined();
+      expect(screen.queryByText("Leaked copy")).toBeNull();
+      expect(screen.queryByText("Leaked detail")).toBeNull();
+    } finally {
+      delete proto.inheritedScope;
+    }
   });
 
   it("posts an approval with the selected profile and assigns the redirect verbatim", async () => {
