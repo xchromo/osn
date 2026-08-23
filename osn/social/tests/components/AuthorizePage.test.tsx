@@ -128,6 +128,10 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  // S-L2. The inherited-scope test below restores this in its own `finally`,
+  // which does not run if the test body is abandoned on a vitest timeout. This
+  // runs on every exit path, so one hang cannot pollute the rest of the file.
+  delete (Object.prototype as Record<string, unknown>).inheritedScope;
 });
 
 describe("<AuthorizePage />", () => {
@@ -170,7 +174,8 @@ describe("<AuthorizePage />", () => {
   });
 
   it("does not resolve a scope that is only an inherited Object property", async () => {
-    // S-L1. `isKnownScope` must test OWN membership: `in` walks the prototype
+    // S-L3 (`xchromo/osn-tracker#441`). `isKnownScope` must test OWN
+    // membership: `in` walks the prototype
     // chain, so an inherited entry would be read as real consent copy.
     //
     // A scope named after a stock Object.prototype key ("constructor") does not
