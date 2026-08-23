@@ -12,7 +12,7 @@ import {
   type GiftRegistry,
   type GiftRegistryItem,
 } from "../../lib/gift-registry";
-import { CLAIM_SESSION_EVENT } from "../claim-session";
+import { CLAIM_SESSION_EVENT, hasClaimedHint } from "../claim-session";
 import { buildSrcSet, variantSrc } from "../invite-images";
 
 /**
@@ -66,6 +66,22 @@ export function GiftRegistryTeaser(props: GiftRegistryTeaserProps) {
   const [registry, setRegistry] = createSignal<GiftRegistry | null>(null);
 
   async function load(): Promise<void> {
+    // NO HINT, NO CALL. The read is credentialed now, so for a browser that has
+    // never claimed here it can only ever answer 401 — and this band sits on a
+    // PUBLIC invite that every visitor scrolls past: first-timers, link
+    // previews, every share of the couple's link. Without this guard the wasted
+    // request scales with page views rather than with guests, against an
+    // account-wide Workers Free budget of 100k/day (P-W1).
+    //
+    // Safe against the one case that matters: `noteClaimed()` sets the hint
+    // BEFORE it dispatches `CLAIM_SESSION_EVENT`, so a guest entering their
+    // code still gets the band in place with no reload. Hint and session are
+    // minted by the same claim, last the same 30 days, and are cleared
+    // together; forging the hint buys only the 401 it would have got anyway.
+    if (!hasClaimedHint()) {
+      setRegistry(null);
+      return;
+    }
     const result = await fetchGiftRegistry(props.apiUrl, props.slug);
     // Only an `ok` changes what is on screen. A 401 before a claim and a 401
     // after a session lapses are the same answer — no band — and a transport
@@ -156,8 +172,14 @@ export function GiftRegistryTeaser(props: GiftRegistryTeaserProps) {
                 tile is laid out only where a fourth fits, rather than wrapping
                 alone onto a second row and turning a glance into a grid. */}
             <Show when={previewItems().length > 0}>
+              {/* `aria-hidden`, because this row IS decoration: the images
+                  carry `alt=""` (the gift titles are not shown beside them, and
+                  the link below carries the action), so without it assistive
+                  tech announces "list, 4 items" and then four empty ones on the
+                  way to the only thing here worth reaching. */}
               <ul
                 data-gift-teaser-preview
+                aria-hidden="true"
                 class="mx-auto mb-8 grid max-w-[34rem] list-none grid-cols-3 gap-3 md:grid-cols-4"
               >
                 <For each={previewItems()}>
@@ -166,8 +188,12 @@ export function GiftRegistryTeaser(props: GiftRegistryTeaserProps) {
                       <img
                         src={variantSrc(imageBase(item), "thumb")}
                         srcset={buildSrcSet(imageBase(item), ["thumb", "card"])}
-                        // A tile is a quarter of a 34rem row at most — thumb
-                        // covers it everywhere, card is there for retina.
+                        // A tile is a quarter of a 34rem row at most. `thumb`
+                        // (320w) covers it up to 2×; a 3× phone crosses that
+                        // and takes `card` (800w). Left alone deliberately: the
+                        // variant allowlist is kept small to cap transform-URL
+                        // cardinality, and a 480w entry would widen it for a
+                        // few lazy below-fold thumbnails.
                         sizes="(min-width: 768px) 8rem, 30vw"
                         alt=""
                         loading="lazy"

@@ -649,10 +649,11 @@ describe("a cookie for one wedding buys nothing on another", () => {
     const foreign = await guestCookie(app, FOREIGN_FAMILY);
     const res = await claim(app, foreign, { quantity: 1 });
     expect(res.status).toBe(404);
-    // Deliberately the item-shaped code, not a family-shaped one: a distinct
-    // code would confirm to the holder of any valid cookie that this item id
-    // exists on a wedding they cannot read.
-    expect(await res.json()).toEqual({ error: "registry_item_not_found" });
+    // The SAME code an unpublished or unentitled registry gives (S-M1). The
+    // family is checked BEFORE the item, so a holder of any valid cookie learns
+    // neither whether this wedding has a list nor whether the item id they
+    // guessed exists on it.
+    expect(await res.json()).toEqual({ error: "registry_not_found" });
   });
 
   it("cannot release another wedding's claim", async () => {
@@ -663,7 +664,7 @@ describe("a cookie for one wedding buys nothing on another", () => {
     const foreign = await guestCookie(app, FOREIGN_FAMILY);
     const res = await release(app, foreign);
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "registry_item_not_found" });
+    expect(await res.json()).toEqual({ error: "registry_not_found" });
     // The local household's claim is untouched.
     expect((await mine(app, local)).claims).toHaveLength(1);
   });
@@ -683,17 +684,21 @@ describe("a cookie for one wedding buys nothing on another", () => {
     expect(raw).not.toContain("Your presence is the present.");
   });
 
-  it("reads an empty household on another wedding's slug, never its claims", async () => {
+  it("cannot read its own household on another wedding's slug either", async () => {
+    // It used to answer 200 `{claims: []}` here — which, against a 404 for an
+    // unpublished list, let anyone holding any valid session walk slugs and
+    // learn which weddings have a published gift list (S-M1). Same 404 now.
     const { app } = buildApp({ shippingAddress: "12 Wattle St, Fitzroy" });
     const local = await guestCookie(app);
     expect((await claim(app, local, { quantity: 1 })).status).toBe(200);
 
     const foreign = await guestCookie(app, FOREIGN_FAMILY);
-    const view = await mine(app, foreign);
-    expect(view.claims).toEqual([]);
-    // No claim on this wedding ⇒ no address, even though a household of this
-    // wedding would see one.
-    expect(view.shippingAddress).toBeUndefined();
+    const res = await appRequest(app, `${guestBase()}/mine`, { headers: { Cookie: foreign } });
+    expect(res.status).toBe(404);
+    const raw = await res.text();
+    expect(JSON.parse(raw)).toEqual({ error: "registry_not_found" });
+    // And nothing of this wedding's household leaks in the body.
+    expect(raw).not.toContain("12 Wattle St");
   });
 
   it("works the other way round too — the bootstrap cookie is useless next door", async () => {
@@ -701,7 +706,7 @@ describe("a cookie for one wedding buys nothing on another", () => {
     const local = await guestCookie(app);
     const res = await claim(app, local, { quantity: 1 }, OTHER_SLUG, OTHER_ITEM);
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "registry_item_not_found" });
+    expect(await res.json()).toEqual({ error: "registry_not_found" });
   });
 });
 

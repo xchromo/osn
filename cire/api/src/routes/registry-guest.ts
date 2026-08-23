@@ -27,11 +27,12 @@ const manualParse = { parse: () => ({}) };
  * The ONE 404 the whole guest surface answers with.
  *
  * Unknown slug, wedding without the `registry` entitlement, registry never
- * opened, registry unpublished, image name that doesn't match the registry
- * prefix, object missing from R2 — all of them, on every route here, produce
- * this exact body. A guest URL is public and unauthenticated, so any answer that
- * told these apart would let anyone enumerate which weddings exist and which of
- * them are quietly drafting a gift list.
+ * opened, registry unpublished, a household of ANOTHER wedding, an image name
+ * that doesn't match the registry prefix, an object missing from R2 — all of
+ * them, on every route here, produce this exact body. The image route is
+ * genuinely public, and the rest are reachable by anyone holding any valid
+ * `cire_session`; an answer that told these apart would let either enumerate
+ * which weddings exist and which of them are quietly drafting a gift list.
  */
 const notVisible = (set: { status?: number | string }) =>
   Effect.sync(() => {
@@ -253,15 +254,18 @@ export interface RegistryGuestClaimDeps {
  * Error mapping, all as machine-readable codes (the `rsvp_closed` precedent):
  *
  *   RegistryNotVisible      → 404 `registry_not_found`
+ *   FamilyNotInWedding      → 404 `registry_not_found`       (see below)
  *   RegistryItemNotInWedding→ 404 `registry_item_not_found`
- *   FamilyNotInWedding      → 404 `registry_item_not_found`  (see below)
  *   ItemFullyClaimed        → 409 `item_fully_claimed`
  *   InvalidQuantity         → 400 `invalid_quantity`
  *
- * `FamilyNotInWedding` answers as a missing ITEM on purpose. It fires when a
- * cookie for wedding A is used on wedding B's slug, and a distinct code there
- * would confirm to the holder of any valid cookie that a given item id exists on
- * a wedding they have no business reading.
+ * `FamilyNotInWedding` answers as `registry_not_found` — the SAME code an
+ * unpublished or unentitled registry gives (S-M1). It fires when a cookie for
+ * wedding A is used on wedding B's slug, and the service checks it BEFORE the
+ * item, so a holder of any valid cookie learns neither whether that wedding has
+ * a list nor whether the item id they guessed exists on it. Answering a
+ * distinct item-shaped code told them the second; answering it only when the
+ * registry happened to be visible told them the first.
  */
 export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimDeps) =>
   new Elysia({ prefix: "/api/invite" })
@@ -296,7 +300,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
             Effect.catchTag("ParseError", () => badRequest(set)),
             Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
             Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
-            Effect.catchTag("FamilyNotInWedding", () => itemNotFound(set)),
+            Effect.catchTag("FamilyNotInWedding", () => notVisible(set)),
             Effect.catchTag("ItemFullyClaimed", () =>
               Effect.sync(() => {
                 set.status = 409;
@@ -332,6 +336,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
         }).pipe(
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
+          Effect.catchTag("FamilyNotInWedding", () => notVisible(set)),
           Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
           Effect.tapDefect(logDefect),
           Effect.catchAllDefect(() => internal(set)),

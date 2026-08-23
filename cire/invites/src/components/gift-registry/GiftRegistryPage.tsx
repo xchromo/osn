@@ -159,9 +159,10 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
 
   async function loadHousehold(): Promise<void> {
     // No claim hint ⇒ this browser has never claimed here, so `…/registry/mine`
-    // could only ever 401. Skipping it matters because this page is PUBLIC and
-    // shareable: the wasted call would scale with page views rather than with
-    // guests, against an account-wide Workers Free budget of 100k/day.
+    // could only ever 401. Worth skipping even though the list read is gated
+    // too: the page is a link people SHARE, and every visitor who opens it
+    // without a code would otherwise spend a guaranteed 401 against an
+    // account-wide Workers Free budget of 100k/day.
     if (!hasClaimedHint()) {
       setMine({ kind: "signed-out" });
       return;

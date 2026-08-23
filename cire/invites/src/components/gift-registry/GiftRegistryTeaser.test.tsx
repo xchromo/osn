@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_GIFT_REGISTRY_EYEBROW,
@@ -80,7 +80,16 @@ function renderTeaser(props: Partial<Parameters<typeof GiftRegistryTeaser>[0]> =
   return render(() => <GiftRegistryTeaser apiUrl={API} slug={SLUG} {...props} />);
 }
 
+/** This browser has claimed here before — the band's ordinary state. */
+function setClaimedHint() {
+  document.cookie = "cire_claimed=1; Path=/";
+}
+
 const realFetch = globalThis.fetch;
+
+beforeEach(() => {
+  setClaimedHint();
+});
 
 afterEach(() => {
   cleanup();
@@ -90,10 +99,25 @@ afterEach(() => {
 });
 
 describe("what renders at all", () => {
-  it("renders nothing for a visitor who has not entered their code", async () => {
+  it("renders nothing for a visitor who has not entered their code, and asks nothing", async () => {
     // The list is for the couple's guests, so the band advertising it is too —
     // the same silence every other claim-gated section of the invitation keeps,
     // rather than a link to a page they cannot open.
+    //
+    // AND IT COSTS NOTHING (P-W1). Without the hint the read could only ever
+    // 401, and this band sits on a PUBLIC invite every visitor scrolls past, so
+    // an unconditional call would spend an account-wide Worker request per page
+    // view to render nothing.
+    document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+    const mock = stubFetch(json(registry()));
+    const { container } = renderTeaser();
+
+    await Promise.resolve();
+    expect(mock).not.toHaveBeenCalled();
+    expect(container.querySelector("[data-gift-teaser]")).toBeNull();
+  });
+
+  it("renders nothing when a claimed guest's session has since lapsed", async () => {
     const mock = stubFetch(json({ error: "Unauthorized" }, 401));
     const { container } = renderTeaser();
     await waitFor(() => expect(mock).toHaveBeenCalled());
@@ -103,13 +127,17 @@ describe("what renders at all", () => {
   });
 
   it("appears the moment a claim lands in the other island, with no reload", async () => {
-    stubFetch(json({ error: "Unauthorized" }, 401), json(registry()));
+    document.cookie = "cire_claimed=; Path=/; Max-Age=0";
+    const mock = stubFetch(json(registry()));
     const { container } = renderTeaser();
-    await waitFor(() => expect(container.querySelector("[data-gift-teaser]")).toBeNull());
+    await Promise.resolve();
+    expect(container.querySelector("[data-gift-teaser]")).toBeNull();
+    expect(mock).not.toHaveBeenCalled();
 
-    // Exactly what `InvitePage` does the moment a claim lands. The invitation
-    // reveals in place and navigates nowhere, so without this the band the
-    // couple wrote would stay missing for the rest of the visit.
+    // Exactly what `InvitePage` does the moment a claim lands. `noteClaimed`
+    // sets the hint BEFORE dispatching, which is what makes the re-read find a
+    // session — and without this the band the couple wrote would stay missing
+    // for the rest of the visit.
     noteClaimed();
 
     await screen.findByRole("link", { name: "See the gift list" });
@@ -120,6 +148,21 @@ describe("what renders at all", () => {
     const { container } = renderTeaser();
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     expect(container.querySelector("[data-gift-teaser]")).toBeNull();
+  });
+
+  it("keeps a band that is already reading when a later read fails", async () => {
+    // The three-way branch in `load()` exists for this: a guest on a phone in a
+    // shop who loses signal must not watch the couple's gift band vanish from
+    // an invitation that is otherwise intact — indistinguishable, to them, from
+    // a wedding that never had a list.
+    stubFetch(json(registry()), json({}, 500));
+    const { container } = renderTeaser();
+    await screen.findByRole("link", { name: "See the gift list" });
+
+    noteClaimed(); // forces the re-read
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+
+    expect(container.querySelector("[data-gift-teaser]")).toBeTruthy();
   });
 
   it("renders nothing when the read fails outright", async () => {

@@ -88,11 +88,12 @@ const registryVars = filterThemeVars(sectionVars(initialInvite?.theme ?? null, '
     {/* The couple's gift list — a band that links to it, not the list itself:
         that lives at `/<slug>/registry` now, because it is the part of an
         invitation a guest comes BACK to. Its OWN island, deliberately after
-        InvitePage: the public registry read is unauthenticated, so it must
-        render for a visitor who hasn't entered their code — which InvitePage,
-        gated on a claim, cannot do. `client:visible` because it is below the
-        fold on every invite; the band renders nothing at all when the registry
-        is unpublished or the wedding isn't entitled (that read 404s). */}
+        InvitePage, for a hydration reason rather than an auth one: `InvitePage`
+        reveals in place after a claim, and a band nested inside it would only
+        exist once that reveal had run. The band reads the same gate the rest of
+        the invitation does and renders NOTHING for a visitor with no claim (401)
+        or a wedding with no published list (404). `client:visible` because it is
+        below the fold on every invite. */}
     <GiftRegistryTeaser
       client:visible={{ rootMargin: "600px" }}
       apiUrl={apiUrl}

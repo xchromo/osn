@@ -540,6 +540,44 @@ describe("claiming", () => {
     expect(container.querySelector('[data-gift-shelf="Kitchen"]')).toBeTruthy();
   });
 
+  it("settles on the closed state when the couple unpublish mid-write", async () => {
+    // `applyOutcome`'s `hidden` branch re-reads the LIST only, and the point of
+    // that re-read is the end state: a 404 that turns the page into "the couple
+    // have closed their gift list" rather than a stale list sitting under a
+    // message that contradicts it.
+    routedFetch({
+      list: [json(registry()), json({ error: "registry_not_found" }, 404)],
+      claim: [json({ error: "registry_not_found" }, 404)],
+    });
+    const { container } = renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    // Waiting on the PANEL, not the words: `giftRegistryWriteMessage` puts the
+    // same sentence in the status line the moment the write answers, which is
+    // before the re-read that actually closes the page.
+    await waitFor(() => expect(container.querySelector("[data-gift-closed]")).toBeTruthy());
+    expect(container.querySelector("[data-gift-item]")).toBeNull();
+  });
+
+  it("re-reads both routes when the couple removed the gift under us", async () => {
+    // `item-gone` is the 404 for the ITEM, not the list: the list is still
+    // there, so both reads run and the page keeps rendering it.
+    const { calls } = routedFetch({
+      claim: [json({ error: "registry_item_not_found" }, 404)],
+    });
+    const { container } = renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reserve" }));
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await screen.findByText(/is no longer on the couple’s list/);
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/registry"))).toHaveLength(2));
+    expect(calls.filter((c) => c.url.endsWith("/registry/mine"))).toHaveLength(2);
+    expect(container.querySelector("[data-gift-item]")).toBeTruthy();
+  });
+
   it("says the session lapsed when the write is the thing that finds out", async () => {
     routedFetch({ claim: [json({ error: "unauthorised" }, 401)] });
     const { container } = renderPage();

@@ -148,7 +148,15 @@ Under `/api/invite/:slug/registry`. **The list is not public.** It names what a 
 | `POST \| DELETE /registry/items/:itemId/claim` | `sessionAuth` + per-IP limiter |
 | `GET /registry/image/:name` — a gift's image bytes | none — see below |
 
-`registryGuestService.guestView` checks the family against the **wedding**, not merely that it exists: a `cire_session` names a household, not a wedding, so without that check one leaked code would open every couple's list on the platform. A family from another wedding fails `RegistryNotVisible` — the same failure, and so the same 404, as unpublished and unentitled. A distinct code would confirm to any cookie-holder which weddings have a list.
+**Every gated route checks the family against the WEDDING**, through one shared `familyInWedding` read, and they must not drift: a `cire_session` names a household, not a wedding, so without it one leaked code reaches every couple's list on the platform. All three answer the same `registry_not_found` a missing, unentitled or unpublished registry gives:
+
+| Route | A household of another wedding gets |
+|---|---|
+| `GET /registry` | `404 registry_not_found` |
+| `GET /registry/mine` | `404 registry_not_found` — **not** the empty `200 {claims: []}` it used to give (S-M1) |
+| `POST \| DELETE /registry/items/:itemId/claim` | `404 registry_not_found`, because the service checks the family **before** the item |
+
+The order in `registryService.claim` is the security property, not a detail. Checking the item first told a cookie-holder whether the id they guessed exists on a wedding they cannot read; checking the family first tells them only what they already knew. `releaseClaim` pays one extra point read on its failure path for the same reason — "matched no claim row" would otherwise answer item-shaped on a visible registry and registry-shaped on an invisible one, which is a probe for which weddings have a list.
 
 The image route stays **unauthenticated on purpose**. A name is `registry-<uuid>`, minted per save and reachable only from the list the session now gates, so the bytes are not enumerable without that read — while authenticating them would put a session lookup on every image request on the page, the one place on the guest surface where requests arrive in dozens. If the couple's pictures ever become sensitive on their own, that route moves and `visibility: "public"` moves with it.
 

@@ -48,6 +48,16 @@ describe("pages/[slug]/registry.astro (the gift list's route)", () => {
     expect(code).not.toContain("registry_not_found");
   });
 
+  it("renders the gift shell for a real wedding, and the not-found one otherwise", () => {
+    // Which document gets the props is one of this route's decisions, and the
+    // props are how `API_URL` reaches the island that makes the credentialed
+    // read. Swapping the component would otherwise pass every test here.
+    expect(code).toContain(
+      "<GiftRegistryDocument apiUrl={API_URL} slug={slug!} invite={invite} />",
+    );
+    expect(code).toContain("<NotFoundDocument");
+  });
+
   it("still renders the page when only the invite read failed", () => {
     // `invite` degrades to null (built-in theme and copy); the island reports
     // whatever the list read finds.

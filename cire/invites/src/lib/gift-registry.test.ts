@@ -467,6 +467,10 @@ describe("the ledger line", () => {
     expect(giftRegistryClaimedCopy([])).toBeNull();
     expect(giftRegistryClaimedCopy([claim(1)])).toBe("You reserved 1 gift");
     expect(giftRegistryClaimedCopy([claim(1), claim(2)])).toBe("You reserved 3 gifts");
+    // Same clamp, and the same reason, as the availability line above: a
+    // restored backup or a migration can hand this a negative quantity, and
+    // "You reserved -1 gifts" is not a thing to print on a ledger.
+    expect(giftRegistryClaimedCopy([claim(-2), claim(3)])).toBe("You reserved 3 gifts");
   });
 });
 
