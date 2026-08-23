@@ -6,7 +6,7 @@ related:
   - "[[backend-patterns]]"
   - "[[schema-layers]]"
   - "[[commands]]"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-08-24
 ---
 
 # Testing Patterns
@@ -108,6 +108,8 @@ describe("events routes", () => {
 - **Never hand-write a DDL mirror.** Test databases are built from the live Drizzle schema via `applySchema()` (`@osn/db/testing`, `@pulse/db/testing`, `@zap/db/testing`) — never a `CREATE TABLE` string in a helper or a test file. A hand-written mirror makes constraint tests tautological: they assert the `UNIQUE` the author typed a few lines above, not the one the schema declares, so dropping `.unique()` from `src/schema` leaves them green. See [[#Schema-derived test databases]].
 
 - **A test must fail for the reason it is named.** Before landing a test that asserts a side effect (a row written, a notice sent), break the code path and confirm the test goes red. `expect(true).toBe(true)` after an action asserts nothing.
+
+- **Never add a setup file just to register jest-dom.** `vite-plugin-solid` puts `@testing-library/jest-dom/vitest` into `setupFiles` on its own, so every package whose `vitest.config.ts` loads that plugin already has `toHaveAttribute` and friends in every test file. The plugin skips its injection only when one of your own `setupFiles` paths matches the regex `/jest-dom/` — that path is the sole off switch it offers. A setup file that does nothing else is pure per-file cost: Vitest runs `setupFiles` once per **test file**, not once per worker. `pulse/web` carried one until 2026-08 and paid for a second jest-dom load in all 41 of its files. Import the matchers in the handful of test files that assert with them instead; `tsconfig.json` already has `tests/**/*` in `include`, so the matcher types resolve across the package from any one import.
 
 ## Schema-derived test databases
 
