@@ -1,4 +1,12 @@
+# The guards that keep this repo honest, and the things they guard. GitHub
+# applies the LAST matching pattern for a given path, so a self-owning
+# `.github/` has to come before `tools/oxlint/**` — otherwise a PR could edit
+# this file itself, or the CI wiring, out of the way with no owner review.
+/.github/            @chav-aniket
+/scripts/            @chav-aniket
+/bunfig.toml         @chav-aniket
+
 # Vendored upstream source (see tools/oxlint/anti-slop/README.md). An edit
 # here bypasses oxfmt and oxlint by design — only the SHA256SUMS check in CI
 # catches drift — so a change to this tree gets a human owner's eyes.
-tools/oxlint/** @chav-aniket
+/tools/oxlint/**     @chav-aniket

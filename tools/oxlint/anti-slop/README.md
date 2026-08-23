@@ -18,9 +18,14 @@ cp -R anti-slop-<sha>/src/. tools/oxlint/anti-slop/
 rm -f tools/oxlint/anti-slop/rules/*.test.ts
 curl -sL https://raw.githubusercontent.com/dmmulroy/anti-slop/<sha>/LICENSE \
   -o tools/oxlint/anti-slop/LICENSE
-(cd tools/oxlint/anti-slop && find . -type f ! -name SHA256SUMS -print0 | \
-  sort -z | xargs -0 shasum -a 256 > SHA256SUMS)
+(cd tools/oxlint/anti-slop && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | \
+  LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS)
 ```
+
+The `sed` strips `find`'s leading `./` — the committed `SHA256SUMS` lists bare paths
+like `index.ts`, not `./index.ts`, so a `find .`-based recipe with no `sed` produces a
+file that hashes identically but diffs on every line. `LC_ALL=C` pins the sort order
+so the recipe reproduces the same byte order on any machine's locale.
 
 Keep `oxlint` and `@oxlint/plugins` on the same version in `package.json` — the
 plugin API is not stable across minors.

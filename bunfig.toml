@@ -6,14 +6,19 @@ minimumReleaseAge = 259200
 # with no expiry stops being an exception and becomes a permanent hole: the
 # range keeps matching future releases, so the next publish under that name
 # installs with no soak at all. `scripts/check-release-age-excludes.ts` enforces
-# this in CI: every name in minimumReleaseAgeExcludes must have a matching
-# marker comment somewhere in this block —
+# this — run in CI by the `script-tests` job's "Check release-age excludes are
+# marked and bounded" step, which gates the required `CI` check — every name
+# in minimumReleaseAgeExcludes must have a matching marker comment somewhere
+# in this block —
 #
 #   # DROP AFTER <package-name> <YYYY-MM-DD>
 #
-# — and the check fails once that date has passed. Add the marker in the same
-# commit as the exclude; when it fires, remove the name from the array below
-# and turn its paragraph into a removed-entry note like the two below.
+# — dated no more than 30 days out, and the check fails once that date has
+# passed. Add the marker in the same commit as the exclude; when it fires,
+# remove the name from the array below and turn its paragraph into a
+# removed-entry note like the two below. The same script also fails if
+# `minimumReleaseAge` above drops below 259200 (3 days) — lowering the soak
+# window itself is a decision that belongs in a reviewed PR, not a quiet edit.
 #
 # bun-types was removed 2026-08-24. It was added because `.bun-version` pins
 # the 1.4.0 runtime, so without matching types the repo typechecked 1.4 APIs
