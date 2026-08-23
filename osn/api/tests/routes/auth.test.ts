@@ -2385,6 +2385,9 @@ describe("auth routes", () => {
     it("GET /account/security-events requires Bearer auth", async () => {
       const res = await app.handle(new Request("http://localhost/account/security-events"));
       expect(res.status).toBe(401);
+      // tracker#346: the header is set above the guards, so it lands on the
+      // rejections too — not only on the 200.
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
     });
 
     it("GET /account/security-events surfaces the recovery_code_generate event end-to-end", async () => {
@@ -2589,6 +2592,7 @@ describe("auth routes", () => {
         }),
       );
       expect(res.status).toBe(429);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
     });
   });
 });
