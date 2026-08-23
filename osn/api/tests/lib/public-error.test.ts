@@ -29,11 +29,15 @@ describe("publicError", () => {
   });
 
   it("skips a throwing getter instead of propagating the throw", () => {
+    // The root's own `_tag` has to be a Cause tag. A domain tag on the root
+    // returns before the key loop ever runs, so the getter would never be
+    // read and this test would pass without touching the changed code.
     const err = {
+      _tag: "Fail",
       get poison(): never {
         throw new Error("do not read me");
       },
-      _tag: "DatabaseError",
+      error: { _tag: "DatabaseError" },
     };
     expect(() => publicError(err)).not.toThrow();
     expect(publicError(err)).toEqual({ status: 500, body: { error: "internal_error" } });
