@@ -1,0 +1,4 @@
+# Vendored upstream source (see tools/oxlint/anti-slop/README.md). An edit
+# here bypasses oxfmt and oxlint by design — only the SHA256SUMS check in CI
+# catches drift — so a change to this tree gets a human owner's eyes.
+tools/oxlint/** @chav-aniket

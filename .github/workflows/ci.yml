@@ -183,6 +183,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tools/oxlint/anti-slop is excluded from oxfmt and ignored by oxlint (see
+      # its README), specifically so a re-vendor stays a plain copy with no
+      # formatting noise. That also means an edit to the vendored tree passes
+      # every other gate unnoticed — this is the one check that would catch it.
+      # No bun needed, so it runs right after checkout.
+      - name: Verify vendored anti-slop matches its checksums
+        run: (cd tools/oxlint/anti-slop && shasum -c SHA256SUMS)
+
       # scripts/cire-dev-db-guard.sh is the only thing standing between the
       # unattended `db:reset:dev` step and the live-wedding D1, and a weakened
       # guard's failure mode is *passing* — nothing downstream would notice
