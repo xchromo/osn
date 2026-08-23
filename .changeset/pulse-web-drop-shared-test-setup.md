@@ -2,4 +2,4 @@
 "@pulse/web": patch
 ---
 
-Stop loading a shared jest-dom setup file in every test file's environment; import it directly in the one test file that uses its matchers.
+Drop the redundant jest-dom setup file. `vite-plugin-solid` already registers the matchers in every test file, so `tests/setup.ts` only made each of the 41 test files resolve the same import a second time. The one test that asserts with those matchers now imports them itself.
