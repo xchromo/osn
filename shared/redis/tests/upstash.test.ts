@@ -100,6 +100,18 @@ describe("wrapUpstash", () => {
       fake.eval.mockResolvedValueOnce("1");
       expect(await client.eval("script", ["k"], [1])).toBe("1");
     });
+
+    it("coerces a bigint reply to number, same as the ioredis path", async () => {
+      fake.eval.mockResolvedValueOnce(42n);
+      expect(await client.eval("script", ["k"], [1])).toBe(42);
+    });
+
+    it("rejects a reply RESP cannot carry (toRedisReply's contract)", async () => {
+      fake.eval.mockResolvedValueOnce({ not: "a RESP value" });
+      await expect(client.eval("script", ["k"], [1])).rejects.toThrow(
+        /Redis EVAL returned a object/,
+      );
+    });
   });
 
   describe("del", () => {
