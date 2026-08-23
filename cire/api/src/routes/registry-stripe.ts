@@ -105,9 +105,14 @@ export interface RegistryStripeDeps {
   readonly defaultCountry?: string;
 }
 
-/** Where Stripe returns the couple: their own registry module, in the portal. */
+/**
+ * Where Stripe returns the couple: the registry's SETTINGS tab, which is where
+ * the button they pressed lives and where the panel that reads their new status
+ * is. Landing them on the gift list would be landing them one tab away from the
+ * thing they just did.
+ */
 function portalRegistryUrl(origin: string, weddingId: string): string {
-  return `${origin.replace(/\/+$/, "")}/#/w/${encodeURIComponent(weddingId)}/registry`;
+  return `${origin.replace(/\/+$/, "")}/#/w/${encodeURIComponent(weddingId)}/registry/settings`;
 }
 
 export const createRegistryStripeRoutes = (

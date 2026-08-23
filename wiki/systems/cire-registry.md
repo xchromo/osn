@@ -374,6 +374,22 @@ Candidates are filtered to `https:` **again in the browser** before any of them 
 
 ---
 
+### The settings tab (`@cire/host`)
+
+`RegistrySettingsView` is the registry module's third sub-tab, beside the gift list and the gifts received. It holds the four decisions the guest surface had been reading with nowhere to make them — publish, copy, shipping address (and its embargo date), money gifts — plus Stripe onboarding.
+
+**One snapshot, shared with the list.** It reads the same cached `RegistrySnapshot`, so moving between sub-tabs costs no fetch, and a save patches the settings row in place rather than invalidating the whole thing.
+
+**Two roles, one visible line.** The tab is `edit`-gated, so a read-only viewer never reaches it; everything on it is `weddingEditor` at the API **except** connecting the Stripe account, which is `weddingOwner`. An editor still sees that panel, disabled, with the reason — a co-host who wonders why money gifts are off gets an answer rather than a missing section.
+
+**Publishing is blocked while the list is empty**, and the notice says why: guests reach the list *and the money-gift option with it* only once it is published, so an empty published list is a page with nothing on it. An already-published list keeps the toggle live, or deleting the last gift would freeze a couple on "Published" with no way back.
+
+**Intent and capability are two controls.** "Let guests give money" is disabled until `stripe_charges_enabled`; the API refuses the write anyway (`stripe_not_ready` → 409), and the panel answers that 409 by saying Stripe cannot take a payment yet rather than "check the fields".
+
+**One live Stripe read, for one state.** On mount, a wedding that has an account but cannot yet charge calls `…/stripe/refresh` once — they have just come back from onboarding and `account.updated` can be seconds behind them. A couple with no account, or one already ready, costs nothing. "Check again" is the same call, pressed by hand, and it reports "still not ready" too.
+
+---
+
 ## Guest surface (`@cire/invites`)
 
 **The list has its own page: `/<slug>/registry`.** It used to be the last section of the invite. It is the one part of an invitation a guest comes *back* to — to see what is left, to change what they reserved, to open it in a shop — and none of that should mean scrolling the invitation again. It is also a link a couple can send on its own.
@@ -460,6 +476,5 @@ Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **log
 ## Still to land
 
 - Organiser settings form: the publish toggle, the shipping address, cash gifts — the three fields the guest surface already reads and cannot yet be set from the portal
-- **The organiser's own connect panel** in the portal: the couple can be connected through the API, but nothing in `@cire/host` yet offers the button — nor the publish toggle, shipping address and cash-gifts switch beside it
 - **The FX capture**: `checkout.session.completed` carries no balance transaction, so the four FX columns are still NULL. The `exchange_rate` read described under [Money](#money) needs its own event or a follow-up call
 - **Labelling `failed` and `refunded` in the portal**: the webhook writes both, but `cire/host/src/components/RegistryView.tsx` still renders `{gift.status}` raw, so the couple read a bare word instead of a sentence

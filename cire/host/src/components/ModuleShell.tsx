@@ -50,11 +50,13 @@ const loadInviteBuilder = () => import("./InviteBuilder");
  * hover on either sub-tab through `PANEL_LOADERS` below.
  */
 const loadRegistry = () => import("./RegistryView");
+const loadRegistrySettings = () => import("./RegistrySettingsView");
 
 const EventsEditor = lazy(loadEventsEditor);
 const GuestsEditor = lazy(loadGuestsEditor);
 const InviteBuilder = lazy(loadInviteBuilder);
 const RegistryView = lazy(loadRegistry);
+const RegistrySettingsView = lazy(loadRegistrySettings);
 
 /**
  * Which sub-tab hides which chunk, so pointing at one can start its fetch.
@@ -104,6 +106,7 @@ const PANEL_LOADERS: PanelLoaders = {
   "invite:design": loadInviteBuilder,
   "registry:list": loadRegistry,
   "registry:gifts": loadRegistry,
+  "registry:settings": loadRegistrySettings,
 };
 
 /** The map's keys, for the drift guard in `ModuleShell.test.tsx`. */
@@ -175,6 +178,11 @@ const MODULE_SUB_TABS: ModuleSubTabs = {
   registry: [
     { id: "list", label: "Gift list" },
     { id: "gifts", label: "Gifts received" },
+    // `edit`, not `manage`: a co-host with edit rights may publish the list and
+    // write its copy. The one owner-only control — connecting the account gifts
+    // are paid into — is disabled inside the panel with the reason, rather than
+    // hiding a whole tab from someone who is allowed most of it.
+    { id: "settings", label: "Settings", edit: true },
   ],
   guests: [
     { id: "list", label: "Households" },
@@ -474,6 +482,13 @@ export default function ModuleShell(props: ModuleShellProps) {
                         weddingId={props.weddingId}
                         view="gifts"
                         canEdit={props.canEdit}
+                      />
+                    </Show>
+                    <Show when={active() === "settings"}>
+                      <RegistrySettingsView
+                        weddingId={props.weddingId}
+                        canEdit={props.canEdit}
+                        canManage={props.canManage}
                       />
                     </Show>
                   </Suspense>

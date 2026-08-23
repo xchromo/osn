@@ -57,6 +57,7 @@ function stripeStub(
   } = {},
 ) {
   const calls: string[] = [];
+  const links: { accountId: string; returnUrl: string; refreshUrl: string }[] = [];
   const client: StripeClient = {
     createAccount(input) {
       calls.push(`createAccount:${input.weddingId}:${input.country}`);
@@ -66,6 +67,7 @@ function stripeStub(
     },
     createAccountLink(input) {
       calls.push(`createAccountLink:${input.accountId}`);
+      links.push(input);
       return overrides.failLink
         ? Effect.fail(new StripeError({ reason: "unreachable" }))
         : Effect.succeed({ url: "https://connect.stripe.test/setup/x", expiresAt: 1_800_000_000 });
@@ -77,7 +79,7 @@ function stripeStub(
         : Effect.succeed({ ...(overrides.account ?? ACCOUNT), id: accountId });
     },
   };
-  return { client, calls };
+  return { client, calls, links };
 }
 
 function buildApp({
@@ -173,6 +175,18 @@ describe("who may connect an account", () => {
 });
 
 describe("create-or-resume", () => {
+  it("returns the couple to the settings tab, where the button they pressed is", async () => {
+    const stripe = stripeStub();
+    const { app } = buildApp({ stripe: stripe.client });
+    await req(app, `${base}/session`, OWNER);
+    // Both URLs: `refresh_url` is where Stripe sends them when the link has
+    // expired, and it must land on the button that mints a fresh one.
+    expect(stripe.links[0]?.returnUrl).toBe(
+      `https://host.test/#/w/${BOOTSTRAP_WEDDING_ID}/registry/settings`,
+    );
+    expect(stripe.links[0]?.refreshUrl).toBe(stripe.links[0]?.returnUrl);
+  });
+
   it("creates one account, stores it, and returns the couple to their own registry", async () => {
     const stripe = stripeStub();
     const { app, db } = buildApp({ stripe: stripe.client });
