@@ -53,7 +53,8 @@ export class GraphClientError extends Error {
 // Internal fetch helpers
 // ---------------------------------------------------------------------------
 
-const { authGet, authPost, authPatch, authDelete } = createAuthFetchers(GraphClientError);
+const { authGet, authPost, authPatch, authDelete } =
+  /* @__PURE__ */ createAuthFetchers(GraphClientError);
 
 // ---------------------------------------------------------------------------
 // Query string helper

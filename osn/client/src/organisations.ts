@@ -44,7 +44,8 @@ export class OrgClientError extends Error {
 // Internal fetch helpers
 // ---------------------------------------------------------------------------
 
-const { authGet, authPost, authPatch, authDeleteVoid } = createAuthFetchers(OrgClientError);
+const { authGet, authPost, authPatch, authDeleteVoid } =
+  /* @__PURE__ */ createAuthFetchers(OrgClientError);
 
 // `deleteOrg`/`removeMember`'s endpoints return no body on success, so this
 // module uses the void-returning delete, unlike graph.ts's `{ ok: true }`

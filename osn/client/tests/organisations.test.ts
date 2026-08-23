@@ -71,6 +71,13 @@ describe("createOrgClient — mutations", () => {
     expect(result).toBeUndefined();
     expect((vi.mocked(fetch).mock.calls[0]![1] as RequestInit).method).toBe("DELETE");
   });
+
+  it("deleteOrg never reads the body of a real 204", async () => {
+    // The endpoint returns 204 with no body, so res.json() rejects. The void
+    // delete must not touch it on the success path.
+    mockFetch({ ok: true, status: 204, json: () => Promise.reject(new SyntaxError("no body")) });
+    await expect(client.deleteOrg(TOKEN, "org_1")).resolves.toBeUndefined();
+  });
 });
 
 describe("createOrgClient — member mutations", () => {
@@ -95,6 +102,11 @@ describe("createOrgClient — member mutations", () => {
     expect((call[1] as RequestInit).method).toBe("DELETE");
   });
 
+  it("removeMember never reads the body of a real 204", async () => {
+    mockFetch({ ok: true, status: 204, json: () => Promise.reject(new SyntaxError("no body")) });
+    await expect(client.removeMember(TOKEN, "org_1", "usr_1")).resolves.toBeUndefined();
+  });
+
   it("updateMemberRole PATCHes with {role} and resolves to undefined", async () => {
     mockFetch({ ok: true, json: () => Promise.resolve({}) });
     const result = await client.updateMemberRole(TOKEN, "org_1", "usr_1", "member");
@@ -114,7 +126,18 @@ describe("createOrgClient — error surface", () => {
 
   it("throws OrgClientError on non-2xx DELETE (reads error body)", async () => {
     mockFetch({ ok: false, json: () => Promise.resolve({ error: "Forbidden" }) });
+    await expect(client.deleteOrg(TOKEN, "org_1")).rejects.toBeInstanceOf(OrgClientError);
+    mockFetch({ ok: false, json: () => Promise.resolve({ error: "Forbidden" }) });
     await expect(client.deleteOrg(TOKEN, "org_1")).rejects.toThrow("Forbidden");
+  });
+
+  it("throws OrgClientError on non-2xx PATCH", async () => {
+    // Each verb closes over the caller's own error class, so assert the class
+    // per verb rather than trusting the message alone.
+    mockFetch({ ok: false, json: () => Promise.resolve({ error: "Forbidden" }) });
+    await expect(client.updateOrg(TOKEN, "org_1", { name: "X" })).rejects.toBeInstanceOf(
+      OrgClientError,
+    );
   });
 
   it("falls back to a generic message when the server omits one", async () => {

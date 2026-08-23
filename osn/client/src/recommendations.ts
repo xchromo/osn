@@ -54,7 +54,7 @@ export class RecommendationClientError extends Error {
   }
 }
 
-const { authGet } = createAuthFetchers(RecommendationClientError);
+const { authGet } = /* @__PURE__ */ createAuthFetchers(RecommendationClientError);
 
 export interface RecommendationClient {
   suggestConnections(
@@ -87,13 +87,13 @@ export function createRecommendationClient(
   const base = `${config.issuerUrl.replace(/\/$/, "")}/recommendations`;
 
   return {
-    suggestConnections: (token, options) => {
+    suggestConnections: async (token, options) => {
       const limit = options?.limit;
       const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : "";
       return authGet<{ suggestions: Suggestion[] }>(`${base}/connections${qs}`, token);
     },
 
-    search: (token, query, options) => {
+    search: async (token, query, options) => {
       const params = new URLSearchParams({ q: query });
       if (options?.limit !== undefined) params.set("limit", String(options.limit));
       if (options?.orgLimit !== undefined) params.set("orgLimit", String(options.orgLimit));
