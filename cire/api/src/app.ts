@@ -228,10 +228,13 @@ const defaultRegistryGuestLimiter = createRateLimiter({ maxRequests: 20, windowM
 // Per-organiser, and sized like the image limiter beside it: an authenticated
 // couple at hand-speed, whose every press costs an outbound Stripe call.
 const defaultRegistryStripeLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
-// Tighter than the claim limiter, and per-IP like it. Every request here is an
-// outbound Stripe call, and a household deciding what to give presses this once
-// or twice — not twenty times.
-const defaultRegistryContributeLimiter = createRateLimiter({ maxRequests: 5, windowMs: 60_000 });
+// Per-IP, like the claim limiter, and sized the same way for the same reason:
+// a NAT'd venue or hotel wifi is ONE address for a whole reception, and the
+// budget has to cover the room rather than a household (P-W2). Five would have
+// the sixth guest of an evening meet a 429 on their way to paying, which is the
+// highest-value action in the product. `sessionAuth` runs first, so only
+// claimed guests ever reach this at all.
+const defaultRegistryContributeLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 /**
  * Default per-IP limiter for the pre-auth OIDC redirect legs (`/oidc/start`,
  * `/oidc/callback`). Tighter than the session probe below — these are the

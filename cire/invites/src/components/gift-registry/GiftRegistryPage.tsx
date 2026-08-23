@@ -390,10 +390,11 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
           </Match>
 
           <Match when={registry()}>
-            {/* Back from Stripe. "Thanks" is deliberately careful about what
-                it claims: the money is Stripe's to confirm, and the gift log
-                is written by the webhook — which may be a second behind the
-                guest. So it says the gift is on its way, not that it landed. */}
+            {/* Back from Stripe. NOTHING here is evidence of a payment — the
+                parameter is one anybody can type, and the row is the webhook's
+                to write (S-L2). So the copy is conditional rather than a
+                confirmation: it thanks them for what they did, without
+                asserting on the page that money moved. */}
             <Show when={payment()}>
               {(arrival) => (
                 <p
@@ -401,7 +402,7 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
                   class="border-gold/40 bg-gold/5 text-gold-ink font-body mx-auto mb-8 max-w-[34rem] rounded-sm border px-4 py-3 text-center text-[0.85rem] leading-[1.6]"
                 >
                   {arrival() === "thanks"
-                    ? "Thank you — your gift is on its way to them."
+                    ? "Thank you. If your payment went through, it’s on its way to them — the couple will see it in their gift list."
                     : "Nothing was charged. The list is still here whenever you want it."}
                 </p>
               )}

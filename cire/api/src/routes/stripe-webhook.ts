@@ -79,20 +79,19 @@ interface StripeEventEnvelope {
   data?: { object?: unknown };
 }
 
-/** The fields this product reads off a completed Checkout Session. */
+/**
+ * The fields this product reads off a completed Checkout Session.
+ *
+ * The metadata is ONE opaque id, on purpose. The gift's amount, the household
+ * it came from, the note and the name all live in the `pending` row this id
+ * names — so nothing personal was ever sent to Stripe, and nothing a connected
+ * account can type into its own session's metadata can settle anything here.
+ */
 interface CheckoutSessionObject {
   id?: unknown;
   payment_intent?: unknown;
-  amount_total?: unknown;
-  currency?: unknown;
   payment_status?: unknown;
-  metadata?: {
-    weddingId?: unknown;
-    familyId?: unknown;
-    itemId?: unknown;
-    message?: unknown;
-    displayName?: unknown;
-  };
+  metadata?: { contributionId?: unknown };
 }
 
 /** A metadata value Stripe gave back: a string, or nothing usable. */
@@ -167,42 +166,20 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
-            const weddingId = metaString(session?.metadata?.weddingId);
-            const familyId = metaString(session?.metadata?.familyId);
-            const amountMinor = session?.amount_total;
-            const currency = metaString(session?.currency);
-            if (
-              !stripeAccountId ||
-              !sessionId ||
-              !weddingId ||
-              !familyId ||
-              !currency ||
-              typeof amountMinor !== "number"
-            ) {
+            const contributionId = metaString(session?.metadata?.contributionId);
+            if (!stripeAccountId || !sessionId || !contributionId) {
               // A completed session that is not one of ours — no connected
-              // account, or none of the metadata we write. Acknowledged: a
-              // retry cannot add fields Stripe never sent.
-              return { received: true, recorded: false };
+              // account, or none of the id we write. Acknowledged: a retry
+              // cannot add fields Stripe never sent.
+              return { received: true, outcome: "unknown" };
             }
 
-            const outcome = yield* registryService.recordContribution({
-              stripeAccountId,
+            const outcome = yield* registryService.settleContribution({
+              contributionId,
               checkoutSessionId: sessionId,
+              stripeAccountId,
               paymentIntentId: metaString(session?.payment_intent),
-              weddingId,
-              familyId,
-              itemId: metaString(session?.metadata?.itemId),
-              amountMinor,
-              // Stripe answers lower-case; the gift log and the budget both
-              // read currency codes upper-case.
-              currency: currency.toUpperCase(),
-              // `paid` is the only status that means the money moved. Anything
-              // else Stripe calls complete-but-unpaid (a delayed bank debit) is
-              // recorded as pending, so the couple see it without being told it
-              // has landed.
-              status: session?.payment_status === "paid" ? "succeeded" : "pending",
-              message: metaString(session?.metadata?.message),
-              displayName: metaString(session?.metadata?.displayName),
+              paid: session?.payment_status === "paid",
             });
             return { received: true, outcome };
           }

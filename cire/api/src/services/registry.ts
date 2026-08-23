@@ -889,16 +889,10 @@ export const registryService = {
     DbService
   > {
     return Effect.gen(function* () {
-      const db = yield* DbService;
-      const { settings, weddingId } = yield* resolveVisibleRegistry(input.slug);
-      const familyRows = yield* dbQuery(() =>
-        db
-          .select({ id: families.id })
-          .from(families)
-          .where(and(eq(families.id, input.familyId), eq(families.weddingId, weddingId)))
-          .all(),
-      );
-      if (!(familyRows as Array<{ id: string }>)[0]) {
+      const { settings, weddingId, currency } = yield* resolveVisibleRegistry(input.slug);
+      // The same shared check the list read and the writes use, so the three
+      // gates cannot drift.
+      if (!(yield* familyInWedding(weddingId, input.familyId))) {
         return yield* Effect.fail(new RegistryNotVisible());
       }
       if (!settings.cashGiftsEnabled || !settings.stripeChargesEnabled) {
@@ -906,7 +900,6 @@ export const registryService = {
       }
       const stripeAccountId = settings.stripeAccountId;
       if (!stripeAccountId) return yield* Effect.fail(new CashGiftsUnavailable());
-      const currency = yield* primaryCurrency(weddingId);
       return { weddingId, stripeAccountId, currency };
     }).pipe(Effect.withSpan("cire.registry.contributionContext"));
   },
@@ -953,89 +946,157 @@ export const registryService = {
    * until that read lands. A gift in the wedding's own currency — the common
    * case — never needs them at all.
    */
-  recordContribution(input: {
-    stripeAccountId: string;
-    checkoutSessionId: string;
-    paymentIntentId: string | null;
+  /**
+   * Write the gift a guest is ABOUT to pay for, as `pending`.
+   *
+   * WHY THE ROW COMES FIRST, before Stripe is ever told anything about it.
+   * Three findings pointed at the same shape:
+   *
+   *  - **Nothing a connected account can forge (S-M1).** The webhook endpoint
+   *    also hears about sessions the couple's own account created for itself,
+   *    where every metadata field is whatever its owner typed. Settling against
+   *    a row WE wrote means a forged session settles nothing: there is no row
+   *    with that id, and one cannot be conjured from the event.
+   *  - **Nothing personal in Stripe's metadata (C-H2).** The guest's note and
+   *    the name they chose stay in D1 under a basis we have declared. Stripe is
+   *    told an opaque id and the money; it needs nothing else to reconcile.
+   *  - **Somewhere for a status to go (S-M2).** A refund or a failed delayed
+   *    debit has a row to move, instead of an insert that can only ever add.
+   *
+   * `onConflictDoNothing` on the session id is what makes a retried attempt
+   * safe: Stripe's idempotency returns the SAME session for the same attempt,
+   * so the second call finds the first attempt's row and leaves it alone.
+   * Returns whether a row now exists for this session — never a throw.
+   */
+  createPendingContribution(input: {
+    id: string;
     weddingId: string;
     familyId: string;
     itemId: string | null;
+    checkoutSessionId: string;
     amountMinor: number;
     currency: string;
-    status: RegistryContributionStatus;
     message: string | null;
     displayName: string | null;
-  }): Effect.Effect<"recorded" | "duplicate" | "rejected", never, DbService> {
+  }): Effect.Effect<boolean, never, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
-      const owns = yield* dbQuery(() =>
-        db
-          .select({ weddingId: registrySettings.weddingId })
-          .from(registrySettings)
-          .where(
-            and(
-              eq(registrySettings.weddingId, input.weddingId),
-              eq(registrySettings.stripeAccountId, input.stripeAccountId),
-            ),
-          )
-          .all(),
-      );
-      if (!(owns as Array<{ weddingId: string }>)[0]) return "rejected";
-
-      const familyRows = yield* dbQuery(() =>
-        db
-          .select({ id: families.id })
-          .from(families)
-          .where(and(eq(families.id, input.familyId), eq(families.weddingId, input.weddingId)))
-          .all(),
-      );
-      if (!(familyRows as Array<{ id: string }>)[0]) return "rejected";
-
-      // An item id that is not this wedding's is dropped rather than refusing
-      // the whole gift: the money arrived, and which line it was aimed at is
-      // the less important half of that fact.
-      let itemId = input.itemId;
-      if (itemId) {
-        const itemRows = yield* dbQuery(() =>
-          db
-            .select({ id: registryItems.id })
-            .from(registryItems)
-            .where(
-              and(
-                eq(registryItems.id, itemId as string),
-                eq(registryItems.weddingId, input.weddingId),
-              ),
-            )
-            .all(),
-        );
-        if (!(itemRows as Array<{ id: string }>)[0]) itemId = null;
-      }
-
       const now = new Date();
-      const rows = yield* dbQuery(() =>
+      yield* dbQuery(() =>
         db
           .insert(registryContributions)
           .values({
-            id: `rct_${crypto.randomUUID()}`,
+            id: input.id,
             weddingId: input.weddingId,
-            itemId,
+            itemId: input.itemId,
             familyId: input.familyId,
-            status: input.status,
+            status: "pending",
             amountMinor: input.amountMinor,
             currency: input.currency,
             stripeCheckoutSessionId: input.checkoutSessionId,
-            stripePaymentIntentId: input.paymentIntentId,
+            stripePaymentIntentId: null,
             message: input.message,
             displayName: input.displayName,
             createdAt: now,
             updatedAt: now,
           })
           .onConflictDoNothing({ target: registryContributions.stripeCheckoutSessionId })
-          .returning({ id: registryContributions.id })
+          .run(),
+      );
+      // Read back rather than trusting the insert: a conflict means the first
+      // attempt's row is there, which is just as good, and a missing row means
+      // the guest must not be handed a payment page.
+      const rows = yield* dbQuery(() =>
+        db
+          .select({ id: registryContributions.id })
+          .from(registryContributions)
+          .where(eq(registryContributions.stripeCheckoutSessionId, input.checkoutSessionId))
           .all(),
       );
-      return (rows as Array<{ id: string }>).length > 0 ? "recorded" : "duplicate";
-    }).pipe(Effect.withSpan("cire.registry.recordContribution"));
+      return (rows as Array<{ id: string }>).length > 0;
+    }).pipe(Effect.withSpan("cire.registry.createPendingContribution"));
+  },
+
+  /**
+   * Settle the gift a completed Checkout Session paid for.
+   *
+   * Moves a `pending` row and only a `pending` row. Stripe delivers at least
+   * once and retries until it gets a 2xx, so a second delivery finding the row
+   * already settled is the ordinary case, not an error — it answers
+   * `duplicate` and writes nothing.
+   *
+   * THREE THINGS ARE CHECKED, and none of them trusts the event's metadata
+   * beyond the id it carries:
+   *
+   *  - a row with that id exists (so a session we never created settles
+   *    nothing);
+   *  - the session id on the row is the one that just completed (so one
+   *    contribution cannot be settled by another session's event);
+   *  - the row's wedding owns the connected account the event arrived on (so
+   *    an account cannot settle another couple's gift).
+   *
+   * FX IS LEFT NULL, deliberately: the primary-currency equivalent comes from
+   * the balance transaction, which is not on this event, and the schema's four
+   * FX columns are all-or-nothing.
+   */
+  settleContribution(input: {
+    contributionId: string;
+    checkoutSessionId: string;
+    stripeAccountId: string;
+    paymentIntentId: string | null;
+    paid: boolean;
+  }): Effect.Effect<"settled" | "duplicate" | "unknown" | "rejected", never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const [row] = yield* dbQuery(() =>
+        db
+          .select({
+            id: registryContributions.id,
+            weddingId: registryContributions.weddingId,
+            status: registryContributions.status,
+            sessionId: registryContributions.stripeCheckoutSessionId,
+          })
+          .from(registryContributions)
+          .where(eq(registryContributions.id, input.contributionId))
+          .all(),
+      );
+      const pending = row as
+        | { id: string; weddingId: string; status: RegistryContributionStatus; sessionId: string }
+        | undefined;
+      if (!pending) return "unknown";
+      if (pending.sessionId !== input.checkoutSessionId) return "rejected";
+
+      const owns = yield* dbQuery(() =>
+        db
+          .select({ weddingId: registrySettings.weddingId })
+          .from(registrySettings)
+          .where(
+            and(
+              eq(registrySettings.weddingId, pending.weddingId),
+              eq(registrySettings.stripeAccountId, input.stripeAccountId),
+            ),
+          )
+          .all(),
+      );
+      if (!(owns as Array<{ weddingId: string }>)[0]) return "rejected";
+      if (pending.status !== "pending") return "duplicate";
+
+      yield* dbQuery(() =>
+        db
+          .update(registryContributions)
+          .set({
+            // `paid` is the only status that means the money moved. A completed
+            // session that is not paid yet (a delayed bank debit) stays pending
+            // so the couple see it without being told it has landed.
+            status: input.paid ? "succeeded" : "pending",
+            stripePaymentIntentId: input.paymentIntentId,
+            updatedAt: new Date(),
+          })
+          .where(eq(registryContributions.id, pending.id))
+          .run(),
+      );
+      return input.paid ? "settled" : "duplicate";
+    }).pipe(Effect.withSpan("cire.registry.settleContribution"));
   },
 
   createItem(
@@ -1608,16 +1669,25 @@ const toPublicItemDto = (
 function resolveVisibleRegistry(
   slug: string,
 ): Effect.Effect<
-  { weddingId: string; settings: RegistrySettingsDto },
+  { weddingId: string; settings: RegistrySettingsDto; currency: string },
   RegistryNotVisible,
   DbService
 > {
   return Effect.gen(function* () {
     const db = yield* DbService;
+    // The CURRENCY rides along (P-W1): SQLite reads the whole row for the slug
+    // lookup regardless, so the extra column is free — and it saves
+    // `primaryCurrency` a second read of the same row, one round trip down, on
+    // the read a guest waits on to reach a payment page.
     const [weddingRow] = yield* dbQuery(() =>
-      db.select({ id: weddings.id }).from(weddings).where(eq(weddings.slug, slug)).all(),
+      db
+        .select({ id: weddings.id, currency: weddings.currency })
+        .from(weddings)
+        .where(eq(weddings.slug, slug))
+        .all(),
     );
-    const weddingId = (weddingRow as { id: string } | undefined)?.id;
+    const wedding = weddingRow as { id: string; currency: string } | undefined;
+    const weddingId = wedding?.id;
     if (!weddingId) return yield* Effect.fail(new RegistryNotVisible());
 
     // Both gates read together: neither answer depends on the other, and the
@@ -1636,7 +1706,8 @@ function resolveVisibleRegistry(
       ? toSettingsDto(settingsRows[0] as SettingsRow)
       : defaultSettings(weddingId);
     if (!entitled || !settings.published) return yield* Effect.fail(new RegistryNotVisible());
-    return { weddingId, settings };
+    // Same fallback `primaryCurrency` has always used.
+    return { weddingId, settings, currency: wedding?.currency ?? "AUD" };
   });
 }
 

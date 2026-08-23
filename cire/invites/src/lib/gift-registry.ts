@@ -293,13 +293,26 @@ export async function contributeGift(
     }
     if (!res.ok) return { kind: "error" };
     const payload = (await res.json()) as { url?: unknown };
-    // A 200 without a URL is not a success — sending a guest nowhere is worse
-    // than telling them it did not work.
-    return typeof payload?.url === "string" && payload.url !== ""
+    // A 200 without a USABLE url is not a success — sending a guest nowhere is
+    // worse than telling them it did not work, and sending them somewhere else
+    // is worse than both. The destination of this hand-off is a fixed, known
+    // origin, so it is asserted rather than assumed: one bad response body
+    // otherwise turns "Continue to payment" into an open redirect, which is the
+    // single worst place for one (S-L1).
+    return typeof payload?.url === "string" && isStripeCheckoutUrl(payload.url)
       ? { kind: "ok", url: payload.url }
       : { kind: "error" };
   } catch {
     return { kind: "error" };
+  }
+}
+
+/** Stripe's own hosted checkout, and nowhere else. */
+export function isStripeCheckoutUrl(raw: string): boolean {
+  try {
+    return new URL(raw).origin === "https://checkout.stripe.com";
+  } catch {
+    return false;
   }
 }
 

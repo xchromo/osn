@@ -67,7 +67,7 @@ function captureNavigation() {
 describe("the hand-off", () => {
   it("sends the guest to Stripe's page, and never asks for a card itself", async () => {
     const assign = captureNavigation();
-    const { calls } = stubFetch(json({ url: "https://checkout.stripe.test/pay/cs_1" }));
+    const { calls } = stubFetch(json({ url: "https://checkout.stripe.com/c/pay/cs_1" }));
     const { container } = renderPanel({ navigate: assign });
 
     // No card field exists on this page, in any state.
@@ -77,13 +77,13 @@ describe("the hand-off", () => {
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
 
     await waitFor(() =>
-      expect(assign).toHaveBeenCalledWith("https://checkout.stripe.test/pay/cs_1"),
+      expect(assign).toHaveBeenCalledWith("https://checkout.stripe.com/c/pay/cs_1"),
     );
     expect(calls[0]?.url).toBe(`${API}/api/invite/${SLUG}/registry/contribute`);
   });
 
   it("gives the first preset unless the guest picks another", async () => {
-    const { calls } = stubFetch(json({ url: "https://checkout.stripe.test/pay/cs_1" }));
+    const { calls } = stubFetch(json({ url: "https://checkout.stripe.com/c/pay/cs_1" }));
     const { container } = renderPanel({ navigate: captureNavigation() });
 
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
@@ -93,7 +93,7 @@ describe("the hand-off", () => {
   });
 
   it("sends the note and name as null when the guest wrote none", async () => {
-    const { calls } = stubFetch(json({ url: "https://checkout.stripe.test/pay/cs_1" }));
+    const { calls } = stubFetch(json({ url: "https://checkout.stripe.com/c/pay/cs_1" }));
     const { container } = renderPanel({ navigate: captureNavigation() });
 
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
@@ -105,6 +105,22 @@ describe("the hand-off", () => {
     // Empty means "I said nothing", which is null on the wire, not "".
     expect(body?.message).toBeNull();
     expect(body?.displayName).toBeNull();
+  });
+
+  /**
+   * S-L1. A full-page navigation out of a payment flow, to a string the server
+   * chose. One bad response body — a compromised or misconfigured API origin, a
+   * future proxy — would otherwise make "Continue to payment" an open redirect.
+   */
+  it("refuses to send the guest anywhere but Stripe's own checkout", async () => {
+    const assign = captureNavigation();
+    stubFetch(json({ url: "https://checkout.stripe.com.evil.test/pay/cs_1" }));
+    const { container } = renderPanel({ navigate: assign });
+
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await screen.findByText(/Could not reach the payment page/);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("says so, and stays put, when a 200 carries no URL", async () => {
@@ -122,7 +138,7 @@ describe("the hand-off", () => {
 
 describe("the amount a guest types", () => {
   it("is converted with the currency's own exponent", async () => {
-    const { calls } = stubFetch(json({ url: "https://checkout.stripe.test/pay/cs_1" }));
+    const { calls } = stubFetch(json({ url: "https://checkout.stripe.com/c/pay/cs_1" }));
     const { container } = renderPanel({ currency: "JPY", navigate: captureNavigation() });
 
     fireEvent.click(screen.getByText("Another amount"));
@@ -136,7 +152,7 @@ describe("the amount a guest types", () => {
   });
 
   it("cannot be submitted at all when the server would refuse it", async () => {
-    const { calls } = stubFetch(json({ url: "https://checkout.stripe.test/pay/cs_1" }));
+    const { calls } = stubFetch(json({ url: "https://checkout.stripe.com/c/pay/cs_1" }));
     const { container } = renderPanel({ navigate: captureNavigation() });
 
     fireEvent.click(screen.getByText("Another amount"));

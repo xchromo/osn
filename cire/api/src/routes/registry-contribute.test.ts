@@ -177,11 +177,15 @@ describe("who may give", () => {
   });
 
   it("refuses a household of another wedding, as the same 404 everything else gives", async () => {
-    const { app } = buildApp();
+    const stripe = stripeStub();
+    const { app } = buildApp({ stripe: stripe.client });
     const foreign = await guestCookie(app, FOREIGN_FAMILY);
     const res = await contribute(app, foreign, { amountMinor: 5000 });
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "registry_not_found" });
+    // Turned away before their card was — the cross-tenant case is the one
+    // this claim matters most for.
+    expect(stripe.sessions).toHaveLength(0);
   });
 
   it("does not exist at all when Stripe is not configured", async () => {
@@ -215,14 +219,16 @@ describe("the couple must be taking money", () => {
   }
 
   it("refuses an unpublished registry as a 404, like every other guest route", async () => {
-    const { app } = buildApp({ published: false });
+    const stripe = stripeStub();
+    const { app } = buildApp({ published: false, stripe: stripe.client });
     const cookie = await guestCookie(app);
     const res = await contribute(app, cookie, { amountMinor: 5000 });
     expect(res.status).toBe(404);
+    expect(stripe.sessions).toHaveLength(0);
   });
 });
 
-describe("what reaches Stripe", () => {
+describe("what reaches Stripe, and what does not", () => {
   it("is a direct charge on the couple's account, in the wedding's currency", async () => {
     const stripe = stripeStub();
     const { app } = buildApp({ stripe: stripe.client });
@@ -243,36 +249,97 @@ describe("what reaches Stripe", () => {
     expect(session?.productName).toBe("Wedding gift");
     expect(session?.successUrl).toBe("https://invite.test/cire-wedding/registry?gift=thanks");
     expect(session?.cancelUrl).toBe("https://invite.test/cire-wedding/registry?gift=cancelled");
-    expect(session?.metadata.weddingId).toBe(BOOTSTRAP_WEDDING_ID);
-    expect(session?.metadata.message).toBe("For the honeymoon");
-    expect(session?.metadata.displayName).toBe("The Ashworths");
   });
 
-  it("drops an item id that is not this wedding's rather than refusing the gift", async () => {
+  /**
+   * C-H2. The guest's note and the name they chose stay in D1 under a basis we
+   * have declared; Stripe is told an opaque id and the money, which is all it
+   * needs to take a payment. It also means nothing a connected account can type
+   * into its own session's metadata can settle a gift here (S-M1).
+   */
+  it("sends Stripe one opaque id and nothing about the guest", async () => {
     const stripe = stripeStub();
     const { app } = buildApp({ stripe: stripe.client });
     const cookie = await guestCookie(app);
 
-    await contribute(app, cookie, { amountMinor: 5000, itemId: "reg_other_pan" });
+    await contribute(app, cookie, {
+      amountMinor: 12_500,
+      message: "For the honeymoon",
+      displayName: "The Ashworths",
+    });
 
-    expect(stripe.sessions[0]?.metadata.itemId).toBeNull();
+    const metadata = stripe.sessions[0]?.metadata ?? {};
+    expect(Object.keys(metadata)).toEqual(["contributionId"]);
+    expect(String(metadata.contributionId)).toMatch(/^rct_/);
+    const serialised = JSON.stringify(stripe.sessions[0]);
+    expect(serialised).not.toContain("For the honeymoon");
+    expect(serialised).not.toContain("The Ashworths");
+    expect(serialised).not.toContain(BOOTSTRAP_WEDDING_ID);
   });
 
-  it("records nothing — a session is an intention, not a gift", async () => {
-    const { app, db } = buildApp();
+  it("writes the gift as pending BEFORE handing over a payment page", async () => {
+    // A payment with no record is the one outcome there is no way back from.
+    const stripe = stripeStub();
+    const { app, db } = buildApp({ stripe: stripe.client });
     const cookie = await guestCookie(app);
-    await contribute(app, cookie, { amountMinor: 5000 });
+
+    await contribute(app, cookie, { amountMinor: 5000, message: "x", displayName: "Y" });
 
     const rows = await db.select().from(registryContributions).all();
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("pending");
+    expect(rows[0]?.stripeCheckoutSessionId).toBe("cs_1");
+    expect(rows[0]?.id).toBe(String(stripe.sessions[0]?.metadata.contributionId));
+    // Nothing is called a gift until Stripe says the money moved.
+    expect(rows[0]?.stripePaymentIntentId).toBeNull();
   });
 
-  it("answers 502 when Stripe will not play", async () => {
-    const { app } = buildApp({ stripe: stripeStub({ fail: true }).client });
+  it("drops an item id that is not this wedding's rather than refusing the gift", async () => {
+    const stripe = stripeStub();
+    const { app, db } = buildApp({ stripe: stripe.client });
+    const cookie = await guestCookie(app);
+
+    await contribute(app, cookie, { amountMinor: 5000, itemId: "reg_other_pan" });
+
+    const rows = await db.select().from(registryContributions).all();
+    expect(rows[0]?.itemId).toBeNull();
+    expect(rows[0]?.amountMinor).toBe(5000);
+  });
+
+  /**
+   * S-H1. The old key folded the note down to its LENGTH, which had both
+   * failure modes an idempotency key exists to avoid: two different gifts of
+   * the same amount collided, so the second silently never charged; and a retry
+   * with different words hit Stripe's `idempotency_error` permanently, because
+   * the key never changed.
+   */
+  it("collapses a double-tap and separates everything else", async () => {
+    const stripe = stripeStub();
+    const { app } = buildApp({ stripe: stripe.client });
+    const cookie = await guestCookie(app);
+
+    await contribute(app, cookie, { amountMinor: 5000, message: "aaa" });
+    await contribute(app, cookie, { amountMinor: 5000, message: "aaa" });
+    await contribute(app, cookie, { amountMinor: 5000, message: "bbb" });
+    await contribute(app, cookie, { amountMinor: 9000, message: "aaa" });
+
+    const keys = stripe.sessions.map((s) => s.idempotencyKey);
+    // The same gift pressed twice is one attempt…
+    expect(keys[0]).toBe(keys[1]);
+    // …a different note of the SAME LENGTH is a different attempt, not a 400…
+    expect(keys[2]).not.toBe(keys[0]);
+    // …and so is a different amount.
+    expect(keys[3]).not.toBe(keys[0]);
+    for (const key of keys) expect(key).toMatch(/^cire-gift-[0-9a-f]{32}$/);
+  });
+
+  it("answers 502 when Stripe will not play, and writes nothing", async () => {
+    const { app, db } = buildApp({ stripe: stripeStub({ fail: true }).client });
     const cookie = await guestCookie(app);
     const res = await contribute(app, cookie, { amountMinor: 5000 });
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "stripe_unavailable" });
+    expect(await db.select().from(registryContributions).all()).toHaveLength(0);
   });
 });
 

@@ -287,8 +287,39 @@ describe("account.updated", () => {
   });
 });
 
-const checkoutCompleted = (
+const CONTRIBUTION_ID = "rct_1";
+
+/**
+ * The `pending` row a completed session settles. The route writes this BEFORE
+ * handing the guest a payment page — see `createPendingContribution` — so a
+ * webhook with nothing to settle is a session cire never created.
+ */
+function seedPending(
+  db: ReturnType<typeof buildApp>["db"],
   familyId: string,
+  over: { id?: string; sessionId?: string; weddingId?: string; status?: string } = {},
+) {
+  const now = new Date();
+  db.insert(registryContributions)
+    .values({
+      id: over.id ?? CONTRIBUTION_ID,
+      weddingId: over.weddingId ?? BOOTSTRAP_WEDDING_ID,
+      itemId: null,
+      familyId,
+      status: (over.status ?? "pending") as "pending",
+      amountMinor: 12_500,
+      currency: "AUD",
+      stripeCheckoutSessionId: over.sessionId ?? "cs_1",
+      stripePaymentIntentId: null,
+      message: "Enjoy Japan",
+      displayName: "The Ashworths",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+}
+
+const checkoutCompleted = (
   overrides: {
     account?: string | null;
     session?: Record<string, unknown>;
@@ -298,19 +329,14 @@ const checkoutCompleted = (
   JSON.stringify({
     id: "evt_gift",
     type: "checkout.session.completed",
+    created: nowSeconds(),
     account: overrides.account === undefined ? ACCOUNT : overrides.account,
     data: {
       object: {
         id: "cs_1",
         payment_intent: "pi_1",
-        amount_total: 12_500,
-        currency: "aud",
         payment_status: "paid",
-        metadata: {
-          weddingId: BOOTSTRAP_WEDDING_ID,
-          familyId,
-          ...overrides.metadata,
-        },
+        metadata: { contributionId: CONTRIBUTION_ID, ...overrides.metadata },
         ...overrides.session,
       },
     },
@@ -320,41 +346,38 @@ async function gifts(db: ReturnType<typeof buildApp>["db"]) {
   return db.select().from(registryContributions).all();
 }
 
-describe("checkout.session.completed — the only place a gift is written", () => {
-  it("records what Stripe says was paid", async () => {
+describe("checkout.session.completed — settling the row, never inventing one", () => {
+  it("settles the pending gift the route wrote", async () => {
     const { app, db, familyId } = buildApp();
-    const res = await deliver(
-      app,
-      checkoutCompleted(familyId, { metadata: { message: "Enjoy Japan" } }),
-    );
+    seedPending(db, familyId);
+
+    const res = await deliver(app, checkoutCompleted());
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ received: true, outcome: "recorded" });
-
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
     const [gift] = await gifts(db);
-    expect(gift?.weddingId).toBe(BOOTSTRAP_WEDDING_ID);
-    expect(gift?.familyId).toBe(familyId);
-    expect(gift?.amountMinor).toBe(12_500);
-    // Stripe answers lower-case; the gift log and the budget read it upper.
-    expect(gift?.currency).toBe("AUD");
     expect(gift?.status).toBe("succeeded");
-    expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
     expect(gift?.stripePaymentIntentId).toBe("pi_1");
+    // The note and the name were never in Stripe's metadata — they are on the
+    // row because we put them there (C-H2).
     expect(gift?.message).toBe("Enjoy Japan");
+    expect(gift?.displayName).toBe("The Ashworths");
     // FX stays null: the primary-currency equivalent comes from the balance
-    // transaction, which is not on this event, and the four columns are
+    // transaction, which is not on this event, and the columns are
     // all-or-nothing.
     expect(gift?.primaryAmountMinor).toBeNull();
     expect(gift?.fxRate).toBeNull();
   });
 
-  it("writes once however many times Stripe delivers it", async () => {
+  it("settles once however many times Stripe delivers it", async () => {
     // At-least-once delivery makes a duplicate the ordinary case, not the edge.
     const { app, db, familyId } = buildApp();
-    const payload = checkoutCompleted(familyId);
+    seedPending(db, familyId);
+    const payload = checkoutCompleted();
+
     expect(await (await deliver(app, payload)).json()).toEqual({
       received: true,
-      outcome: "recorded",
+      outcome: "settled",
     });
     expect(await (await deliver(app, payload)).json()).toEqual({
       received: true,
@@ -363,87 +386,59 @@ describe("checkout.session.completed — the only place a gift is written", () =
     expect(await gifts(db)).toHaveLength(1);
   });
 
-  it("records an unpaid-but-complete session as pending, not as money that arrived", async () => {
+  it("leaves an unpaid-but-complete session pending, not as money that arrived", async () => {
     const { app, db, familyId } = buildApp();
-    await deliver(app, checkoutCompleted(familyId, { session: { payment_status: "unpaid" } }));
-    const [gift] = await gifts(db);
-    expect(gift?.status).toBe("pending");
-  });
-
-  it("keeps the item a gift was aimed at, and drops one from another wedding", async () => {
-    const { app, db, familyId } = buildApp();
-    await deliver(app, checkoutCompleted(familyId, { metadata: { itemId: ITEM_ID } }));
-    expect((await gifts(db))[0]?.itemId).toBe(ITEM_ID);
-
-    await deliver(
-      app,
-      checkoutCompleted(familyId, {
-        session: { id: "cs_2" },
-        metadata: { itemId: "reg_someone_elses" },
-      }),
-    );
-    const second = (await gifts(db)).find((g) => g.stripeCheckoutSessionId === "cs_2");
-    // The money arrived; which line it was aimed at is the smaller half.
-    expect(second?.itemId).toBeNull();
-    expect(second?.amountMinor).toBe(12_500);
+    seedPending(db, familyId);
+    await deliver(app, checkoutCompleted({ session: { payment_status: "unpaid" } }));
+    expect((await gifts(db))[0]?.status).toBe("pending");
   });
 
   /**
-   * THE METADATA IS NOT TRUSTED ON ITS OWN. This endpoint also hears about
-   * sessions a connected account created for itself, where the metadata is
-   * whatever its owner typed.
+   * THE FORGERY CASE (S-M1). This endpoint also hears about sessions a
+   * connected account created for ITSELF, where every metadata field is
+   * whatever its owner typed. Settling against a row we wrote is what makes
+   * that worthless: there is no row, and one cannot be conjured from the event.
    */
-  it("refuses a gift whose wedding does not own the account it came from", async () => {
-    const { app, db, familyId } = buildApp();
-    const res = await deliver(app, checkoutCompleted(familyId, { account: "acct_someone_else" }));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
-    expect(await gifts(db)).toHaveLength(0);
-  });
-
-  it("refuses a gift whose household belongs to another wedding", async () => {
-    const { app, db, familyId } = buildApp();
-    const now = new Date();
-    db.insert(weddings)
-      .values({
-        id: "wed_other",
-        slug: "other-wedding",
-        displayName: "Other",
-        ownerOsnProfileId: "usr_bob",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    db.insert(families)
-      .values({
-        id: "fam_other",
-        weddingId: "wed_other",
-        publicId: "OTHERWD-ELM-EE55",
-        familyName: "Elmwood",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-
+  it("writes nothing for a session cire never created", async () => {
+    const { app, db } = buildApp();
     const res = await deliver(
       app,
-      checkoutCompleted(familyId, { metadata: { familyId: "fam_other" } }),
+      checkoutCompleted({ metadata: { contributionId: "rct_forged" } }),
     );
-    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
     expect(await gifts(db)).toHaveLength(0);
   });
 
-  it("acknowledges a completed session that is not one of ours at all", async () => {
+  it("refuses a gift whose wedding does not own the account it came from", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const res = await deliver(app, checkoutCompleted({ account: "acct_someone_else" }));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("refuses a settlement aimed at another session", async () => {
+    // One contribution cannot be settled by a different session's event.
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: "cs_other" });
+    const res = await deliver(app, checkoutCompleted());
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("acknowledges a completed session carrying none of our metadata", async () => {
     const { app, db } = buildApp();
     const payload = JSON.stringify({
       id: "evt_x",
       type: "checkout.session.completed",
+      created: nowSeconds(),
       account: ACCOUNT,
-      data: { object: { id: "cs_9", amount_total: 100, currency: "aud", metadata: {} } },
+      data: { object: { id: "cs_9", metadata: {} } },
     });
     const res = await deliver(app, payload);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ received: true, recorded: false });
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
     expect(await gifts(db)).toHaveLength(0);
   });
 });

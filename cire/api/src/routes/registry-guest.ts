@@ -220,6 +220,50 @@ export const createRegistryGuestMineRoutes = (db: Db) =>
       );
     });
 
+/**
+ * How long two presses count as the same attempt, in milliseconds.
+ *
+ * Long enough to swallow a double-tap and a browser retry; short enough that a
+ * guest who genuinely gives the same amount twice in one evening — a couple
+ * paying separately from one household, say — is two gifts and not one.
+ */
+const GIFT_ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * An idempotency key over the whole request, bucketed in time.
+ *
+ * Hashed rather than concatenated because the parts include free text: a note
+ * containing the separator would otherwise collide with a different note that
+ * did not.
+ */
+function giftIdempotencyKey(input: {
+  familyId: string;
+  slug: string;
+  amountMinor: number;
+  itemId: string | null;
+  message: string | null;
+  displayName: string | null;
+}): Effect.Effect<string, never> {
+  return Effect.promise(async () => {
+    const bucket = Math.floor(Date.now() / GIFT_ATTEMPT_WINDOW_MS);
+    const canonical = JSON.stringify([
+      input.familyId,
+      input.slug,
+      input.amountMinor,
+      input.itemId,
+      input.message,
+      input.displayName,
+      bucket,
+    ]);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    const hex = [...new Uint8Array(digest)]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, 32);
+    return `cire-gift-${hex}`;
+  });
+}
+
 /** Options for {@link createRegistryContributeRoutes}. */
 export interface RegistryContributeDeps {
   /** Absent ⇒ the route is not mounted; a guest is never offered a dead button. */
@@ -282,6 +326,9 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
                 : null;
 
             const giftUrl = `${deps.guestOrigin.replace(/\/+$/, "")}/${encodeURIComponent(params.slug)}/registry`;
+            // Minted here so the row and the session name the same gift. It is
+            // the ONLY thing about this gift that reaches Stripe.
+            const contributionId = `rct_${crypto.randomUUID()}`;
             const session = yield* deps.stripe.createCheckoutSession({
               accountId: context.stripeAccountId,
               amountMinor: body.amountMinor,
@@ -292,22 +339,45 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
               productName: "Wedding gift",
               successUrl: `${giftUrl}?gift=thanks`,
               cancelUrl: `${giftUrl}?gift=cancelled`,
-              metadata: {
-                weddingId: context.weddingId,
+              // One opaque id, and nothing else (C-H2). The guest's note and
+              // the name they chose stay in D1 under a basis we have declared;
+              // Stripe needs neither to take a payment.
+              metadata: { contributionId },
+              // Keyed on WHAT is being given and WHEN, to the nearest few
+              // minutes (S-H1). The previous key folded the note down to its
+              // LENGTH, which had both failure modes an idempotency key exists
+              // to avoid: two different gifts of the same amount collided, so
+              // the second silently never charged, and a retry with different
+              // words hit Stripe's `idempotency_error` — permanently, because
+              // the key never changed. A hash of the whole request plus a
+              // coarse time bucket collapses a double-tap and separates
+              // everything else.
+              idempotencyKey: yield* giftIdempotencyKey({
                 familyId,
+                slug: params.slug,
+                amountMinor: body.amountMinor,
                 itemId,
-                // Trimmed at the schema, so neither can exceed Stripe's 500
-                // characters and bounce the guest mid-payment.
                 message: body.message,
                 displayName: body.displayName,
-              },
-              // Keyed on WHAT is being given, not on when. A double-tapped
-              // button inside Stripe's 24h idempotency window returns the same
-              // payment page instead of a second one; the cost is that an
-              // identical second gift (same amount, same words, same day) would
-              // too, which is the rarer and cheaper mistake of the two.
-              idempotencyKey: `cire-gift-${familyId}-${itemId ?? "none"}-${body.amountMinor}-${(body.message ?? "").length}`,
+              }),
             });
+
+            // The row goes in BEFORE the guest is handed a payment page. If it
+            // cannot be written they must not be sent to pay: a payment with no
+            // record is the one outcome there is no way back from. The unpaid
+            // session expires at Stripe on its own.
+            const stored = yield* registryService.createPendingContribution({
+              id: contributionId,
+              weddingId: context.weddingId,
+              familyId,
+              itemId,
+              checkoutSessionId: session.id,
+              amountMinor: body.amountMinor,
+              currency: context.currency,
+              message: body.message,
+              displayName: body.displayName,
+            });
+            if (!stored) return yield* internal(set);
 
             return { url: session.url };
           }).pipe(
