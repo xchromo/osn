@@ -8,7 +8,8 @@ related:
   - "[[identity-model]]"
   - "[[cire-auth]]"
   - "[[cire]]"
-last-reviewed: 2026-08-17
+  - "[[subprocessors]]"
+last-reviewed: 2026-08-24
 ---
 
 # Access Control
@@ -51,7 +52,7 @@ The matrix that needs to exist, by environment + system + role.
 | Cire Cloudflare D1 (guest DB) | Read-write (operator) | <named humans> | ✓ Via Cloudflare dashboard / Wrangler + WebAuthn | Manual + audit log | Quarterly |
 | Cire Cloudflare R2 (`cire-sheets`, raw guest CSVs) | Read-write (operator) | <named humans> | ✓ | Manual + audit log | Quarterly |
 | Domain registrar | Owner | <named humans> | ✓ | Manual | Annual |
-| Stripe (when ticketing lands) | Admin | <named humans> | ✓ | Manual | Quarterly |
+| Stripe platform Dashboard (cire gift registry — first live use once the PR #760/#762 keys are set; Pulse ticketing later). Dashboard access reaches every couple's connected-account view and the API/webhook secrets below | Admin | <named humans> | ✓ | Manual | Quarterly |
 | Email provider (Resend today; Cloudflare Email Service is the legacy fallback) | Admin | <named humans> | ✓ | Manual | Quarterly |
 | Redis provider (Upstash, `ap-southeast-2`) | Admin | <named humans> | ✓ | Manual | Quarterly |
 
@@ -60,6 +61,21 @@ a private successor under `wiki/compliance/access-matrix/<YYYY>-<Q>.md`
 on a quarterly cadence and is **never committed publicly**. The public
 template gives auditors the structure; the private quarterly file gives
 them the evidence.
+
+## Worker secrets — Stripe (`cire-api-production`)
+
+Two Cloudflare Workers secrets gate the cire gift-payment surface. Both
+are **unset today on every tier**, so the code (PR #760, stacked PR #762)
+ships inert; setting either is gated by the paperwork checklist in
+[[subprocessors]] §"Stripe Connect (cire) — the paperwork gate". They are
+secrets, never `[vars]`: the API key can move money, and the signing
+secret is the only thing that stops anyone else's webhook body being
+believed.
+
+| Secret | What it gates | Provisioned | Rotation |
+|---|---|---|---|
+| `STRIPE_SECRET_KEY` | Unset ⇒ the organiser Connect routes are **not mounted** (no payment surface, not a broken one); the portal probes and hides the panel. Set ⇒ account creation, onboarding links, live account reads — calls that act on the platform's Stripe account. | `bunx wrangler secret put STRIPE_SECRET_KEY --env production`, then `wrangler deploy --env production` (a secret change does not cycle warm isolates). Requires Cloudflare access per the matrix above + Stripe Dashboard access to mint the key. Live key on production only; the dev tier gets a test-mode key (`sk_test_…`) or nothing. | Roll the key in the Stripe Dashboard (Developers → API keys) with an expiry window, `wrangler secret put` the new value, redeploy, let the old key expire. Immediate revocation (suspected compromise): roll with no window — the Worker 502s Stripe calls until the new value is deployed, which is the correct failure. |
+| `STRIPE_WEBHOOK_SECRET` | Unset ⇒ `POST /api/stripe/webhook` **does not exist**. Nothing else authenticates that endpoint — the signature IS the authentication — so without a signing secret it must not be reachable. | Same `wrangler secret put` + redeploy path. The value comes from the Dashboard webhook endpoint (created in checklist step 6). | **Zero-downtime by design, worth writing down:** when a secret is rolled in the Dashboard with an overlap window, Stripe signs each delivery with BOTH secrets, and the verifier (`cire/api/src/services/stripe.ts`) checks every `v1` digest in the header against its one configured secret — so deliveries verify throughout, whichever value the Worker holds. Sequence: roll in the Dashboard with an overlap window → `wrangler secret put` the new value → redeploy → old secret expires. |
 
 ## Access lifecycle
 
