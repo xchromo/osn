@@ -16,10 +16,14 @@ curl -sL https://github.com/dmmulroy/anti-slop/archive/<sha>.tar.gz | tar xz
 rm -rf tools/oxlint/anti-slop/{index.ts,rules,shared}
 cp -R anti-slop-<sha>/src/. tools/oxlint/anti-slop/
 rm -f tools/oxlint/anti-slop/rules/*.test.ts
+curl -sL https://raw.githubusercontent.com/dmmulroy/anti-slop/<sha>/LICENSE \
+  -o tools/oxlint/anti-slop/LICENSE
 ```
 
 Keep `oxlint` and `@oxlint/plugins` on the same version in `package.json` — the
 plugin API is not stable across minors.
+
+Upstream is MIT (`LICENSE`, vendored verbatim).
 
 ## Which rules are on
 
