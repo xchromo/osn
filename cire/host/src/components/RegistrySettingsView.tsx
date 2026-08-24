@@ -1,6 +1,6 @@
 import { useAuth } from "@shared/rp-auth/solid";
 import { toast } from "@shared/toast";
-import { createMemo, createSignal, onMount, Show } from "solid-js";
+import { batch, createMemo, createSignal, onMount, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { haptic } from "../lib/haptics";
@@ -108,14 +108,22 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
     return s.stripeChargesEnabled ? "ready" : "incomplete";
   });
 
+  /**
+   * Seven signals, one update. Both callers reach this past an `await`, which
+   * is outside Solid's automatic batching, so without `batch` the seven setters
+   * are seven separate renders of the whole form — once on load and again after
+   * every save.
+   */
   function seed(s: RegistrySettings): void {
-    setPublished(s.published);
-    setHeadline(s.headline ?? "");
-    setMessage(s.message ?? "");
-    setShippingAddress(s.shippingAddress ?? "");
-    setShippingVisibleFrom(s.shippingVisibleFrom ?? "");
-    setCashGifts(s.cashGiftsEnabled);
-    setSeeded(true);
+    batch(() => {
+      setPublished(s.published);
+      setHeadline(s.headline ?? "");
+      setMessage(s.message ?? "");
+      setShippingAddress(s.shippingAddress ?? "");
+      setShippingVisibleFrom(s.shippingVisibleFrom ?? "");
+      setCashGifts(s.cashGiftsEnabled);
+      setSeeded(true);
+    });
   }
 
   /**
@@ -134,8 +142,10 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
 
   /** A save: the server row is now the truth, so the form takes it too. */
   function patchSettings(next: RegistrySettings): void {
-    patchCache(next);
-    seed(next);
+    batch(() => {
+      patchCache(next);
+      seed(next);
+    });
   }
 
   onMount(() => {
@@ -169,7 +179,18 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
         // against the same per-organiser limiter that guards the Connect
         // button the couple actually needs. Coming back from Stripe is a fresh
         // page load, which is exactly when the guard is empty.
-        if (s?.stripeAccountId && !s.stripeChargesEnabled && claimStripeCheck(props.weddingId)) {
+        //
+        // `canManage` first: the route behind this is owner-only, so for a
+        // co-host the call can only ever come back 403. `claimStripeCheck`
+        // stays last because it SPENDS the one-shot token — checking it ahead
+        // of a gate that refuses would burn the owner's single check of the
+        // page load on a request that never happens.
+        if (
+          props.canManage &&
+          s?.stripeAccountId &&
+          !s.stripeChargesEnabled &&
+          claimStripeCheck(props.weddingId)
+        ) {
           void refreshStripe(true);
         }
       } catch (err) {
@@ -293,7 +314,7 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
    * a couple staring at a disabled switch actually needs.
    */
   async function refreshStripe(quiet = false): Promise<void> {
-    if (checking()) return;
+    if (checking() || !props.canManage) return;
     setChecking(true);
     try {
       const res = await authFetch(stripeUrl("refresh"), { method: "POST" });
@@ -514,10 +535,16 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
                     : "Continue on Stripe"}
               </Button>
               <Show when={stripeState() !== "none"}>
+                {/* Same owner-only route as its neighbour, so the same gate and
+                    the same reason. Ungated, a co-host pressing it met "Couldn't
+                    reach Stripe just now" — a 403 dressed up as an outage,
+                    which is an answer to a question they did not ask. */}
                 <Button
                   type="button"
                   variant="quiet"
                   disabled={checking()}
+                  aria-disabled={props.canManage ? undefined : "true"}
+                  aria-describedby={props.canManage ? undefined : "stripe-owner-only"}
                   onClick={() => void refreshStripe()}
                 >
                   {checking() ? "Checking…" : "Check again"}
