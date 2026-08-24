@@ -42,8 +42,10 @@ import type { StripeClient, StripeError } from "../services/stripe";
  *
  * **Key-optional.** With no `STRIPE_SECRET_KEY` the client is `null` and these
  * routes are not mounted at all, so a deployment without Stripe has no payment
- * surface rather than a broken one. The portal probes and hides the panel — the
- * same shape as the account-linking flag.
+ * surface rather than a broken one. Unlike the account-linking flag, the portal
+ * does NOT probe: nothing in `@cire/host` reads a capability, the Money-gifts
+ * panel renders on every tier, and a keyless deployment surfaces itself as the
+ * 404 this route's absence produces when a couple presses Connect (C-L1).
  */
 
 /**

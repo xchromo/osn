@@ -5,6 +5,7 @@ import { createMemo, createSignal, onMount, Show } from "solid-js";
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { haptic } from "../lib/haptics";
 import {
+  claimStripeCheck,
   ensureRegistryLoaded,
   invalidateRegistry,
   registryAccessor,
@@ -53,6 +54,23 @@ interface RegistrySettingsViewProps {
 /** What the money panel says about the connected account, in one word. */
 type StripeState = "none" | "incomplete" | "ready";
 
+/**
+ * Stripe's own hosted onboarding, and nowhere else.
+ *
+ * The twin of `isStripeCheckoutUrl` on the guest site. The API hands back a URL
+ * and this button navigates to it, so the response body decides where a signed-in
+ * owner's browser goes next. One parse closes the whole class — a compromised
+ * API, a proxy in the middle, a refactor that lets some other value reach the
+ * field — where that becomes `javascript:` or a page dressed up as Stripe.
+ */
+function isStripeConnectUrl(raw: string): boolean {
+  try {
+    return new URL(raw).origin === "https://connect.stripe.com";
+  } catch {
+    return false;
+  }
+}
+
 export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
   const { authFetch } = useAuth();
   const snapshot = registryAccessor(props.weddingId);
@@ -100,11 +118,23 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
     setSeeded(true);
   }
 
-  /** Write a fresh settings row into the shared snapshot, list untouched. */
-  function patchSettings(next: RegistrySettings): void {
+  /**
+   * Write a fresh settings row into the shared snapshot, list untouched.
+   *
+   * Deliberately does NOT re-seed the form. The Stripe refresh runs while a
+   * couple is typing — on mount, and from a button inside the same fieldset —
+   * and seeding from it would silently wipe an address they were half way
+   * through. `stripeState()` reads the snapshot, so the panel still updates.
+   */
+  function patchCache(next: RegistrySettings): void {
     const current = snapshot();
     if (!current) return;
     setCachedRegistry(props.weddingId, { ...current, settings: next } as RegistrySnapshot);
+  }
+
+  /** A save: the server row is now the truth, so the form takes it too. */
+  function patchSettings(next: RegistrySettings): void {
+    patchCache(next);
     seed(next);
   }
 
@@ -124,12 +154,24 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
         });
         const s = settings();
         if (s) seed(s);
-        // ONE live Stripe read, and only for a couple mid-onboarding. This is
-        // the state where the answer genuinely may have changed since the page
-        // was cached — they have just come back from Stripe and the
-        // `account.updated` webhook can be seconds behind them. A couple who
-        // are already `ready`, or who have no account at all, cost nothing.
-        if (s?.stripeAccountId && !s.stripeChargesEnabled) void refreshStripe(true);
+        // ONE live Stripe read per page load, and only for a couple
+        // mid-onboarding. This is the state where the answer genuinely may
+        // have changed since the page was cached — they have just come back
+        // from Stripe and the `account.updated` webhook can be seconds behind
+        // them. A couple who are already `ready`, or who have no account at
+        // all, cost nothing.
+        //
+        // `claimStripeCheck` is what keeps it to one. This panel is
+        // behind a `<Show>`, so every list→settings switch remounts it, and
+        // `incomplete` is not a seconds-long state: Stripe can hold an account
+        // there for days pending documents. Without the guard, idle tab
+        // flipping would spend a Stripe round-trip and a D1 write each time,
+        // against the same per-organiser limiter that guards the Connect
+        // button the couple actually needs. Coming back from Stripe is a fresh
+        // page load, which is exactly when the guard is empty.
+        if (s?.stripeAccountId && !s.stripeChargesEnabled && claimStripeCheck(props.weddingId)) {
+          void refreshStripe(true);
+        }
       } catch (err) {
         if (isAuthExpired(err)) return redirectToLogin();
         setLoadError("Could not load the registry settings. Is the API running?");
@@ -167,7 +209,14 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
         haptic("reject");
         setCashGifts(false);
         toast.error("Stripe can’t take a payment for this wedding yet, so money gifts stay off.");
-        invalidateRegistry(props.weddingId);
+        // Re-read the two Stripe columns that went stale — NOT
+        // `invalidateRegistry`. Nothing on this tab re-fetches after a load, so
+        // dropping the snapshot would leave the form rendering off `null`: no
+        // items, so "add a gift before publishing" over a full list; no
+        // settings, so "connect an account" to a connected couple; and
+        // `patchCache` short-circuiting, so the next successful save would not
+        // reach the cache either.
+        void refreshStripe(true);
         return;
       }
       if (!res.ok) {
@@ -217,7 +266,7 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
         return;
       }
       const body = (await res.json()) as { url?: string };
-      if (!body.url) {
+      if (!body.url || !isStripeConnectUrl(body.url)) {
         haptic("reject");
         toast.error("Couldn’t reach Stripe just now. Try again in a moment.");
         return;
@@ -259,7 +308,10 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
       const status = (await res.json()) as { chargesEnabled: boolean; payoutsEnabled: boolean };
       const current = settings();
       if (current) {
-        patchSettings({
+        // `patchCache`, never `patchSettings`: this read changes two Stripe
+        // columns the form does not own, and re-seeding would discard whatever
+        // the couple has typed since the page loaded.
+        patchCache({
           ...current,
           stripeChargesEnabled: status.chargesEnabled,
           stripePayoutsEnabled: status.payoutsEnabled,
@@ -309,13 +361,24 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
 
         <form class="flex flex-col gap-8" noValidate onSubmit={(event) => void save(event)}>
           {/* ── Visibility ─────────────────────────────────────────────── */}
-          <fieldset class="flex flex-col gap-3 border-0 p-0" disabled={!props.canEdit}>
+          {/* The description hangs off the FIELDSET, not off the blocked radio.
+              A `disabled` radio is out of the tab order and skipped by a screen
+              reader in forms mode, so a description on it would be unreachable
+              by the one person who needs it; a group description is announced
+              on entering the group, and the Draft radio beside it is always
+              reachable. Making the radio `aria-disabled` instead would let a
+              click flip the DOM's checked state while the signal stayed put. */}
+          <fieldset
+            class="flex flex-col gap-3 border-0 p-0"
+            disabled={!props.canEdit}
+            aria-describedby={canPublish() ? undefined : "registry-publish-blocked"}
+          >
             <legend class="font-body text-gold-ink mb-1 text-[0.72rem] tracking-[0.2em] uppercase">
               Visibility
             </legend>
 
             <Show when={!canPublish()}>
-              <Notice tone="warn">
+              <Notice id="registry-publish-blocked" tone="warn">
                 Add a gift before publishing. Guests reach the list — and the money-gift option with
                 it — only once it is published, so an empty published list is a page with nothing on
                 it.
@@ -430,10 +493,18 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
             </p>
 
             <div class="flex flex-wrap items-center gap-3">
+              {/* Not `disabled` for an editor: the whole point of showing this
+                  panel to a co-host is that they read WHY it is not theirs, and
+                  a disabled button takes its description out of reach. It stays
+                  focusable and `connectStripe` refuses on `canManage`, as does
+                  the owner-only route behind it. `connecting()` is a passing
+                  state with nothing to explain, so that one stays `disabled`. */}
               <Button
                 type="button"
                 variant="outline"
-                disabled={!props.canManage || connecting()}
+                disabled={connecting()}
+                aria-disabled={props.canManage ? undefined : "true"}
+                aria-describedby={props.canManage ? undefined : "stripe-owner-only"}
                 onClick={() => void connectStripe()}
               >
                 {connecting()
@@ -455,7 +526,7 @@ export default function RegistrySettingsView(props: RegistrySettingsViewProps) {
             </div>
 
             <Show when={!props.canManage}>
-              <p class={hintClass} data-testid="stripe-owner-only">
+              <p id="stripe-owner-only" class={hintClass} data-testid="stripe-owner-only">
                 Only the wedding’s owner can connect the account gifts are paid into.
               </p>
             </Show>

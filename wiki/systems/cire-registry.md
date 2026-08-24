@@ -352,7 +352,7 @@ This is what closed **S-L2** in `wiki/todo/security.md`.
 
 ## Organiser surface (`@cire/host`)
 
-The module lives at `cire/host/src/components/RegistryView.tsx`, wired into the rail by `lib/module-nav.ts`, into the route grammar by `lib/dashboard-route.ts` (`MODULE_SUBS.registry = ["list", "gifts"]`) and into the shell by `components/ModuleShell.tsx`. Both sub-tabs mount the **same** component with a `view` prop — one fetch, one cache, two renders.
+The module lives at `cire/host/src/components/RegistryView.tsx`, wired into the rail by `lib/module-nav.ts`, into the route grammar by `lib/dashboard-route.ts` (`MODULE_SUBS.registry = ["list", "gifts", "settings"]`) and into the shell by `components/ModuleShell.tsx`. Three sub-tabs, two components: `list` and `gifts` mount the **same** `RegistryView` with a `view` prop — one fetch, one cache, two renders — and `settings` is `RegistrySettingsView`, a second chunk reading the same cached snapshot.
 
 **The upsell is the normal state.** The shell wraps the module in `<Show when={entitlements.includes("registry")} fallback={<UpsellPanel feature="registry" />}>`, exactly as vendors does. No wedding holds the entitlement, so an organiser navigating to Registry today sees the panel, and the module below it is code nobody can reach without a comp grant.
 
@@ -370,8 +370,6 @@ The module lives at `cire/host/src/components/RegistryView.tsx`, wired into the 
 
 Candidates are filtered to `https:` **again in the browser** before any of them becomes an `<img src>`, and the pick is re-checked before it is posted. The API emits nothing else, but a render site that trusts its input because of what the server promised is one API change away from being wrong. "No pictures on that page" (422) is a normal outcome, not an error: it renders as a note that offers the upload path, not an alert.
 
-**Not built yet on this surface:** the settings form (publish toggle, shipping address, cash gifts).
-
 ---
 
 ### The settings tab (`@cire/host`)
@@ -380,7 +378,9 @@ Candidates are filtered to `https:` **again in the browser** before any of them 
 
 **One snapshot, shared with the list.** It reads the same cached `RegistrySnapshot`, so moving between sub-tabs costs no fetch, and a save patches the settings row in place rather than invalidating the whole thing.
 
-**Two roles, one visible line.** The tab is `edit`-gated, so a read-only viewer never reaches it; everything on it is `weddingEditor` at the API **except** connecting the Stripe account, which is `weddingOwner`. An editor still sees that panel, disabled, with the reason — a co-host who wonders why money gifts are off gets an answer rather than a missing section.
+**Two roles, one visible line.** The tab is `edit`-gated, so a read-only viewer never reaches it; everything on it is `weddingEditor` at the API **except** connecting the Stripe account, which is `weddingOwner`. An editor still sees that panel, with the reason — a co-host who wonders why money gifts are off gets an answer rather than a missing section. The Connect button is `aria-disabled`, not `disabled`, and that is the point: a `disabled` button leaves the tab order and a screen reader in forms mode skips it, taking the explanation out of reach of exactly the person asking for it. It stays focusable, `connectStripe()` refuses on `canManage`, and the owner-only route refuses behind that (C-L2).
+
+**The panel does not probe for Stripe, and never has (C-L1).** With no `STRIPE_SECRET_KEY` the API's Connect routes are not mounted at all, and nothing in `@cire/host` reads a capability flag to find that out — the Money-gifts section renders on every tier, and a keyless deployment (which is every tier today, pending the paperwork in [[subprocessors]]) learns the truth from the 404 the Connect button raises as a toast. That is survivable but not the account-linking shape, where a flag hides the surface. If hiding it becomes worth doing, it needs a capability field on `GET /registry` and a `Show` around the section; until then, do not write that the portal hides it.
 
 **Publishing is blocked while the list is empty**, and the notice says why: guests reach the list *and the money-gift option with it* only once it is published, so an empty published list is a page with nothing on it. An already-published list keeps the toggle live, or deleting the last gift would freeze a couple on "Published" with no way back.
 

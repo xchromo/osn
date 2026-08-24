@@ -46,8 +46,12 @@ const loadInviteBuilder = () => import("./InviteBuilder");
  * because it is the only module gated by an entitlement **no wedding holds**:
  * every organiser today loads its tree, its money formatting and its two panels
  * to be shown an upsell instead (REG-P-W4). Once the entitlement is granted the
- * cost lands on the rail click that opens the module — one chunk, warmed by the
- * hover on either sub-tab through `PANEL_LOADERS` below.
+ * cost lands on the rail click that opens the module.
+ *
+ * TWO chunks, not one. The list and the gifts received are two panels of
+ * `RegistryView`; the settings tab is its own file, so its bytes stay out of the
+ * way of the couple who only came to add a gift. Both are warmed by a hover or
+ * a focus on the sub-tab that needs them, through `PANEL_LOADERS` below.
  */
 const loadRegistry = () => import("./RegistryView");
 const loadRegistrySettings = () => import("./RegistrySettingsView");
@@ -467,8 +471,12 @@ export default function ModuleShell(props: ModuleShellProps) {
                   when={props.entitlements.includes("registry")}
                   fallback={<UpsellPanel feature="registry" />}
                 >
-                  {/* One boundary for both subs: they are the same chunk, so a
-                  sub switch never re-suspends once it has landed. */}
+                  {/* One boundary for all three subs. The list and the gifts
+                  received share a chunk, so switching between those never
+                  re-suspends once it has landed; settings is a second chunk and
+                  suspends the first time it is opened cold — which is what
+                  `warmPanel` on the sub-tab is for, and why the fallback below
+                  is the panel-shaped one rather than a spinner. */}
                   <Suspense fallback={<PanelLoading />}>
                     <Show when={active() === "list"}>
                       <RegistryView

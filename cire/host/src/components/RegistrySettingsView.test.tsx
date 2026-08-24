@@ -128,6 +128,13 @@ describe("publishing", () => {
     // The consequence a couple needs to know: money gifts live on the published
     // page too, so this is not only about the gift list.
     expect(screen.getByText(/money-gift option/i)).toBeTruthy();
+    // And it is announced on entering the group rather than left as loose text
+    // beside a control the keyboard skips.
+    const group = publish.closest("fieldset") as HTMLFieldSetElement;
+    expect(group.getAttribute("aria-describedby")).toBe("registry-publish-blocked");
+    expect(document.getElementById("registry-publish-blocked")?.textContent).toMatch(
+      /Add a gift before publishing/i,
+    );
   });
 
   it("is allowed once there is a gift", async () => {
@@ -137,6 +144,8 @@ describe("publishing", () => {
     const publish = (await screen.findByTestId("registry-publish")) as HTMLInputElement;
     expect(publish.disabled).toBe(false);
     expect(screen.queryByText(/Add a gift before publishing/i)).toBeNull();
+    // The description goes with the notice — a dangling id describes nothing.
+    expect(publish.closest("fieldset")?.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("never traps a couple whose published list lost its last gift", async () => {
@@ -261,7 +270,7 @@ describe("money gifts", () => {
 describe("who may connect the account", () => {
   it("lets the owner start onboarding, and hands them to Stripe", async () => {
     setCachedRegistry("wed_1", snapshot({ items: [item()] }));
-    authFetch.mockResolvedValue(json({ url: "https://connect.stripe.test/setup/x" }));
+    authFetch.mockResolvedValue(json({ url: "https://connect.stripe.com/setup/s/x" }));
     const assign = vi.fn();
     Object.defineProperty(window, "location", { configurable: true, value: { assign } });
 
@@ -270,10 +279,28 @@ describe("who may connect the account", () => {
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
 
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://connect.stripe.test/setup/x"));
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith("https://connect.stripe.com/setup/s/x"),
+    );
     const [url, init] = authFetch.mock.calls.at(-1) ?? [];
     expect(String(url)).toContain("/registry/stripe/session");
     expect((init as RequestInit | undefined)?.method).toBe("POST");
+  });
+
+  it("goes to Stripe and nowhere else", async () => {
+    // The response body decides where a signed-in owner's browser goes next, so
+    // anything that is not Stripe's own onboarding host is refused rather than
+    // navigated to.
+    setCachedRegistry("wed_1", snapshot({ items: [item()] }));
+    authFetch.mockResolvedValue(json({ url: "https://connect.stripe.com.evil.test/setup" }));
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", { configurable: true, value: { assign } });
+
+    renderPanel({ canManage: true });
+    fireEvent.click(await screen.findByRole("button", { name: /Connect an account/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("shows an editor the panel, disabled, with the reason", async () => {
@@ -283,10 +310,17 @@ describe("who may connect the account", () => {
     const button = await screen.findByRole("button", { name: /Connect an account/i });
     // Visible, not hidden: a co-host who wonders why money gifts are off gets
     // an answer instead of a missing section.
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByTestId("stripe-owner-only").textContent).toMatch(
       /only the wedding’s owner/i,
     );
+    // And the reason is REACHABLE: `aria-disabled` rather than `disabled` keeps
+    // the button in the tab order, and the description says whose job it is.
+    expect(button.getAttribute("aria-describedby")).toBe("stripe-owner-only");
+    expect(screen.getByTestId("stripe-owner-only").id).toBe("stripe-owner-only");
+    // Focusable, but still inert — pressing it asks Stripe for nothing.
+    fireEvent.click(button);
+    expect(authFetch).not.toHaveBeenCalled();
   });
 });
 

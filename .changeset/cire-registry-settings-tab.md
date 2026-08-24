@@ -28,3 +28,12 @@ until Stripe can take a charge, and the API's own `stripe_not_ready` 409 is
 answered by saying so, rather than "check the fields". One live Stripe read
 happens on mount for a couple mid-onboarding — they have just come back from
 Stripe and the webhook can be seconds behind them — and for nobody else.
+
+**Reasons stay reachable.** The Connect button an editor cannot press is
+`aria-disabled` rather than `disabled`, so it keeps its place in the tab order
+and its `aria-describedby` reason with it — a `disabled` button is skipped by the
+keyboard and by a screen reader in forms mode, which hides the explanation from
+the one person asking for it. The empty-list publish block hangs its notice off
+the Visibility fieldset for the same reason, since the blocked radio itself is
+`disabled` and unreachable. And the Connect URL is parsed before the browser is
+sent to it: `https://connect.stripe.com` or nothing.

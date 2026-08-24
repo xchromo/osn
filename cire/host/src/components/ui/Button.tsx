@@ -34,7 +34,13 @@ export type ButtonSize = "sm" | "md" | "icon";
 const BASE =
   "font-body inline-flex items-center justify-center gap-2 rounded-sm border whitespace-nowrap " +
   "uppercase transition-colors duration-(--dur-fast) ease-(--ease-out) " +
-  "disabled:pointer-events-none disabled:opacity-40";
+  "disabled:pointer-events-none disabled:opacity-40 " +
+  // `aria-disabled` is the other way to say it: the control stays in the tab
+  // order and keeps its description reachable, and the handler no-ops. Used
+  // where the point is that someone READS why they cannot press it — a
+  // `disabled` button is skipped by the keyboard and by a screen reader in
+  // forms mode, which hides the explanation from exactly the person asking.
+  "aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 const VARIANT = {
   primary: "border-gold bg-gold text-bg hover:bg-gold-dim",
