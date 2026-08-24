@@ -54,8 +54,6 @@ export class RecommendationClientError extends Error {
   }
 }
 
-const { authGet } = /* @__PURE__ */ createAuthFetchers(RecommendationClientError);
-
 export interface RecommendationClient {
   suggestConnections(
     token: string,
@@ -85,6 +83,11 @@ export function createRecommendationClient(
   config: RecommendationClientConfig,
 ): RecommendationClient {
   const base = `${config.issuerUrl.replace(/\/$/, "")}/recommendations`;
+  // Built here, not at module scope: a top-level `createAuthFetchers(...)` is
+  // a call no bundler will drop, which pinned this module into the entry
+  // chunk of every app importing the barrel. `/* @__PURE__ */` does not fix
+  // that on a destructuring declarator.
+  const { authGet } = createAuthFetchers(RecommendationClientError);
 
   return {
     suggestConnections: async (token, options) => {

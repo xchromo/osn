@@ -44,7 +44,8 @@ export interface AuthFetchers {
   authPatch<T>(url: string, token: string, body: unknown): Promise<T>;
   /** For endpoints that return a JSON body on success (e.g. `{ ok: true }`). */
   authDelete<T>(url: string, token: string): Promise<T>;
-  /** For endpoints that return no body on success (e.g. 204). Only parses JSON on the error path. */
+  /** For callers that want no body back. Parses JSON only on the error path, so a
+   * success response that is empty or unparseable still resolves. */
   authDeleteVoid(url: string, token: string): Promise<void>;
 }
 

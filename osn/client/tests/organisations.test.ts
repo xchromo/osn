@@ -72,9 +72,10 @@ describe("createOrgClient — mutations", () => {
     expect((vi.mocked(fetch).mock.calls[0]![1] as RequestInit).method).toBe("DELETE");
   });
 
-  it("deleteOrg never reads the body of a real 204", async () => {
-    // The endpoint returns 204 with no body, so res.json() rejects. The void
-    // delete must not touch it on the success path.
+  it("deleteOrg resolves even when the success body does not parse", async () => {
+    // The void delete must not read the body on the success path, so an
+    // unparseable one cannot make a successful delete throw. Driven with a
+    // rejecting json() to prove the success path never calls it.
     mockFetch({ ok: true, status: 204, json: () => Promise.reject(new SyntaxError("no body")) });
     await expect(client.deleteOrg(TOKEN, "org_1")).resolves.toBeUndefined();
   });
@@ -102,7 +103,7 @@ describe("createOrgClient — member mutations", () => {
     expect((call[1] as RequestInit).method).toBe("DELETE");
   });
 
-  it("removeMember never reads the body of a real 204", async () => {
+  it("removeMember resolves even when the success body does not parse", async () => {
     mockFetch({ ok: true, status: 204, json: () => Promise.reject(new SyntaxError("no body")) });
     await expect(client.removeMember(TOKEN, "org_1", "usr_1")).resolves.toBeUndefined();
   });

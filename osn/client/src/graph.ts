@@ -50,13 +50,6 @@ export class GraphClientError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Internal fetch helpers
-// ---------------------------------------------------------------------------
-
-const { authGet, authPost, authPatch, authDelete } =
-  /* @__PURE__ */ createAuthFetchers(GraphClientError);
-
-// ---------------------------------------------------------------------------
 // Query string helper
 // ---------------------------------------------------------------------------
 
@@ -101,6 +94,15 @@ export interface GraphClient {
 
 export function createGraphClient(config: GraphClientConfig): GraphClient {
   const base = `${config.issuerUrl.replace(/\/$/, "")}/graph`;
+  // Built here rather than at module scope on purpose. A top-level
+  // `createAuthFetchers(...)` is a call a bundler will not drop — a
+  // `/* @__PURE__ */` comment does not help, because neither esbuild nor
+  // rolldown removes a declarator whose binding is a destructuring pattern.
+  // That pinned this module into the entry chunk of every app that imports
+  // the barrel. Inside the factory there is no top-level statement left to
+  // keep. These deletes return a JSON body; `organisations.ts` uses the
+  // void-returning variant instead.
+  const { authGet, authPost, authPatch, authDelete } = createAuthFetchers(GraphClientError);
 
   return {
     listConnections: (token, options) =>

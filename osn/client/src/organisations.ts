@@ -41,18 +41,6 @@ export class OrgClientError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Internal fetch helpers
-// ---------------------------------------------------------------------------
-
-const { authGet, authPost, authPatch, authDeleteVoid } =
-  /* @__PURE__ */ createAuthFetchers(OrgClientError);
-
-// `deleteOrg`/`removeMember`'s endpoints return no body on success, so this
-// module uses the void-returning delete, unlike graph.ts's `{ ok: true }`
-// endpoints.
-const authDelete = authDeleteVoid;
-
-// ---------------------------------------------------------------------------
 // Query string helper
 // ---------------------------------------------------------------------------
 
@@ -107,6 +95,17 @@ export interface OrgClient {
 
 export function createOrgClient(config: OrgClientConfig): OrgClient {
   const base = `${config.issuerUrl.replace(/\/$/, "")}/organisations`;
+  // Built here, not at module scope: a top-level `createAuthFetchers(...)` is
+  // a call no bundler will drop, which pinned this module into the entry
+  // chunk of every app importing the barrel. `/* @__PURE__ */` does not fix
+  // that on a destructuring declarator.
+  const { authGet, authPost, authPatch, authDeleteVoid } = createAuthFetchers(OrgClientError);
+  // `deleteOrg` and `removeMember` are declared `Promise<void>` on `OrgClient`
+  // and their callers use no body, so this module discards it. The routes do
+  // return `{ ok: true }` (see `osn/api/src/routes/organisation.ts`) — the
+  // void variant simply never reads it, which also means a success response
+  // that does not parse cannot throw.
+  const authDelete = authDeleteVoid;
 
   return {
     listMyOrgs: (token, options) =>
