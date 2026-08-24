@@ -51,9 +51,53 @@ export function issuerPreconnect(): Plugin {
   };
 }
 
+/**
+ * `@simplewebauthn/browser`'s `package.json` only exports the `"."` subpath
+ * (`esm/index.js`), a barrel that does `export * from './methods/
+ * startRegistration.js'` and `export * from './methods/startAuthentication.
+ * js'`. Every importer — whether it names one or the other — resolves
+ * through that same barrel module, and the package ships no `"sideEffects":
+ * false`, so Rollup conservatively keeps a static import of the barrel alive
+ * in any chunk that pulls a name from it. Combined with the `manualChunks`
+ * split below, that undoes the split: the barrel unconditionally re-imports
+ * BOTH method chunks, so the banner's ceremony chunk still fetches
+ * `startRegistration`'s chunk even though its code no longer lives beside
+ * `startAuthentication`'s.
+ *
+ * The barrel's own body is nothing but those `export *` statements — no
+ * runtime effect — so it is safe to mark side-effect-free. Scoped to this one
+ * resolved id (via `resolveId`, deferring to Vite's own resolution first)
+ * rather than a blanket `treeshake.moduleSideEffects` override, which would
+ * also flip Rollup's default (side-effectful) assumption for every other
+ * dependency in the graph and could silently keep dead code that used to be
+ * dropped.
+ */
+function webauthnBarrelHasNoSideEffects(): Plugin {
+  return {
+    name: "webauthn-barrel-has-no-side-effects",
+    // Build only — the flag this sets only matters to Rollup's tree-shaker,
+    // which the dev server never runs.
+    apply: "build",
+    // Must win the resolveId race against Vite's own resolver
+    // (`vite:resolve`) — the first plugin to return a non-null result
+    // resolves the specifier, and only this plugin's result carries the
+    // `moduleSideEffects: false` flag Rollup needs. A plugin placed in
+    // `build.rollupOptions.plugins` instead runs too late to win that race,
+    // since Vite's core resolver already sits ahead of it.
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      if (source !== "@simplewebauthn/browser") return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved || resolved.id.includes("?")) return resolved;
+      if (!resolved.id.endsWith("@simplewebauthn/browser/esm/index.js")) return resolved;
+      return { ...resolved, moduleSideEffects: false };
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [tailwindcss(), solid(), issuerPreconnect()],
+  plugins: [tailwindcss(), solid(), issuerPreconnect(), webauthnBarrelHasNoSideEffects()],
 
   clearScreen: false,
   // Portless assigns the port and passes it as `PORT`; the literal is the
@@ -63,5 +107,29 @@ export default defineConfig(async () => ({
   server: {
     port: devPort(1422),
     strictPort: true,
+  },
+
+  build: {
+    rollupOptions: {
+      output: {
+        // `@simplewebauthn/browser`'s single-entry barrel (see above) also
+        // means Rollup's default chunking groups `startAuthentication` and
+        // `startRegistration` into one shared vendor chunk regardless of
+        // source-level organisation. That defeats P-I1: the security-events
+        // banner (mounted on every settings visit) ends up pulling in
+        // `startRegistration`, which only `SecuritySection` (opened rarely)
+        // needs. Splitting on the underlying method files forces Rollup to
+        // place each method's compiled body in its own chunk.
+        manualChunks(id) {
+          if (id.includes("@simplewebauthn/browser/esm/methods/startAuthentication")) {
+            return "webauthn-authentication";
+          }
+          if (id.includes("@simplewebauthn/browser/esm/methods/startRegistration")) {
+            return "webauthn-registration";
+          }
+          return undefined;
+        },
+      },
+    },
   },
 }));
