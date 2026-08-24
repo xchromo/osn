@@ -1,6 +1,16 @@
-import { events, families, guestEvents, guests, imports, rsvps } from "@cire/db";
+import {
+  events,
+  families,
+  guestEvents,
+  guests,
+  imports,
+  registryClaims,
+  registryContributions,
+  registrySettings,
+  rsvps,
+} from "@cire/db";
 import { rowsChanged } from "@shared/db-utils";
-import { inArray, lt, sql } from "drizzle-orm";
+import { eq, inArray, lt, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { Data, Effect } from "effect";
 
@@ -163,6 +173,16 @@ export const retentionService = {
       );
       const familyIds = familyRows.map((r) => r.id);
 
+      // ── LEAVE THE COUPLE A RECORD, BEFORE TAKING THE DETAIL AWAY ──────────
+      // Gifts are guest data: claims and contributions both hang off
+      // `families`, so the delete below cascades them away and the couple's
+      // record of what arrived goes with it. That window is deliberate (cire
+      // holds no funds and has no record-keeping duty of its own), but a
+      // record vanishing unannounced is not. A parting summary — counts and
+      // totals, no household, no name, no note — lands on `registry_settings`,
+      // which this sweep keeps. `wiki/compliance/retention.md` §Contributions.
+      yield* writeGiftSummaries(weddingIds, now);
+
       const result = yield* Effect.tryPromise({
         try: () => {
           const stmts: BatchItem<"sqlite">[] = [];
@@ -254,3 +274,131 @@ export const retentionService = {
     );
   },
 };
+
+/**
+ * The shape written into `registry_settings.gift_summary_json`.
+ *
+ * Aggregates only, and that is the whole design: the sweep exists to delete the
+ * per-guest detail, so a summary carrying a household, a name or a note would be
+ * the deletion undone in the row next door. Money is summed PER CURRENCY rather
+ * than converted — a total that re-values itself is not a record of anything,
+ * and the FX columns are null for the common same-currency case anyway.
+ */
+export interface GiftSummary {
+  /** When the detail was deleted, ISO date. */
+  sweptOn: string;
+  /** Gifts reserved from the list, and how many of them were marked purchased. */
+  claims: { reserved: number; purchased: number };
+  /** Money gifts that actually settled, per currency, in minor units. */
+  contributions: { count: number; totals: { currency: string; amountMinor: number }[] };
+}
+
+/**
+ * Write each expiring wedding's parting gift summary.
+ *
+ * Runs BEFORE the delete, obviously — afterwards there is nothing to count. A
+ * wedding with no gifts at all gets no row written: an empty summary is noise
+ * on a page, and its absence says the same thing more quietly.
+ *
+ * Never fails the sweep. Losing a summary is a worse day for one couple;
+ * failing the sweep leaves a whole cohort's personal data in the database.
+ */
+function writeGiftSummaries(
+  weddingIds: readonly string[],
+  now: Date,
+): Effect.Effect<void, never, DbService> {
+  return Effect.gen(function* () {
+    const db = yield* DbService;
+    const claimRows = yield* dbQuery(() =>
+      db
+        .select({
+          weddingId: registryClaims.weddingId,
+          status: registryClaims.status,
+          quantity: registryClaims.quantity,
+        })
+        .from(registryClaims)
+        .where(inArray(registryClaims.weddingId, [...weddingIds]))
+        .all(),
+    );
+    const giftRows = yield* dbQuery(() =>
+      db
+        .select({
+          weddingId: registryContributions.weddingId,
+          currency: registryContributions.currency,
+          amountMinor: registryContributions.amountMinor,
+          status: registryContributions.status,
+        })
+        .from(registryContributions)
+        .where(inArray(registryContributions.weddingId, [...weddingIds]))
+        .all(),
+    );
+
+    const summaries = new Map<string, GiftSummary>();
+    const sweptOn = now.toISOString().slice(0, 10);
+    const blank = (): GiftSummary => ({
+      sweptOn,
+      claims: { reserved: 0, purchased: 0 },
+      contributions: { count: 0, totals: [] },
+    });
+
+    for (const row of claimRows as Array<{
+      weddingId: string;
+      status: string;
+      quantity: number;
+    }>) {
+      // A released claim is a tombstone, not a gift — it is what the couple did
+      // NOT receive, and counting it would overstate the record.
+      if (row.status === "released") continue;
+      const summary = summaries.get(row.weddingId) ?? blank();
+      const quantity = Math.max(0, row.quantity);
+      if (row.status === "purchased") summary.claims.purchased += quantity;
+      else summary.claims.reserved += quantity;
+      summaries.set(row.weddingId, summary);
+    }
+
+    for (const row of giftRows as Array<{
+      weddingId: string;
+      currency: string;
+      amountMinor: number;
+      status: string;
+    }>) {
+      // Only money that actually moved. A pending or failed row is not a gift.
+      if (row.status !== "succeeded") continue;
+      const summary = summaries.get(row.weddingId) ?? blank();
+      summary.contributions.count += 1;
+      const existing = summary.contributions.totals.find((t) => t.currency === row.currency);
+      if (existing) existing.amountMinor += Math.max(0, row.amountMinor);
+      else
+        summary.contributions.totals.push({
+          currency: row.currency,
+          amountMinor: Math.max(0, row.amountMinor),
+        });
+      summaries.set(row.weddingId, summary);
+    }
+
+    for (const [weddingId, summary] of summaries) {
+      summary.contributions.totals.sort((a, b) => (a.currency < b.currency ? -1 : 1));
+      yield* dbQuery(() =>
+        db
+          .update(registrySettings)
+          .set({ giftSummaryJson: JSON.stringify(summary), giftSummaryAt: now, updatedAt: now })
+          .where(eq(registrySettings.weddingId, weddingId))
+          .run(),
+      ).pipe(
+        // A summary is a courtesy; the sweep is an obligation.
+        Effect.catchAll((cause) =>
+          Effect.logWarning("gift summary not written").pipe(
+            Effect.annotateLogs({ weddingId, reason: String(cause) }),
+          ),
+        ),
+      );
+    }
+  }).pipe(
+    Effect.catchAll((cause) =>
+      Effect.logWarning("gift summaries not written").pipe(
+        Effect.annotateLogs({ reason: String(cause) }),
+      ),
+    ),
+    Effect.withSpan("cire.retention.writeGiftSummaries"),
+  );
+}

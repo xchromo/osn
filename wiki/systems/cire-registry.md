@@ -40,6 +40,7 @@ One row per wedding, keyed by `wedding_id` (PK + FK cascade). **An absent row re
 | `cash_gifts_enabled` | Off by default and independently of `published` |
 | `shipping_address`, `shipping_visible_from` | Shown to claimed guests only; the date is the "don't ship until we're back" pattern |
 | `stripe_account_id`, `stripe_charges_enabled`, `stripe_payouts_enabled`, `stripe_account_updated_at` | Connect state, cached from the `account.updated` webhook so the portal needs no live Stripe call per page load |
+| `gift_summary_json`, `gift_summary_at` (migration 0058) | What the couple keeps after the 1-year sweep takes the detail: counts and per-currency totals, no household, no name, no note. Written by the sweep itself, immediately before the delete |
 
 ### `registry_items`
 
@@ -114,20 +115,45 @@ Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That m
 
 | Route | Gate |
 |---|---|
-| `POST /api/invite/:slug/registry/contribute` | `sessionAuth` + family-in-wedding + its own per-IP limiter (5/min) |
+| `POST /api/invite/:slug/registry/contribute` | `sessionAuth` + family-in-wedding + its own per-IP limiter (20/min) |
 | `POST /api/stripe/webhook` → `checkout.session.completed` | Stripe signature |
 
 **The gates run before Stripe does.** `contributionContext` resolves the visible registry, checks the household belongs to THIS wedding, and requires `cash_gifts_enabled` AND `stripe_charges_enabled` AND an account id. A guest is turned away before their card is, or not at all. The cash-specific refusal is its own 409 `cash_gifts_unavailable`, because it is the one a guest looking at the panel can understand; everything else is the same 404 as always.
 
-**Its own limiter, tighter than the claim one** (5/min per IP vs 20): every call is an outbound Stripe request — the "amplifier" shape the link-preview route is limited for — and it is the one guest route that can cost money to be wrong about.
+**Its own limiter, at the claim route's rate** (20/min per IP). Every call is an outbound Stripe request — the "amplifier" shape the link-preview route is limited for — but the limit is per IP and a reception is one NAT: 5/min was reasoned as if it were per household, and it would have met the sixth guest of the evening with a 429 on their way to paying.
 
-**Nothing is recorded at checkout time.** A session is an intention. `registry_contributions` is written by the webhook, because Stripe is the only party that knows whether the money moved. That write is idempotent on `stripe_checkout_session_id` (at-least-once delivery makes a duplicate ordinary), and it re-checks what the metadata claims: the wedding must own the account the event arrived on (`event.account`), and the household must belong to that wedding. An item id from another wedding is dropped rather than refusing the gift — the money arrived, and which line it was aimed at is the smaller half.
+**The row is written FIRST, as `pending`, before the guest is handed a payment page.** Stripe is told one opaque id and the money — no wedding, no household, no name, no note. Two things follow. A forged session settles nothing: the webhook settles the row an id names, and there is no row to conjure from an event, which matters because this endpoint also hears about sessions a connected account created for ITSELF, where every metadata field is whatever its owner typed. And no guest personal data crosses to a US processor for a reconciliation that never needed it.
+
+`settleContribution` moves that row to `succeeded` after checking the completed session is the one on the row and that the row's wedding owns the account the event arrived on (`event.account`). It answers `settled` / `duplicate` / `unknown` / `rejected` — at-least-once delivery makes `duplicate` ordinary, and the states are where refunds will hang. **If the row cannot be written the guest is not sent to pay at all**: a payment with no record is the one outcome there is no way back from.
+
+**The idempotency key is a hash of the whole request** — household, slug, amount, item, message, name — plus a five-minute bucket, so a double-tap is one attempt and everything else is its own. Folding the note down to its length, as the first cut did, had both failure modes a key exists to avoid: two different gifts of the same amount from one household collided and the second silently never charged, and a retry with different words hit Stripe's `idempotency_error` permanently, because the key never changed.
 
 **FX stays NULL for now.** The primary-currency equivalent comes from the balance transaction's `exchange_rate`, which is not on the checkout event; the four FX columns are all-or-nothing, and a gift in the wedding's own currency — the common case — never needs them.
 
 **The guest surface** (`GiftMoneyPanel`) sits above the shelves and OUTSIDE the items-exist branch, on purpose: a guest who finds every gift taken has not stopped wanting to give something, and an option that appears only once the list runs dry reads as a consolation prize. It takes no card details — the button hands off to Stripe's hosted page — and it says so before the guest presses, along with who reads the name and note they typed (the couple; never the other guests). Amounts are typed in MAJOR units and converted once through the currency's real exponent (`parseGiftAmountMinor`): JPY has none and KWD has three, so a fixed ×100 is wrong by 100× on a payment screen. Coming back, `?gift=thanks` says the gift is *on its way* rather than that it landed — the row is the webhook's to write, and it may be a second behind the guest.
 
 `PublicRegistryDto.cashGiftsEnabled` is the couple's intent **ANDed** with Stripe's capability, so the guest surface never has to reason about the two separately.
+
+
+### What the couple keeps (built)
+
+Guest data goes at one year, and gifts go with it — the household, the name a guest typed, the note they wrote. That is right for the personal detail and wrong for the fact that people gave: a couple who opens the registry two years on should not find that their wedding received nothing.
+
+So the sweep writes before it deletes. `writeGiftSummaries` runs inside `sweepExpiredGuestData`, immediately ahead of the delete batch, and leaves one JSON blob per wedding on `registry_settings` — a row the sweep does not touch, because it hangs off the wedding rather than off a guest:
+
+```json
+{ "sweptOn": "2026-06-17",
+  "claims": { "reserved": 1, "purchased": 2 },
+  "contributions": { "count": 3, "totals": [{ "currency": "AUD", "amountMinor": 17500 }] } }
+```
+
+Three rules it keeps:
+
+- **Only what arrived counts.** Released claims are excluded — a household that changed its mind never bought anything — and only `succeeded` contributions are counted, so a `pending` row that never settled is not money.
+- **Totals are per currency, never converted.** A rate from the day of the sweep would make the number a guess; two lines that each say what they are is the honest shape.
+- **It never fails the sweep.** A summary that cannot be written is logged and stepped over. The deletion is the obligation; the keepsake is not.
+
+Nothing yet *delivers* this to the couple — cire has no path to an organiser's email address (that lives in osn-api, behind an ARC route that does not exist). The durable record is the point; sending it is a follow-up.
 
 ---
 

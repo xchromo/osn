@@ -1,0 +1,21 @@
+-- 0058_gift_summary.sql — what survives the 1-year sweep (additive; no drops).
+--
+-- Gifts are guest data. `registry_claims` and `registry_contributions` both hang
+-- off `families`, so the retention sweep's family delete cascades them away a
+-- year after the wedding — and the couple's record of what arrived goes with
+-- them. That window is deliberate and stays (see `wiki/compliance/retention.md`):
+-- cire holds no funds and has no record-keeping obligation of its own, and the
+-- couple's own Stripe and bank records are the durable copy.
+--
+-- What the sweep must not do is take the record away without warning. These two
+-- columns are where a parting summary lands, written just before the delete.
+-- `registry_settings` is KEPT by the sweep — it carries no guest PII and the
+-- published invite depends on it — which is what makes it the right home.
+--
+-- AGGREGATES ONLY. Counts and totals per currency, and nothing that names a
+-- household, a person or a note: the whole point of the sweep is that those are
+-- gone, and a summary that carried them would be the deletion undone in the row
+-- next door.
+ALTER TABLE `registry_settings` ADD COLUMN `gift_summary_json` text;
+--> statement-breakpoint
+ALTER TABLE `registry_settings` ADD COLUMN `gift_summary_at` integer;

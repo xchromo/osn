@@ -368,6 +368,8 @@ CREATE TABLE IF NOT EXISTS registry_settings (
   stripe_charges_enabled INTEGER NOT NULL DEFAULT 0,
   stripe_payouts_enabled INTEGER NOT NULL DEFAULT 0,
   stripe_account_updated_at INTEGER,
+  gift_summary_json TEXT,
+  gift_summary_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
