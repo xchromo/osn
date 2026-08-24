@@ -29,6 +29,13 @@ answered by saying so, rather than "check the fields". One live Stripe read
 happens on mount for a couple mid-onboarding — they have just come back from
 Stripe and the webhook can be seconds behind them — and for nobody else.
 
+**The gift log stopped printing enum values.** A claim now reads Promised /
+Bought / No longer coming and a contribution reads Not cleared yet / Received /
+Refunded — the two tables behind that log share the column and share none of its
+values, and a couple should not meet the word "succeeded" about a wedding
+present. A refunded gift keeps its row and gets a sentence: it went back to the
+guest, and it is not in the total above.
+
 **Reasons stay reachable.** The Connect button an editor cannot press is
 `aria-disabled` rather than `disabled`, so it keeps its place in the tab order
 and its `aria-describedby` reason with it — a `disabled` button is skipped by the

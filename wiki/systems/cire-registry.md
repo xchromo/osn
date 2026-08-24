@@ -370,6 +370,8 @@ The module lives at `cire/host/src/components/RegistryView.tsx`, wired into the 
 
 Candidates are filtered to `https:` **again in the browser** before any of them becomes an `<img src>`, and the pick is re-checked before it is posted. The API emits nothing else, but a render site that trusts its input because of what the server promised is one API change away from being wrong. "No pictures on that page" (422) is a normal outcome, not an error: it renders as a note that offers the upload path, not an alert.
 
+**The gift log says what a status means, not what the column holds.** `giftStatus()` in `RegistryView.tsx` maps the row to a word the couple would use — a claim reads Promised / Bought / No longer coming, a contribution reads Not cleared yet / Received / Refunded — because the two tables share the column and share none of its values, and nobody should meet "succeeded" in their own gift log. Refunded and released carry the error tint, and a refunded gift gets a sentence under it: it went back, and it is not in the total above. A status this build has no word for is rendered as it arrived rather than swallowed.
+
 ---
 
 ### The settings tab (`@cire/host`)
@@ -475,6 +477,4 @@ Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **log
 
 ## Still to land
 
-- Organiser settings form: the publish toggle, the shipping address, cash gifts — the three fields the guest surface already reads and cannot yet be set from the portal
 - **The FX capture**: `checkout.session.completed` carries no balance transaction, so the four FX columns are still NULL. The `exchange_rate` read described under [Money](#money) needs its own event or a follow-up call
-- **Labelling `failed` and `refunded` in the portal**: the webhook writes both, but `cire/host/src/components/RegistryView.tsx` still renders `{gift.status}` raw, so the couple read a bare word instead of a sentence
