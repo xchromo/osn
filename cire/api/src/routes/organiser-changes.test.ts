@@ -1451,3 +1451,108 @@ describe("GET /changes/list — history paging", () => {
     expect(huge.status).toBe(200);
   });
 });
+
+// ── Tenant isolation: a second wedding is invisible to the diff ─────────────
+
+describe("wedding scoping: a change is tenant-isolated", () => {
+  // A SECOND wedding owned by someone else, pre-populated with its own event,
+  // family and guest. Every call here targets the bootstrap wedding's path,
+  // so the second tenant's rows must be invisible to the diff and untouched
+  // by apply.
+  const OTHER_EVENT = "evt_second_party";
+  const OTHER_FAMILY = "fam_second";
+  const OTHER_GUEST = "gst_second";
+
+  function addSecondWedding(db: ReturnType<typeof buildApp>["db"]) {
+    const now = new Date();
+    db.insert(weddings)
+      .values({
+        id: "wed_second",
+        slug: "second-wedding",
+        displayName: "Second Wedding",
+        ownerOsnProfileId: "usr_someone_else",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(events)
+      .values({
+        id: OTHER_EVENT,
+        weddingId: "wed_second",
+        slug: "second-party",
+        name: "Second Party",
+        description: "",
+        startAt: "2027-02-02T10:00:00+11:00",
+        endAt: "2027-02-02T12:00:00+11:00",
+        timezone: "Australia/Sydney",
+        address: null,
+        dressCodeDescription: null,
+        dressCodePalette: null,
+        pinterestUrl: null,
+        mapsUrl: null,
+        sortOrder: 0,
+      })
+      .run();
+    db.insert(families)
+      .values({
+        id: OTHER_FAMILY,
+        weddingId: "wed_second",
+        publicId: "SECOND-FAM",
+        familyName: "Secondfamily",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(guests)
+      .values({
+        id: OTHER_GUEST,
+        familyId: OTHER_FAMILY,
+        firstName: "Zoe",
+        lastName: "Secondfamily",
+        sortOrder: 0,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  }
+
+  it("previews scoped to the caller's wedding when a second wedding exists", async () => {
+    const { app, db } = buildApp();
+    addSecondWedding(db);
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      plan: { eventRemoves: unknown[]; familyRemoves: unknown[]; guestRemoves: unknown[] };
+    };
+    // The other tenant's rows are out of scope, so nothing is flagged for removal.
+    expect(body.plan.eventRemoves).toHaveLength(0);
+    expect(body.plan.familyRemoves).toHaveLength(0);
+    expect(body.plan.guestRemoves).toHaveLength(0);
+  });
+
+  it("apply only touches the caller's wedding, leaving the other tenant intact", async () => {
+    const { app, db } = buildApp();
+    addSecondWedding(db);
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    const { changeId } = (await res.json()) as { changeId: string };
+
+    const apply = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
+    expect(apply.status).toBe(200);
+
+    // Bootstrap wedding got its change; the second tenant's rows survived.
+    expect(
+      db.select().from(events).where(eq(events.weddingId, BOOTSTRAP_WEDDING_ID)).all(),
+    ).toHaveLength(2);
+    expect(db.select().from(events).where(eq(events.id, OTHER_EVENT)).all()).toHaveLength(1);
+    expect(db.select().from(families).where(eq(families.id, OTHER_FAMILY)).all()).toHaveLength(1);
+    expect(db.select().from(guests).where(eq(guests.id, OTHER_GUEST)).all()).toHaveLength(1);
+  });
+});
