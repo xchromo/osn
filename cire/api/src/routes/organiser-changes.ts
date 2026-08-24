@@ -680,8 +680,8 @@ export const createOrganiserChangeRoutes = (
             rows.length > limit ? (page[page.length - 1]?.uploadedAt ?? null) : null;
 
           return {
-            // The history list is exposed under both `imports` (legacy clients)
-            // and `changes` (new clients) so both prefixes serve identically.
+            // The page is returned under `imports` — the table name — and is
+            // keyset-paginated on `uploadedAt`.
             imports: page.map((r) => ({
               id: r.id,
               uploadedAt: r.uploadedAt,

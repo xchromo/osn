@@ -119,14 +119,14 @@ Extract the parser's semantic rules into a shared module `cire/api/src/lib/guest
 
 ## 7. API surface
 
-Gated `weddingMember()` today; flip to `weddingEditor()` when platform PR 2 (roles) lands.
+Gated `weddingEditor()` (owner or `editor` co-host; a `viewer` gets 403 `read_only_role`).
 
 | Route | Purpose |
 |---|---|
 | `POST .../changes/preview` | Body: DesiredState JSON **or** a spreadsheet upload carrying `eventsCsv`, `guestsCsv`, or both (§3.1 — either sheet may be omitted) — all funnel into the one pipeline. Returns `{changeId, plan, warnings, baseRevision, scope}`. |
 | `POST .../changes/apply` | `{changeId}` — re-diff, 409 on stale `baseRevision`, checkpoint, apply. |
 | `POST .../changes/revert` | `{changeId}` — before-image restore (§4). |
-| `GET .../changes/list` | Paginated history (imports + editor saves), as `/import/list` today. |
+| `GET .../changes/list` | Paginated history (imports + editor saves), keyset-paginated on `uploadedAt`. |
 | `GET .../export/{events,guests}.csv` | Round-trip export (§5), `?fidelity=full` optional. |
 | `GET .../households` | Household-shaped roster read (`weddingMember()`) — one row per family INCLUDING guest-less ones, which the guest-shaped `/guests` cannot represent. The editor loads it so a code-only household survives a draft save (§3.2). |
 

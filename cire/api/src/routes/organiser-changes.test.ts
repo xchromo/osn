@@ -78,6 +78,8 @@ describe("POST /changes/preview + /apply — spreadsheet (CSV) front door", () =
       baseRevision: string;
       plan: { familyCreates: unknown[] };
     };
+    // The alias-era `importId` echo is gone; `changeId` is the only id.
+    expect(preview).not.toHaveProperty("importId");
     // Fresh wedding — no applied change yet, so the head is genesis.
     expect(preview.baseRevision).toBe("genesis");
     expect(preview.plan.familyCreates).toHaveLength(2);
@@ -384,6 +386,27 @@ describe("POST /changes/preview + /apply — single-sheet uploads", () => {
  * spreadsheet".
  */
 describe("POST /changes/preview — parse errors locate the problem", () => {
+  it("422s formula injection with cell coords and no cell contents", async () => {
+    const { app } = buildApp();
+    const evil = [
+      "Event Name,Start,End,Timezone,Location,Address,Dress Code Description,Dress Code Palette,Pinterest URL,Maps URL",
+      "=cmd|',2026-09-18T16:00:00+10:00,2026-09-18T22:00:00+10:00,Australia/Sydney,,,,,,",
+    ].join("\n");
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: evil,
+      guestsCsv: GUESTS_CSV,
+    });
+
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.row).toBe(2);
+    expect(body.column).toBe(1);
+    // The offending cell is attacker-controlled — locate it, never echo it.
+    expect(JSON.stringify(body)).not.toContain("cmd");
+    expect(JSON.stringify(body)).not.toContain("=cmd");
+  });
+
   it("reports reason + row + column + sheet for a bad timestamp", async () => {
     const { app } = buildApp();
     const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
@@ -1070,6 +1093,21 @@ describe("POST /changes/preview — provenance default + removeManual toggle", (
 // ── Authz + multi-tenant isolation on /changes ──────────────────────────────
 
 describe("authz — /changes gate", () => {
+  it("403s a non-member before parsing the body, not 400", async () => {
+    const { app } = buildApp();
+    // Deliberately malformed body: a 400 here would mean the parse beat the
+    // gate, telling a stranger their JSON was fine before refusing them.
+    const res = await appRequest(app, `${CHANGES_BASE}/preview`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${await auth.sign("usr_not_a_member")}`,
+      },
+      body: "{not json",
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("401 without an OSN JWT", async () => {
     const { app } = buildApp();
     const res = await appRequest(app, `${CHANGES_BASE}/preview`, {
@@ -1240,5 +1278,176 @@ describe("POST /changes/apply — 402 on capacity breach", () => {
     const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(200);
     expect(db.select().from(guests).all()).toHaveLength(101);
+  });
+});
+
+// ── Apply guards, payload cap, history paging ───────────────────────────────
+//
+// These moved here from the deleted `/import` alias test file. Nothing in them
+// was alias-specific — the alias just happened to be the mount they were
+// written against.
+
+describe("POST /changes/apply — change-row guards", () => {
+  it("404s an unknown changeId", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: "nonexistent" });
+    expect(res.status).toBe(404);
+  });
+
+  it("409s a change that has left preview status (TOCTOU defence)", async () => {
+    const { app, db } = buildApp();
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+    // Stand in for a concurrent apply landing first.
+    db.update(imports).set({ status: "applied" }).where(eq(imports.id, changeId)).run();
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
+    expect(res.status).toBe(409);
+  });
+
+  it("400s the alias-era `importId` body", async () => {
+    const { app } = buildApp();
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+
+    const res = await ownerPost(app, `${CHANGES_BASE}/apply`, { importId: changeId });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("the /import alias is gone", () => {
+  it("404s the old preview path", async () => {
+    const { app } = buildApp();
+    const res = await ownerPost(
+      app,
+      `/api/organiser/weddings/${BOOTSTRAP_WEDDING_ID}/import/preview`,
+      { eventsCsv: EVENTS_CSV, guestsCsv: GUESTS_CSV },
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /changes/preview — 1MB payload cap", () => {
+  it("413s a body that declares more than 1MB", async () => {
+    const { app } = buildApp();
+    const res = await appRequest(app, `${CHANGES_BASE}/preview`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearer}`,
+        // Lying header — the pre-check must refuse before any parse happens.
+        "Content-Length": String(2 * 1024 * 1024),
+      },
+      body: JSON.stringify({ eventsCsv: EVENTS_CSV, guestsCsv: GUESTS_CSV }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("413s a body that really is over 1MB when the header is absent", async () => {
+    const { app } = buildApp();
+    // A CSV whose real bytes clear the cap, for the post-parse backup arm that
+    // covers CDNs stripping or faking Content-Length.
+    // Under the parser's 5000-row and 10k-cell caps, over the 1MB byte cap.
+    const pad = "x".repeat(100);
+    const fat = [
+      "Family ID,Family Name,Guest First Name,Guest Last Name,Mehndi,Reception",
+      ...Array.from(
+        { length: 4_900 },
+        (_, i) => `${i},Testfamily${pad}${i},Ada${pad}${i},Testfamily${i},yes,yes`,
+      ),
+    ].join("\n");
+    expect(new TextEncoder().encode(fat).length).toBeGreaterThan(1024 * 1024);
+
+    const res = await appRequest(app, `${CHANGES_BASE}/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ eventsCsv: EVENTS_CSV, guestsCsv: fat }),
+    });
+    expect(res.status).toBe(413);
+  });
+});
+
+describe("GET /changes/list — history paging", () => {
+  async function seedChange(app: ReturnType<typeof buildApp>["app"]) {
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    return ((await res.json()) as { changeId: string }).changeId;
+  }
+
+  it("returns the wedding's changes newest-first", async () => {
+    const { app } = buildApp();
+    const id = await seedChange(app);
+
+    const res = await ownerGet(app, `${CHANGES_BASE}/list`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { imports: { id: string }[]; nextCursor: number | null };
+    expect(body.imports.find((i) => i.id === id)).toBeDefined();
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("pages on `?limit` and `?cursor`", async () => {
+    const { app, db } = buildApp();
+    const id1 = await seedChange(app);
+    db.update(imports).set({ uploadedAt: 1_000 }).where(eq(imports.id, id1)).run();
+    const id2 = await seedChange(app);
+    db.update(imports).set({ uploadedAt: 2_000 }).where(eq(imports.id, id2)).run();
+    const id3 = await seedChange(app);
+    db.update(imports).set({ uploadedAt: 3_000 }).where(eq(imports.id, id3)).run();
+
+    const page1Res = await ownerGet(app, `${CHANGES_BASE}/list?limit=2`);
+    const page1 = (await page1Res.json()) as {
+      imports: { id: string }[];
+      nextCursor: number | null;
+    };
+    expect(page1.imports.map((i) => i.id)).toEqual([id3, id2]);
+    expect(page1.nextCursor).toBe(2_000);
+
+    const page2Res = await ownerGet(app, `${CHANGES_BASE}/list?limit=2&cursor=2000`);
+    const page2 = (await page2Res.json()) as {
+      imports: { id: string }[];
+      nextCursor: number | null;
+    };
+    expect(page2.imports.map((i) => i.id)).toEqual([id1]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  it("403s a viewer co-host — the list sits behind the editor gate", async () => {
+    const { app, db } = buildApp();
+    db.insert(weddingHosts)
+      .values({
+        id: "whost_list_viewer",
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        osnProfileId: "usr_list_viewer",
+        addedByOsnProfileId: "usr_dev_bootstrap_owner",
+        role: "viewer",
+        createdAt: new Date(),
+      })
+      .run();
+
+    const res = await appRequest(app, `${CHANGES_BASE}/list`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${await auth.sign("usr_list_viewer")}` },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "read_only_role" });
+  });
+
+  it("clamps `?limit` to 1..100", async () => {
+    const { app } = buildApp();
+    await seedChange(app);
+
+    const tiny = await ownerGet(app, `${CHANGES_BASE}/list?limit=0`);
+    expect(((await tiny.json()) as { imports: unknown[] }).imports).toHaveLength(1);
+
+    const huge = await ownerGet(app, `${CHANGES_BASE}/list?limit=999`);
+    expect(huge.status).toBe(200);
   });
 });
