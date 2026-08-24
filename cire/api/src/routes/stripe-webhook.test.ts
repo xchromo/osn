@@ -6,7 +6,6 @@ import {
   registryContributions,
   registryItems,
   registrySettings,
-  weddings,
 } from "@cire/db";
 import { eq } from "drizzle-orm";
 
@@ -455,5 +454,233 @@ describe("events this product does not handle", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
     expect((await settings(db))?.stripeChargesEnabled).toBe(false);
+  });
+});
+
+/**
+ * A checkout session event that is not `completed`. Same object, different
+ * ending — the three of them share a shape because Stripe sends the same
+ * session back each time.
+ */
+const sessionEvent = (
+  type: string,
+  overrides: {
+    account?: string | null;
+    session?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  } = {},
+) =>
+  JSON.stringify({
+    id: `evt_${type}`,
+    type,
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "cs_1",
+        payment_intent: "pi_1",
+        metadata: { contributionId: CONTRIBUTION_ID, ...overrides.metadata },
+        ...overrides.session,
+      },
+    },
+  });
+
+const chargeRefunded = (
+  overrides: { account?: string | null; charge?: Record<string, unknown> } = {},
+) =>
+  JSON.stringify({
+    id: "evt_refund",
+    type: "charge.refunded",
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "ch_1",
+        payment_intent: "pi_1",
+        refunded: true,
+        amount: 12_500,
+        amount_refunded: 12_500,
+        ...overrides.charge,
+      },
+    },
+  });
+
+/** Seed a gift, then settle it the way the real chain does. */
+async function seedSettled(app: App, db: ReturnType<typeof buildApp>["db"], familyId: string) {
+  seedPending(db, familyId);
+  await deliver(app, checkoutCompleted());
+}
+
+describe("checkout.session.async_payment_succeeded — the debit that landed days later", () => {
+  /**
+   * The money bug this closes: a BECS or SEPA debit completes the session in
+   * seconds and settles days later. Without this event the gift sat `pending`
+   * forever and the couple were never told the money had arrived.
+   */
+  it("settles a gift whose bank debit finally cleared", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    // What Stripe sent at checkout time: complete, but not paid.
+    await deliver(app, checkoutCompleted({ session: { payment_status: "unpaid" } }));
+    expect((await gifts(db))[0]?.status).toBe("pending");
+
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.async_payment_succeeded", {
+        // Deliberately WITHOUT `payment_status`: the event type is the
+        // stronger statement, and a missing field must not leave the gift
+        // pending a second time.
+        session: { payment_status: undefined },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.stripePaymentIntentId).toBe("pi_1");
+  });
+
+  it("is a no-op once the gift already settled", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const res = await deliver(app, sessionEvent("checkout.session.async_payment_succeeded"));
+    expect(await res.json()).toEqual({ received: true, outcome: "duplicate" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+});
+
+describe("the endings where no money moves", () => {
+  for (const type of ["checkout.session.async_payment_failed", "checkout.session.expired"]) {
+    it(`marks a pending gift failed on ${type}`, async () => {
+      const { app, db, familyId } = buildApp();
+      seedPending(db, familyId);
+
+      const res = await deliver(app, sessionEvent(type));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ received: true, outcome: "failed" });
+      // The row is KEPT, not deleted: it is the idempotency anchor, and the
+      // `unique` session id is what makes a redelivery a no-op.
+      const [gift] = await gifts(db);
+      expect(gift?.status).toBe("failed");
+      expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
+    });
+
+    /**
+     * THE ONE THAT MATTERS. `expired` is a plausible thing for a hostile
+     * connected account to send, and a handler that could turn `succeeded` into
+     * `failed` on receipt of it would be a way to make a couple's gift vanish.
+     */
+    it(`cannot un-settle a gift somebody actually gave (${type})`, async () => {
+      const { app, db, familyId } = buildApp();
+      await seedSettled(app, db, familyId);
+
+      const res = await deliver(app, sessionEvent(type));
+
+      expect(await res.json()).toEqual({ received: true, outcome: "ignored" });
+      expect((await gifts(db))[0]?.status).toBe("succeeded");
+    });
+  }
+
+  it("refuses a failure aimed at a wedding that does not own the account", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.expired", { account: "acct_someone_else" }),
+    );
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("refuses a failure aimed at another session", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: "cs_other" });
+    const res = await deliver(app, sessionEvent("checkout.session.expired"));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("writes nothing for an expiry of a session cire never created", async () => {
+    const { app, db } = buildApp();
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.expired", { metadata: { contributionId: "rct_forged" } }),
+    );
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+});
+
+describe("charge.refunded — money that went back", () => {
+  it("marks a settled gift refunded, found by its payment intent", async () => {
+    // The refund event carries a CHARGE, not a session — the payment intent
+    // the settle path wrote is the only link back to the row.
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(app, chargeRefunded());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "refunded" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("refunded");
+    // The amount stays as GIVEN. Rewriting it to the net would quietly rewrite
+    // history in the couple's own record.
+    expect(gift?.amountMinor).toBe(12_500);
+  });
+
+  it("leaves a partly-refunded gift alone", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(
+      app,
+      chargeRefunded({ charge: { refunded: false, amount_refunded: 5_000 } }),
+    );
+
+    // A couple who returned half of a gift still received the other half.
+    expect(await res.json()).toEqual({ received: true, outcome: "partial" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("refuses a refund from an account the wedding does not own", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const res = await deliver(app, chargeRefunded({ account: "acct_someone_else" }));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("ignores a refund of something that never settled", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    // A pending row has no payment intent at all, so there is nothing to find.
+    const res = await deliver(app, chargeRefunded());
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("settles once and refunds once, however many times Stripe delivers", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const payload = chargeRefunded();
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "refunded",
+    });
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "ignored",
+    });
+    expect((await gifts(db))[0]?.status).toBe("refunded");
+  });
+
+  it("acknowledges a refund on a charge with no payment intent", async () => {
+    const { app } = buildApp();
+    const res = await deliver(app, chargeRefunded({ charge: { payment_intent: null } }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
   });
 });

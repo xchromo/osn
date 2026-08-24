@@ -7,11 +7,11 @@ related:
   - "[[cire-platform-plan]]"
   - "[[cire-consent]]"
   - "[[drag-and-drop]]"
-last-reviewed: 2026-08-23
+last-reviewed: 2026-08-24
 ---
 # Gift registry
 
-Phase 4 module. The couple curate a gift list; guest **households** claim from it so nobody buys the same thing twice; the couple work from a gift log afterwards to write thank-yous. Card contributions ride Stripe Connect and land in a later PR — everything below is usable as an honour-system list with no Stripe account at all.
+Phase 4 module. The couple curate a gift list; guest **households** claim from it so nobody buys the same thing twice; the couple work from a gift log afterwards to write thank-yous. Card contributions ride Stripe Connect — and everything below is still usable as an honour-system list with no Stripe account at all.
 
 > **It is locked.** The `registry` entitlement is granted to no wedding, so every route in this page answers `402 payment_required` in production today. See [[cire-entitlements]] for the mechanism and the comp-grant CLI. Nothing here is reachable until someone grants it.
 
@@ -99,7 +99,7 @@ Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That m
 |---|---|---|
 | `POST …/registry/stripe/session` | `weddingOwner` + entitlement | Creates the connected account (Express, `card_payments` + `transfers`) if there isn't one, then mints a hosted onboarding link |
 | `POST …/registry/stripe/refresh` | `weddingOwner` + entitlement | One live `GET /v1/accounts/:id`, and caches what it says |
-| `POST /api/stripe/webhook` | Stripe signature | `account.updated` → caches the capability booleans |
+| `POST /api/stripe/webhook` | Stripe signature | `account.updated` → caches the capability booleans; the five gift events below |
 
 **Owner-only, not editor.** Every other registry write is `weddingEditor`, because adding a gift is ordinary help. This names the bank account the money lands in, and sits on the same side of the role line as codes, deletion and co-host removal.
 
@@ -116,7 +116,7 @@ Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That m
 | Route | Gate |
 |---|---|
 | `POST /api/invite/:slug/registry/contribute` | `sessionAuth` + family-in-wedding + its own per-IP limiter (20/min) |
-| `POST /api/stripe/webhook` → `checkout.session.completed` | Stripe signature |
+| `POST /api/stripe/webhook` → `checkout.session.completed`, `.async_payment_succeeded`, `.async_payment_failed`, `.expired`, `charge.refunded` | Stripe signature |
 
 **The gates run before Stripe does.** `contributionContext` resolves the visible registry, checks the household belongs to THIS wedding, and requires `cash_gifts_enabled` AND `stripe_charges_enabled` AND an account id. A guest is turned away before their card is, or not at all. The cash-specific refusal is its own 409 `cash_gifts_unavailable`, because it is the one a guest looking at the panel can understand; everything else is the same 404 as always.
 
@@ -124,7 +124,13 @@ Rendering goes through `formatMinorPair` in `cire/host/src/lib/money.ts`. That m
 
 **The row is written FIRST, as `pending`, before the guest is handed a payment page.** Stripe is told one opaque id and the money — no wedding, no household, no name, no note. Two things follow. A forged session settles nothing: the webhook settles the row an id names, and there is no row to conjure from an event, which matters because this endpoint also hears about sessions a connected account created for ITSELF, where every metadata field is whatever its owner typed. And no guest personal data crosses to a US processor for a reconciliation that never needed it.
 
-`settleContribution` moves that row to `succeeded` after checking the completed session is the one on the row and that the row's wedding owns the account the event arrived on (`event.account`). It answers `settled` / `duplicate` / `unknown` / `rejected` — at-least-once delivery makes `duplicate` ordinary, and the states are where refunds will hang. **If the row cannot be written the guest is not sent to pay at all**: a payment with no record is the one outcome there is no way back from.
+`settleContribution` moves that row to `succeeded` after checking the completed session is the one on the row and that the row's wedding owns the account the event arrived on (`event.account`). It answers `settled` / `duplicate` / `unknown` / `rejected` — at-least-once delivery makes `duplicate` ordinary. **If the row cannot be written the guest is not sent to pay at all**: a payment with no record is the one outcome there is no way back from.
+
+**A checkout session is not over when it completes**, which is why five events reach the gift rather than one. A delayed bank debit — BECS here, SEPA in Europe — completes the session in seconds and settles days later, so `async_payment_succeeded` runs the same settle path; without it a real gift sat `pending` forever and never reached the couple's log. `async_payment_failed` and `expired` call `failContribution`, which marks a gift whose money is never coming `failed`. `charge.refunded` calls `refundContribution`, which finds its row by **payment intent** — a charge event carries no session — and only when Stripe's own `refunded` flag says the whole charge went back; a partial refund is acknowledged and left alone, since the couple did receive the rest.
+
+**Every one of those transitions is one-way, and guarded in the service rather than the route.** Only a `pending` row may fail; only a `succeeded` row may refund; the row is kept, never deleted. So a replayed — or forged — `expired` from a hostile connected account cannot un-settle a gift somebody actually gave: it answers `ignored`. Each of the three also re-checks that the row's wedding owns the account the event arrived on, in ONE query: `contributionOnAccount` LEFT JOINs the settings row and returns a null account id when it does not match, inside a handler Stripe gives twenty seconds. Migration 0059 indexes `stripe_payment_intent_id` for the refund lookup — deliberately not UNIQUE, since a null-heavy column and Stripe's own idempotency make a constraint a liability rather than a guarantee.
+
+**What the couple see of an unhappy ending.** A `failed` gift is not in the gift log at all: money that never moved is not a gift, and a guest who abandoned a checkout page never meant to tell them anything. A `refunded` one stays visible and out of the totals — a refund is a thing that happened to their record, not an erasure of it. The retention summary counts neither.
 
 **The idempotency key is a hash of the whole request** — household, slug, amount, item, message, name — plus a five-minute bucket, so a double-tap is one attempt and everything else is its own. Folding the note down to its length, as the first cut did, had both failure modes a key exists to avoid: two different gifts of the same amount from one household collided and the second silently never charged, and a retry with different words hit Stripe's `idempotency_error` permanently, because the key never changed.
 
@@ -456,4 +462,4 @@ Every handler runs `Effect.tapDefect` before its catch-all, so a defect is **log
 - Organiser settings form: the publish toggle, the shipping address, cash gifts — the three fields the guest surface already reads and cannot yet be set from the portal
 - **The organiser's own connect panel** in the portal: the couple can be connected through the API, but nothing in `@cire/host` yet offers the button — nor the publish toggle, shipping address and cash-gifts switch beside it
 - **The FX capture**: `checkout.session.completed` carries no balance transaction, so the four FX columns are still NULL. The `exchange_rate` read described under [Money](#money) needs its own event or a follow-up call
-- Refunds and failures: `registry_contributions.status` has `failed` and `refunded`, and nothing writes them yet
+- **Labelling `failed` and `refunded` in the portal**: the webhook writes both, but `cire/host/src/components/RegistryView.tsx` still renders `{gift.status}` raw, so the couple read a bare word instead of a sentence

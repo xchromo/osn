@@ -50,6 +50,28 @@ note. Released claims and unsettled contributions are not counted, totals are
 never converted across currencies, and a summary that cannot be written is
 logged and stepped over — the deletion is the obligation.
 
+**A checkout session is not over when it completes.** Four more Stripe events
+are handled, because three of them decide whether a gift exists.
+`checkout.session.async_payment_succeeded` settles a delayed bank debit — BECS
+here, SEPA in Europe — that completes the session in seconds and clears days
+later; without it a real gift sat `pending` forever and never reached the
+couple's log. `async_payment_failed` and `expired` close a gift whose money is
+never coming, and `charge.refunded` marks a settled one refunded, found by the
+payment intent the settle path wrote (migration 0059 indexes that column). A
+partial refund is left alone: a couple who returned half a gift still received
+the other half.
+
+Every one of those transitions is one-way and guarded in the service — only a
+`pending` row may fail, only a `succeeded` row may refund, and the row is kept
+rather than deleted. A replayed or forged `expired` cannot un-settle a gift
+somebody actually gave. A `failed` gift is hidden from the couple's log
+entirely, since money that never moved is not a gift and a guest who abandoned
+checkout never meant to tell them anything; a refunded one stays visible and out
+of the total, because a refund is a thing that happened to their record.
+
+The account lookup that guards all of this is one query rather than two — a
+`LEFT JOIN` on the settings row, inside a handler Stripe gives twenty seconds.
+
 `PublicRegistryDto.cashGiftsEnabled` is now the couple's intent ANDed with
 Stripe's capability, so the guest surface never reasons about the two
 separately. Still inert without `STRIPE_SECRET_KEY`: no client, no route, no

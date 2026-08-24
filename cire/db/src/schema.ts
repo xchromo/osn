@@ -789,6 +789,10 @@ export const registryContributions = sqliteTable(
   (t) => [
     index("registry_contributions_wedding_created_idx").on(t.weddingId, t.createdAt),
     index("registry_contributions_item_idx").on(t.itemId),
+    // A refund event names a payment intent and nothing else — no session id,
+    // and no metadata worth trusting — so this is the column the refund path
+    // reads by. Without the index that read scans every gift on the platform.
+    index("registry_contributions_payment_intent_idx").on(t.stripePaymentIntentId),
   ],
 );
 

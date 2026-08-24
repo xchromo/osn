@@ -437,6 +437,7 @@ CREATE TABLE IF NOT EXISTS registry_contributions (
 );
 CREATE INDEX IF NOT EXISTS registry_contributions_wedding_created_idx ON registry_contributions(wedding_id, created_at);
 CREATE INDEX IF NOT EXISTS registry_contributions_item_idx ON registry_contributions(item_id);
+CREATE INDEX IF NOT EXISTS registry_contributions_payment_intent_idx ON registry_contributions(stripe_payment_intent_id);
 `;
 
 export function createDb(path: string = ":memory:"): Db {

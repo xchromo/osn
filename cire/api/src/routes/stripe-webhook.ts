@@ -46,6 +46,19 @@ import { verifyStripeWebhook } from "../services/stripe";
  *    account created for itself, where the metadata is whatever its owner
  *    typed. So the wedding must actually own the account the event came from
  *    (`event.account`), and the household must belong to that wedding.
+ *
+ * **What it does with the four endings a payment can have.** A checkout session
+ * is not over when it completes. A delayed bank debit — BECS here, SEPA in
+ * Europe — completes the session in seconds and settles days later, so
+ * `async_payment_succeeded` settles the gift the same way `completed` does, and
+ * `async_payment_failed` marks it `failed`. `expired` does the same for a guest
+ * who opened checkout and closed the tab. `charge.refunded` marks a settled gift
+ * `refunded`, and only when the whole charge went back — a couple who returned
+ * part of a gift still received the rest.
+ *
+ * Every one of those transitions is one-way and guarded in the service: only a
+ * `pending` row may fail, only a `succeeded` row may refund. A replayed or
+ * forged `expired` cannot un-settle a gift somebody actually gave.
  */
 
 /**
@@ -64,6 +77,21 @@ const MAX_EVENT_BYTES = 64 * 1024;
 /** Events this product acts on. Everything else is acknowledged and dropped. */
 const ACCOUNT_UPDATED = "account.updated";
 const CHECKOUT_COMPLETED = "checkout.session.completed";
+/**
+ * A delayed debit that landed, days after the session completed. Same shape and
+ * same handler as `completed`: the object is the session, and `payment_status`
+ * is the fact. Without it a BECS or SEPA gift sits `pending` forever.
+ */
+const CHECKOUT_ASYNC_SUCCEEDED = "checkout.session.async_payment_succeeded";
+/** A delayed debit that bounced. The session is over and no money is coming. */
+const CHECKOUT_ASYNC_FAILED = "checkout.session.async_payment_failed";
+/** The guest opened checkout and walked away; Stripe closed the session. */
+const CHECKOUT_EXPIRED = "checkout.session.expired";
+/**
+ * Money went back. Carries a CHARGE, not a session — which is why the refund
+ * path finds its row by payment intent (migration 0059 indexes that column).
+ */
+const CHARGE_REFUNDED = "charge.refunded";
 
 export interface StripeWebhookDeps {
   /** Stripe's signing secret for this endpoint. Absent ⇒ do not mount. */
@@ -92,6 +120,18 @@ interface CheckoutSessionObject {
   payment_intent?: unknown;
   payment_status?: unknown;
   metadata?: { contributionId?: unknown };
+}
+
+/**
+ * The fields this product reads off a refunded Charge.
+ *
+ * `refunded` is Stripe's own "the whole thing went back" flag — true only when
+ * the refunded amount equals the charge. A partial refund leaves it false, and
+ * the handler leaves the gift alone.
+ */
+interface ChargeObject {
+  payment_intent?: unknown;
+  refunded?: unknown;
 }
 
 /** A metadata value Stripe gave back: a string, or nothing usable. */
@@ -162,7 +202,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             return { received: true, matched };
           }
 
-          if (type === CHECKOUT_COMPLETED) {
+          if (type === CHECKOUT_COMPLETED || type === CHECKOUT_ASYNC_SUCCEEDED) {
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
@@ -179,7 +219,52 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
               checkoutSessionId: sessionId,
               stripeAccountId,
               paymentIntentId: metaString(session?.payment_intent),
-              paid: session?.payment_status === "paid",
+              // `async_payment_succeeded` fires for exactly one reason, and its
+              // session still reads `payment_status: "paid"` — but the event
+              // type is the stronger statement of the two, and a session object
+              // that arrived without the field should not silently leave the
+              // gift pending a second time.
+              paid: type === CHECKOUT_ASYNC_SUCCEEDED || session?.payment_status === "paid",
+            });
+            return { received: true, outcome };
+          }
+
+          if (type === CHECKOUT_ASYNC_FAILED || type === CHECKOUT_EXPIRED) {
+            const session = envelope.data?.object as CheckoutSessionObject;
+            const stripeAccountId = metaString(envelope.account);
+            const sessionId = metaString(session?.id);
+            const contributionId = metaString(session?.metadata?.contributionId);
+            if (!stripeAccountId || !sessionId || !contributionId) {
+              return { received: true, outcome: "unknown" };
+            }
+
+            const outcome = yield* registryService.failContribution({
+              contributionId,
+              checkoutSessionId: sessionId,
+              stripeAccountId,
+            });
+            return { received: true, outcome };
+          }
+
+          if (type === CHARGE_REFUNDED) {
+            const charge = envelope.data?.object as ChargeObject;
+            const stripeAccountId = metaString(envelope.account);
+            const paymentIntentId = metaString(charge?.payment_intent);
+            if (!stripeAccountId || !paymentIntentId) {
+              // A refund on a charge with no payment intent is not a checkout
+              // charge, and nothing here knows what it is.
+              return { received: true, outcome: "unknown" };
+            }
+            if (charge?.refunded !== true) {
+              // PARTIAL. The charge is still, in part, a gift the couple
+              // received — calling the whole thing refunded would tell them
+              // otherwise. Acknowledged and left alone.
+              return { received: true, outcome: "partial" };
+            }
+
+            const outcome = yield* registryService.refundContribution({
+              paymentIntentId,
+              stripeAccountId,
             });
             return { received: true, outcome };
           }
