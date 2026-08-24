@@ -199,3 +199,42 @@ test("the committed cire/api/wrangler.toml passes", async () => {
   const result = assertCireDevDb(toml);
   expect(result.ok).toBe(true);
 });
+
+// Both callers pass the database to wrangler by NAME, so a second binding
+// wearing the dev name is a second candidate target — and the id checks above
+// only ever looked at [env.dev]'s first binding. These two fixtures are the
+// only ones where the file is internally consistent (the dev block is exactly
+// right) and the guard must still refuse.
+test("another env carrying the dev name over a different id is refused", () => {
+  const toml = `
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "cire-db-dev"
+database_id = "${DEV_ID}"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "cire-db-dev"
+database_id = "${PROD_ID}"
+`;
+  const result = assertCireDevDb(toml);
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.message).toContain("[env.staging] carries a second D1 named 'cire-db-dev'");
+  }
+});
+
+test("a second binding inside [env.dev] itself wearing the dev name is refused", () => {
+  const toml = `
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "cire-db-dev"
+database_id = "${DEV_ID}"
+
+[[env.dev.d1_databases]]
+binding = "DB_LEGACY"
+database_name = "cire-db-dev"
+database_id = "${PROD_ID}"
+`;
+  expect(assertCireDevDb(toml).ok).toBe(false);
+});

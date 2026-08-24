@@ -97,6 +97,22 @@ export function assertCireDevDb(toml: string): CireDevDbResult {
     };
   }
 
+  // Everything above reads [env.dev]'s FIRST d1 binding, because that is the
+  // one wrangler resolves for `--env dev`. But the two callers pass the
+  // database by NAME, so any other binding wearing that same name is a target
+  // this function has not looked at — including a second entry under
+  // [env.dev] itself. Refuse if one exists pointing somewhere else.
+  for (const [scope, env] of scopes(parsed)) {
+    for (const binding of env.d1_databases ?? []) {
+      if (binding.database_name === CIRE_DEV_DB_NAME && binding.database_id !== id) {
+        return {
+          ok: false,
+          message: `${scope} carries a second D1 named '${CIRE_DEV_DB_NAME}', id ${String(binding.database_id ?? "<none>")}. Refusing — the name the reset script passes to wrangler no longer picks out one database.`,
+        };
+      }
+    }
+  }
+
   // The dev id must appear exactly once in the whole file. More than once
   // means some other env block (production, or the top-level local one)
   // shares the database, and "reset on every deploy" would wipe it.
