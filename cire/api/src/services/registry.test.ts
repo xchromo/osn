@@ -89,7 +89,8 @@ function seedContribution(
     primaryCurrency: string | null;
     status: "pending" | "succeeded" | "failed" | "refunded";
     familyId: string;
-    sessionId: string;
+    /** Explicit `null` is meaningful: an attempt that never got a page (0060). */
+    sessionId: string | null;
     paymentIntentId: string | null;
     createdAt: Date;
   }> = {},
@@ -110,7 +111,8 @@ function seedContribution(
       primaryCurrency: over.primaryCurrency ?? null,
       fxRate: null,
       fxRateAt: null,
-      stripeCheckoutSessionId: over.sessionId ?? `cs_${crypto.randomUUID()}`,
+      stripeCheckoutSessionId:
+        over.sessionId === undefined ? `cs_${crypto.randomUUID()}` : over.sessionId,
       stripePaymentIntentId: over.paymentIntentId ?? null,
       message: null,
       displayName: null,
@@ -940,6 +942,7 @@ const ACCOUNT = "acct_connected";
 function contribution(db: Db0, id: string) {
   return db.select().from(registryContributions).where(eq(registryContributions.id, id)).get() as {
     status: string;
+    stripeCheckoutSessionId: string | null;
     stripePaymentIntentId: string | null;
   };
 }
@@ -1103,6 +1106,25 @@ describe("refundContribution", () => {
     expect(contribution(db, id).status).toBe("pending");
   });
 
+  it("refuses to guess when two gifts share one payment intent", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    // Not a shape the settle path writes today — the point is that the column
+    // is an index and not a UNIQUE, so nothing at the database stops it, and
+    // the refund must not pick one of them by accident of row order.
+    const first = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+    const second = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.refundContribution({ paymentIntentId: "pi_1", stripeAccountId: ACCOUNT }),
+    );
+
+    expect(outcome).toBe("ambiguous");
+    expect(contribution(db, first).status).toBe("succeeded");
+    expect(contribution(db, second).status).toBe("succeeded");
+  });
+
   it("takes a refunded gift out of the primary-currency total", async () => {
     const db = db0();
     ownAccount(db, ACCOUNT);
@@ -1144,5 +1166,262 @@ describe("what the couple sees of a gift that failed", () => {
     // A refund is a thing that HAPPENED to the couple's record, so it stays
     // visible — out of the total, still in the log.
     expect(entries.some((g) => g.status === "refunded")).toBe(true);
+  });
+});
+
+/**
+ * The gift row now exists BEFORE Stripe is asked for a payment page, so its
+ * session id starts NULL and is attached afterwards (osn-tracker #528). What
+ * follows is every way that window can end: the page arrives and is attached,
+ * the same page arrives twice, two rows race for one page, and the row is gone.
+ */
+describe("createPendingContribution", () => {
+  const pending = (db: Db0, id: string) => ({
+    id,
+    weddingId: BOOTSTRAP_WEDDING_ID,
+    familyId: twoFamilies(db)[0],
+    itemId: null,
+    amountMinor: 5000,
+    currency: "AUD",
+    message: null,
+    displayName: null,
+  });
+
+  it("writes the gift with no session id at all", async () => {
+    const db = db0();
+    const id = `rct_${crypto.randomUUID()}`;
+
+    expect(await ok(db, registryService.createPendingContribution(pending(db, id)))).toBe(true);
+
+    const row = contribution(db, id);
+    expect(row.status).toBe("pending");
+    expect(row.stripeCheckoutSessionId).toBeNull();
+  });
+
+  /**
+   * The id is minted fresh per request, so a second insert under the same id is
+   * a UUID collision, not a retry. The honest answer is `false` — and no
+   * payment page — rather than silently handing the guest somebody else's gift.
+   */
+  it("refuses to write over a gift that already has that id", async () => {
+    const db = db0();
+    const id = `rct_${crypto.randomUUID()}`;
+    await ok(db, registryService.createPendingContribution(pending(db, id)));
+
+    const second = await ok(
+      db,
+      registryService.createPendingContribution({ ...pending(db, id), amountMinor: 99_000 }),
+    );
+
+    expect(second).toBe(false);
+    // The first gift is untouched — the collision wrote nothing.
+    expect(
+      db
+        .select({ amountMinor: registryContributions.amountMinor })
+        .from(registryContributions)
+        .where(eq(registryContributions.id, id))
+        .get()?.amountMinor,
+    ).toBe(5000);
+  });
+});
+
+describe("attachCheckoutSession", () => {
+  it("attaches the page Stripe handed back", async () => {
+    const db = db0();
+    const id = seedContribution(db, { status: "pending", sessionId: null });
+
+    const outcome = await ok(
+      db,
+      registryService.attachCheckoutSession({ contributionId: id, checkoutSessionId: "cs_1" }),
+    );
+
+    expect(outcome).toBe("attached");
+    expect(contribution(db, id).stripeCheckoutSessionId).toBe("cs_1");
+  });
+
+  /** A retry of the same attach is the same answer, not a second write. */
+  it("is idempotent when the row already holds that session", async () => {
+    const db = db0();
+    const id = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.attachCheckoutSession({ contributionId: id, checkoutSessionId: "cs_1" }),
+    );
+
+    expect(outcome).toBe("attached");
+    expect(contribution(db, id).stripeCheckoutSessionId).toBe("cs_1");
+  });
+
+  /**
+   * One session id belongs to exactly one gift. A row that loses the race has
+   * no page of its own and never will, so it is closed rather than left
+   * `pending` for an organiser to wait on.
+   */
+  it("closes the loser when a session already belongs to another gift", async () => {
+    const db = db0();
+    const winner = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+    const loser = seedContribution(db, { status: "pending", sessionId: null });
+
+    const outcome = await ok(
+      db,
+      registryService.attachCheckoutSession({ contributionId: loser, checkoutSessionId: "cs_1" }),
+    );
+
+    expect(outcome).toBe("duplicate");
+    expect(contribution(db, loser).status).toBe("failed");
+    expect(contribution(db, loser).stripeCheckoutSessionId).toBeNull();
+    // The gift that got there first keeps the page.
+    expect(contribution(db, winner).status).toBe("pending");
+    expect(contribution(db, winner).stripeCheckoutSessionId).toBe("cs_1");
+  });
+
+  it("says so when there is no such gift", async () => {
+    const db = db0();
+    const outcome = await ok(
+      db,
+      registryService.attachCheckoutSession({
+        contributionId: "rct_gone",
+        checkoutSessionId: "cs_1",
+      }),
+    );
+    expect(outcome).toBe("missing");
+  });
+});
+
+describe("abandonPendingContribution", () => {
+  it("closes an attempt Stripe never gave a page to", async () => {
+    const db = db0();
+    const id = seedContribution(db, { status: "pending", sessionId: null });
+
+    await ok(db, registryService.abandonPendingContribution({ contributionId: id }));
+
+    expect(contribution(db, id).status).toBe("failed");
+  });
+
+  /**
+   * The guard is three clauses, and this is the one that matters: a row that
+   * DID get a session is a live payment page, and a late failure on the request
+   * that opened it must not close a gift the guest may already be paying.
+   */
+  it("leaves a gift that already has a payment page alone", async () => {
+    const db = db0();
+    const id = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    await ok(db, registryService.abandonPendingContribution({ contributionId: id }));
+
+    expect(contribution(db, id).status).toBe("pending");
+  });
+});
+
+describe("findReusableContribution", () => {
+  const reuse = (db: Db0) => ({
+    weddingId: BOOTSTRAP_WEDDING_ID,
+    familyId: twoFamilies(db)[0],
+    itemId: null,
+    amountMinor: 10_000,
+    message: null,
+    displayName: null,
+    since: new Date(Date.now() - 60_000),
+  });
+
+  it("hands back the page an identical attempt already got", async () => {
+    const db = db0();
+    seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    expect(await ok(db, registryService.findReusableContribution(reuse(db)))).toEqual({
+      sessionId: "cs_1",
+    });
+  });
+
+  /**
+   * osn-tracker #528. A NULL session is an attempt that never reached Stripe —
+   * there is no page to send anyone back to, so reuse must skip it. Returning
+   * it would hand the guest a `null` URL.
+   */
+  it("skips an attempt that never got a page", async () => {
+    const db = db0();
+    seedContribution(db, { status: "pending", sessionId: null });
+
+    expect(await ok(db, registryService.findReusableContribution(reuse(db)))).toBeNull();
+  });
+});
+
+describe("settling a gift whose session was never attached", () => {
+  it("adopts the session id the webhook names", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "pending", sessionId: null });
+
+    const outcome = await ok(
+      db,
+      registryService.settleContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+        paymentIntentId: "pi_1",
+        paid: true,
+        paidAmountMinor: 10_000,
+        paidCurrency: "AUD",
+      }),
+    );
+
+    expect(outcome).toBe("settled");
+    const row = contribution(db, id);
+    expect(row.status).toBe("succeeded");
+    // The window closes here: the gift is paid AND now names its own session.
+    expect(row.stripeCheckoutSessionId).toBe("cs_1");
+    expect(row.stripePaymentIntentId).toBe("pi_1");
+  });
+
+  /** Adoption is guarded: a session another gift already holds is not free. */
+  it("refuses to adopt a session another gift already holds", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const holder = seedContribution(db, { status: "succeeded", sessionId: "cs_1" });
+    const orphan = seedContribution(db, { status: "pending", sessionId: null });
+
+    const outcome = await ok(
+      db,
+      registryService.settleContribution({
+        contributionId: orphan,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+        paymentIntentId: "pi_1",
+        paid: true,
+        paidAmountMinor: 10_000,
+        paidCurrency: "AUD",
+      }),
+    );
+
+    expect(outcome).toBe("rejected");
+    expect(contribution(db, orphan).status).toBe("pending");
+    expect(contribution(db, orphan).stripeCheckoutSessionId).toBeNull();
+    expect(contribution(db, holder).status).toBe("succeeded");
+  });
+
+  /**
+   * The other end of the same window: the guest walked away, the session
+   * expired, and the expiry event is the first thing that ever names the
+   * session. The row is closed and stamped with the session it was.
+   */
+  it("closes an orphan on expiry, and records which session expired", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "pending", sessionId: null });
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+      }),
+    );
+
+    expect(outcome).toBe("failed");
+    const row = contribution(db, id);
+    expect(row.status).toBe("failed");
+    expect(row.stripeCheckoutSessionId).toBe("cs_1");
   });
 });

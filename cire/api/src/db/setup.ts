@@ -426,7 +426,7 @@ CREATE TABLE IF NOT EXISTS registry_contributions (
   primary_currency TEXT,
   fx_rate TEXT,
   fx_rate_at INTEGER,
-  stripe_checkout_session_id TEXT NOT NULL UNIQUE,
+  stripe_checkout_session_id TEXT UNIQUE,
   stripe_payment_intent_id TEXT,
   message TEXT,
   display_name TEXT,

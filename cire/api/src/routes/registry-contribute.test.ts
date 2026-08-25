@@ -9,6 +9,7 @@ import {
   weddings,
 } from "@cire/db";
 import { createRateLimiter } from "@shared/rate-limit";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { createApp } from "../app";
@@ -29,9 +30,9 @@ import { appRequest, TEST_ORIGIN } from "../test-helpers";
  *     visitor with no claim at all;
  *   - the charge is DIRECT: it names the couple's connected account, so the
  *     money is theirs from the moment it is taken;
- *   - nothing is recorded here. A session is an intention; the row is the
- *     webhook's to write, because Stripe is the only party that knows whether
- *     the money moved;
+ *   - the row is written FIRST and the session attached after (osn-tracker
+ *     #528), so a payment page never exists at Stripe that we have no record
+ *     of; the row stays `pending` until the webhook says the money moved;
  *   - the amount is bounded, so a fat-fingered zero is a validation error
  *     rather than a card charge.
  */
@@ -42,7 +43,18 @@ const ACCOUNT = "acct_couple";
 /** A household of the OTHER wedding — the cross-tenant cookie. */
 const FOREIGN_FAMILY = "OTHERWD-ELM-EE55";
 
-function stripeStub(options: { fail?: boolean; reusable?: boolean } = {}) {
+function stripeStub(
+  options: {
+    fail?: boolean;
+    reusable?: boolean;
+    /**
+     * Runs while the route is still inside `createCheckoutSession` — the only
+     * vantage point from which "the row exists BEFORE Stripe is asked" can be
+     * observed rather than inferred from the end state (osn-tracker #528).
+     */
+    onCreate?: () => void;
+  } = {},
+) {
   const sessions: CreateCheckoutSessionInput[] = [];
   /** Session ids the route asked Stripe to read back (the S-M1 reuse path). */
   const retrieved: string[] = [];
@@ -53,6 +65,7 @@ function stripeStub(options: { fail?: boolean; reusable?: boolean } = {}) {
     retrieveAccount: () => Effect.fail(new StripeError({ reason: "not used here" })),
     createCheckoutSession(input) {
       sessions.push(input);
+      options.onCreate?.();
       if (options.fail) return Effect.fail(new StripeError({ reason: "unreachable" }));
       // Ids count up, so a test can tell a second session from a reused first.
       minted += 1;
@@ -286,23 +299,52 @@ describe("what reaches Stripe, and what does not", () => {
     const metadata = stripe.sessions[0]?.metadata ?? {};
     expect(Object.keys(metadata)).toEqual(["contributionId"]);
     expect(String(metadata.contributionId)).toMatch(/^rct_/);
+    // The same id also goes in `client_reference_id`, which the connected
+    // account cannot rewrite the way it can rewrite its own metadata — so the
+    // webhook reads that first and metadata only as the fallback.
+    expect(stripe.sessions[0]?.clientReferenceId).toBe(String(metadata.contributionId));
     const serialised = JSON.stringify(stripe.sessions[0]);
     expect(serialised).not.toContain("For the honeymoon");
     expect(serialised).not.toContain("The Ashworths");
     expect(serialised).not.toContain(BOOTSTRAP_WEDDING_ID);
   });
 
-  it("writes the gift as pending BEFORE handing over a payment page", async () => {
-    // A payment with no record is the one outcome there is no way back from.
-    const stripe = stripeStub();
-    const { app, db } = buildApp({ stripe: stripe.client });
+  it("writes the gift as pending BEFORE Stripe is asked for a page", async () => {
+    // A payment with no record is the one outcome there is no way back from,
+    // so the row has to be on disk while Stripe is still being asked — not
+    // once it has answered (osn-tracker #528).
+    let duringCreate: Array<{ id: string; status: string; sessionId: string | null }> = [];
+    const stripe = stripeStub({
+      onCreate: () => {
+        duringCreate = db
+          .select({
+            id: registryContributions.id,
+            status: registryContributions.status,
+            sessionId: registryContributions.stripeCheckoutSessionId,
+          })
+          .from(registryContributions)
+          .all();
+      },
+    });
+    const built = buildApp({ stripe: stripe.client });
+    const { app } = built;
+    const db = built.db;
     const cookie = await guestCookie(app);
 
     await contribute(app, cookie, { amountMinor: 5000, message: "x", displayName: "Y" });
 
+    // Mid-flight: the gift exists, and has no session because there is not one
+    // yet — that NULL is the whole point of migration 0060.
+    expect(duringCreate).toHaveLength(1);
+    expect(duringCreate[0]?.status).toBe("pending");
+    expect(duringCreate[0]?.sessionId).toBeNull();
+    expect(duringCreate[0]?.id).toMatch(/^rct_/);
+
     const rows = await db.select().from(registryContributions).all();
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(duringCreate[0]?.id);
     expect(rows[0]?.status).toBe("pending");
+    // …and afterwards the session Stripe handed back is attached to it.
     expect(rows[0]?.stripeCheckoutSessionId).toBe("cs_1");
     expect(rows[0]?.id).toBe(String(stripe.sessions[0]?.metadata.contributionId));
     // Nothing is called a gift until Stripe says the money moved.
@@ -352,13 +394,91 @@ describe("what reaches Stripe, and what does not", () => {
     for (const key of keys) expect(key).toMatch(/^cire-gift-[0-9a-f]{32}$/);
   });
 
-  it("answers 502 when Stripe will not play, and writes nothing", async () => {
+  it("answers 502 when Stripe will not play, and closes the attempt it opened", async () => {
     const { app, db } = buildApp({ stripe: stripeStub({ fail: true }).client });
     const cookie = await guestCookie(app);
     const res = await contribute(app, cookie, { amountMinor: 5000 });
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "stripe_unavailable" });
-    expect(await db.select().from(registryContributions).all()).toHaveLength(0);
+    // The row was written before Stripe was asked, so it exists — but it is
+    // marked `failed`, not left pending: there is no payment page it could
+    // ever belong to, and a `pending` row is a gift an organiser is waiting on.
+    const rows = await db.select().from(registryContributions).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("failed");
+    expect(rows[0]?.stripeCheckoutSessionId).toBeNull();
+  });
+
+  /**
+   * osn-tracker #528. Two presses of the same button used to be able to leave
+   * two rows and two sessions. The reuse read (S-M1) collapses the second press
+   * onto the page the first one got, so there is one gift and one session.
+   */
+  it("gives a double-tap one payment page and one gift", async () => {
+    const stripe = stripeStub();
+    const { app, db } = buildApp({ stripe: stripe.client });
+    const cookie = await guestCookie(app);
+
+    const first = await contribute(app, cookie, { amountMinor: 5000, message: "aaa" });
+    const second = await contribute(app, cookie, { amountMinor: 5000, message: "aaa" });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual(await first.json());
+    // The second press never asked Stripe for a page — it read back the first.
+    expect(stripe.sessions).toHaveLength(1);
+    expect(stripe.retrieved).toEqual(["cs_1"]);
+
+    const rows = await db.select().from(registryContributions).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.stripeCheckoutSessionId).toBe("cs_1");
+  });
+
+  /**
+   * osn-tracker #528. A row with a NULL session is an attempt the Worker never
+   * finished — it was evicted between writing the gift and hearing back from
+   * Stripe. There is no page to send anyone back to, so the reuse read must
+   * skip it and mint a fresh one, rather than handing the guest a `null` URL.
+   */
+  it("never reuses an attempt that never got a payment page", async () => {
+    const stripe = stripeStub();
+    const { app, db } = buildApp({ stripe: stripe.client });
+    const cookie = await guestCookie(app);
+    const familyId = db
+      .select({ id: families.id })
+      .from(families)
+      .where(eq(families.publicId, FAMILY))
+      .get()?.id;
+    expect(familyId).toBeTruthy();
+    const now = new Date();
+    db.insert(registryContributions)
+      .values({
+        id: "rct_orphan",
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        itemId: null,
+        familyId: familyId as string,
+        status: "pending",
+        amountMinor: 5000,
+        currency: "AUD",
+        stripeCheckoutSessionId: null,
+        message: null,
+        displayName: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const res = await contribute(app, cookie, { amountMinor: 5000 });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ url: "https://checkout.stripe.test/pay/cs_1" });
+    // Stripe was asked for a new page, and never asked to read the orphan back.
+    expect(stripe.sessions).toHaveLength(1);
+    expect(stripe.retrieved).toEqual([]);
+    // The orphan is left exactly as it was; the new gift is its own row.
+    const rows = await db.select().from(registryContributions).all();
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.id === "rct_orphan")?.stripeCheckoutSessionId).toBeNull();
   });
 });
 

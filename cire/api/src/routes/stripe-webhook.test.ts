@@ -296,7 +296,7 @@ const CONTRIBUTION_ID = "rct_1";
 function seedPending(
   db: ReturnType<typeof buildApp>["db"],
   familyId: string,
-  over: { id?: string; sessionId?: string; weddingId?: string; status?: string } = {},
+  over: { id?: string; sessionId?: string | null; weddingId?: string; status?: string } = {},
 ) {
   const now = new Date();
   db.insert(registryContributions)
@@ -308,7 +308,7 @@ function seedPending(
       status: (over.status ?? "pending") as "pending",
       amountMinor: 12_500,
       currency: "AUD",
-      stripeCheckoutSessionId: over.sessionId ?? "cs_1",
+      stripeCheckoutSessionId: over.sessionId === undefined ? "cs_1" : over.sessionId,
       stripePaymentIntentId: null,
       message: "Enjoy Japan",
       displayName: "The Ashworths",
@@ -455,6 +455,47 @@ describe("checkout.session.completed — settling the row, never inventing one",
     const res = await deliver(app, checkoutCompleted());
     expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
     expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  /**
+   * osn-tracker #528. `client_reference_id` is set by the platform when the
+   * session is created and the connected account has no way to rewrite it, so
+   * it is the field the settle path reads FIRST. Metadata is only the fallback
+   * for sessions created before it was sent.
+   */
+  it("settles by client_reference_id, in preference to metadata", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+
+    const res = await deliver(
+      app,
+      checkoutCompleted({
+        session: { client_reference_id: CONTRIBUTION_ID },
+        // A connected account rewriting its own metadata changes nothing.
+        metadata: { contributionId: "rct_forged" },
+      }),
+    );
+
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  /**
+   * The window migration 0060 opened: the Worker wrote the gift, asked Stripe
+   * for a page, and was evicted before it heard back. The completed event is
+   * the first thing that ever names the session — the gift settles anyway, and
+   * takes the session id with it.
+   */
+  it("settles a gift that never got its session attached", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: null });
+
+    const res = await deliver(app, checkoutCompleted());
+
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
   });
 
   it("acknowledges a completed session carrying none of our metadata", async () => {
@@ -613,6 +654,24 @@ describe("the endings where no money moves", () => {
       expect((await gifts(db))[0]?.status).toBe("succeeded");
     });
   }
+
+  /**
+   * The other side of migration 0060: an attempt that never had its session
+   * attached still has to be closable, or it sits `pending` forever and the
+   * couple's gift log carries a gift nobody ever gave. The expiring session's
+   * id goes on the row on the way out, so a redelivery is a no-op.
+   */
+  it("closes an attempt that never got its session attached", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: null });
+
+    const res = await deliver(app, sessionEvent("checkout.session.expired"));
+
+    expect(await res.json()).toEqual({ received: true, outcome: "failed" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("failed");
+    expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
+  });
 
   it("refuses a failure aimed at a wedding that does not own the account", async () => {
     const { app, db, familyId } = buildApp();

@@ -111,6 +111,13 @@ export interface CreateCheckoutSessionInput {
    */
   metadata: StripeFormParams;
   /**
+   * Our own id for the gift row, echoed back verbatim on every webhook event.
+   * Stripe treats `client_reference_id` as an opaque string it never inspects,
+   * which makes it the one field the connected account cannot rewrite the way
+   * it can rewrite metadata — so the settle path reads this first.
+   */
+  clientReferenceId: string;
+  /**
    * Makes a retried create return the FIRST session rather than a second one.
    * The caller owns it because only the caller knows what "the same attempt"
    * means — here, one guest's one press.
@@ -361,6 +368,7 @@ export function createStripeClient(config: StripeConfig): StripeClient {
               },
             },
           },
+          client_reference_id: input.clientReferenceId,
           metadata: input.metadata,
           // The same metadata on the PaymentIntent, so a couple looking at the
           // charge in their own Stripe dashboard can see which wedding and

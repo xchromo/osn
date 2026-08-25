@@ -167,6 +167,13 @@ interface CheckoutSessionObject {
   /** What Stripe actually charged, reconciled against the row at settle (S-L1). */
   amount_total?: unknown;
   currency?: unknown;
+  /**
+   * Our own gift id, set when the session was created (0060). Stripe echoes it
+   * back untouched and the connected account has no way to write it, unlike
+   * `metadata` — so it is read first and `metadata` is only the fallback for
+   * sessions created before the field was sent.
+   */
+  client_reference_id?: unknown;
   metadata?: { contributionId?: unknown };
 }
 
@@ -185,6 +192,16 @@ interface ChargeObject {
 /** A metadata value Stripe gave back: a string, or nothing usable. */
 function metaString(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * The gift a session names. `client_reference_id` is the trustworthy field —
+ * the platform sets it at creation and nothing on the connected account's side
+ * can rewrite it — so it wins; `metadata.contributionId` still answers for
+ * sessions created before 0060 shipped.
+ */
+function contributionIdOf(session: CheckoutSessionObject | undefined): string | null {
+  return metaString(session?.client_reference_id) ?? metaString(session?.metadata?.contributionId);
 }
 
 export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
@@ -255,7 +272,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
-            const contributionId = metaString(session?.metadata?.contributionId);
+            const contributionId = contributionIdOf(session);
             if (!stripeAccountId || !sessionId || !contributionId) {
               // A completed session that is not one of ours — no connected
               // account, or none of the id we write. Acknowledged: a retry
@@ -285,7 +302,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
-            const contributionId = metaString(session?.metadata?.contributionId);
+            const contributionId = contributionIdOf(session);
             if (!stripeAccountId || !sessionId || !contributionId) {
               return { received: true, outcome: "unknown" };
             }
