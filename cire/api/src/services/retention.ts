@@ -241,14 +241,13 @@ export const retentionService = {
             return batchable.batch(stmts as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
           }
           // bun:sqlite (tests/local): no .batch(); run sequentially, children first.
-          return (async () => {
-            const out: unknown[] = [];
-            // FK-ordered deletes: children must commit before parents, so
-            // sequential awaiting is the contract, not an oversight.
-            // oxlint-disable-next-line no-await-in-loop
-            for (const stmt of stmts) out.push(await stmt);
-            return out;
-          })();
+          // FK-ordered deletes: children must commit before parents, so the
+          // statements are chained rather than gathered with Promise.all —
+          // running them together would delete a parent out from under a child.
+          return stmts.reduce<Promise<unknown[]>>(
+            (chain, stmt) => chain.then(async (out) => [...out, await stmt]),
+            Promise.resolve<unknown[]>([]),
+          );
         },
         catch: (e) => new RetentionWriteError({ op: "sweep", reason: String(e) }),
       }).pipe(
