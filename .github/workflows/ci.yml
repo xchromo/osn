@@ -243,6 +243,18 @@ jobs:
       - name: Check release-age excludes are marked and bounded
         run: bun run check:release-age-excludes
 
+      # Same shape, different invariant: every `vitest.config.ts` that loads
+      # `vite-plugin-solid` has to say in its own `setupFiles` what it wants
+      # to happen with jest-dom, because the plugin injects
+      # `@testing-library/jest-dom/vitest` into any project that does not. The
+      # suppression is one line per config and nothing fails when it goes —
+      # the suite still passes, it is only seconds slower per package, which
+      # is exactly the kind of regression no reviewer catches. The CLI test
+      # proves the walk works; this step proves it against this repo's own
+      # configs and its own marker file.
+      - name: Check the jest-dom suppression markers are intact
+        run: bun run check:jest-dom-markers
+
   openapi-freshness:
     name: OpenAPI Freshness
     runs-on: ubuntu-latest

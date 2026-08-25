@@ -6,7 +6,7 @@ related:
   - "[[backend-patterns]]"
   - "[[schema-layers]]"
   - "[[commands]]"
-last-reviewed: 2026-08-24
+last-reviewed: 2026-08-25
 ---
 
 # Testing Patterns
@@ -175,6 +175,41 @@ bun run --cwd zap/api test:d1
 ```
 
 Run serially. Concurrent Miniflare workerd instances contend and fail spuriously, which is why the root script pins `--concurrency=1`. Both `ci.yml` and `deploy.yml` run this lane; before 2026-08 neither did, and zap's test sat failing on a stale fixture for as long as it took someone to run it by hand.
+
+## jest-dom is opt-in, per test file
+
+`vite-plugin-solid` prepends `@testing-library/jest-dom/vitest` to `setupFiles`
+for every Vitest project it is loaded into, unless some entry in that array
+already has a path matching `/jest-dom/`. Nothing in a config says so; it
+happens per test file, and in a package that asserts no DOM matcher at all it
+is pure setup cost.
+
+Every Solid `vitest.config.ts` therefore points `setupFiles` at a marker:
+
+```ts
+setupFiles: ["../../shared/test-config/no-jest-dom.ts"],
+```
+
+That file's whole body is `export {};`. It exists so its **path** matches the
+plugin's test — nothing more. Never put real setup code in it: `shared/test-config/`
+carries no `package.json`, so turbo cannot see it in the package graph and an
+edit there invalidates nobody's `test` cache. Thirteen packages would keep
+serving a cached pass against the previous contents.
+
+A test that needs a matcher imports it itself, at the top of the file:
+
+```ts
+import "@testing-library/jest-dom/vitest";
+```
+
+Both halves are enforced. `scripts/check-jest-dom-markers.ts` (the
+`Check the jest-dom suppression markers are intact` step in the `script-tests`
+job, `bun run check:jest-dom-markers` locally) fails when a config that imports
+`vite-plugin-solid` has no `setupFiles` entry matching `/jest-dom/`, and when
+the marker file grows anything beyond comments and `export {};`. Two exemptions:
+a config that does not import the plugin (`tools/lab`), and a project inside a
+`test.projects` array that sets `browser: { enabled: true }` — the plugin skips
+browser mode, which already bundles the assertions.
 
 ## Running Tests
 
