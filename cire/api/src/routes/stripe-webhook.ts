@@ -90,7 +90,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
  *    text outside the BMP.
  *
  * So the stream is drained a chunk at a time and abandoned the moment the
- * running byte count passes the bound. The reader is cancelled on the way out,
+ * running byte count passes the bound. Leaving the loop cancels the stream,
  * which is what tells the runtime to stop pulling the rest of the upload.
  *
  * Returns the decoded text, or `null` when the body was too big.
@@ -99,30 +99,24 @@ async function readBoundedText(request: Request, max: number): Promise<string | 
   const body = request.body;
   if (!body) return "";
 
-  const reader = body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
-  try {
-    for (;;) {
-      // Sequential by nature: each chunk has to be counted before the next is
-      // pulled, which is the whole point of the bound.
-      // oxlint-disable-next-line no-await-in-loop
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > max) return null;
-      // `stream: true` so a multi-byte character split across two chunks is
-      // decoded as one character rather than two replacement ones — the
-      // signature is over the exact text, so a mangled decode is a 400 for a
-      // body Stripe signed correctly.
-      text += decoder.decode(value, { stream: true });
-    }
-    return text + decoder.decode();
-  } finally {
-    // Already-ended readers ignore this; an abandoned one stops the upload.
-    await reader.cancel().catch(() => {});
+  // Async iteration, not a reader loop: each chunk has to be counted before the
+  // next is pulled, so there is nothing here to run concurrently. Leaving the
+  // loop early — `return null` on the bound, or a throw — runs the iterator's
+  // `return()`, and that cancels the stream, which is what tells the runtime to
+  // stop pulling the rest of the upload.
+  for await (const chunk of body) {
+    bytes += chunk.byteLength;
+    if (bytes > max) return null;
+    // `stream: true` so a multi-byte character split across two chunks is
+    // decoded as one character rather than two replacement ones — the
+    // signature is over the exact text, so a mangled decode is a 400 for a
+    // body Stripe signed correctly.
+    text += decoder.decode(chunk, { stream: true });
   }
+  return text + decoder.decode();
 }
 
 /** Events this product acts on. Everything else is acknowledged and dropped. */
