@@ -353,14 +353,13 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
                start until this island hydrates — a moment the page should name
                rather than fill with an empty frame. A live region, because for
                a screen reader this IS the page until it resolves. */
-            <p
+            <output
               data-gift-waiting
-              role="status"
               aria-live="polite"
-              class="font-body text-text-muted py-10 text-center text-[0.88rem]"
+              class="font-body text-text-muted block py-10 text-center text-[0.88rem]"
             >
               Opening the couple’s list…
-            </p>
+            </output>
           }
         >
           <Match when={answer() === "signed-out"}>
@@ -478,14 +477,13 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
                 a screen reader hears the 409 the same moment a sighted guest reads
                 it. Never an overlay: page-level fixed positioning is trapped by any
                 ancestor `transform`. */}
-            <p
+            <output
               data-gift-status
-              role="status"
               aria-live="polite"
-              class="font-body text-text mx-auto mb-8 min-h-[1.25rem] max-w-[34rem] text-center text-[0.82rem] leading-[1.6]"
+              class="font-body text-text mx-auto mb-8 block min-h-[1.25rem] max-w-[34rem] text-center text-[0.82rem] leading-[1.6]"
             >
               {status()}
-            </p>
+            </output>
 
             {/* Giving money sits ABOVE the shelves and outside the
                 items-exist branch on purpose: a guest who finds every gift

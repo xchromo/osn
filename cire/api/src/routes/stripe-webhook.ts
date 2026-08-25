@@ -105,6 +105,9 @@ async function readBoundedText(request: Request, max: number): Promise<string | 
   let text = "";
   try {
     for (;;) {
+      // Sequential by nature: each chunk has to be counted before the next is
+      // pulled, which is the whole point of the bound.
+      // oxlint-disable-next-line no-await-in-loop
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;

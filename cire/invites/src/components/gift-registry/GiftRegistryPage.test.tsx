@@ -711,7 +711,9 @@ describe("the status line", () => {
     await whenListed();
 
     const status = container.querySelector("[data-gift-status]") as HTMLElement;
-    expect(status.getAttribute("role")).toBe("status");
+    // `<output>` carries role="status" implicitly, which is why the attribute
+    // is not spelled out on the element.
+    expect(status.tagName).toBe("OUTPUT");
     expect(status.getAttribute("aria-live")).toBe("polite");
     // A `transform` on any ancestor would trap a fixed overlay; there is none.
     expect(container.querySelector(".fixed")).toBeNull();
