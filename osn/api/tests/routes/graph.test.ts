@@ -65,6 +65,16 @@ describe("graph routes", () => {
     expect(res.status).toBe(401);
   });
 
+  // The header is set as the first statement of the handler precisely so a
+  // rejection carries it too — a 401 is still a response tied to the request
+  // that produced it, and a cache does not care that the body was an error.
+  // The 200 tests below cannot see that: they pass either way.
+  it("GET /graph/connections sets cache-control: private, no-store on the 401", async () => {
+    const res = await graphApp.handle(new Request("http://localhost/graph/connections"));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+  });
+
   // -------------------------------------------------------------------------
   // Connection flow
   // -------------------------------------------------------------------------
