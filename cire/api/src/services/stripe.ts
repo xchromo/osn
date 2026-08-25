@@ -124,6 +124,12 @@ export interface StripeCheckoutSession {
   url: string;
 }
 
+export interface RetrieveCheckoutSessionInput {
+  /** The couple's connected account the session was created on. */
+  accountId: string;
+  sessionId: string;
+}
+
 /** Everything this product asks Stripe to do. Injected, so tests need no network. */
 export interface StripeClient {
   createAccount(input: CreateAccountInput): Effect.Effect<StripeAccount, StripeError>;
@@ -132,6 +138,14 @@ export interface StripeClient {
   createCheckoutSession(
     input: CreateCheckoutSessionInput,
   ): Effect.Effect<StripeCheckoutSession, StripeError>;
+  /**
+   * Read a session back. `null` means "there is nothing here to send a guest
+   * to" — expired, already paid, or open but with no URL left — which is a
+   * normal answer and not an error: the caller mints a fresh session instead.
+   */
+  retrieveCheckoutSession(
+    input: RetrieveCheckoutSessionInput,
+  ): Effect.Effect<StripeCheckoutSession | null, StripeError>;
 }
 
 export class StripeService extends Context.Tag("StripeService")<StripeService, StripeClient>() {}
@@ -361,6 +375,27 @@ export function createStripeClient(config: StripeConfig): StripeClient {
           return typeof session?.id === "string" && typeof session.url === "string"
             ? Effect.succeed({ id: session.id, url: session.url })
             : Effect.fail(new StripeError({ reason: "unexpected checkout session payload" }));
+        }),
+      );
+    },
+
+    retrieveCheckoutSession(input) {
+      return request(
+        "GET",
+        `/v1/checkout/sessions/${encodeURIComponent(input.sessionId)}`,
+        {},
+        undefined,
+        input.accountId,
+      ).pipe(
+        Effect.map((payload) => {
+          const session = payload as { id?: unknown; url?: unknown; status?: unknown };
+          // Only an OPEN session is somewhere a guest can still pay. A complete
+          // or expired one is history, and its `url` — if Stripe even still
+          // returns one — leads to a page that cannot take a card.
+          if (session?.status !== "open") return null;
+          return typeof session.id === "string" && typeof session.url === "string"
+            ? { id: session.id, url: session.url }
+            : null;
         }),
       );
     },

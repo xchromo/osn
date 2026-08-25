@@ -42,20 +42,35 @@ const ACCOUNT = "acct_couple";
 /** A household of the OTHER wedding — the cross-tenant cookie. */
 const FOREIGN_FAMILY = "OTHERWD-ELM-EE55";
 
-function stripeStub(options: { fail?: boolean } = {}) {
+function stripeStub(options: { fail?: boolean; reusable?: boolean } = {}) {
   const sessions: CreateCheckoutSessionInput[] = [];
+  /** Session ids the route asked Stripe to read back (the S-M1 reuse path). */
+  const retrieved: string[] = [];
+  let minted = 0;
   const client: StripeClient = {
     createAccount: () => Effect.fail(new StripeError({ reason: "not used here" })),
     createAccountLink: () => Effect.fail(new StripeError({ reason: "not used here" })),
     retrieveAccount: () => Effect.fail(new StripeError({ reason: "not used here" })),
     createCheckoutSession(input) {
       sessions.push(input);
-      return options.fail
-        ? Effect.fail(new StripeError({ reason: "unreachable" }))
-        : Effect.succeed({ id: "cs_1", url: "https://checkout.stripe.test/pay/cs_1" });
+      if (options.fail) return Effect.fail(new StripeError({ reason: "unreachable" }));
+      // Ids count up, so a test can tell a second session from a reused first.
+      minted += 1;
+      const id = `cs_${minted}`;
+      return Effect.succeed({ id, url: `https://checkout.stripe.test/pay/${id}` });
+    },
+    retrieveCheckoutSession(input) {
+      retrieved.push(input.sessionId);
+      // `reusable: false` is Stripe answering "that page is spent" — expired or
+      // already paid — which the route must treat as no page at all.
+      return Effect.succeed(
+        options.reusable === false
+          ? null
+          : { id: input.sessionId, url: `https://checkout.stripe.test/pay/${input.sessionId}` },
+      );
     },
   };
-  return { client, sessions };
+  return { client, sessions, retrieved };
 }
 
 function buildApp({
@@ -312,9 +327,13 @@ describe("what reaches Stripe, and what does not", () => {
    * the same amount collided, so the second silently never charged; and a retry
    * with different words hit Stripe's `idempotency_error` permanently, because
    * the key never changed.
+   *
+   * `reusable: false` here is doing a job: it takes the S-M1 reuse read out of
+   * the way — every press is spent on arrival — so what reaches Stripe is the
+   * key alone, which is the belt this test is about.
    */
   it("collapses a double-tap and separates everything else", async () => {
-    const stripe = stripeStub();
+    const stripe = stripeStub({ reusable: false });
     const { app } = buildApp({ stripe: stripe.client });
     const cookie = await guestCookie(app);
 

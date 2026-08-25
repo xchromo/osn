@@ -1,4 +1,15 @@
-import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  lazy,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+  Switch,
+} from "solid-js";
 
 import {
   claimGiftRegistryItem,
@@ -21,8 +32,19 @@ import {
   type GiftRegistryWrite,
 } from "../../lib/gift-registry";
 import { CLAIM_SESSION_EVENT, hasClaimedHint } from "../claim-session";
-import { GiftMoneyPanel } from "./GiftMoneyPanel";
 import { GiftRegistryItemCard } from "./GiftRegistryItemCard";
+
+/**
+ * The money panel is a whole second surface — its own amount field, its own
+ * fetch, its own Stripe hand-off — and most guests come here to tick something
+ * off the list instead. `lazy` keeps it out of the page's first chunk and
+ * fetches it only for the weddings that take money, which is the same
+ * `.then` adapter the invite designs use for a named export. Module scope, so
+ * the promise and therefore the chunk are shared across renders.
+ */
+const GiftMoneyPanel = lazy(() =>
+  import("./GiftMoneyPanel").then((m) => ({ default: m.GiftMoneyPanel })),
+);
 
 /**
  * THE GIFT LIST, as a guest reads it — the couple's list, what is still free on
@@ -473,12 +495,16 @@ export function GiftRegistryPage(props: GiftRegistryPageProps) {
                 taking money — the API ANDs their intent with Stripe's
                 capability before it ever reaches here. */}
             <Show when={registry()?.cashGiftsEnabled && signedIn()}>
-              <GiftMoneyPanel
-                apiUrl={props.apiUrl}
-                slug={props.slug}
-                currency={registry()?.currency ?? ""}
-                inviteHref={props.inviteHref}
-              />
+              {/* No fallback: a placeholder for a panel most guests will not
+                  use would push the shelves down and then snap them back. */}
+              <Suspense fallback={null}>
+                <GiftMoneyPanel
+                  apiUrl={props.apiUrl}
+                  slug={props.slug}
+                  currency={registry()?.currency ?? ""}
+                  inviteHref={props.inviteHref}
+                />
+              </Suspense>
             </Show>
 
             <Show

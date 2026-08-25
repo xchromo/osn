@@ -385,6 +385,37 @@ describe("checkout.session.completed — settling the row, never inventing one",
     expect(await gifts(db)).toHaveLength(1);
   });
 
+  /**
+   * S-L1. Nothing in the checkout cire builds can charge an amount other than
+   * the one on the row — one fixed line item, no promotion codes, no adjustable
+   * quantity — so a disagreement means something we do not model. The gift
+   * still settles, because the money moved; the log warns, and the as-given
+   * figure stays as given, because that is what the guest agreed to.
+   */
+  it("settles a gift Stripe charged differently, without rewriting what was agreed", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+
+    const res = await deliver(
+      app,
+      checkoutCompleted({ session: { amount_total: 9_900, currency: "usd" } }),
+    );
+
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.amountMinor).toBe(12_500);
+    expect(gift?.currency).toBe("AUD");
+  });
+
+  it("does not call a lower-case currency a mismatch", async () => {
+    // Stripe writes currencies in lower case; the row holds them upper.
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    await deliver(app, checkoutCompleted({ session: { amount_total: 12_500, currency: "aud" } }));
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
   it("leaves an unpaid-but-complete session pending, not as money that arrived", async () => {
     const { app, db, familyId } = buildApp();
     seedPending(db, familyId);
@@ -682,5 +713,125 @@ describe("charge.refunded — money that went back", () => {
     const res = await deliver(app, chargeRefunded({ charge: { payment_intent: null } }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+  });
+});
+
+/**
+ * How much body it will read (S-H1).
+ *
+ * The route is public and unauthenticated — the signature is the authentication,
+ * and it cannot run until the body has been read. So the body is the one thing
+ * an attacker fully controls the size of, and the bound has to hold whatever
+ * they declare about it.
+ *
+ * These build the request by hand with a streamed body, which is what removes
+ * `Content-Length` — every other test in this file passes a string, and a string
+ * body gets an honest length computed for it, which is the easy case.
+ */
+describe("the body is bounded as it arrives", () => {
+  /** A body with no declared length, delivered in the chunks given. */
+  function streamOf(chunks: readonly Uint8Array[]) {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+  }
+
+  /** Signs `payload`, then sends those exact bytes with no `Content-Length`. */
+  async function deliverStream(app: App, payload: string, chunks: readonly Uint8Array[]) {
+    const at = nowSeconds();
+    return app.fetch(
+      new Request("http://localhost/api/stripe/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "stripe-signature": `t=${at},v1=${await hmacHex(SECRET, `${at}.${payload}`)}`,
+        },
+        body: streamOf(chunks),
+        // Required for a request that streams its body.
+        duplex: "half",
+      } as RequestInit),
+    );
+  }
+
+  /** An event this product does not act on — a 200 means it got all the way in. */
+  function padded(bytes: number) {
+    return JSON.stringify({
+      id: "evt_bound",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "x".repeat(bytes) } },
+    });
+  }
+
+  it("refuses an oversized body that declares no length", async () => {
+    // Correctly signed, so the only thing that can refuse it is the bound. And
+    // `malformed`, not `no-match`: it never reached the signature at all.
+    const { app } = buildApp();
+    const payload = padded(80 * 1024);
+    const res = await deliverStream(app, payload, [new TextEncoder().encode(payload)]);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("counts bytes, not UTF-16 code units", async () => {
+    // 30k three-byte characters: 90KB on the wire, but `String.length` is 30k,
+    // comfortably under a 64KB bound expressed in `payload.length`. That was the
+    // second half of S-H1 — a bound in the wrong unit is no bound for anyone
+    // writing in a non-Latin script.
+    const { app } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_wide",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "な".repeat(30_000) } },
+    });
+    expect(payload.length).toBeLessThan(64 * 1024);
+    const bytes = new TextEncoder().encode(payload);
+    expect(bytes.byteLength).toBeGreaterThan(64 * 1024);
+
+    const res = await deliverStream(app, payload, [bytes]);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("verifies a signed body whose characters straddle two chunks", async () => {
+    // The decode is incremental, so a three-byte character split across a chunk
+    // boundary must come back as one character rather than replacement ones —
+    // the signature is over the exact text, and a mangled decode would be a 400
+    // for a body Stripe signed correctly.
+    const { app } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_split",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "な".repeat(64) } },
+    });
+    const bytes = new TextEncoder().encode(payload);
+    // A continuation byte: mid-character by construction, not by luck.
+    const cut = bytes.findIndex((b, i) => i > 0 && (b & 0b1100_0000) === 0b1000_0000);
+    expect(cut).toBeGreaterThan(0);
+
+    const res = await deliverStream(app, payload, [bytes.slice(0, cut), bytes.slice(cut)]);
+    expect(res.status).toBe(200);
+  });
+
+  it("still refuses on the declared length, before a byte is buffered", async () => {
+    // The cheap check stays: an honest `Content-Length` over the bound costs one
+    // header lookup rather than an 80KB read.
+    const { app } = buildApp();
+    const res = await deliver(app, padded(80 * 1024));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("lets an ordinary event through", async () => {
+    // The control: same shape, same path, under the bound.
+    const { app } = buildApp();
+    const payload = padded(1024);
+    const res = await deliverStream(app, payload, [new TextEncoder().encode(payload)]);
+    expect(res.status).toBe(200);
   });
 });

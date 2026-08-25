@@ -10,11 +10,11 @@ import {
   rsvps,
 } from "@cire/db";
 import { rowsChanged } from "@shared/db-utils";
-import { eq, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { Data, Effect } from "effect";
 
-import { DbService, dbQuery } from "../db";
+import { commitGroupedBatches, DbService, dbQuery } from "../db";
 import { metricGuestDataSwept } from "../metrics";
 import type { DeletableBucket } from "./r2-cleanup";
 import { reapR2Objects } from "./r2-cleanup";
@@ -309,15 +309,27 @@ function writeGiftSummaries(
 ): Effect.Effect<void, never, DbService> {
   return Effect.gen(function* () {
     const db = yield* DbService;
+    const ids = [...weddingIds];
+
+    // Grouped in SQLite, not folded in JS. The row counts here scale with how
+    // many gifts a cohort of weddings received, not with how many weddings are
+    // expiring — a popular list is thousands of claims — and every one of those
+    // rows would otherwise cross the D1 wire to be added up. Grouped, the answer
+    // is a handful of rows per wedding whatever the traffic was.
     const claimRows = yield* dbQuery(() =>
       db
         .select({
           weddingId: registryClaims.weddingId,
           status: registryClaims.status,
-          quantity: registryClaims.quantity,
+          // Clamped per row, inside the sum: a single negative quantity must not
+          // subtract from the gifts the couple really were given.
+          quantity: sql<number>`sum(max(${registryClaims.quantity}, 0))`,
         })
         .from(registryClaims)
-        .where(inArray(registryClaims.weddingId, [...weddingIds]))
+        // A released claim is a tombstone, not a gift — it is what the couple did
+        // NOT receive, and counting it would overstate the record.
+        .where(and(inArray(registryClaims.weddingId, ids), ne(registryClaims.status, "released")))
+        .groupBy(registryClaims.weddingId, registryClaims.status)
         .all(),
     );
     const giftRows = yield* dbQuery(() =>
@@ -325,11 +337,21 @@ function writeGiftSummaries(
         .select({
           weddingId: registryContributions.weddingId,
           currency: registryContributions.currency,
-          amountMinor: registryContributions.amountMinor,
-          status: registryContributions.status,
+          count: sql<number>`count(*)`,
+          amountMinor: sql<number>`sum(max(${registryContributions.amountMinor}, 0))`,
         })
         .from(registryContributions)
-        .where(inArray(registryContributions.weddingId, [...weddingIds]))
+        .where(
+          and(
+            inArray(registryContributions.weddingId, ids),
+            // Only money that actually moved. A pending or failed row is not a gift.
+            eq(registryContributions.status, "succeeded"),
+          ),
+        )
+        .groupBy(registryContributions.weddingId, registryContributions.currency)
+        // Sorted here rather than in JS: the summary is a record somebody reads,
+        // and a stable currency order is part of it being one.
+        .orderBy(registryContributions.currency)
         .all(),
     );
 
@@ -346,11 +368,8 @@ function writeGiftSummaries(
       status: string;
       quantity: number;
     }>) {
-      // A released claim is a tombstone, not a gift — it is what the couple did
-      // NOT receive, and counting it would overstate the record.
-      if (row.status === "released") continue;
       const summary = summaries.get(row.weddingId) ?? blank();
-      const quantity = Math.max(0, row.quantity);
+      const quantity = row.quantity ?? 0;
       if (row.status === "purchased") summary.claims.purchased += quantity;
       else summary.claims.reserved += quantity;
       summaries.set(row.weddingId, summary);
@@ -359,39 +378,32 @@ function writeGiftSummaries(
     for (const row of giftRows as Array<{
       weddingId: string;
       currency: string;
+      count: number;
       amountMinor: number;
-      status: string;
     }>) {
-      // Only money that actually moved. A pending or failed row is not a gift.
-      if (row.status !== "succeeded") continue;
       const summary = summaries.get(row.weddingId) ?? blank();
-      summary.contributions.count += 1;
-      const existing = summary.contributions.totals.find((t) => t.currency === row.currency);
-      if (existing) existing.amountMinor += Math.max(0, row.amountMinor);
-      else
-        summary.contributions.totals.push({
-          currency: row.currency,
-          amountMinor: Math.max(0, row.amountMinor),
-        });
+      summary.contributions.count += row.count;
+      summary.contributions.totals.push({
+        currency: row.currency,
+        amountMinor: row.amountMinor ?? 0,
+      });
       summaries.set(row.weddingId, summary);
     }
 
-    for (const [weddingId, summary] of summaries) {
-      summary.contributions.totals.sort((a, b) => (a.currency < b.currency ? -1 : 1));
-      yield* dbQuery(() =>
-        db
-          .update(registrySettings)
-          .set({ giftSummaryJson: JSON.stringify(summary), giftSummaryAt: now, updatedAt: now })
-          .where(eq(registrySettings.weddingId, weddingId))
-          .run(),
-      ).pipe(
-        // A summary is a courtesy; the sweep is an obligation.
-        Effect.catchAll((cause) =>
-          Effect.logWarning("gift summary not written").pipe(
-            Effect.annotateLogs({ weddingId, reason: String(cause) }),
-          ),
-        ),
-      );
+    // One batch rather than one round-trip per wedding: a cohort is however many
+    // weddings passed their year on the same day, and each of these is a
+    // single-row UPDATE keyed by id. `commitGroupedBatches` keeps each within
+    // D1's per-batch ceiling.
+    const updates = [...summaries].map(([weddingId, summary]) => [
+      db
+        .update(registrySettings)
+        .set({ giftSummaryJson: JSON.stringify(summary), giftSummaryAt: now, updatedAt: now })
+        .where(eq(registrySettings.weddingId, weddingId)),
+    ]);
+    if (updates.length > 0) {
+      // A summary is a courtesy; the sweep is an obligation. Caught around the
+      // whole batch, because that is the unit that succeeds or fails now.
+      yield* dbQuery(() => commitGroupedBatches(db, updates));
     }
   }).pipe(
     Effect.catchAll((cause) =>

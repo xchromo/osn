@@ -308,22 +308,38 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
         return runCire(
           Effect.gen(function* () {
             const body = yield* Schema.decodeUnknown(ContributeBody)(raw);
+            // The item check rides along with the household check inside the
+            // context read, rather than waiting on its answer: two point reads
+            // against the same wedding, one round trip.
             const context = yield* registryService.contributionContext({
               slug: params.slug,
               familyId,
+              itemId: body.itemId,
             });
+            const itemId = context.itemId;
 
-            // An item id that is not this wedding's is dropped rather than
-            // refused: what the guest is doing is giving money, and which line
-            // they aimed it at is the smaller half of that.
-            const itemId =
-              body.itemId &&
-              (yield* registryService.itemBelongsToWedding({
-                weddingId: context.weddingId,
-                itemId: body.itemId,
-              }))
-                ? body.itemId
-                : null;
+            // The attempt this guest already has open, if they have one. This
+            // is the idempotency that has no edges (S-M1): the time bucket
+            // below can put two presses either side of a boundary, but a row
+            // we already wrote is a row either press can find.
+            const openAttempt = yield* registryService.findReusableContribution({
+              weddingId: context.weddingId,
+              familyId,
+              itemId,
+              amountMinor: body.amountMinor,
+              message: body.message,
+              displayName: body.displayName,
+              since: new Date(Date.now() - GIFT_ATTEMPT_WINDOW_MS),
+            });
+            if (openAttempt) {
+              const existing = yield* deps.stripe.retrieveCheckoutSession({
+                accountId: context.stripeAccountId,
+                sessionId: openAttempt.sessionId,
+              });
+              // `null` means the page is no longer somewhere they can pay —
+              // expired, or already paid. Fall through and mint a fresh one.
+              if (existing) return { url: existing.url };
+            }
 
             const giftUrl = `${deps.guestOrigin.replace(/\/+$/, "")}/${encodeURIComponent(params.slug)}/registry`;
             // Minted here so the row and the session name the same gift. It is
@@ -344,7 +360,10 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
               // Stripe needs neither to take a payment.
               metadata: { contributionId },
               // Keyed on WHAT is being given and WHEN, to the nearest few
-              // minutes (S-H1). The previous key folded the note down to its
+              // minutes (S-H1). SECOND belt now, behind the reuse read above:
+              // it covers the simultaneous double-tap, where neither request
+              // has written a row for the other to find.
+              // The previous key folded the note down to its
               // LENGTH, which had both failure modes an idempotency key exists
               // to avoid: two different gifts of the same amount collided, so
               // the second silently never charged, and a retry with different

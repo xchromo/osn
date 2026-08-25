@@ -302,7 +302,7 @@ describe("the money panel", () => {
     routedFetch({ list: [json(registry({ cashGiftsEnabled: true, items: [] }))] });
     const { container } = renderPage();
     await screen.findByText("The couple haven’t added any gifts yet.");
-    expect(container.querySelector("[data-gift-money]")).toBeTruthy();
+    await waitFor(() => expect(container.querySelector("[data-gift-money]")).toBeTruthy());
   });
 });
 

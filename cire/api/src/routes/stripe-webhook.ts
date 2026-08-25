@@ -68,11 +68,59 @@ import { verifyStripeWebhook } from "../services/stripe";
  * authentication, and it cannot run until the body has been read. So the body
  * is what an attacker gets to choose the size of. Rejecting on the declared
  * `content-length` costs one map lookup and happens before a single byte is
- * buffered into isolate memory; the same bound is re-checked on the
- * materialised text, because `Content-Length` is theirs to lie about. Stripe's
- * own events run to a few KB (S-M2).
+ * buffered into isolate memory; the same bound is then enforced *as the body
+ * arrives*, because `Content-Length` is theirs to lie about. Stripe's own
+ * events run to a few KB (S-M2, S-H1).
  */
 const MAX_EVENT_BYTES = 64 * 1024;
+
+/**
+ * Read at most `max` BYTES of the body, or give up.
+ *
+ * Two things the obvious `await request.text()` gets wrong on a public,
+ * pre-authentication endpoint (S-H1):
+ *
+ *  - **It buffers everything first.** A checked length after the await is a
+ *    check on memory already spent: a lying `Content-Length` — or none at all,
+ *    which chunked encoding allows — puts the whole body in the isolate before
+ *    the bound is consulted. Cloudflare kills a Worker that exceeds its memory
+ *    limit, so the failure is the isolate, not a 400.
+ *  - **`String.length` is not bytes.** It counts UTF-16 code units, so any
+ *    body of non-Latin text passes a byte bound it is over — twice over for
+ *    text outside the BMP.
+ *
+ * So the stream is drained a chunk at a time and abandoned the moment the
+ * running byte count passes the bound. The reader is cancelled on the way out,
+ * which is what tells the runtime to stop pulling the rest of the upload.
+ *
+ * Returns the decoded text, or `null` when the body was too big.
+ */
+async function readBoundedText(request: Request, max: number): Promise<string | null> {
+  const body = request.body;
+  if (!body) return "";
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > max) return null;
+      // `stream: true` so a multi-byte character split across two chunks is
+      // decoded as one character rather than two replacement ones — the
+      // signature is over the exact text, so a mangled decode is a 400 for a
+      // body Stripe signed correctly.
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    // Already-ended readers ignore this; an abandoned one stops the upload.
+    await reader.cancel().catch(() => {});
+  }
+}
 
 /** Events this product acts on. Everything else is acknowledged and dropped. */
 const ACCOUNT_UPDATED = "account.updated";
@@ -119,6 +167,9 @@ interface CheckoutSessionObject {
   id?: unknown;
   payment_intent?: unknown;
   payment_status?: unknown;
+  /** What Stripe actually charged, reconciled against the row at settle (S-L1). */
+  amount_total?: unknown;
+  currency?: unknown;
   metadata?: { contributionId?: unknown };
 }
 
@@ -154,9 +205,10 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
         set.status = 400;
         return { error: "invalid_signature", reason: "malformed" };
       }
-      const payload = await request.text();
-      // Re-checked on what actually arrived: the header above is attacker-set.
-      if (payload.length > MAX_EVENT_BYTES) {
+      // Bounded as it arrives, on what actually turns up rather than on what
+      // the header claimed: `Content-Length` is attacker-set, and may be absent.
+      const payload = await readBoundedText(request, MAX_EVENT_BYTES);
+      if (payload === null) {
         set.status = 400;
         return { error: "invalid_signature", reason: "malformed" };
       }
@@ -225,6 +277,9 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
               // that arrived without the field should not silently leave the
               // gift pending a second time.
               paid: type === CHECKOUT_ASYNC_SUCCEEDED || session?.payment_status === "paid",
+              paidAmountMinor:
+                typeof session?.amount_total === "number" ? session.amount_total : null,
+              paidCurrency: metaString(session?.currency),
             });
             return { received: true, outcome };
           }
