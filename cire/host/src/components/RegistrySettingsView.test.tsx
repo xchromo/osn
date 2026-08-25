@@ -77,6 +77,7 @@ const snapshot = (over: Partial<RegistrySnapshot> = {}): RegistrySnapshot =>
     items: over.items ?? [],
     gifts: [],
     giftsHasMore: false,
+    giftSummary: null,
     currency: "AUD",
     contributionsPrimaryMinor: 0,
   }) as RegistrySnapshot;

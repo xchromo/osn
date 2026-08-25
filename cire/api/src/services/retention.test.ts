@@ -646,7 +646,12 @@ describe("the parting gift summary", () => {
             })
             .run();
         }
-        const gift = (status: "succeeded" | "pending", amountMinor: number, currency: string) =>
+        const gift = (
+          status: "succeeded" | "pending",
+          amountMinor: number,
+          currency: string,
+          at: Date = stamp,
+        ) =>
           db
             .insert(registryContributions)
             .values({
@@ -660,14 +665,17 @@ describe("the parting gift summary", () => {
               stripeCheckoutSessionId: `cs_${crypto.randomUUID()}`,
               message: "Enjoy Japan",
               displayName: "The Ashworths",
-              createdAt: stamp,
-              updatedAt: stamp,
+              createdAt: at,
+              updatedAt: at,
             })
             .run();
         gift("succeeded", 12_500, "AUD");
         gift("succeeded", 5_000, "AUD");
-        gift("succeeded", 3_000, "JPY");
-        gift("pending", 99_999, "AUD");
+        gift("succeeded", 3_000, "JPY", new Date("2025-05-20T00:00:00.000Z"));
+        // Latest of all of them AND unsettled: it must move neither the totals
+        // nor the range, which is what proves the range is taken from the same
+        // rows as the counts.
+        gift("pending", 99_999, "AUD", new Date("2026-01-05T00:00:00.000Z"));
 
         yield* retentionService.sweepExpiredGuestData(now);
 
@@ -679,10 +687,18 @@ describe("the parting gift summary", () => {
         expect(row?.giftSummaryAt).not.toBeNull();
         const summary = JSON.parse(row?.giftSummaryJson ?? "{}") as {
           sweptOn: string;
+          firstGiftOn: string;
+          lastGiftOn: string;
           claims: { reserved: number; purchased: number };
           contributions: { count: number; totals: { currency: string; amountMinor: number }[] };
         };
         expect(summary.sweptOn).toBe("2026-06-17");
+        // The span the counted gifts actually arrived over — epoch seconds out
+        // of `min()`/`max()`, rendered as ISO days. The released claim and the
+        // unsettled charge fall outside it for the same reason they fall
+        // outside the totals.
+        expect(summary.firstGiftOn).toBe("2025-05-11");
+        expect(summary.lastGiftOn).toBe("2025-05-20");
         // A released claim is what they did NOT receive; counting it would
         // overstate the record.
         expect(summary.claims).toEqual({ reserved: 1, purchased: 2 });

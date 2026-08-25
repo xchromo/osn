@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetRegistryCache,
   type GiftLogEntry,
+  type GiftSummary,
   peekCachedRegistry,
   type RegistryItem,
   type RegistrySnapshot,
@@ -74,8 +75,19 @@ const snapshot = (over: Partial<RegistrySnapshot> = {}): RegistrySnapshot => ({
   items: [],
   gifts: [],
   giftsHasMore: false,
+  giftSummary: null,
   currency: "AUD",
   contributionsPrimaryMinor: 0,
+  ...over,
+});
+
+/** A swept wedding's parting record. Dates are ISO days, as stored. */
+const summary = (over: Partial<GiftSummary> = {}): GiftSummary => ({
+  sweptOn: "2026-06-17",
+  firstGiftOn: "2025-05-11",
+  lastGiftOn: "2025-05-20",
+  claims: { reserved: 4, purchased: 14 },
+  contributions: { count: 3, totals: [{ currency: "AUD", amountMinor: 17_500 }] },
   ...over,
 });
 
@@ -598,5 +610,61 @@ describe("RegistryView — gifts received", () => {
     setCachedRegistry("wed_1", snapshot());
     render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
     expect(await screen.findByText("No gifts yet.")).toBeInTheDocument();
+  });
+
+  it("reads the parting summary as a record of detail that has been erased", async () => {
+    setCachedRegistry("wed_1", snapshot({ giftSummary: summary() }));
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    expect(await screen.findByText("Your record of gifts")).toBeInTheDocument();
+    // The erasure said outright — a bare total under an empty list reads as
+    // "nobody gave you anything".
+    expect(screen.getByText(/we deleted your guests' details/)).toBeInTheDocument();
+    expect(screen.getByText(/18 gifts from your list/)).toBeInTheDocument();
+  });
+
+  it("gives the range the gifts arrived over", async () => {
+    setCachedRegistry("wed_1", snapshot({ giftSummary: summary() }));
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    // Asserted on the years, not the month names: the band formats in the
+    // reader's locale. The point is that both ends are printed, and that the
+    // UTC pinning has not shifted either off its stored day.
+    const line = await screen.findByText(/Gifts arrived between .*2025.* and .*2025/);
+    expect(line).toHaveTextContent("11");
+    expect(line).toHaveTextContent("20");
+  });
+
+  it("totals each currency as it was given, never converted into one figure", async () => {
+    setCachedRegistry(
+      "wed_1",
+      snapshot({
+        giftSummary: summary({
+          contributions: {
+            count: 4,
+            totals: [
+              { currency: "AUD", amountMinor: 17_500 },
+              { currency: "JPY", amountMinor: 3_000 },
+            ],
+          },
+        }),
+      }),
+    );
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    const line = await screen.findByText(/175[.,]00/);
+    expect(line).toHaveTextContent(/3.?000/);
+    expect(line).toHaveTextContent("4 cash gifts");
+  });
+
+  it("stops saying there are no gifts once the detail has been swept", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [], giftSummary: summary() }));
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    await screen.findByText("Your record of gifts");
+    expect(screen.queryByText("No gifts yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows no summary band while the gifts themselves are still here", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    await screen.findByText("The Nguyens");
+    expect(screen.queryByText("Your record of gifts")).not.toBeInTheDocument();
   });
 });

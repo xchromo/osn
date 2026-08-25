@@ -44,6 +44,9 @@ import { Data, Effect } from "effect";
 import { commitGroupedBatches, DbService, dbQuery } from "../db";
 import { entitlementService } from "./entitlements";
 import { REGISTRY_IMAGE_NAME } from "./invite-assets";
+// Type only — `./retention` owns the shape, this module only reads it back.
+// Nothing at runtime crosses between them, so no import cycle.
+import type { GiftSummary } from "./retention";
 
 /** No item with this id under this wedding (missing or another wedding's). 404-class. */
 export class RegistryItemNotInWedding extends Data.TaggedError("RegistryItemNotInWedding") {}
@@ -201,6 +204,15 @@ export interface RegistrySnapshot {
   gifts: GiftLogEntryDto[];
   /** Whether another page of gift-log rows sits past `gifts`. */
   giftsHasMore: boolean;
+  /**
+   * The aggregates the retention sweep left behind, or null.
+   *
+   * Non-null means the sweep has run and the per-guest detail is DELETED — so
+   * `gifts` above is empty not because nothing arrived but because we erased
+   * it, and the portal has to say which. Null is the ordinary case: the gift
+   * log is still the record.
+   */
+  giftSummary: GiftSummary | null;
   /** The wedding's primary currency — what every authored figure is in. */
   currency: string;
   /**
@@ -256,6 +268,9 @@ interface SettingsRow {
   stripeChargesEnabled: boolean;
   stripePayoutsEnabled: boolean;
   stripeAccountUpdatedAt: Date | null;
+  /** Written by the retention sweep, never from the portal. Both or neither. */
+  giftSummaryJson: string | null;
+  giftSummaryAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -316,6 +331,94 @@ const toSettingsDto = (r: SettingsRow): RegistrySettingsDto => ({
   stripePayoutsEnabled: r.stripePayoutsEnabled,
   updatedAt: r.updatedAt.getTime(),
 });
+
+/** One per-currency line of a stored summary, checked rather than trusted. */
+const isCurrencyTotal = (value: unknown): value is { currency: string; amountMinor: number } =>
+  typeof value === "object" &&
+  value !== null &&
+  "currency" in value &&
+  typeof value.currency === "string" &&
+  "amountMinor" in value &&
+  typeof value.amountMinor === "number" &&
+  Number.isFinite(value.amountMinor);
+
+/** Both halves of a stored summary's claim counts, present and finite. */
+const isClaimCounts = (value: unknown): value is { reserved: number; purchased: number } =>
+  typeof value === "object" &&
+  value !== null &&
+  "reserved" in value &&
+  typeof value.reserved === "number" &&
+  Number.isFinite(value.reserved) &&
+  "purchased" in value &&
+  typeof value.purchased === "number" &&
+  Number.isFinite(value.purchased);
+
+const isContributionTotals = (
+  value: unknown,
+): value is { count: number; totals: { currency: string; amountMinor: number }[] } =>
+  typeof value === "object" &&
+  value !== null &&
+  "count" in value &&
+  typeof value.count === "number" &&
+  Number.isFinite(value.count) &&
+  "totals" in value &&
+  Array.isArray(value.totals) &&
+  value.totals.every(isCurrencyTotal);
+
+const isGiftSummary = (value: unknown): value is GiftSummary =>
+  typeof value === "object" &&
+  value !== null &&
+  "sweptOn" in value &&
+  typeof value.sweptOn === "string" &&
+  "firstGiftOn" in value &&
+  typeof value.firstGiftOn === "string" &&
+  "lastGiftOn" in value &&
+  typeof value.lastGiftOn === "string" &&
+  "claims" in value &&
+  isClaimCounts(value.claims) &&
+  "contributions" in value &&
+  isContributionTotals(value.contributions);
+
+/**
+ * Decode `registry_settings.gift_summary_json` — the aggregates the retention
+ * sweep leaves behind a year after the last event, in the same pass that deletes
+ * the households every claim and contribution hangs off (`GiftSummary` in
+ * `./retention`).
+ *
+ * Both columns or neither. `gift_summary_at` is set by the same UPDATE, so JSON
+ * without it is a half-written row rather than a record, and a timestamp without
+ * JSON has nothing to say.
+ *
+ * Copied field by field, never the parsed object whole — the rule `decodePalette`
+ * follows in `./claim`. This blob is the one part of the organiser snapshot not
+ * built out of typed columns, and spreading it would let anything a later writer
+ * (or a hand-edited row) puts in there ride out to the portal. Malformed reads as
+ * ABSENT rather than throwing: a bad blob then costs the couple one band on a
+ * page, where a throw costs them the whole registry screen.
+ */
+function decodeGiftSummary(raw: string | null, at: Date | null): GiftSummary | null {
+  if (raw === null || at === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isGiftSummary(parsed)) return null;
+  return {
+    sweptOn: parsed.sweptOn,
+    firstGiftOn: parsed.firstGiftOn,
+    lastGiftOn: parsed.lastGiftOn,
+    claims: { reserved: parsed.claims.reserved, purchased: parsed.claims.purchased },
+    contributions: {
+      count: parsed.contributions.count,
+      totals: parsed.contributions.totals.map((total) => ({
+        currency: total.currency,
+        amountMinor: total.amountMinor,
+      })),
+    },
+  };
+}
 
 const toItemDto = (r: ItemRow, quantityClaimed: number): RegistryItemDto => ({
   id: r.id,
@@ -636,15 +739,19 @@ export const registryService = {
           },
           { concurrency: "unbounded" },
         );
-      const [settingsRow] = settingsRows;
+      const settingsRow = settingsRows[0] as SettingsRow | undefined;
 
       return {
-        settings: settingsRow
-          ? toSettingsDto(settingsRow as SettingsRow)
-          : defaultSettings(weddingId),
+        settings: settingsRow ? toSettingsDto(settingsRow) : defaultSettings(weddingId),
         items: (itemRows as ItemRow[]).map((r) => toItemDto(r, claimed.get(r.id) ?? 0)),
         gifts: gifts.entries,
         giftsHasMore: gifts.hasMore,
+        // Read off the settings row already in hand. The sweep writes the summary
+        // onto the one registry row it keeps, so this costs no extra D1 round
+        // trip, and a wedding that was never swept simply has nothing here.
+        giftSummary: settingsRow
+          ? decodeGiftSummary(settingsRow.giftSummaryJson, settingsRow.giftSummaryAt)
+          : null,
         currency,
         contributionsPrimaryMinor,
       };

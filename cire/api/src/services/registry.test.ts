@@ -125,6 +125,86 @@ function seedContribution(
   return id;
 }
 
+describe("the parting gift summary", () => {
+  /** Put a summary on the bootstrap wedding's settings row the way the retention
+   *  sweep does — blob and timestamp together, in one write. */
+  function writeSummary(db: Db0, json: string | null, at: Date | null = new Date()) {
+    const now = new Date();
+    db.insert(registrySettings)
+      .values({
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        published: true,
+        giftSummaryJson: json,
+        giftSummaryAt: at,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  }
+
+  const KEPT = {
+    sweptOn: "2026-06-17",
+    firstGiftOn: "2025-05-11",
+    lastGiftOn: "2025-05-20",
+    claims: { reserved: 1, purchased: 2 },
+    contributions: {
+      count: 3,
+      totals: [
+        { currency: "AUD", amountMinor: 17_500 },
+        { currency: "JPY", amountMinor: 3_000 },
+      ],
+    },
+  };
+
+  it("reads as absent for a wedding that was never swept", async () => {
+    const db = db0();
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.giftSummary).toBeNull();
+  });
+
+  it("carries the counts, the totals and the arrival range back out", async () => {
+    const db = db0();
+    writeSummary(db, JSON.stringify(KEPT));
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.giftSummary).toEqual(KEPT);
+  });
+
+  it("drops keys the summary never had rather than passing them through", async () => {
+    // This blob is the one part of the response not built from typed columns.
+    // Anything extra in it — a name, a note, a stray debug field — must not
+    // reach the portal merely because it was in the row.
+    const db = db0();
+    writeSummary(db, JSON.stringify({ ...KEPT, displayName: "The Ashworths" }));
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.giftSummary).toEqual(KEPT);
+    expect(JSON.stringify(snap.giftSummary)).not.toContain("Ashworth");
+  });
+
+  it("reads a damaged or half-written summary as no summary at all", async () => {
+    // A throw here would take the whole registry screen down; absent costs one
+    // band on a page. Run in parallel — a loop with an await in it is banned.
+    const cases: [string, Date | null][] = [
+      ["}{ not json", new Date()],
+      [JSON.stringify({ sweptOn: "2026-06-17" }), new Date()],
+      [JSON.stringify({ ...KEPT, claims: { reserved: "lots" } }), new Date()],
+      [
+        JSON.stringify({ ...KEPT, contributions: { count: 1, totals: [{ currency: "AUD" }] } }),
+        new Date(),
+      ],
+      // JSON with no `gift_summary_at` is a half-written row, not a record.
+      [JSON.stringify(KEPT), null],
+    ];
+    const snaps = await Promise.all(
+      cases.map(([json, at]) => {
+        const db = db0();
+        writeSummary(db, json, at);
+        return ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+      }),
+    );
+    for (const snap of snaps) expect(snap.giftSummary).toBeNull();
+  });
+});
+
 describe("registry settings", () => {
   it("reads as unpublished before any row exists", async () => {
     const db = db0();

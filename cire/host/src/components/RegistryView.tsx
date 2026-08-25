@@ -395,6 +395,36 @@ export default function RegistryView(props: RegistryViewProps) {
    *  household name otherwise — both guest-authored, both text nodes. */
   const giftFrom = (gift: GiftLogEntry): string => gift.displayName ?? gift.familyName;
 
+  /**
+   * The parting summary, or null while the gifts themselves are still here.
+   *
+   * Non-null is the signal that the retention sweep has run and the per-guest
+   * detail is gone — which is also why the empty gift log below must not then
+   * say "No gifts yet": after a sweep the log is empty because we deleted it,
+   * not because nobody gave anything.
+   */
+  const giftSummary = createMemo(() => snapshot()?.giftSummary ?? null);
+
+  /** "1 gift" / "3 gifts". */
+  const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+  /**
+   * A stored ISO day as a readable date.
+   *
+   * Parsed as UTC and printed as UTC, both ends pinned. The sweep writes a
+   * calendar day, not an instant: a bare `2026-06-17` handed to `new Date` is
+   * READ as UTC midnight but PRINTED in the reader's zone, which lands a day
+   * earlier for everyone west of Greenwich — so the date on the record would
+   * differ from the date in the record.
+   */
+  const summaryDate = (iso: string): string =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+
   /** The two money lines a gift renders as. Foreign-currency gifts show the
    *  as-given amount as the headline with the primary equivalent underneath;
    *  a primary-currency gift shows one line. */
@@ -741,6 +771,56 @@ export default function RegistryView(props: RegistryViewProps) {
 
       {/* ── Gifts received ────────────────────────────────────────────────── */}
       <Show when={props.view === "gifts"}>
+        {/* The record that outlives the detail. Written by the retention sweep a
+            year after the last event, in the same pass that deletes the
+            households every gift hangs off — so this is not a summary OF the log
+            below, it is what stands INSTEAD of it. The copy has to say that
+            outright, or a couple reads an empty log as an empty guest list.
+            Rendered ONLY when a summary exists, i.e. only after the sweep. */}
+        <Show when={giftSummary()}>
+          {(summary) => (
+            <div class="border-border bg-surface/20 flex flex-col gap-2 rounded-sm border p-4">
+              <span class="text-gold-dim font-body text-[0.7rem] tracking-[0.18em] uppercase">
+                Your record of gifts
+              </span>
+              <p class="text-text-muted text-[0.8rem]">
+                On {summaryDate(summary().sweptOn)}, a year after your wedding, we deleted your
+                guests' details — and the gifts went with them. Who gave what, and the notes they
+                wrote, are gone. These totals are what we kept.
+              </p>
+              <Show when={summary().claims.reserved + summary().claims.purchased > 0}>
+                <span class="text-text text-[1.05rem]">
+                  {plural(summary().claims.reserved + summary().claims.purchased, "gift", "gifts")}{" "}
+                  from your list
+                  <span class="text-text-muted text-[0.85rem]">
+                    {" "}
+                    · {summary().claims.purchased} marked bought
+                  </span>
+                </span>
+              </Show>
+              <Show when={summary().contributions.count > 0}>
+                {/* Per currency, side by side, never added together: a total
+                    that re-values itself is not a record of anything, and
+                    there is nothing left here to re-derive a rate from. */}
+                <span class="text-text text-[1.05rem]">
+                  {summary()
+                    .contributions.totals.map((total) =>
+                      formatMinor(total.amountMinor, total.currency),
+                    )
+                    .join(" · ")}
+                  <span class="text-text-muted text-[0.85rem]">
+                    {" "}
+                    · {plural(summary().contributions.count, "cash gift", "cash gifts")}
+                  </span>
+                </span>
+              </Show>
+              <span class="text-text-muted text-[0.75rem]">
+                Gifts arrived between {summaryDate(summary().firstGiftOn)} and{" "}
+                {summaryDate(summary().lastGiftOn)}. Each currency is totalled as it was given.
+              </span>
+            </div>
+          )}
+        </Show>
         <Show when={snapshot()}>
           {(snap) => (
             <Show when={snap().contributionsPrimaryMinor > 0}>
@@ -765,7 +845,14 @@ export default function RegistryView(props: RegistryViewProps) {
 
         <Show
           when={gifts().length > 0}
-          fallback={<p class="text-text-muted text-[0.85rem] italic">No gifts yet.</p>}
+          fallback={
+            // After a sweep the log is empty because we deleted it — the band
+            // above has just said so, and "No gifts yet." underneath it would
+            // flatly contradict it.
+            <Show when={!giftSummary()}>
+              <p class="text-text-muted text-[0.85rem] italic">No gifts yet.</p>
+            </Show>
+          }
         >
           <ul class="flex flex-col gap-1">
             <For each={gifts()}>

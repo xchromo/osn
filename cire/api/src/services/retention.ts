@@ -287,11 +287,50 @@ export const retentionService = {
 export interface GiftSummary {
   /** When the detail was deleted, ISO date. */
   sweptOn: string;
+  /**
+   * The span the counted gifts arrived over, ISO days, both ends inclusive.
+   *
+   * A count with no dates on it is a number, not a record — "18 gifts" says
+   * nothing about the wedding it belongs to once the rows are gone. Taken from
+   * the same rows as the counts, so the two can never describe different sets:
+   * a released claim and an unsettled charge fall outside the range for exactly
+   * the reason they fall outside the totals. Equal to each other on a wedding
+   * whose gifts all arrived on one day, which is a fact about that wedding and
+   * not a fault.
+   */
+  firstGiftOn: string;
+  lastGiftOn: string;
   /** Gifts reserved from the list, and how many of them were marked purchased. */
   claims: { reserved: number; purchased: number };
   /** Money gifts that actually settled, per currency, in minor units. */
   contributions: { count: number; totals: { currency: string; amountMinor: number }[] };
 }
+
+/**
+ * A summary mid-fold, before it is written.
+ *
+ * Same counts as {@link GiftSummary}, but the arrival span is still in epoch
+ * SECONDS — the two source queries each report their own min and max, and "the
+ * earlier of two dates" is only cheap while they are still numbers. Rendered to
+ * ISO days once, at the write.
+ */
+interface SummaryDraft {
+  claims: { reserved: number; purchased: number };
+  contributions: { count: number; totals: { currency: string; amountMinor: number }[] };
+  firstAt: number | null;
+  lastAt: number | null;
+}
+
+/**
+ * An epoch-SECONDS timestamp as an ISO calendar day.
+ *
+ * `integer({ mode: "timestamp" })` stores seconds in SQLite, and the raw
+ * `min()`/`max()` aggregates below hand back the stored integer rather than a
+ * Date — drizzle's timestamp mapping only runs on a column selected whole. So
+ * the ×1000 is ours to do, and it fails silently if we forget: the JSON still
+ * writes, it just dates every gift to 1970.
+ */
+const isoDay = (seconds: number): string => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 /**
  * Write each expiring wedding's parting gift summary.
@@ -324,6 +363,12 @@ function writeGiftSummaries(
           // Clamped per row, inside the sum: a single negative quantity must not
           // subtract from the gifts the couple really were given.
           quantity: sql<number>`sum(max(${registryClaims.quantity}, 0))`,
+          // Epoch SECONDS, not Dates: a raw aggregate bypasses the timestamp
+          // mapping drizzle applies to a column selected whole. Grouped with the
+          // counts and filtered by the same WHERE, so the range can only ever
+          // describe the rows the counts describe.
+          firstAt: sql<number>`min(${registryClaims.createdAt})`,
+          lastAt: sql<number>`max(${registryClaims.createdAt})`,
         })
         .from(registryClaims)
         // A released claim is a tombstone, not a gift — it is what the couple did
@@ -339,6 +384,11 @@ function writeGiftSummaries(
           currency: registryContributions.currency,
           count: sql<number>`count(*)`,
           amountMinor: sql<number>`sum(max(${registryContributions.amountMinor}, 0))`,
+          // Epoch SECONDS, same as the claims query above. Under the same
+          // `status = 'succeeded'` filter, so a charge that never settled moves
+          // neither the totals nor the dates.
+          firstAt: sql<number>`min(${registryContributions.createdAt})`,
+          lastAt: sql<number>`max(${registryContributions.createdAt})`,
         })
         .from(registryContributions)
         .where(
@@ -355,23 +405,42 @@ function writeGiftSummaries(
         .all(),
     );
 
-    const summaries = new Map<string, GiftSummary>();
+    const summaries = new Map<string, SummaryDraft>();
     const sweptOn = now.toISOString().slice(0, 10);
-    const blank = (): GiftSummary => ({
-      sweptOn,
+    const blank = (): SummaryDraft => ({
       claims: { reserved: 0, purchased: 0 },
       contributions: { count: 0, totals: [] },
+      firstAt: null,
+      lastAt: null,
     });
+    /**
+     * Widen a draft's span to cover one query's min and max.
+     *
+     * Null is "this query had no rows for this wedding", not a date — a wedding
+     * with claims and no cash gifts must not have its range pulled to the epoch
+     * by the query that found nothing.
+     */
+    const widen = (draft: SummaryDraft, first: number | null, last: number | null): void => {
+      if (first !== null) {
+        draft.firstAt = draft.firstAt === null ? first : Math.min(draft.firstAt, first);
+      }
+      if (last !== null) {
+        draft.lastAt = draft.lastAt === null ? last : Math.max(draft.lastAt, last);
+      }
+    };
 
     for (const row of claimRows as Array<{
       weddingId: string;
       status: string;
       quantity: number;
+      firstAt: number | null;
+      lastAt: number | null;
     }>) {
       const summary = summaries.get(row.weddingId) ?? blank();
       const quantity = row.quantity ?? 0;
       if (row.status === "purchased") summary.claims.purchased += quantity;
       else summary.claims.reserved += quantity;
+      widen(summary, row.firstAt, row.lastAt);
       summaries.set(row.weddingId, summary);
     }
 
@@ -380,6 +449,8 @@ function writeGiftSummaries(
       currency: string;
       count: number;
       amountMinor: number;
+      firstAt: number | null;
+      lastAt: number | null;
     }>) {
       const summary = summaries.get(row.weddingId) ?? blank();
       summary.contributions.count += row.count;
@@ -387,6 +458,7 @@ function writeGiftSummaries(
         currency: row.currency,
         amountMinor: row.amountMinor ?? 0,
       });
+      widen(summary, row.firstAt, row.lastAt);
       summaries.set(row.weddingId, summary);
     }
 
@@ -394,12 +466,26 @@ function writeGiftSummaries(
     // weddings passed their year on the same day, and each of these is a
     // single-row UPDATE keyed by id. `commitGroupedBatches` keeps each within
     // D1's per-batch ceiling.
-    const updates = [...summaries].map(([weddingId, summary]) => [
-      db
-        .update(registrySettings)
-        .set({ giftSummaryJson: JSON.stringify(summary), giftSummaryAt: now, updatedAt: now })
-        .where(eq(registrySettings.weddingId, weddingId)),
-    ]);
+    const updates = [...summaries].map(([weddingId, draft]) => {
+      // The span falls back to the sweep date rather than going absent. Every
+      // row that produced a count also carried a `created_at`, so a null here
+      // would mean the counts came from nowhere; saying "on the day we swept" is
+      // wrong by at most a year, where a missing field would leave the portal
+      // deciding what to print out of nothing.
+      const summary: GiftSummary = {
+        sweptOn,
+        firstGiftOn: draft.firstAt === null ? sweptOn : isoDay(draft.firstAt),
+        lastGiftOn: draft.lastAt === null ? sweptOn : isoDay(draft.lastAt),
+        claims: draft.claims,
+        contributions: draft.contributions,
+      };
+      return [
+        db
+          .update(registrySettings)
+          .set({ giftSummaryJson: JSON.stringify(summary), giftSummaryAt: now, updatedAt: now })
+          .where(eq(registrySettings.weddingId, weddingId)),
+      ];
+    });
     if (updates.length > 0) {
       // A summary is a courtesy; the sweep is an obligation. Caught around the
       // whole batch, because that is the unit that succeeds or fails now.
