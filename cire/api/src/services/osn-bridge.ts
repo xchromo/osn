@@ -39,6 +39,18 @@ const ARC_RESOLVE_ACCOUNT_SCOPE = "graph:resolve-account";
  * `/organisations/internal/*` requires this dedicated scope.
  */
 const ARC_ORG_READ_SCOPE = "org:read";
+/**
+ * Scope for the organiser-address lookup — osn-api's
+ * `/internal/accounts/emails` requires this and refuses `graph:read`. An email
+ * address is the one field the graph routes never return, so it is granted and
+ * withdrawn on its own.
+ */
+const ARC_ACCOUNT_EMAIL_SCOPE = "account:email-read";
+/**
+ * osn-api caps the lookup at 100 ids per request and 422s a longer body, so a
+ * cohort larger than that is chunked here rather than truncated there.
+ */
+const MAX_EMAIL_IDS_PER_CALL = 100;
 
 /** Outcome of resolving an OSN profile id to its owning account id. */
 export type OsnAccountResolution =
@@ -395,6 +407,105 @@ export async function createHandleSearchResolverFromEnv(env: {
   const arcPrivateKey = await importKeyFromJwk(env.arcPrivateKeyJwk).catch(() => null);
   if (!arcPrivateKey) return null;
   return createArcHandleSearchResolver({
+    osnApiUrl: env.osnApiUrl,
+    arcPrivateKey,
+    arcKeyId: env.arcKeyId,
+  });
+}
+
+/**
+ * Resolves OSN profile ids (`usr_*`) to the email address osn-api holds for the
+ * account that owns each. Keyed by profile id, with an entry ONLY for the ids
+ * osn-api answered for.
+ *
+ * A missing entry means "no mail", and nothing more: the profile may not
+ * exist, its account may be mid-erasure, or it may have no usable address, and
+ * the route deliberately does not say which. Do not treat absence as an error.
+ *
+ * FAIL-SOFT: any transport or infra failure resolves to an EMPTY map. The only
+ * caller is the retention sweep's parting summary, and the sweep has already
+ * deleted the data by the time this runs — an unreachable osn-api costs a
+ * courtesy email, never the deletion.
+ */
+export type OsnOrganiserEmailResolver = (
+  profileIds: readonly string[],
+) => Promise<ReadonlyMap<string, string>>;
+
+/**
+ * Builds an {@link OsnOrganiserEmailResolver} backed by a real ARC-authenticated
+ * call to `POST /internal/accounts/emails`, using the dedicated
+ * `account:email-read` scope.
+ */
+export function createArcOrganiserEmailResolver(
+  config: ArcResolverConfig,
+): OsnOrganiserEmailResolver {
+  const base = config.osnApiUrl.replace(/\/+$/, "");
+
+  return async (profileIds) => {
+    const empty = new Map<string, string>();
+    const ids = [...new Set(profileIds)];
+    if (ids.length === 0) return empty;
+
+    try {
+      const token = await signArcToken(config.arcPrivateKey, {
+        iss: ARC_ISSUER,
+        aud: ARC_AUDIENCE,
+        scope: ARC_ACCOUNT_EMAIL_SCOPE,
+        kid: config.arcKeyId,
+      });
+
+      const fetchChunk = async (chunk: string[]): Promise<[string, string][]> => {
+        const res = await instrumentedFetch(`${base}/internal/accounts/emails`, {
+          method: "POST",
+          headers: { authorization: `ARC ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ profile_ids: chunk }),
+        });
+        if (!res.ok) return [];
+        const data = (await res.json()) as {
+          emails?: { profile_id?: unknown; email?: unknown }[];
+        };
+        if (!Array.isArray(data.emails)) return [];
+        const pairs: [string, string][] = [];
+        for (const row of data.emails) {
+          if (typeof row.profile_id !== "string" || typeof row.email !== "string") continue;
+          pairs.push([row.profile_id, row.email]);
+        }
+        return pairs;
+      };
+
+      // Chunked, then all in flight at once. A `for await` here would trip
+      // `no-await-in-loop`, and would also serialise round-trips that have no
+      // dependency on each other; the chunk count is bounded by the cohort.
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += MAX_EMAIL_IDS_PER_CALL) {
+        chunks.push(ids.slice(i, i + MAX_EMAIL_IDS_PER_CALL));
+      }
+      const settled = await Promise.all(chunks.map((chunk) => fetchChunk(chunk)));
+      return new Map(settled.flat());
+    } catch {
+      // FAIL-SOFT: see the type docstring.
+      return empty;
+    }
+  };
+}
+
+/**
+ * Builds the organiser-address resolver from raw env material — the sibling of
+ * {@link createHandleSearchResolverFromEnv}. Returns `null` when any piece is
+ * absent, which simply means the retention sweep sends no summary email that
+ * run; it never fails to boot and never blocks the sweep.
+ */
+export async function createOrganiserEmailResolverFromEnv(env: {
+  osnApiUrl?: string;
+  arcPrivateKeyJwk?: string;
+  arcKeyId?: string;
+}): Promise<OsnOrganiserEmailResolver | null> {
+  if (!env.osnApiUrl || !env.arcPrivateKeyJwk || !env.arcKeyId) {
+    return null;
+  }
+  const arcPrivateKey = await importKeyFromJwk(env.arcPrivateKeyJwk).catch(() => null);
+  if (!arcPrivateKey) return null;
+  return createArcOrganiserEmailResolver({
     osnApiUrl: env.osnApiUrl,
     arcPrivateKey,
     arcKeyId: env.arcKeyId,

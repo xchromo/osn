@@ -8,6 +8,7 @@ import {
   registryContributions,
   registrySettings,
   rsvps,
+  weddings,
 } from "@cire/db";
 import { rowsChanged } from "@shared/db-utils";
 import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
@@ -115,6 +116,12 @@ export const retentionService = {
   sweepExpiredGuestData(
     now: Date = new Date(),
     buckets: RetentionBuckets = {},
+    /**
+     * Optional delivery of the parting summaries — see {@link GiftSummaryNotifier}.
+     * Optional because the sweep's obligation is the deletion: a deployment with
+     * no ARC key or no mail transport still sweeps on time, silently.
+     */
+    notify?: GiftSummaryNotifier,
   ): Effect.Effect<number, RetentionWriteError, DbService> {
     return Effect.gen(function* () {
       const db = yield* DbService;
@@ -181,7 +188,9 @@ export const retentionService = {
       // record vanishing unannounced is not. A parting summary — counts and
       // totals, no household, no name, no note — lands on `registry_settings`,
       // which this sweep keeps. `wiki/compliance/retention.md` §Contributions.
-      yield* writeGiftSummaries(weddingIds, now);
+      // The notices come back so the couple can be TOLD, below — writing the
+      // record where only a portal visit would find it is not telling anyone.
+      const notices = yield* writeGiftSummaries(weddingIds, now);
 
       const result = yield* Effect.tryPromise({
         try: () => {
@@ -267,6 +276,26 @@ export const retentionService = {
       // collected before the deletes above.
       yield* reapR2Objects(buckets.sheets, "sheets", sheetKeys);
 
+      // ── TELL THE COUPLE, LAST ─────────────────────────────────────────────
+      // After the deletes have committed, and deliberately so: the email says
+      // the detail is gone, so it must not go out while it is still there.
+      //
+      // One attempt, no retry, no queue. The notifier cannot fail (error
+      // channel `never`) but it can HANG — an unreachable mail host or a stuck
+      // osn-api — and a cron sweep that waits on a mailbox is a sweep that
+      // stops running. The timeout bounds that, the catch swallows what the
+      // timeout raises, and neither can reach the sweep's own error channel.
+      if (notify && notices.length > 0) {
+        yield* notify(notices).pipe(
+          Effect.timeout("30 seconds"),
+          Effect.catchAllCause((cause) =>
+            Effect.logWarning("gift summary notices not delivered").pipe(
+              Effect.annotateLogs({ reason: String(cause), weddings: notices.length }),
+            ),
+          ),
+        );
+      }
+
       return guestsDeleted;
     }).pipe(
       Effect.tapError(() => Effect.sync(() => metricGuestDataSwept("error"))),
@@ -333,19 +362,50 @@ interface SummaryDraft {
 const isoDay = (seconds: number): string => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 /**
- * Write each expiring wedding's parting gift summary.
+ * What the sweep hands its notifier: one wedding's parting summary, plus the
+ * facts the email needs that the summary itself does not carry — who owns the
+ * wedding (an OSN profile id, because cire holds no address), what the couple
+ * named it, which currency they think in, and when the retained year started.
+ */
+export interface GiftSummaryNotice {
+  readonly weddingId: string;
+  readonly weddingName: string;
+  readonly ownerOsnProfileId: string;
+  readonly currency: string;
+  /** `YYYY-MM-DD` of the last event — the far end of the retained year. */
+  readonly finalEventOn: string;
+  readonly summary: GiftSummary;
+}
+
+/**
+ * Delivery of the parting summaries, supplied by the caller.
+ *
+ * The error channel is `never` and the context is `never` by contract: the
+ * sweep will not carry a mail transport in its requirements, and delivery must
+ * not be able to fail the deletion. Whoever builds one handles its own
+ * failures (see `cire/api/src/lib/gift-summary-email.ts`).
+ */
+export type GiftSummaryNotifier = (
+  notices: readonly GiftSummaryNotice[],
+) => Effect.Effect<void, never, never>;
+
+/**
+ * Write each expiring wedding's parting gift summary, and return what was
+ * written so the caller can deliver it.
  *
  * Runs BEFORE the delete, obviously — afterwards there is nothing to count. A
  * wedding with no gifts at all gets no row written: an empty summary is noise
  * on a page, and its absence says the same thing more quietly.
  *
  * Never fails the sweep. Losing a summary is a worse day for one couple;
- * failing the sweep leaves a whole cohort's personal data in the database.
+ * failing the sweep leaves a whole cohort's personal data in the database. A
+ * failure here also returns NO notices: a summary that could not be written
+ * must not be mailed as though it had been.
  */
 function writeGiftSummaries(
   weddingIds: readonly string[],
   now: Date,
-): Effect.Effect<void, never, DbService> {
+): Effect.Effect<readonly GiftSummaryNotice[], never, DbService> {
   return Effect.gen(function* () {
     const db = yield* DbService;
     const ids = [...weddingIds];
@@ -466,6 +526,7 @@ function writeGiftSummaries(
     // weddings passed their year on the same day, and each of these is a
     // single-row UPDATE keyed by id. `commitGroupedBatches` keeps each within
     // D1's per-batch ceiling.
+    const rendered = new Map<string, GiftSummary>();
     const updates = [...summaries].map(([weddingId, draft]) => {
       // The span falls back to the sweep date rather than going absent. Every
       // row that produced a count also carried a `created_at`, so a null here
@@ -479,6 +540,7 @@ function writeGiftSummaries(
         claims: draft.claims,
         contributions: draft.contributions,
       };
+      rendered.set(weddingId, summary);
       return [
         db
           .update(registrySettings)
@@ -491,10 +553,70 @@ function writeGiftSummaries(
       // whole batch, because that is the unit that succeeds or fails now.
       yield* dbQuery(() => commitGroupedBatches(db, updates));
     }
+
+    if (rendered.size === 0) return [];
+
+    // Everything below is for the EMAIL, not the stored summary: an address to
+    // reach the couple at, a name to call the wedding, a currency to print the
+    // total in, and the date the retained year is counted from. Read after the
+    // summaries are written so a cohort with no gifts pays for none of it.
+    const summarised = [...rendered.keys()];
+    const weddingRows = yield* dbQuery(() =>
+      db
+        .select({
+          id: weddings.id,
+          displayName: weddings.displayName,
+          ownerOsnProfileId: weddings.ownerOsnProfileId,
+          currency: weddings.currency,
+        })
+        .from(weddings)
+        .where(inArray(weddings.id, summarised))
+        .all(),
+    );
+    // Same scalar-max-inside-aggregate-max as the sweep's own cutoff query, and
+    // for the same reason: an open-ended event stores "" as its end.
+    const finalEventRows = yield* dbQuery(() =>
+      db
+        .select({
+          weddingId: events.weddingId,
+          finalEventOn: sql<string>`max(max(${events.endAt}, ${events.startAt}))`,
+        })
+        .from(events)
+        .where(inArray(events.weddingId, summarised))
+        .groupBy(events.weddingId)
+        .all(),
+    );
+
+    const finalEventById = new Map(
+      (finalEventRows as Array<{ weddingId: string; finalEventOn: string }>).map((r) => [
+        r.weddingId,
+        r.finalEventOn,
+      ]),
+    );
+
+    // `flatMap` over the wedding rows, not the summaries: a wedding whose row
+    // has somehow gone has no owner to mail, and drops out silently.
+    return weddingRows.flatMap((w) => {
+      const summary = rendered.get(w.id);
+      if (!summary || !w.ownerOsnProfileId) return [];
+      return [
+        {
+          weddingId: w.id,
+          weddingName: w.displayName,
+          ownerOsnProfileId: w.ownerOsnProfileId,
+          currency: w.currency,
+          finalEventOn: (finalEventById.get(w.id) ?? "").slice(0, 10),
+          summary,
+        },
+      ];
+    });
   }).pipe(
     Effect.catchAll((cause) =>
       Effect.logWarning("gift summaries not written").pipe(
         Effect.annotateLogs({ reason: String(cause) }),
+        // No summary written, no summary mailed — telling a couple their record
+        // was kept when it was not is worse than telling them nothing.
+        Effect.as([] as readonly GiftSummaryNotice[]),
       ),
     ),
     Effect.withSpan("cire.retention.writeGiftSummaries"),

@@ -19,6 +19,7 @@ import {
   type EnquiryReplyData,
   type EnquiryQuoteData,
 } from "./enquiry";
+import { renderRegistryGiftSummary, type RegistryGiftSummaryData } from "./gift-summary";
 import { renderEmailChangeOtp, renderRegistrationOtp, renderStepUpOtp } from "./otp";
 import {
   renderCrossDeviceLogin,
@@ -42,6 +43,7 @@ export type EmailTemplate =
   | "passkey-added"
   | "passkey-removed"
   | "cross-device-login"
+  | "registry-gift-summary"
   | "vendor-claim-invite";
 
 /** Typed data bag per template. Extend the map when adding a template. */
@@ -57,6 +59,7 @@ export interface EmailTemplateDataMap {
   "passkey-added": Record<string, never>;
   "passkey-removed": Record<string, never>;
   "cross-device-login": Record<string, never>;
+  "registry-gift-summary": RegistryGiftSummaryData;
   "vendor-claim-invite": { claimUrl: string; vendorName: string };
 }
 
@@ -101,6 +104,8 @@ export function renderTemplate<T extends EmailTemplate>(
       return renderPasskeyRemoved();
     case "cross-device-login":
       return renderCrossDeviceLogin();
+    case "registry-gift-summary":
+      return renderRegistryGiftSummary(data as EmailTemplateData<"registry-gift-summary">);
     case "vendor-claim-invite":
       return renderVendorClaimInvite(data as EmailTemplateData<"vendor-claim-invite">);
   }
@@ -121,7 +126,14 @@ export {
   renderPasskeyAdded,
   renderPasskeyRemoved,
   renderCrossDeviceLogin,
+  renderRegistryGiftSummary,
   renderVendorClaimInvite,
 };
 
-export type { EnquiryNewData, EnquiryReplyData, EnquiryQuoteData, VendorClaimInviteData };
+export type {
+  EnquiryNewData,
+  EnquiryReplyData,
+  EnquiryQuoteData,
+  RegistryGiftSummaryData,
+  VendorClaimInviteData,
+};
