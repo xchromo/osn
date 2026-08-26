@@ -277,7 +277,9 @@ struct SignOutTests {
         let (osnSession, session) = await makeSignedInSession()
         seedSessionCookie(in: session)
 
-        MockURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        MockURLProtocol.handler = { _ -> (Int, [String: String], Data) in
+            throw URLError(.notConnectedToInternet)
+        }
         await osnSession.signOut()
 
         #expect(sessionCookies(in: session).isEmpty)

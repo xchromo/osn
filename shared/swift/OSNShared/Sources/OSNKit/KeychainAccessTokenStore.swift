@@ -46,11 +46,16 @@ public enum KeychainAccessTokenStore {
     public static func migrateToSharedAccessGroup() throws {
         guard accessGroup != nil else { return }
 
-        var query = query(accessGroup: nil)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        // Named `legacyQuery`, not `query`: a local called `query` would shadow
+        // the `query(accessGroup:)` above, and the later call to it would
+        // resolve to the dictionary instead of the function.
+        let legacyQuery = query(accessGroup: nil)
+
+        var readQuery = legacyQuery
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = SecItemCopyMatching(readQuery as CFDictionary, &result)
         switch status {
         case errSecItemNotFound:
             return
@@ -74,7 +79,7 @@ public enum KeychainAccessTokenStore {
             throw OSNKitError.keychainWriteFailed(status: writeStatus)
         }
 
-        let deleteStatus = SecItemDelete(query(accessGroup: nil) as CFDictionary)
+        let deleteStatus = SecItemDelete(legacyQuery as CFDictionary)
         guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
             throw OSNKitError.keychainDeleteFailed(status: deleteStatus)
         }
