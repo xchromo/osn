@@ -11,10 +11,31 @@ import {
   type RegistrySnapshot,
   setCachedRegistry,
 } from "../lib/registry-store";
+import { toastError, toastSuccess } from "../test-support/mocks";
 import RegistryView from "./RegistryView";
 
 const authFetch = vi.fn();
 vi.mock("@shared/rp-auth/solid", () => ({ useAuth: () => ({ authFetch }) }));
+
+vi.mock("@shared/toast", async () => {
+  const { toastMock } = await import("../test-support/mocks");
+  return toastMock();
+});
+
+const downloadBlobMock = vi.fn();
+vi.mock("../lib/download", () => ({
+  downloadBlob: (name: string, blob: Blob) => downloadBlobMock(name, blob),
+  downloadCsv: vi.fn(),
+}));
+
+// Only `redirectToLogin` is replaced — it assigns `window.location.href`, which
+// happy-dom cannot follow. `apiUrl` and `isAuthExpired` stay real, so the tests
+// below exercise the actual expiry predicate rather than a stand-in for it.
+const redirectToLoginMock = vi.hoisted(() => vi.fn());
+vi.mock("../lib/api", async () => ({
+  ...(await vi.importActual<typeof import("../lib/api")>("../lib/api")),
+  redirectToLogin: redirectToLoginMock,
+}));
 
 const item = (over: Partial<RegistryItem>): RegistryItem => ({
   id: "itm_1",
@@ -111,7 +132,7 @@ describe("RegistryView — the gift list", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     const rows = await screen.findAllByRole("listitem");
     expect(rows[0]!.textContent).toContain("Copper pan");
     expect(rows[1]!.textContent).toContain("Wine fridge");
@@ -124,7 +145,7 @@ describe("RegistryView — the gift list", () => {
         items: [item({ priceMinor: 12_000, quantityWanted: 3, quantityClaimed: 1 })],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     expect(await screen.findByText(/120[.,]00/)).toBeInTheDocument();
     expect(screen.getByText(/1 of 3 claimed/)).toBeInTheDocument();
   });
@@ -134,7 +155,7 @@ describe("RegistryView — the gift list", () => {
       "wed_1",
       snapshot({ items: [item({ quantityWanted: 1, quantityClaimed: 1 })] }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     expect(await screen.findByText(/all taken/)).toBeInTheDocument();
   });
 
@@ -154,7 +175,7 @@ describe("RegistryView — the gift list", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     await screen.findByText("Copper pan");
     // Named by what it opens, not by "Link" — a screen-reader user hitting a
     // list of them otherwise hears the same word once per row (C-L2).
@@ -167,7 +188,9 @@ describe("RegistryView — the gift list", () => {
 
   it("hides the add form and every row control from a viewer", async () => {
     setCachedRegistry("wed_1", snapshot({ items: [item({ title: "Copper pan" })] }));
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={false} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={false} />
+    ));
     await screen.findByText("Copper pan");
     expect(screen.queryByRole("button", { name: /add gift/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /remove copper pan/i })).not.toBeInTheDocument();
@@ -181,7 +204,7 @@ describe("RegistryView — the gift list", () => {
         status: 200,
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     const title = await screen.findByPlaceholderText(/copper pan/i);
     fireEvent.input(title, { target: { value: "Wine fridge" } });
     fireEvent.click(screen.getByRole("button", { name: /add gift/i }));
@@ -201,7 +224,7 @@ describe("RegistryView — the gift list", () => {
         status: 200,
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     fireEvent.input(await screen.findByPlaceholderText(/copper pan/i), {
       target: { value: "Kettle" },
     });
@@ -215,7 +238,7 @@ describe("RegistryView — the gift list", () => {
   it("rejects a negative price without calling the API", async () => {
     setCachedRegistry("wed_1", snapshot());
     const { container } = render(() => (
-      <RegistryView weddingId="wed_1" view="list" canEdit={true} />
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />
     ));
     fireEvent.input(await screen.findByPlaceholderText(/copper pan/i), {
       target: { value: "Kettle" },
@@ -240,7 +263,7 @@ describe("RegistryView — the gift list", () => {
       }),
     );
     authFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     fireEvent.click(await screen.findByRole("button", { name: /move copper pan down/i }));
 
     const rows = screen.getAllByRole("listitem");
@@ -262,7 +285,7 @@ describe("RegistryView — the gift list", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     expect(await screen.findByRole("button", { name: /move copper pan up/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /move wine fridge down/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /move copper pan down/i })).not.toBeDisabled();
@@ -276,7 +299,7 @@ describe("RegistryView — the gift list", () => {
         resolve = r;
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     fireEvent.click(await screen.findByRole("button", { name: /remove copper pan/i }));
     await waitFor(() => expect(screen.queryByText("Copper pan")).not.toBeInTheDocument());
     expect(String(authFetch.mock.calls[0]![0])).toMatch(/\/registry\/items\/a$/);
@@ -295,7 +318,7 @@ describe("RegistryView — the gift list", () => {
       }),
     );
     const { container } = render(() => (
-      <RegistryView weddingId="wed_1" view="list" canEdit={true} />
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />
     ));
     fireEvent.click(await screen.findByRole("button", { name: /edit copper pan/i }));
     // The add form carries a "Gift" field too, so scope to the inline editor —
@@ -340,7 +363,7 @@ describe("RegistryView — the gift list", () => {
         ),
       );
     });
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     fireEvent.input(await screen.findByPlaceholderText(/copper pan/i), {
       target: { value: "Kettle" },
     });
@@ -376,7 +399,7 @@ describe("RegistryView — the gift list", () => {
         new Response(JSON.stringify({ item: item({ id: "a", imageKey: null }) }), { status: 200 }),
       );
     });
-    render(() => <RegistryView weddingId="wed_1" view="list" canEdit={true} />);
+    render(() => <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="list" canEdit={true} />);
     fireEvent.click(await screen.findByRole("button", { name: /edit copper pan/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove picture" }));
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -400,7 +423,9 @@ describe("RegistryView — gifts received", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("Mai & Tom")).toBeInTheDocument();
     expect(screen.getByText("The Okonkwos")).toBeInTheDocument();
   });
@@ -425,7 +450,7 @@ describe("RegistryView — gifts received", () => {
       }),
     );
     const { container } = render(() => (
-      <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
     ));
 
     // The note renders verbatim, as characters.
@@ -444,7 +469,7 @@ describe("RegistryView — gifts received", () => {
       snapshot({ gifts: [gift({ id: "a", displayName: null, familyName: "<b>Bold</b>" })] }),
     );
     const { container } = render(() => (
-      <RegistryView weddingId="wed_1" view="gifts" canEdit={false} />
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={false} />
     ));
     expect(await screen.findByText("<b>Bold</b>")).toBeInTheDocument();
     expect(container.querySelector("b")).toBeNull();
@@ -471,7 +496,9 @@ describe("RegistryView — gifts received", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     // Headline: the amount the guest actually gave.
     expect(await screen.findByText(/£\s?50[.,]00|GBP\s?50[.,]00/)).toBeInTheDocument();
     // Supporting line: the snapshotted primary equivalent, marked approximate.
@@ -494,14 +521,18 @@ describe("RegistryView — gifts received", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     await screen.findByText(/50[.,]00/);
     expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
   });
 
   it("labels the cash total as approximate", async () => {
     setCachedRegistry("wed_1", snapshot({ contributionsPrimaryMinor: 250_00 }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText(/Approximate/)).toBeInTheDocument();
     expect(screen.getByText(/250[.,]00/)).toBeInTheDocument();
   });
@@ -509,7 +540,9 @@ describe("RegistryView — gifts received", () => {
   it("toggles a thank-you and POSTs the new state", async () => {
     setCachedRegistry("wed_1", snapshot({ gifts: [gift({ id: "clm_9", kind: "claim" })] }));
     authFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     const toggle = await screen.findByRole("button", { name: /mark thanked/i });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(toggle);
@@ -522,7 +555,9 @@ describe("RegistryView — gifts received", () => {
 
   it("gives a viewer the thanked state without a control to change it", async () => {
     setCachedRegistry("wed_1", snapshot({ gifts: [gift({ id: "a", thankedAt: 123 })] }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={false} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={false} />
+    ));
     expect(await screen.findByText("Thanked")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /thanked/i })).not.toBeInTheDocument();
   });
@@ -540,7 +575,9 @@ describe("RegistryView — gifts received", () => {
         { status: 200 },
       ),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     fireEvent.click(await screen.findByRole("button", { name: /load more gifts/i }));
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
     // Offset is how many rows are already held, so the next page starts after them.
@@ -569,7 +606,9 @@ describe("RegistryView — gifts received", () => {
         ],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("Promised")).toBeInTheDocument();
     expect(screen.getByText("Bought")).toBeInTheDocument();
     expect(screen.getByText("No longer coming")).toBeInTheDocument();
@@ -590,7 +629,9 @@ describe("RegistryView — gifts received", () => {
         gifts: [gift({ id: "r", kind: "contribution", status: "refunded", amountMinor: 5_000 })],
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("Refunded")).toBeInTheDocument();
     expect(screen.getByText(/not counted in the total/i)).toBeInTheDocument();
   });
@@ -602,19 +643,25 @@ describe("RegistryView — gifts received", () => {
       "wed_1",
       snapshot({ gifts: [gift({ id: "x", kind: "contribution", status: "disputed" })] }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("disputed")).toBeInTheDocument();
   });
 
   it("says so when there are no gifts yet", async () => {
     setCachedRegistry("wed_1", snapshot());
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("No gifts yet.")).toBeInTheDocument();
   });
 
   it("reads the parting summary as a record of detail that has been erased", async () => {
     setCachedRegistry("wed_1", snapshot({ giftSummary: summary() }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     expect(await screen.findByText("Your record of gifts")).toBeInTheDocument();
     // The erasure said outright — a bare total under an empty list reads as
     // "nobody gave you anything".
@@ -624,7 +671,9 @@ describe("RegistryView — gifts received", () => {
 
   it("gives the range the gifts arrived over", async () => {
     setCachedRegistry("wed_1", snapshot({ giftSummary: summary() }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     // Asserted on the years, not the month names: the band formats in the
     // reader's locale. The point is that both ends are printed, and that the
     // UTC pinning has not shifted either off its stored day.
@@ -648,7 +697,9 @@ describe("RegistryView — gifts received", () => {
         }),
       }),
     );
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     const line = await screen.findByText(/175[.,]00/);
     expect(line).toHaveTextContent(/3.?000/);
     expect(line).toHaveTextContent("4 cash gifts");
@@ -656,15 +707,136 @@ describe("RegistryView — gifts received", () => {
 
   it("stops saying there are no gifts once the detail has been swept", async () => {
     setCachedRegistry("wed_1", snapshot({ gifts: [], giftSummary: summary() }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     await screen.findByText("Your record of gifts");
     expect(screen.queryByText("No gifts yet.")).not.toBeInTheDocument();
   });
 
   it("shows no summary band while the gifts themselves are still here", async () => {
     setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
-    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
     await screen.findByText("The Nguyens");
     expect(screen.queryByText("Your record of gifts")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The gift log is kept for a year and then swept into totals, so the couple need
+ * a way to take the detail with them before that happens. The button hands the
+ * server-built CSV straight to the shared download helper — the bytes are
+ * formula-sanitised server-side, so nothing is assembled here.
+ */
+describe("RegistryView — gift log export", () => {
+  beforeEach(() => {
+    downloadBlobMock.mockReset();
+    toastSuccess.mockReset();
+    toastError.mockReset();
+    redirectToLoginMock.mockReset();
+  });
+
+  const csvResponse = () =>
+    new Response("Kind,Item\r\nCash gift,", {
+      status: 200,
+      headers: { "Content-Type": "text/csv; charset=utf-8" },
+    });
+
+  it("offers no export while there is nothing to export", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [] }));
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+    await screen.findByText("No gifts yet.");
+    expect(screen.queryByRole("button", { name: /Download gifts/i })).not.toBeInTheDocument();
+  });
+
+  it("downloads the server-built gift CSV under a slug-based filename", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    authFetch.mockResolvedValueOnce(csvResponse());
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    await waitFor(() => expect(downloadBlobMock).toHaveBeenCalledTimes(1));
+    expect(String(authFetch.mock.calls[0]![0])).toContain(
+      "/api/organiser/weddings/wed_1/gifts.csv",
+    );
+    expect(downloadBlobMock.mock.calls[0]![0]).toBe("cire-gifts-wed-1.csv");
+    expect(downloadBlobMock.mock.calls[0]![1]).toBeInstanceOf(Blob);
+    expect(toastSuccess).toHaveBeenCalled();
+  });
+
+  it("says so and downloads nothing when the export fails", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    authFetch.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(downloadBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the couple to sign in again when the export answers 401", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    authFetch.mockResolvedValueOnce(new Response("", { status: 401 }));
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    // An expired session is not a failed download: bounce to login rather than
+    // telling the couple to retry something that cannot succeed.
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalled();
+    expect(downloadBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the couple to sign in again when authFetch throws AuthExpiredError", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    // The refresh can fail before any response exists, and `authFetch` then
+    // rejects instead of resolving — the second of the two expiry exits.
+    authFetch.mockRejectedValueOnce({ _tag: "AuthExpiredError" });
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("builds the file once however many times the button is pressed", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    let release: ((res: Response) => void) | undefined;
+    authFetch.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+    );
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    const button = await screen.findByRole("button", { name: /Download gifts/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    // The export is the heaviest read the couple can trigger and it shares a
+    // per-user rate limit with the other two, so an impatient double-click must
+    // not spend three of its ten requests a minute.
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    release?.(csvResponse());
+    await waitFor(() => expect(downloadBlobMock).toHaveBeenCalledTimes(1));
   });
 });

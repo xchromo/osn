@@ -481,6 +481,7 @@ export default function ModuleShell(props: ModuleShellProps) {
                     <Show when={active() === "list"}>
                       <RegistryView
                         weddingId={props.weddingId}
+                        weddingSlug={props.weddingSlug}
                         view="list"
                         canEdit={props.canEdit}
                       />
@@ -488,6 +489,7 @@ export default function ModuleShell(props: ModuleShellProps) {
                     <Show when={active() === "gifts"}>
                       <RegistryView
                         weddingId={props.weddingId}
+                        weddingSlug={props.weddingSlug}
                         view="gifts"
                         canEdit={props.canEdit}
                       />
