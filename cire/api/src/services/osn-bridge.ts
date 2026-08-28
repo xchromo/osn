@@ -52,6 +52,14 @@ const ARC_ACCOUNT_EMAIL_SCOPE = "account:email-read";
  */
 const MAX_EMAIL_IDS_PER_CALL = 100;
 
+/**
+ * How many of those calls may be in flight together. These are cross-service
+ * POSTs into osn-api, which also serves interactive sign-ins, so a large
+ * retention cohort must not turn into a burst against the login path. Matches
+ * the bound the summary sender uses over the addresses this returns.
+ */
+const MAX_EMAIL_CALLS_IN_FLIGHT = 4;
+
 /** Outcome of resolving an OSN profile id to its owning account id. */
 export type OsnAccountResolution =
   | { readonly ok: true; readonly accountId: string }
@@ -473,15 +481,31 @@ export function createArcOrganiserEmailResolver(
         return pairs;
       };
 
-      // Chunked, then all in flight at once. A `for await` here would trip
-      // `no-await-in-loop`, and would also serialise round-trips that have no
-      // dependency on each other; the chunk count is bounded by the cohort.
+      // Chunked, then run a few chunks at a time. The chunks are independent,
+      // so nothing here has to be sequential — but `Promise.all` over all of
+      // them would make the concurrency whatever the cohort happened to be,
+      // and these are cross-service calls into the API that also serves live
+      // sign-ins. The sender one layer up bounds itself at 4 for the same
+      // reason; an unbounded lookup underneath would undo that.
       const chunks: string[][] = [];
       for (let i = 0; i < ids.length; i += MAX_EMAIL_IDS_PER_CALL) {
         chunks.push(ids.slice(i, i + MAX_EMAIL_IDS_PER_CALL));
       }
-      const settled = await Promise.all(chunks.map((chunk) => fetchChunk(chunk)));
-      return new Map(settled.flat());
+      const windows: string[][][] = [];
+      for (let i = 0; i < chunks.length; i += MAX_EMAIL_CALLS_IN_FLIGHT) {
+        windows.push(chunks.slice(i, i + MAX_EMAIL_CALLS_IN_FLIGHT));
+      }
+      // Windows chained rather than looped over: each waits for the one before,
+      // which is the whole point of the bound.
+      const settled = await windows.reduce<Promise<[string, string][]>>(
+        (chain, window) =>
+          chain.then(async (pairs) => [
+            ...pairs,
+            ...(await Promise.all(window.map((chunk) => fetchChunk(chunk)))).flat(),
+          ]),
+        Promise.resolve<[string, string][]>([]),
+      );
+      return new Map(settled);
     } catch {
       // FAIL-SOFT: see the type docstring.
       return empty;

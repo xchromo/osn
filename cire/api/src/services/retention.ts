@@ -13,7 +13,7 @@ import {
 import { rowsChanged } from "@shared/db-utils";
 import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
-import { Data, Effect } from "effect";
+import { Cause, Data, Effect } from "effect";
 
 import { commitGroupedBatches, DbService, dbQuery } from "../db";
 import { metricGuestDataSwept } from "../metrics";
@@ -56,6 +56,21 @@ export class RetentionWriteError extends Data.TaggedError("RetentionWriteError")
  * here (and the notice copy) to move the line. 365 days in milliseconds.
  */
 export const RETENTION_AFTER_FINAL_EVENT_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * Most weddings one sweep will take. The cohort is every wedding whose last
+ * event passed a year ago, and nothing else removes a wedding from that set —
+ * so after a run of failed crons, or a busy season a year later, it can be
+ * arbitrarily large. Every query below feeds it into an `IN (...)`, and SQLite
+ * stops at 999 bound variables: past that the sweep does not slow down, it
+ * throws, and a compliance-obligated delete fails.
+ *
+ * The sweep is idempotent and runs on a schedule, so the remainder is simply
+ * the next run's work. Capping here rather than per-query bounds the whole
+ * chain at once — the aggregates, the deletes, the batched writes and the
+ * email cohort all inherit it.
+ */
+export const MAX_WEDDINGS_PER_SWEEP = 250;
 
 /**
  * `events.end_at` is an ISO-8601 string that begins with a zero-padded
@@ -139,9 +154,22 @@ export const retentionService = {
           .from(events)
           .groupBy(events.weddingId)
           .having(lt(sql`max(max(${events.endAt}, ${events.startAt}))`, cutoff))
+          // Bounded — see MAX_WEDDINGS_PER_SWEEP. Ordered so the cap takes the
+          // longest-overdue weddings first and a backlog drains oldest-first
+          // instead of leaving the same tail behind on every run.
+          .orderBy(sql`max(max(${events.endAt}, ${events.startAt})) asc`)
+          .limit(MAX_WEDDINGS_PER_SWEEP)
           .all(),
       );
       const weddingIds = expired.map((r) => r.weddingId);
+
+      if (weddingIds.length === MAX_WEDDINGS_PER_SWEEP) {
+        // Not an error: the next scheduled run takes the remainder. Logged so a
+        // backlog that never drains is visible rather than silent.
+        yield* Effect.logInfo("guest-data retention sweep hit its per-run cap", {
+          cap: MAX_WEDDINGS_PER_SWEEP,
+        });
+      }
 
       if (weddingIds.length === 0) {
         yield* Effect.sync(() => metricGuestDataSwept("ok", 0));
@@ -289,7 +317,17 @@ export const retentionService = {
           Effect.timeout("30 seconds"),
           Effect.catchAllCause((cause) =>
             Effect.logWarning("gift summary notices not delivered").pipe(
-              Effect.annotateLogs({ reason: String(cause), weddings: notices.length }),
+              // Fixed strings, never `String(cause)` (S-L1). `notify` is a
+              // caller-supplied function type: whatever a future notifier puts
+              // in an error message would land in this log line, and the thing
+              // it is holding is an organiser's email address. The two shapes
+              // that can reach here — the timeout above, or a defect from a
+              // notifier whose error channel says it has none — are worth
+              // telling apart, and neither name carries data.
+              Effect.annotateLogs({
+                reason: Cause.isFailure(cause) ? "timeout" : "defect",
+                weddings: notices.length,
+              }),
             ),
           ),
         );

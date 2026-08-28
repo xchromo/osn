@@ -21,7 +21,11 @@ import { DbService } from "../db";
 import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 import type { DeletableBucket } from "./r2-cleanup";
-import { retentionService, RETENTION_AFTER_FINAL_EVENT_MS } from "./retention";
+import {
+  retentionService,
+  RETENTION_AFTER_FINAL_EVENT_MS,
+  type GiftSummaryNotice,
+} from "./retention";
 
 const withDb = effWith(TestDbLayer);
 
@@ -726,6 +730,138 @@ describe("the parting gift summary", () => {
           db.select().from(registryClaims).where(eq(registryClaims.weddingId, weddingId)).all()
             .length,
         ).toBe(0);
+      }),
+    ),
+  );
+
+  it(
+    "hands the notifier one notice per swept wedding, and only after the detail is gone",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date("2026-06-17T04:00:00.000Z");
+        const { weddingId, familyId } = yield* makeWedding({ eventDates: ["2025-05-10"] });
+        const stamp = new Date("2025-05-11T00:00:00.000Z");
+        db.insert(registrySettings)
+          .values({ weddingId, published: true, createdAt: stamp, updatedAt: stamp })
+          .run();
+        db.insert(registryContributions)
+          .values({
+            id: `rct_${crypto.randomUUID()}`,
+            weddingId,
+            itemId: null,
+            familyId,
+            status: "succeeded",
+            amountMinor: 12_500,
+            currency: "AUD",
+            stripeCheckoutSessionId: `cs_${crypto.randomUUID()}`,
+            message: "Enjoy Japan",
+            displayName: "The Ashworths",
+            createdAt: stamp,
+            updatedAt: stamp,
+          })
+          .run();
+
+        const seen: GiftSummaryNotice[][] = [];
+        let rowsLeftWhenNotified = -1;
+        const notify = (notices: readonly GiftSummaryNotice[]) =>
+          Effect.sync(() => {
+            seen.push([...notices]);
+            // The email says the detail is gone, so it must not be sent while
+            // it is still there. Counted at the moment of the call, not after.
+            rowsLeftWhenNotified = db
+              .select()
+              .from(registryContributions)
+              .where(eq(registryContributions.weddingId, weddingId))
+              .all().length;
+          });
+
+        yield* retentionService.sweepExpiredGuestData(now, {}, notify);
+
+        expect(seen.length).toBe(1);
+        expect(rowsLeftWhenNotified).toBe(0);
+        const notice = seen[0]?.[0];
+        expect(notice?.weddingId).toBe(weddingId);
+        expect(notice?.ownerOsnProfileId).toBe("usr_test");
+        expect(notice?.finalEventOn).toBe("2025-05-10");
+        expect(notice?.summary.contributions.count).toBe(1);
+        // The notice carries aggregates only, same as the stored summary.
+        const asText = JSON.stringify(notice);
+        expect(asText).not.toContain("Ashworth");
+        expect(asText).not.toContain("Enjoy Japan");
+      }),
+    ),
+  );
+
+  it(
+    "does not call the notifier when the cohort produced no summaries",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date("2026-06-17T04:00:00.000Z");
+        const { weddingId } = yield* makeWedding({ eventDates: ["2025-04-01"] });
+        const stamp = new Date("2025-05-11T00:00:00.000Z");
+        db.insert(registrySettings)
+          .values({ weddingId, published: true, createdAt: stamp, updatedAt: stamp })
+          .run();
+
+        let calls = 0;
+        yield* retentionService.sweepExpiredGuestData(now, {}, () =>
+          Effect.sync(() => {
+            calls += 1;
+          }),
+        );
+
+        // No gifts, no summary, nothing to tell them about.
+        expect(calls).toBe(0);
+      }),
+    ),
+  );
+
+  it(
+    "sweeps normally when the notifier dies",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const now = new Date("2026-06-17T04:00:00.000Z");
+        const { weddingId, familyId, guestId } = yield* makeWedding({
+          eventDates: ["2025-05-10"],
+        });
+        const stamp = new Date("2025-05-11T00:00:00.000Z");
+        db.insert(registrySettings)
+          .values({ weddingId, published: true, createdAt: stamp, updatedAt: stamp })
+          .run();
+        db.insert(registryContributions)
+          .values({
+            id: `rct_${crypto.randomUUID()}`,
+            weddingId,
+            itemId: null,
+            familyId,
+            status: "succeeded",
+            amountMinor: 4_000,
+            currency: "AUD",
+            stripeCheckoutSessionId: `cs_${crypto.randomUUID()}`,
+            createdAt: stamp,
+            updatedAt: stamp,
+          })
+          .run();
+
+        // The notifier's error channel is `never` by contract, so the only
+        // shape a broken one can take is a defect. The sweep has already
+        // committed its deletes by then and must not fail on the courtesy.
+        const deleted = yield* retentionService.sweepExpiredGuestData(now, {}, () =>
+          Effect.die(new Error("mail transport unreachable")),
+        );
+
+        expect(deleted).toBe(1);
+        expect(db.select().from(guests).where(eq(guests.id, guestId)).all().length).toBe(0);
+        const row = db
+          .select()
+          .from(registrySettings)
+          .where(eq(registrySettings.weddingId, weddingId))
+          .get();
+        // The stored summary is the durable half and survives regardless.
+        expect(row?.giftSummaryJson).not.toBeNull();
       }),
     ),
   );

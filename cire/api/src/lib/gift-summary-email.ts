@@ -25,15 +25,27 @@ export type OrganiserEmailLookup = (
 ) => Promise<ReadonlyMap<string, string>>;
 
 /**
+ * One formatter per currency, kept for the life of the module (P-I1).
+ * Constructing an `Intl.NumberFormat` is the expensive part, and a cohort is
+ * usually one currency repeated, so building it per wedding is waste. Only
+ * successful constructions are cached: a malformed code must keep throwing on
+ * every call rather than caching a broken formatter.
+ */
+const formatters = new Map<string, Intl.NumberFormat>();
+
+/**
  * Formats a minor-unit total in the wedding's own currency. `Intl` throws on a
  * malformed currency code, and a bad code in one row must not cost the whole
  * cohort its summaries, so the fallback prints the number and the code as-is.
  */
 function formatTotal(currency: string, amountMinor: number): string {
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(
-      amountMinor / 100,
-    );
+    let formatter = formatters.get(currency);
+    if (!formatter) {
+      formatter = new Intl.NumberFormat(undefined, { style: "currency", currency });
+      formatters.set(currency, formatter);
+    }
+    return formatter.format(amountMinor / 100);
   } catch {
     return `${(amountMinor / 100).toFixed(2)} ${currency}`;
   }
