@@ -1432,8 +1432,11 @@ describe("GET /api/organiser/weddings/:weddingId/gifts.csv", () => {
     const body = await res.text();
     const header = body.split("\r\n")[0]!;
     expect(header).toContain("Kind");
-    expect(header).toContain("Household Code");
     expect(header).toContain("Amount In Your Currency");
+    // The household's claim code is a bearer credential, so the file names the
+    // household and never codes it (S-M1).
+    expect(header).not.toContain("Household Code");
+    expect(body).not.toContain("GIFT-AAA-0001");
 
     // Both kinds of gift, cash first (newest first).
     const lines = body.split("\r\n");
@@ -1455,7 +1458,7 @@ describe("GET /api/organiser/weddings/:weddingId/gifts.csv", () => {
     const res = await get(app, path, BOOTSTRAP_OWNER);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(
-      "Kind,Item,Household Code,Household,Given As,Quantity,Status,Note,Amount,Currency," +
+      "Kind,Item,Household,Given As,Quantity,Status,Note,Amount,Currency," +
         "Amount In Your Currency,Your Currency,Exchange Rate,Thanked At,Received At",
     );
   });
@@ -1464,6 +1467,25 @@ describe("GET /api/organiser/weddings/:weddingId/gifts.csv", () => {
     const { db, app } = buildApp();
     seedCohost(db);
     const res = await get(app, path, COHOST);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+  });
+
+  it("serves the CSV for a viewer co-host as well", async () => {
+    const { db, app } = buildApp();
+    // `weddingMember` admits every role, viewer included — the export is a read,
+    // and a viewer already sees the same log in the portal.
+    db.insert(weddingHosts)
+      .values({
+        id: "whost_giftscsv_viewer",
+        weddingId: BOOTSTRAP_WEDDING_ID,
+        osnProfileId: "usr_viewer_giftscsv",
+        addedByOsnProfileId: BOOTSTRAP_OWNER,
+        role: "viewer",
+        createdAt: new Date(),
+      })
+      .run();
+    const res = await get(app, path, "usr_viewer_giftscsv");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/csv");
   });

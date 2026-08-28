@@ -59,7 +59,7 @@ describe("giftExportService.giftsCsv", () => {
       Effect.gen(function* () {
         const csv = yield* giftExportService.giftsCsv(BOOTSTRAP_WEDDING_ID);
         expect(lines(csv)).toEqual([
-          "Kind,Item,Household Code,Household,Given As,Quantity,Status,Note,Amount,Currency,Amount In Your Currency,Your Currency,Exchange Rate,Thanked At,Received At",
+          "Kind,Item,Household,Given As,Quantity,Status,Note,Amount,Currency,Amount In Your Currency,Your Currency,Exchange Rate,Thanked At,Received At",
         ]);
       }),
     ),
@@ -103,10 +103,10 @@ describe("giftExportService.giftsCsv", () => {
         expect(rows).toHaveLength(3);
         // Newest first: the cash gift landed a minute after the claim.
         expect(rows[1]).toBe(
-          "Cash gift,,GIFT-AAA-0001,Marchetti,,,succeeded,For the honeymoon,125.00,AUD,,,,,2026-08-20T10:02:00.000Z",
+          "Cash gift,,Marchetti,,,succeeded,For the honeymoon,125.00,AUD,,,,,2026-08-20T10:02:00.000Z",
         );
         expect(rows[2]).toBe(
-          "Gift list,Copper Pan,GIFT-AAA-0001,Marchetti,Auntie Ros,2,purchased,Bought the pair,,,,,,,2026-08-20T10:01:00.000Z",
+          "Gift list,Copper Pan,Marchetti,Auntie Ros,2,purchased,Bought the pair,,,,,,,2026-08-20T10:01:00.000Z",
         );
       }),
     ),
@@ -179,11 +179,11 @@ describe("giftExportService.giftsCsv", () => {
         const row = lines(yield* giftExportService.giftsCsv(BOOTSTRAP_WEDDING_ID))[1]!;
         const cells = row.split(",");
         expect(cells[1]).toBe("Copper Pan");
-        expect(cells[8]).toBe("20000");
-        expect(cells[9]).toBe("JPY");
-        expect(cells[10]).toBe("204.00");
-        expect(cells[11]).toBe("AUD");
-        expect(cells[12]).toBe("0.0102");
+        expect(cells[7]).toBe("20000");
+        expect(cells[8]).toBe("JPY");
+        expect(cells[9]).toBe("204.00");
+        expect(cells[10]).toBe("AUD");
+        expect(cells[11]).toBe("0.0102");
       }),
     ),
   );
@@ -210,6 +210,118 @@ describe("giftExportService.giftsCsv", () => {
 
         const csv = yield* giftExportService.giftsCsv("wed_someone_else");
         expect(lines(csv)).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it(
+    "escapes cells that a spreadsheet would otherwise run as a formula",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        seedHousehold(db);
+        db.insert(registryClaims)
+          .values({
+            id: "rclaim_inject",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            itemId: "ritem_pan",
+            familyId: "fam_gifts",
+            quantity: 1,
+            status: "purchased",
+            note: "-1+1",
+            displayName: "@evil",
+            createdAt: at(1),
+            updatedAt: at(1),
+          })
+          .run();
+        db.insert(registryContributions)
+          .values({
+            id: "rcon_inject",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            familyId: "fam_gifts",
+            status: "succeeded",
+            amountMinor: 1000,
+            currency: "AUD",
+            message: "=cmd|' /C calc'!A0",
+            createdAt: at(2),
+            updatedAt: at(2),
+          })
+          .run();
+
+        // Every one of these is guest-written text arriving in a file the couple
+        // will open in Excel or Numbers, so the leading marker must be neutered
+        // rather than merely quoted (S-M3).
+        const csv = yield* giftExportService.giftsCsv(BOOTSTRAP_WEDDING_ID);
+        expect(csv).toContain("'=cmd|' /C calc'!A0");
+        expect(csv).toContain("'@evil");
+        expect(csv).toContain("'-1+1");
+      }),
+    ),
+  );
+
+  it(
+    "keeps gifts given by the host household, unlike the guest export",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        db.insert(families)
+          .values({
+            id: "fam_host",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            publicId: "HOST-BBB-0002",
+            familyName: "Okonkwo",
+            kind: "host",
+            createdAt: at(0),
+            updatedAt: at(0),
+          })
+          .run();
+        db.insert(registryContributions)
+          .values({
+            id: "rcon_host",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            familyId: "fam_host",
+            status: "succeeded",
+            amountMinor: 2000,
+            currency: "AUD",
+            message: "From us two",
+            createdAt: at(1),
+            updatedAt: at(1),
+          })
+          .run();
+
+        // The guests export filters `kind = 'host'` out (table-export.ts:99)
+        // because a host is not a guest. A gift is a gift whoever sent it, and
+        // the portal's log shows it, so the export keeps it.
+        const csv = yield* giftExportService.giftsCsv(BOOTSTRAP_WEDDING_ID);
+        expect(csv).toContain("Okonkwo");
+        expect(csv).toContain("From us two");
+      }),
+    ),
+  );
+
+  it(
+    "prints the thanked-at date apart from the received-at date",
+    withDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        seedHousehold(db);
+        db.insert(registryClaims)
+          .values({
+            id: "rclaim_thanked",
+            weddingId: BOOTSTRAP_WEDDING_ID,
+            itemId: "ritem_pan",
+            familyId: "fam_gifts",
+            quantity: 1,
+            status: "purchased",
+            thankedAt: at(3),
+            createdAt: at(1),
+            updatedAt: at(3),
+          })
+          .run();
+
+        const cells = lines(yield* giftExportService.giftsCsv(BOOTSTRAP_WEDDING_ID))[1]!.split(",");
+        expect(cells[12]).toBe("2026-08-20T10:03:00.000Z");
+        expect(cells[13]).toBe("2026-08-20T10:01:00.000Z");
       }),
     ),
   );

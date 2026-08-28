@@ -28,6 +28,15 @@ vi.mock("../lib/download", () => ({
   downloadCsv: vi.fn(),
 }));
 
+// Only `redirectToLogin` is replaced — it assigns `window.location.href`, which
+// happy-dom cannot follow. `apiUrl` and `isAuthExpired` stay real, so the tests
+// below exercise the actual expiry predicate rather than a stand-in for it.
+const redirectToLoginMock = vi.hoisted(() => vi.fn());
+vi.mock("../lib/api", async () => ({
+  ...(await vi.importActual<typeof import("../lib/api")>("../lib/api")),
+  redirectToLogin: redirectToLoginMock,
+}));
+
 const item = (over: Partial<RegistryItem>): RegistryItem => ({
   id: "itm_1",
   weddingId: "wed_1",
@@ -726,6 +735,7 @@ describe("RegistryView — gift log export", () => {
     downloadBlobMock.mockReset();
     toastSuccess.mockReset();
     toastError.mockReset();
+    redirectToLoginMock.mockReset();
   });
 
   const csvResponse = () =>
@@ -772,5 +782,61 @@ describe("RegistryView — gift log export", () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(downloadBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the couple to sign in again when the export answers 401", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    authFetch.mockResolvedValueOnce(new Response("", { status: 401 }));
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    // An expired session is not a failed download: bounce to login rather than
+    // telling the couple to retry something that cannot succeed.
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalled();
+    expect(downloadBlobMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the couple to sign in again when authFetch throws AuthExpiredError", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    // The refresh can fail before any response exists, and `authFetch` then
+    // rejects instead of resolving — the second of the two expiry exits.
+    authFetch.mockRejectedValueOnce({ _tag: "AuthExpiredError" });
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download gifts/i }));
+
+    await waitFor(() => expect(redirectToLoginMock).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("builds the file once however many times the button is pressed", async () => {
+    setCachedRegistry("wed_1", snapshot({ gifts: [gift({})] }));
+    let release: ((res: Response) => void) | undefined;
+    authFetch.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+    );
+    render(() => (
+      <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
+    ));
+
+    const button = await screen.findByRole("button", { name: /Download gifts/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    // The export is the heaviest read the couple can trigger and it shares a
+    // per-user rate limit with the other two, so an impatient double-click must
+    // not spend three of its ten requests a minute.
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    release?.(csvResponse());
+    await waitFor(() => expect(downloadBlobMock).toHaveBeenCalledTimes(1));
   });
 });

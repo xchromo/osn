@@ -12,19 +12,25 @@ import { minorToDecimal } from "../lib/money";
  * The gift log is unbounded in principle — every household may claim every item
  * and send cash on top — and the portal answers that with paging
  * (`registryService.giftLog`). An export cannot page: the whole point of the
- * download is that it is the whole record. So it is bounded instead, well above
- * any real wedding (a 400-household guest list at ten gifts a household is
- * 4,000 rows), and a read that hits the ceiling is LOGGED rather than silently
- * truncated — a portability answer that quietly drops rows is worse than no
- * answer at all.
+ * download is that it is the whole record. So it is bounded instead, and a read
+ * that hits the ceiling is LOGGED rather than silently truncated — a
+ * portability answer that quietly drops rows is worse than no answer at all.
+ *
+ * The number comes from the CPU budget, NOT from how many gifts a wedding
+ * plausibly has (P-C1). Cloudflare Workers Free allows 10 ms of CPU per
+ * invocation (`wiki/runbooks/free-tier-limits.md`), and building this file is
+ * dominated by `serialiseCsv`, which trims, scans and quotes every one of the
+ * fourteen cells in a row: measured at roughly 6 ms for 2,000 rows and 11 ms
+ * for 5,000, so the higher figure spends the whole budget and the request is
+ * killed with `exceededCpu`. Raising it back to "a plausible wedding" means
+ * streaming the response first — see the follow-up issue on this file.
  */
-export const MAX_GIFT_EXPORT_ROWS = 5000;
+export const MAX_GIFT_EXPORT_ROWS = 2000;
 
 /** One gift, already flattened into the columns the CSV prints. */
 interface GiftRow {
   kind: "Gift list" | "Cash gift";
   itemTitle: string | null;
-  publicId: string;
   familyName: string;
   displayName: string | null;
   quantity: number | null;
@@ -54,6 +60,13 @@ const iso = (at: Date | null): string => (at ? at.toISOString() : "");
  * host-family exclusion, because the export must contain exactly what the
  * portal shows and nothing else.
  *
+ * A household is named, never coded (S-M1). `families.public_id` is the claim
+ * code — a bearer credential that opens that household's invite on its own —
+ * and the portal's gift log does not return it, so neither does the file. The
+ * household name plus the giver's chosen display name is what a thank-you list
+ * needs, and it leaves nothing on a laptop or in a mail attachment that could
+ * be used to sign in as a guest.
+ *
  * Amounts are printed as bare major-unit decimals with the currency in its own
  * column — a spreadsheet can sum a number, not "$12.50" — and the primary
  * -currency columns carry the equivalent snapshotted at charge time, blank for a
@@ -76,7 +89,6 @@ export const giftExportService = {
               .select({
                 id: registryClaims.id,
                 itemTitle: registryItems.title,
-                publicId: families.publicId,
                 familyName: families.familyName,
                 displayName: registryClaims.displayName,
                 quantity: registryClaims.quantity,
@@ -98,7 +110,6 @@ export const giftExportService = {
               .select({
                 id: registryContributions.id,
                 itemTitle: registryItems.title,
-                publicId: families.publicId,
                 familyName: families.familyName,
                 displayName: registryContributions.displayName,
                 status: registryContributions.status,
@@ -133,7 +144,6 @@ export const giftExportService = {
       const claims: GiftRow[] = (
         claimRows as Array<{
           itemTitle: string;
-          publicId: string;
           familyName: string;
           displayName: string | null;
           quantity: number;
@@ -145,7 +155,6 @@ export const giftExportService = {
       ).map((r) => ({
         kind: "Gift list" as const,
         itemTitle: r.itemTitle,
-        publicId: r.publicId,
         familyName: r.familyName,
         displayName: r.displayName,
         quantity: r.quantity,
@@ -163,7 +172,6 @@ export const giftExportService = {
       const contributions: GiftRow[] = (
         contributionRows as Array<{
           itemTitle: string | null;
-          publicId: string;
           familyName: string;
           displayName: string | null;
           status: string;
@@ -179,7 +187,6 @@ export const giftExportService = {
       ).map((r) => ({
         kind: "Cash gift" as const,
         itemTitle: r.itemTitle,
-        publicId: r.publicId,
         familyName: r.familyName,
         displayName: r.displayName,
         quantity: null,
@@ -213,7 +220,6 @@ export const giftExportService = {
       const header = [
         "Kind",
         "Item",
-        "Household Code",
         "Household",
         "Given As",
         "Quantity",
@@ -232,7 +238,6 @@ export const giftExportService = {
         .map((g) => [
           g.kind,
           g.itemTitle ?? "",
-          g.publicId,
           g.familyName,
           g.displayName ?? "",
           g.quantity === null ? "" : String(g.quantity),
