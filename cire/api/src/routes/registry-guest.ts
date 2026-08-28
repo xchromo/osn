@@ -345,58 +345,87 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
             // Minted here so the row and the session name the same gift. It is
             // the ONLY thing about this gift that reaches Stripe.
             const contributionId = `rct_${crypto.randomUUID()}`;
-            const session = yield* deps.stripe.createCheckoutSession({
-              accountId: context.stripeAccountId,
-              amountMinor: body.amountMinor,
-              currency: context.currency,
-              // Deliberately generic. It is what the guest sees on the Stripe
-              // page and on their statement, and a gift's line item is not the
-              // place to publish what a couple asked for.
-              productName: "Wedding gift",
-              successUrl: `${giftUrl}?gift=thanks`,
-              cancelUrl: `${giftUrl}?gift=cancelled`,
-              // One opaque id, and nothing else (C-H2). The guest's note and
-              // the name they chose stay in D1 under a basis we have declared;
-              // Stripe needs neither to take a payment.
-              metadata: { contributionId },
-              // Keyed on WHAT is being given and WHEN, to the nearest few
-              // minutes (S-H1). SECOND belt now, behind the reuse read above:
-              // it covers the simultaneous double-tap, where neither request
-              // has written a row for the other to find.
-              // The previous key folded the note down to its
-              // LENGTH, which had both failure modes an idempotency key exists
-              // to avoid: two different gifts of the same amount collided, so
-              // the second silently never charged, and a retry with different
-              // words hit Stripe's `idempotency_error` — permanently, because
-              // the key never changed. A hash of the whole request plus a
-              // coarse time bucket collapses a double-tap and separates
-              // everything else.
-              idempotencyKey: yield* giftIdempotencyKey({
-                familyId,
-                slug: params.slug,
-                amountMinor: body.amountMinor,
-                itemId,
-                message: body.message,
-                displayName: body.displayName,
-              }),
-            });
 
-            // The row goes in BEFORE the guest is handed a payment page. If it
-            // cannot be written they must not be sent to pay: a payment with no
-            // record is the one outcome there is no way back from. The unpaid
-            // session expires at Stripe on its own.
+            // THE ROW COMES FIRST, before Stripe is told anything (osn-tracker
+            // #528). Written the other way round there is a window — small, but
+            // it is the window in which the guest's money moves — where a
+            // session exists at Stripe and no row exists here: evict the Worker
+            // between the call and the insert and the settle webhook names a
+            // gift we have no record of. Writing the row first inverts which
+            // side the orphan falls on, and an orphan on our side is one we can
+            // see, close, and count.
             const stored = yield* registryService.createPendingContribution({
               id: contributionId,
               weddingId: context.weddingId,
               familyId,
               itemId,
-              checkoutSessionId: session.id,
               amountMinor: body.amountMinor,
               currency: context.currency,
               message: body.message,
               displayName: body.displayName,
             });
             if (!stored) return yield* internal(set);
+
+            const session = yield* deps.stripe
+              .createCheckoutSession({
+                accountId: context.stripeAccountId,
+                amountMinor: body.amountMinor,
+                currency: context.currency,
+                // Deliberately generic. It is what the guest sees on the Stripe
+                // page and on their statement, and a gift's line item is not the
+                // place to publish what a couple asked for.
+                productName: "Wedding gift",
+                successUrl: `${giftUrl}?gift=thanks`,
+                cancelUrl: `${giftUrl}?gift=cancelled`,
+                // One opaque id, and nothing else (C-H2). The guest's note and
+                // the name they chose stay in D1 under a basis we have declared;
+                // Stripe needs neither to take a payment.
+                metadata: { contributionId },
+                // The same id again, in the one field a connected account cannot
+                // rewrite. Stripe echoes it on every event for this session, so
+                // the settle path can read it before it reads any metadata.
+                clientReferenceId: contributionId,
+                // Keyed on WHAT is being given and WHEN, to the nearest few
+                // minutes (S-H1). SECOND belt now, behind the reuse read above:
+                // it covers the simultaneous double-tap, where neither request
+                // has written a row for the other to find.
+                // The previous key folded the note down to its
+                // LENGTH, which had both failure modes an idempotency key exists
+                // to avoid: two different gifts of the same amount collided, so
+                // the second silently never charged, and a retry with different
+                // words hit Stripe's `idempotency_error` — permanently, because
+                // the key never changed. A hash of the whole request plus a
+                // coarse time bucket collapses a double-tap and separates
+                // everything else.
+                idempotencyKey: yield* giftIdempotencyKey({
+                  familyId,
+                  slug: params.slug,
+                  amountMinor: body.amountMinor,
+                  itemId,
+                  message: body.message,
+                  displayName: body.displayName,
+                }),
+              })
+              .pipe(
+                // Stripe refused, so the row above is an attempt that will never
+                // be paid. Close it here rather than leave the guest's note and
+                // chosen name sitting `pending` for a year.
+                Effect.tapError(() =>
+                  registryService.abandonPendingContribution({ contributionId }),
+                ),
+              );
+
+            // Now the row knows which session it became. `duplicate` means
+            // another request's row already holds this session — Stripe's
+            // idempotency handed both the same one — and this row has closed
+            // itself; the guest still goes to the same page. `missing` means
+            // the row we just wrote is gone, which nothing explains, so nobody
+            // is sent to pay.
+            const attached = yield* registryService.attachCheckoutSession({
+              contributionId,
+              checkoutSessionId: session.id,
+            });
+            if (attached === "missing") return yield* internal(set);
 
             return { url: session.url };
           }).pipe(

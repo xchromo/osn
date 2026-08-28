@@ -777,7 +777,13 @@ export const registryContributions = sqliteTable(
     // The webhook idempotency anchor — the same role `provider_ref` plays for
     // entitlement grants. A replayed `checkout.session.completed` conflicts here
     // instead of writing a second gift.
-    stripeCheckoutSessionId: text("stripe_checkout_session_id").notNull().unique(),
+    //
+    // NULLABLE, because the row is written BEFORE Stripe is asked for a page
+    // (0060): a NULL here is an attempt that never got a session, which the
+    // reuse lookup skips and the failure path closes. The UNIQUE is plain and
+    // not partial on purpose — SQLite counts NULLs as distinct, so every real
+    // session id is still claimed by exactly one row.
+    stripeCheckoutSessionId: text("stripe_checkout_session_id").unique(),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
     message: text("message"),
     displayName: text("display_name"),

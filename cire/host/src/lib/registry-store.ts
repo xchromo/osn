@@ -82,6 +82,26 @@ export interface GiftLogEntry {
   createdAt: number;
 }
 
+/**
+ * What cire kept when it deleted a wedding's gift detail.
+ *
+ * Present ONLY after the retention sweep: a year after the last event the guest
+ * households are deleted, and every claim and contribution goes with them.
+ * Aggregates only, by design — a summary carrying a name, a household or a note
+ * would be the deletion undone in the field next door. Money is totalled PER
+ * CURRENCY and never converted. Mirrors `GiftSummary` in
+ * `cire/api/src/services/retention.ts`.
+ */
+export interface GiftSummary {
+  /** The day the detail was deleted, ISO. */
+  sweptOn: string;
+  /** The span the counted gifts arrived over, ISO days, both ends inclusive. */
+  firstGiftOn: string;
+  lastGiftOn: string;
+  claims: { reserved: number; purchased: number };
+  contributions: { count: number; totals: { currency: string; amountMinor: number }[] };
+}
+
 /** The whole registry as the organiser API returns it in one GET. */
 export interface RegistrySnapshot {
   settings: RegistrySettings;
@@ -89,6 +109,9 @@ export interface RegistrySnapshot {
   gifts: GiftLogEntry[];
   /** Whether another page of gift-log rows sits past `gifts`. */
   giftsHasMore: boolean;
+  /** The parting summary, or null while the gifts themselves are still here.
+   *  Non-null means `gifts` is empty because we deleted it. */
+  giftSummary: GiftSummary | null;
   /** The wedding's primary currency — what every authored figure is in. */
   currency: string;
   /** Succeeded contributions summed in the primary currency. APPROXIMATE by

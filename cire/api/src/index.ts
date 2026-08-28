@@ -9,6 +9,7 @@ import { Effect, Layer } from "effect";
 import { type AppOptions, createApp } from "./app";
 import { createD1Db, DbService } from "./db";
 import { setExecutionCtx } from "./lib/execution-ctx";
+import { sendGiftSummaryEmails } from "./lib/gift-summary-email";
 import { CIRE_OIDC_TX_HMAC_INFO } from "./lib/oidc";
 import { runCire } from "./observability";
 import { assetReconcileService } from "./services/asset-reconcile";
@@ -19,11 +20,12 @@ import {
   createConnectionSearchResolverFromEnv,
   createHandleResolverFromEnv,
   createHandleSearchResolverFromEnv,
+  createOrganiserEmailResolverFromEnv,
   createOrgMembershipResolverFromEnv,
   createProfileDisplayResolverFromEnv,
   createProfileOrgsResolverFromEnv,
 } from "./services/osn-bridge";
-import { retentionService } from "./services/retention";
+import { retentionService, type GiftSummaryNotice } from "./services/retention";
 import { sessionService } from "./services/session";
 import { createStripeClientFromEnv } from "./services/stripe";
 import { createZapChatClientFromEnv } from "./services/zap-bridge";
@@ -537,14 +539,47 @@ const handler: ExportedHandler<Env> = {
     // carry guest PII) would outlive the deleted DB rows forever. The `cire-assets`
     // invite images are NOT reaped here — those rows survive (the invite stays
     // live); see retentionService.sweepExpiredGuestData.
+    // The parting summary needs two things the sweep itself does not have: a
+    // way to ask osn-api for the organiser's address (cire stores none) and a
+    // real mail transport. Both are assembled here, where the ARC key material
+    // and the Resend key live, so the service keeps its DbService-only context.
+    //
+    // Both are optional and the sweep does not care: no ARC key, or no Resend
+    // key, means no notifier and a silent sweep that still deletes on time.
+    // `makeLogEmailLive` is deliberately NOT used as a stand-in — logging a
+    // summary nobody reads is not delivery, and would make the compliance
+    // record claim the couple was told when they were not.
+    const resendApiKey = env.RESEND_API_KEY;
+    const organiserEmails = await createOrganiserEmailResolverFromEnv({
+      osnApiUrl: env.OSN_API_URL,
+      arcPrivateKeyJwk: env.CIRE_API_ARC_PRIVATE_KEY,
+      arcKeyId: env.CIRE_API_ARC_KEY_ID,
+    });
+    const giftSummaryNotifier =
+      organiserEmails && resendApiKey
+        ? (notices: readonly GiftSummaryNotice[]) =>
+            sendGiftSummaryEmails(notices, organiserEmails).pipe(
+              Effect.provide(
+                makeResendEmailLive({
+                  apiKey: resendApiKey,
+                  fromAddress: "hello@cireweddings.com",
+                }),
+              ),
+            )
+        : undefined;
+
     ctx.waitUntil(
       Effect.runPromise(
-        retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled guest-data retention sweep failed", { reason: err.reason }),
+        retentionService
+          .sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }, giftSummaryNotifier)
+          .pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled guest-data retention sweep failed", {
+                reason: err.reason,
+              }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
-        ),
       ),
     );
 

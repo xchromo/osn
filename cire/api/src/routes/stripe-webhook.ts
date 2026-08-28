@@ -90,7 +90,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
  *    text outside the BMP.
  *
  * So the stream is drained a chunk at a time and abandoned the moment the
- * running byte count passes the bound. The reader is cancelled on the way out,
+ * running byte count passes the bound. Leaving the loop cancels the stream,
  * which is what tells the runtime to stop pulling the rest of the upload.
  *
  * Returns the decoded text, or `null` when the body was too big.
@@ -99,30 +99,24 @@ async function readBoundedText(request: Request, max: number): Promise<string | 
   const body = request.body;
   if (!body) return "";
 
-  const reader = body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
-  try {
-    for (;;) {
-      // Sequential by nature: each chunk has to be counted before the next is
-      // pulled, which is the whole point of the bound.
-      // oxlint-disable-next-line no-await-in-loop
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > max) return null;
-      // `stream: true` so a multi-byte character split across two chunks is
-      // decoded as one character rather than two replacement ones — the
-      // signature is over the exact text, so a mangled decode is a 400 for a
-      // body Stripe signed correctly.
-      text += decoder.decode(value, { stream: true });
-    }
-    return text + decoder.decode();
-  } finally {
-    // Already-ended readers ignore this; an abandoned one stops the upload.
-    await reader.cancel().catch(() => {});
+  // Async iteration, not a reader loop: each chunk has to be counted before the
+  // next is pulled, so there is nothing here to run concurrently. Leaving the
+  // loop early — `return null` on the bound, or a throw — runs the iterator's
+  // `return()`, and that cancels the stream, which is what tells the runtime to
+  // stop pulling the rest of the upload.
+  for await (const chunk of body) {
+    bytes += chunk.byteLength;
+    if (bytes > max) return null;
+    // `stream: true` so a multi-byte character split across two chunks is
+    // decoded as one character rather than two replacement ones — the
+    // signature is over the exact text, so a mangled decode is a 400 for a
+    // body Stripe signed correctly.
+    text += decoder.decode(chunk, { stream: true });
   }
+  return text + decoder.decode();
 }
 
 /** Events this product acts on. Everything else is acknowledged and dropped. */
@@ -173,6 +167,13 @@ interface CheckoutSessionObject {
   /** What Stripe actually charged, reconciled against the row at settle (S-L1). */
   amount_total?: unknown;
   currency?: unknown;
+  /**
+   * Our own gift id, set when the session was created (0060). Stripe echoes it
+   * back untouched and the connected account has no way to write it, unlike
+   * `metadata` — so it is read first and `metadata` is only the fallback for
+   * sessions created before the field was sent.
+   */
+  client_reference_id?: unknown;
   metadata?: { contributionId?: unknown };
 }
 
@@ -191,6 +192,16 @@ interface ChargeObject {
 /** A metadata value Stripe gave back: a string, or nothing usable. */
 function metaString(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * The gift a session names. `client_reference_id` is the trustworthy field —
+ * the platform sets it at creation and nothing on the connected account's side
+ * can rewrite it — so it wins; `metadata.contributionId` still answers for
+ * sessions created before 0060 shipped.
+ */
+function contributionIdOf(session: CheckoutSessionObject | undefined): string | null {
+  return metaString(session?.client_reference_id) ?? metaString(session?.metadata?.contributionId);
 }
 
 export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
@@ -261,7 +272,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
-            const contributionId = metaString(session?.metadata?.contributionId);
+            const contributionId = contributionIdOf(session);
             if (!stripeAccountId || !sessionId || !contributionId) {
               // A completed session that is not one of ours — no connected
               // account, or none of the id we write. Acknowledged: a retry
@@ -291,7 +302,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const session = envelope.data?.object as CheckoutSessionObject;
             const stripeAccountId = metaString(envelope.account);
             const sessionId = metaString(session?.id);
-            const contributionId = metaString(session?.metadata?.contributionId);
+            const contributionId = contributionIdOf(session);
             if (!stripeAccountId || !sessionId || !contributionId) {
               return { received: true, outcome: "unknown" };
             }
