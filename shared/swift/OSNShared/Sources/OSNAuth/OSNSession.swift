@@ -60,6 +60,12 @@ public final class OSNSession {
 
     public private(set) var state: SessionState = .restoring
 
+    /// The identity host this session talks to. Held so a caller building
+    /// its own OSNAuth client (e.g. Musubi's passkey list) uses the same one
+    /// rather than reaching for a literal — `MusubiAccountView` hardcoded
+    /// `.local` before this existed.
+    public let environment: Environment
+
     /// Shared cookie-jar-backed session and token refresher — every
     /// app-specific API client (e.g. `makePulseClient`) is built from these
     /// so it shares the same cookie jar and refresh-in-flight coalescing.
@@ -72,17 +78,22 @@ public final class OSNSession {
     /// `containerURLProvider` parameter: the public initializer always builds
     /// real dependencies from `environment`, and there is no way to swap in
     /// a mock `URLSession` through it. This lets `OSNAuthTests` construct an
-    /// `OSNSession` wired to `LoginMockURLProtocol` and assert deterministically
+    /// `OSNSession` wired to `OSNTesting`'s `MockURLProtocol` and assert deterministically
     /// on its behaviour instead of depending on a real network call failing.
-    init(urlSession: URLSession, tokenRefresher: TokenRefresher, loginClient: PasskeyLoginClient) {
+    init(
+        environment: Environment,
+        urlSession: URLSession,
+        tokenRefresher: TokenRefresher,
+        loginClient: PasskeyLoginClient
+    ) {
+        self.environment = environment
         self.urlSession = urlSession
         self.tokenRefresher = tokenRefresher
         self.loginClient = loginClient
     }
 
     /// - Parameter environment: identity host for passkey ceremonies + token
-    ///   refresh. Defaults to `.local` — no deployed Pulse API host exists
-    ///   yet, so this is development-oriented, not a hardcoded prod value.
+    ///   refresh.
     /// - Throws: whatever `SharedCookieJar.makeSession()` throws
     ///   (`OSNKitError.appGroupContainerUnavailable` when the App Group
     ///   container doesn't resolve — the group is registered, so this means
@@ -90,11 +101,24 @@ public final class OSNSession {
     ///   see `pulse/ios/project.yml`). That is an infrastructure/build-config
     ///   failure, not a session state — there is no working `URLSession` to
     ///   hand out if it happens, so it isn't folded into `SessionState`.
-    public convenience init(environment: Environment = .local) throws {
+    ///
+    /// `environment` has no default. It defaulted to `.local`, which meant a
+    /// release build silently talked to `localhost`; app targets now derive it
+    /// from the build configuration via `Environment.resolve(info:)`.
+    public convenience init(environment: Environment) throws {
+        // Before anything reads the Keychain: move a pre-group item into the
+        // shared access group, so an app updating from an older build keeps
+        // its signed-in state. A no-op on every later launch, and off iOS.
+        try? KeychainAccessTokenStore.migrateToSharedAccessGroup()
         let session = try SharedCookieJar.makeSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
         let loginClient = PasskeyLoginClient(session: session, environment: environment)
-        self.init(urlSession: session, tokenRefresher: tokenRefresher, loginClient: loginClient)
+        self.init(
+            environment: environment,
+            urlSession: session,
+            tokenRefresher: tokenRefresher,
+            loginClient: loginClient
+        )
     }
 
     /// Silent restore on launch. A throw from `TokenRefresher.refresh()`
@@ -153,15 +177,38 @@ public final class OSNSession {
         }
     }
 
+    /// Ends the session everywhere it is recorded: on the server, in the
+    /// Keychain, and in the shared cookie jar.
+    ///
     /// `TokenRefresher.logout()` already deletes the Keychain access token
     /// internally on every path (even a failed network call). The explicit
     /// `KeychainAccessTokenStore.delete()` here is defensive — `delete()`
     /// treats "already gone" as success (`errSecItemNotFound`), so calling
     /// it after `logout()` is a no-op, not a race.
+    ///
+    /// The cookie needs clearing by hand for a reason worth stating: the
+    /// server ends a session by returning clearing cookies from `POST
+    /// /logout`, so a request that never *reached* the server clears nothing.
+    /// The jar is shared across every OSN app in the App Group, so a stale
+    /// cookie left there is not just this app's problem — the next sibling to
+    /// foreground would present it and look signed in.
     public func signOut() async {
         try? await tokenRefresher.logout()
         try? KeychainAccessTokenStore.delete()
+        clearSessionCookie()
         state = .signedOut
+    }
+
+    /// Removes the session cookie for this environment from the shared jar.
+    /// The name is derived exactly as the server derives it — see
+    /// `sessionCookieName(for:)`, which is the one place that decides between
+    /// the `__Host-` and bare spellings.
+    private func clearSessionCookie() {
+        guard let storage = urlSession.configuration.httpCookieStorage else { return }
+        let name = sessionCookieName(for: environment)
+        for cookie in storage.cookies(for: environment.baseURL) ?? [] where cookie.name == name {
+            storage.deleteCookie(cookie)
+        }
     }
 
     /// Loads the Keychain-stored access token and refreshes it if it's

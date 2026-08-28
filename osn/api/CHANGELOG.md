@@ -1,5 +1,34 @@
 # @osn/osn
 
+## 3.20.20
+
+### Patch Changes
+
+- 7c101b2: Tracker#466–470 — added `Cache-Control` to every authenticated response that
+  was missing one: `no-store` on `/token` and `/recovery/generate`, and
+  `private, no-store` on the per-user reads (sessions, passkeys, profile list,
+  account-deletion status, the graph routes, the recommendation routes). Set as
+  the first statement of each handler, above the rate-limit and auth checks, so
+  a 401 or 429 carries the header too, not just a 200.
+
+  `/recovery/status` already set `no-store`, but only after its DB read, inside
+  a `try` — so a rejection never got it. Moved the existing assignment up
+  rather than adding a second one.
+
+## 3.20.19
+
+### Patch Changes
+
+- Updated dependencies [c6d023b]
+  - @shared/redis@0.4.5
+
+## 3.20.18
+
+### Patch Changes
+
+- Updated dependencies [8fac137]
+  - @shared/crypto@0.10.8
+
 ## 3.20.17
 
 ### Patch Changes

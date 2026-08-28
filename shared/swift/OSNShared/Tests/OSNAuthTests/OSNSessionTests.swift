@@ -18,18 +18,10 @@ private func makeJWT(sub: String, email: String, handle: String, displayName: St
     return "\(header).\(payload).\(signature)"
 }
 
-private func makeMockSession() -> URLSession {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [LoginMockURLProtocol.self]
-    configuration.httpShouldSetCookies = true
-    configuration.httpCookieAcceptPolicy = .always
-    LoginMockURLProtocol.cookieStorage = configuration.httpCookieStorage
-    return URLSession(configuration: configuration)
-}
-
 @MainActor
 private func makeOSNSession(environment: Environment, session: URLSession, tokenRefresher: TokenRefresher) -> OSNSession {
     OSNSession(
+        environment: environment,
         urlSession: session,
         tokenRefresher: tokenRefresher,
         loginClient: PasskeyLoginClient(session: session, environment: environment)
@@ -49,7 +41,7 @@ struct OSNSessionTests {
         let session = makeMockSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = #"{"error":"invalid_grant","message":"session expired"}"#
             return (400, ["Content-Type": "application/json"], Data(body.utf8))
         }
@@ -67,7 +59,7 @@ struct OSNSessionTests {
         let session = makeMockSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             (200, [:], Data())
         }
 
@@ -85,7 +77,7 @@ struct OSNSessionTests {
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
         let requestCount = Counter()
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             await requestCount.increment()
             let body = """
             {"access_token":"at-fresh-1","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
@@ -118,7 +110,7 @@ struct OSNSessionTests {
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
         let requestCount = Counter()
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             await requestCount.increment()
             return (200, [:], Data())
         }
@@ -143,7 +135,7 @@ struct OSNSessionTests {
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
         let jwtA = makeJWT(sub: "profile-a", email: "a@example.com", handle: "alice", displayName: "Alice")
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = """
             {"access_token":"\(jwtA)","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
             """
@@ -193,7 +185,7 @@ struct OSNSessionTests {
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
         let jwtA = makeJWT(sub: "profile-a", email: "a@example.com", handle: "alice", displayName: "Alice")
-        LoginMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = """
             {"access_token":"\(jwtA)","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
             """
@@ -225,4 +217,88 @@ struct OSNSessionTests {
 private actor Counter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+/// Sign-out has to end the session in three places, not one: on the server,
+/// in the Keychain, and in the shared cookie jar.
+///
+/// What this suite can and cannot reach, stated plainly. The cookie and
+/// Keychain halves run here for real. The **access-group** half does not:
+/// `swift test` runs on an unentitled macOS host, where any query carrying
+/// `kSecAttrAccessGroup` fails with `errSecMissingEntitlement` (−34018), so
+/// `KeychainAccessTokenStore.accessGroup` is `nil` off iOS and the only branch
+/// reachable here is the no-op one. That two apps genuinely share one item is
+/// device-only behaviour and is checked by hand, not by this suite.
+@Suite(.serialized, .keychainSerializing)
+@MainActor
+struct SignOutTests {
+    private func makeSignedInSession() async -> (OSNSession, URLSession) {
+        let session = makeMockSession()
+        let refresher = TokenRefresher(session: session, environment: .local)
+        let osnSession = makeOSNSession(environment: .local, session: session, tokenRefresher: refresher)
+        return (osnSession, session)
+    }
+
+    private func seedSessionCookie(in session: URLSession) {
+        let cookie = HTTPCookie(properties: [
+            .name: sessionCookieName(for: .local),
+            .value: "ses_seeded",
+            .domain: Environment.local.baseURL.host!,
+            .path: "/",
+        ])!
+        session.configuration.httpCookieStorage?.setCookie(cookie)
+    }
+
+    private func sessionCookies(in session: URLSession) -> [HTTPCookie] {
+        (session.configuration.httpCookieStorage?.cookies(for: Environment.local.baseURL) ?? [])
+            .filter { $0.name == sessionCookieName(for: .local) }
+    }
+
+    @Test func signOutClearsTheSessionCookieFromTheSharedJar() async throws {
+        try KeychainAccessTokenStore.save("token", expiresIn: 300)
+        let (osnSession, session) = await makeSignedInSession()
+        seedSessionCookie(in: session)
+        #expect(sessionCookies(in: session).count == 1)
+
+        MockURLProtocol.handler = { _ in (200, [:], Data()) }
+        await osnSession.signOut()
+
+        #expect(sessionCookies(in: session).isEmpty)
+        #expect(try KeychainAccessTokenStore.load() == nil)
+        #expect(osnSession.state == .signedOut)
+    }
+
+    /// The case the manual `deleteCookie` exists for. The server ends a
+    /// session by returning clearing cookies, so a request that never reaches
+    /// it clears nothing — and the jar is shared, so the stale cookie would be
+    /// the *next app's* problem, not this one's.
+    @Test func signOutStillClearsEverythingWhenLogoutNeverReachesTheServer() async throws {
+        try KeychainAccessTokenStore.save("token", expiresIn: 300)
+        let (osnSession, session) = await makeSignedInSession()
+        seedSessionCookie(in: session)
+
+        MockURLProtocol.handler = { _ -> (Int, [String: String], Data) in
+            throw URLError(.notConnectedToInternet)
+        }
+        await osnSession.signOut()
+
+        #expect(sessionCookies(in: session).isEmpty)
+        #expect(try KeychainAccessTokenStore.load() == nil)
+        #expect(osnSession.state == .signedOut)
+    }
+
+    /// After a sign-out the shared session is dead server-side, so a sibling
+    /// app's next refresh must fail rather than quietly succeed.
+    @Test func aRefreshAfterSignOutFails() async throws {
+        let (osnSession, _) = await makeSignedInSession()
+        MockURLProtocol.handler = { _ in (200, [:], Data()) }
+        await osnSession.signOut()
+
+        MockURLProtocol.handler = { _ in
+            let body = #"{"error":"invalid_grant","message":"session revoked"}"#
+            return (400, ["Content-Type": "application/json"], Data(body.utf8))
+        }
+        await osnSession.restore()
+        #expect(osnSession.state == .signedOut)
+    }
 }
