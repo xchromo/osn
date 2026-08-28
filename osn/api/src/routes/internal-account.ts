@@ -25,6 +25,19 @@ const SCOPE_APP_ENROLLMENT_WRITE = "app-enrollment:write";
 const SCOPE_ACCOUNT_EMAIL_READ = "account:email-read";
 
 /**
+ * The one service allowed to use that scope (S-M2).
+ *
+ * `PERMITTED_SCOPES` in graph-internal.ts is a single flat allowlist governing
+ * what /graph/internal/register-service will grant to ANY service, so holding
+ * `INTERNAL_SERVICE_SECRET` is enough to register a key asking for
+ * `account:email-read`. Until that allowlist is per-service, the restriction to
+ * cire-api is enforced here instead — at the point of use, where the issuer is
+ * signature-verified. Kept even after the registration side is fixed: a scope
+ * granted by mistake still cannot be spent from the wrong service.
+ */
+const EMAIL_READ_ISSUER = "cire-api";
+
+/**
  * Wire shape for one answered address. Snake_case on the wire like the rest of
  * the internal routes; the parameter carries the anonymous type and the return
  * stays inferred (same shape as `orgSummary` in organisation-internal.ts).
@@ -188,6 +201,12 @@ export function createInternalAccountRoutes(
           SCOPE_ACCOUNT_EMAIL_READ,
         );
         if (!caller) return { error: "Unauthorized" };
+        // Same 401 shape as a missing or wrong-scoped token: a service that
+        // should not be here learns nothing from the difference.
+        if (caller.iss !== EMAIL_READ_ISSUER) {
+          set.status = 401;
+          return { error: "Unauthorized" };
+        }
 
         try {
           const found = await run(lookupProfileEmails(body.profile_ids));

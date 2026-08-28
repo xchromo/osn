@@ -38,8 +38,13 @@ describe("internal account emails", () => {
   const runWithLayer = <A>(eff: Effect.Effect<A, unknown, DbTag>): Promise<A> =>
     Effect.runPromise(eff.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
 
-  /** Registers a service account holding `scopes` and returns a signed ARC token. */
-  async function setupArcToken(scopes: string): Promise<string> {
+  /**
+   * Registers a service account holding `scopes` and returns a signed ARC token.
+   * The issuer is a parameter because the route pins it (S-M2): a correctly
+   * scoped, correctly signed token from any service other than cire-api is
+   * still refused, so a test needs to be able to issue one.
+   */
+  async function setupArcToken(scopes: string, serviceId = "cire-api"): Promise<string> {
     const kp = await generateArcKeyPair();
     const pubJwk = await exportKeyToJwk(kp.publicKey);
     const now = new Date();
@@ -52,7 +57,7 @@ describe("internal account emails", () => {
           db
             .insert(serviceAccounts)
             .values({
-              serviceId: "cire-api",
+              serviceId,
               allowedScopes: scopes,
               createdAt: now,
               updatedAt: now,
@@ -65,7 +70,7 @@ describe("internal account emails", () => {
         yield* Effect.promise(() =>
           db.insert(serviceAccountKeys).values({
             keyId,
-            serviceId: "cire-api",
+            serviceId,
             publicKeyJwk: pubJwk,
             registeredAt: now,
             expiresAt: null,
@@ -76,7 +81,7 @@ describe("internal account emails", () => {
     );
 
     return createArcToken(kp.privateKey, {
-      iss: "cire-api",
+      iss: serviceId,
       aud: "osn-api",
       scope: scopes,
       kid: keyId,
@@ -111,6 +116,22 @@ describe("internal account emails", () => {
     const token = await setupArcToken("graph:read");
     const res = await post(token, ["usr_anything"]);
     expect(res.status).toBe(401);
+  });
+
+  it("returns 401 for a correctly scoped token issued by another service", async () => {
+    // S-M2: PERMITTED_SCOPES is one flat allowlist governing what
+    // /graph/internal/register-service will grant to ANY service, so holding
+    // INTERNAL_SERVICE_SECRET is enough to register a key asking for
+    // account:email-read. The restriction to cire-api is enforced here instead,
+    // at the point of use, where the issuer is signature-verified.
+    const user = await runWithLayer(auth.registerProfile("couple@example.com", "couple"));
+    const token = await setupArcToken("account:email-read", "pulse-api");
+
+    const res = await post(token, [user.id]);
+    expect(res.status).toBe(401);
+    // Same body as a missing or wrong-scoped token: the refused service learns
+    // nothing from the difference.
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns the address of the account owning a known profile", async () => {
