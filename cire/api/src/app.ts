@@ -51,6 +51,7 @@ import {
   createRegistryWriteRoutes,
 } from "./routes/registry";
 import {
+  createRegistryContributeRoutes,
   createRegistryGuestClaimRoutes,
   createRegistryGuestImageRoutes,
   createRegistryGuestListRoutes,
@@ -227,6 +228,13 @@ const defaultRegistryGuestLimiter = createRateLimiter({ maxRequests: 20, windowM
 // Per-organiser, and sized like the image limiter beside it: an authenticated
 // couple at hand-speed, whose every press costs an outbound Stripe call.
 const defaultRegistryStripeLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
+// Per-IP, like the claim limiter, and sized the same way for the same reason:
+// a NAT'd venue or hotel wifi is ONE address for a whole reception, and the
+// budget has to cover the room rather than a household (P-W2). Five would have
+// the sixth guest of an evening meet a 429 on their way to paying, which is the
+// highest-value action in the product. `sessionAuth` runs first, so only
+// claimed guests ever reach this at all.
+const defaultRegistryContributeLimiter = createRateLimiter({ maxRequests: 20, windowMs: 60_000 });
 /**
  * Default per-IP limiter for the pre-auth OIDC redirect legs (`/oidc/start`,
  * `/oidc/callback`). Tighter than the session probe below — these are the
@@ -439,6 +447,8 @@ export interface AppOptions {
   registryImageLimiter?: RateLimiterBackend;
   /** Override the guest registry claim/release rate limiter (useful for testing). */
   registryGuestLimiter?: RateLimiterBackend;
+  /** Override the guest "give money" limiter (useful for testing). */
+  registryContributeLimiter?: RateLimiterBackend;
   /**
    * Stripe Connect. BOTH halves are key-optional and independent, because in
    * practice they arrive at different moments: the client can be configured
@@ -527,6 +537,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
     registryPreviewLimiter = defaultRegistryPreviewLimiter,
     registryImageLimiter = defaultRegistryImageLimiter,
     registryGuestLimiter = defaultRegistryGuestLimiter,
+    registryContributeLimiter = defaultRegistryContributeLimiter,
     stripe = null,
     stripeWebhookSecret = null,
     stripeAccountCountry,
@@ -714,6 +725,18 @@ export function createApp(db: Db, options: AppOptions = {}) {
       .use(createRegistryGuestListRoutes(db))
       .use(createRegistryGuestMineRoutes(db))
       .use(createRegistryGuestClaimRoutes(db, { limiter: registryGuestLimiter }))
+      // Giving money. Mounted only with Stripe configured — a guest must never
+      // be offered a button that cannot lead anywhere. Its own limiter, tighter
+      // than the claim one: every call is an outbound Stripe request.
+      .use(
+        stripe
+          ? createRegistryContributeRoutes(db, {
+              stripe,
+              limiter: registryContributeLimiter,
+              guestOrigin: webOrigin,
+            })
+          : new Elysia(),
+      )
       .use(createOrganiserWeddingsRoutes(db, osnAuthOptions))
       .use(createOrganiserExportRoutes(db, osnAuthOptions, exportLimiter))
       .use(createOrganiserWeddingCreateRoute(db, osnAuthOptions, weddingCreateLimiter))

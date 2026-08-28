@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { BOOTSTRAP_WEDDING_ID, registrySettings } from "@cire/db";
+import {
+  BOOTSTRAP_WEDDING_ID,
+  families,
+  registryContributions,
+  registryItems,
+  registrySettings,
+} from "@cire/db";
 import { eq } from "drizzle-orm";
 
 import { createApp } from "../app";
@@ -41,10 +47,29 @@ async function hmacHex(secret: string, payload: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * A seeded household of the bootstrap wedding. Read from the database rather
+ * than hardcoded: the seed mints family ids as uuids, so the only honest way to
+ * name one is to look it up.
+ */
+const ITEM_ID = "reg_pan";
+
 function buildApp({ secret = SECRET as string | null } = {}) {
   const db = createDb(":memory:");
   seedDb(db);
   const now = new Date();
+  db.insert(registryItems)
+    .values({
+      id: ITEM_ID,
+      weddingId: BOOTSTRAP_WEDDING_ID,
+      kind: "product",
+      title: "Copper pan",
+      quantityWanted: 1,
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
   // A wedding whose registry already knows its connected account.
   db.insert(registrySettings)
     .values({
@@ -58,8 +83,9 @@ function buildApp({ secret = SECRET as string | null } = {}) {
       updatedAt: now,
     })
     .run();
+  const familyId = db.select({ id: families.id }).from(families).get()?.id as string;
   const app = createApp(db, { stripeWebhookSecret: secret });
-  return { app, db };
+  return { app, db, familyId };
 }
 type App = ReturnType<typeof buildApp>["app"];
 
@@ -260,6 +286,193 @@ describe("account.updated", () => {
   });
 });
 
+const CONTRIBUTION_ID = "rct_1";
+
+/**
+ * The `pending` row a completed session settles. The route writes this BEFORE
+ * handing the guest a payment page — see `createPendingContribution` — so a
+ * webhook with nothing to settle is a session cire never created.
+ */
+function seedPending(
+  db: ReturnType<typeof buildApp>["db"],
+  familyId: string,
+  over: { id?: string; sessionId?: string; weddingId?: string; status?: string } = {},
+) {
+  const now = new Date();
+  db.insert(registryContributions)
+    .values({
+      id: over.id ?? CONTRIBUTION_ID,
+      weddingId: over.weddingId ?? BOOTSTRAP_WEDDING_ID,
+      itemId: null,
+      familyId,
+      status: (over.status ?? "pending") as "pending",
+      amountMinor: 12_500,
+      currency: "AUD",
+      stripeCheckoutSessionId: over.sessionId ?? "cs_1",
+      stripePaymentIntentId: null,
+      message: "Enjoy Japan",
+      displayName: "The Ashworths",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+}
+
+const checkoutCompleted = (
+  overrides: {
+    account?: string | null;
+    session?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  } = {},
+) =>
+  JSON.stringify({
+    id: "evt_gift",
+    type: "checkout.session.completed",
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "cs_1",
+        payment_intent: "pi_1",
+        payment_status: "paid",
+        metadata: { contributionId: CONTRIBUTION_ID, ...overrides.metadata },
+        ...overrides.session,
+      },
+    },
+  });
+
+async function gifts(db: ReturnType<typeof buildApp>["db"]) {
+  return db.select().from(registryContributions).all();
+}
+
+describe("checkout.session.completed — settling the row, never inventing one", () => {
+  it("settles the pending gift the route wrote", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+
+    const res = await deliver(app, checkoutCompleted());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.stripePaymentIntentId).toBe("pi_1");
+    // The note and the name were never in Stripe's metadata — they are on the
+    // row because we put them there (C-H2).
+    expect(gift?.message).toBe("Enjoy Japan");
+    expect(gift?.displayName).toBe("The Ashworths");
+    // FX stays null: the primary-currency equivalent comes from the balance
+    // transaction, which is not on this event, and the columns are
+    // all-or-nothing.
+    expect(gift?.primaryAmountMinor).toBeNull();
+    expect(gift?.fxRate).toBeNull();
+  });
+
+  it("settles once however many times Stripe delivers it", async () => {
+    // At-least-once delivery makes a duplicate the ordinary case, not the edge.
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const payload = checkoutCompleted();
+
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "settled",
+    });
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "duplicate",
+    });
+    expect(await gifts(db)).toHaveLength(1);
+  });
+
+  /**
+   * S-L1. Nothing in the checkout cire builds can charge an amount other than
+   * the one on the row — one fixed line item, no promotion codes, no adjustable
+   * quantity — so a disagreement means something we do not model. The gift
+   * still settles, because the money moved; the log warns, and the as-given
+   * figure stays as given, because that is what the guest agreed to.
+   */
+  it("settles a gift Stripe charged differently, without rewriting what was agreed", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+
+    const res = await deliver(
+      app,
+      checkoutCompleted({ session: { amount_total: 9_900, currency: "usd" } }),
+    );
+
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.amountMinor).toBe(12_500);
+    expect(gift?.currency).toBe("AUD");
+  });
+
+  it("does not call a lower-case currency a mismatch", async () => {
+    // Stripe writes currencies in lower case; the row holds them upper.
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    await deliver(app, checkoutCompleted({ session: { amount_total: 12_500, currency: "aud" } }));
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("leaves an unpaid-but-complete session pending, not as money that arrived", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    await deliver(app, checkoutCompleted({ session: { payment_status: "unpaid" } }));
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  /**
+   * THE FORGERY CASE (S-M1). This endpoint also hears about sessions a
+   * connected account created for ITSELF, where every metadata field is
+   * whatever its owner typed. Settling against a row we wrote is what makes
+   * that worthless: there is no row, and one cannot be conjured from the event.
+   */
+  it("writes nothing for a session cire never created", async () => {
+    const { app, db } = buildApp();
+    const res = await deliver(
+      app,
+      checkoutCompleted({ metadata: { contributionId: "rct_forged" } }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+
+  it("refuses a gift whose wedding does not own the account it came from", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const res = await deliver(app, checkoutCompleted({ account: "acct_someone_else" }));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("refuses a settlement aimed at another session", async () => {
+    // One contribution cannot be settled by a different session's event.
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: "cs_other" });
+    const res = await deliver(app, checkoutCompleted());
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("acknowledges a completed session carrying none of our metadata", async () => {
+    const { app, db } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_x",
+      type: "checkout.session.completed",
+      created: nowSeconds(),
+      account: ACCOUNT,
+      data: { object: { id: "cs_9", metadata: {} } },
+    });
+    const res = await deliver(app, payload);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+});
+
 describe("events this product does not handle", () => {
   it("acknowledges them rather than buying days of retries", async () => {
     const { app, db } = buildApp();
@@ -272,5 +485,353 @@ describe("events this product does not handle", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
     expect((await settings(db))?.stripeChargesEnabled).toBe(false);
+  });
+});
+
+/**
+ * A checkout session event that is not `completed`. Same object, different
+ * ending — the three of them share a shape because Stripe sends the same
+ * session back each time.
+ */
+const sessionEvent = (
+  type: string,
+  overrides: {
+    account?: string | null;
+    session?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  } = {},
+) =>
+  JSON.stringify({
+    id: `evt_${type}`,
+    type,
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "cs_1",
+        payment_intent: "pi_1",
+        metadata: { contributionId: CONTRIBUTION_ID, ...overrides.metadata },
+        ...overrides.session,
+      },
+    },
+  });
+
+const chargeRefunded = (
+  overrides: { account?: string | null; charge?: Record<string, unknown> } = {},
+) =>
+  JSON.stringify({
+    id: "evt_refund",
+    type: "charge.refunded",
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "ch_1",
+        payment_intent: "pi_1",
+        refunded: true,
+        amount: 12_500,
+        amount_refunded: 12_500,
+        ...overrides.charge,
+      },
+    },
+  });
+
+/** Seed a gift, then settle it the way the real chain does. */
+async function seedSettled(app: App, db: ReturnType<typeof buildApp>["db"], familyId: string) {
+  seedPending(db, familyId);
+  await deliver(app, checkoutCompleted());
+}
+
+describe("checkout.session.async_payment_succeeded — the debit that landed days later", () => {
+  /**
+   * The money bug this closes: a BECS or SEPA debit completes the session in
+   * seconds and settles days later. Without this event the gift sat `pending`
+   * forever and the couple were never told the money had arrived.
+   */
+  it("settles a gift whose bank debit finally cleared", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    // What Stripe sent at checkout time: complete, but not paid.
+    await deliver(app, checkoutCompleted({ session: { payment_status: "unpaid" } }));
+    expect((await gifts(db))[0]?.status).toBe("pending");
+
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.async_payment_succeeded", {
+        // Deliberately WITHOUT `payment_status`: the event type is the
+        // stronger statement, and a missing field must not leave the gift
+        // pending a second time.
+        session: { payment_status: undefined },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "settled" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("succeeded");
+    expect(gift?.stripePaymentIntentId).toBe("pi_1");
+  });
+
+  it("is a no-op once the gift already settled", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const res = await deliver(app, sessionEvent("checkout.session.async_payment_succeeded"));
+    expect(await res.json()).toEqual({ received: true, outcome: "duplicate" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+});
+
+describe("the endings where no money moves", () => {
+  for (const type of ["checkout.session.async_payment_failed", "checkout.session.expired"]) {
+    it(`marks a pending gift failed on ${type}`, async () => {
+      const { app, db, familyId } = buildApp();
+      seedPending(db, familyId);
+
+      const res = await deliver(app, sessionEvent(type));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ received: true, outcome: "failed" });
+      // The row is KEPT, not deleted: it is the idempotency anchor, and the
+      // `unique` session id is what makes a redelivery a no-op.
+      const [gift] = await gifts(db);
+      expect(gift?.status).toBe("failed");
+      expect(gift?.stripeCheckoutSessionId).toBe("cs_1");
+    });
+
+    /**
+     * THE ONE THAT MATTERS. `expired` is a plausible thing for a hostile
+     * connected account to send, and a handler that could turn `succeeded` into
+     * `failed` on receipt of it would be a way to make a couple's gift vanish.
+     */
+    it(`cannot un-settle a gift somebody actually gave (${type})`, async () => {
+      const { app, db, familyId } = buildApp();
+      await seedSettled(app, db, familyId);
+
+      const res = await deliver(app, sessionEvent(type));
+
+      expect(await res.json()).toEqual({ received: true, outcome: "ignored" });
+      expect((await gifts(db))[0]?.status).toBe("succeeded");
+    });
+  }
+
+  it("refuses a failure aimed at a wedding that does not own the account", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.expired", { account: "acct_someone_else" }),
+    );
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("refuses a failure aimed at another session", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId, { sessionId: "cs_other" });
+    const res = await deliver(app, sessionEvent("checkout.session.expired"));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("writes nothing for an expiry of a session cire never created", async () => {
+    const { app, db } = buildApp();
+    const res = await deliver(
+      app,
+      sessionEvent("checkout.session.expired", { metadata: { contributionId: "rct_forged" } }),
+    );
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect(await gifts(db)).toHaveLength(0);
+  });
+});
+
+describe("charge.refunded — money that went back", () => {
+  it("marks a settled gift refunded, found by its payment intent", async () => {
+    // The refund event carries a CHARGE, not a session — the payment intent
+    // the settle path wrote is the only link back to the row.
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(app, chargeRefunded());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "refunded" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("refunded");
+    // The amount stays as GIVEN. Rewriting it to the net would quietly rewrite
+    // history in the couple's own record.
+    expect(gift?.amountMinor).toBe(12_500);
+  });
+
+  it("leaves a partly-refunded gift alone", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(
+      app,
+      chargeRefunded({ charge: { refunded: false, amount_refunded: 5_000 } }),
+    );
+
+    // A couple who returned half of a gift still received the other half.
+    expect(await res.json()).toEqual({ received: true, outcome: "partial" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("refuses a refund from an account the wedding does not own", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const res = await deliver(app, chargeRefunded({ account: "acct_someone_else" }));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("ignores a refund of something that never settled", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    // A pending row has no payment intent at all, so there is nothing to find.
+    const res = await deliver(app, chargeRefunded());
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("settles once and refunds once, however many times Stripe delivers", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const payload = chargeRefunded();
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "refunded",
+    });
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "ignored",
+    });
+    expect((await gifts(db))[0]?.status).toBe("refunded");
+  });
+
+  it("acknowledges a refund on a charge with no payment intent", async () => {
+    const { app } = buildApp();
+    const res = await deliver(app, chargeRefunded({ charge: { payment_intent: null } }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+  });
+});
+
+/**
+ * How much body it will read (S-H1).
+ *
+ * The route is public and unauthenticated — the signature is the authentication,
+ * and it cannot run until the body has been read. So the body is the one thing
+ * an attacker fully controls the size of, and the bound has to hold whatever
+ * they declare about it.
+ *
+ * These build the request by hand with a streamed body, which is what removes
+ * `Content-Length` — every other test in this file passes a string, and a string
+ * body gets an honest length computed for it, which is the easy case.
+ */
+describe("the body is bounded as it arrives", () => {
+  /** A body with no declared length, delivered in the chunks given. */
+  function streamOf(chunks: readonly Uint8Array[]) {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+  }
+
+  /** Signs `payload`, then sends those exact bytes with no `Content-Length`. */
+  async function deliverStream(app: App, payload: string, chunks: readonly Uint8Array[]) {
+    const at = nowSeconds();
+    return app.fetch(
+      new Request("http://localhost/api/stripe/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "stripe-signature": `t=${at},v1=${await hmacHex(SECRET, `${at}.${payload}`)}`,
+        },
+        body: streamOf(chunks),
+        // Required for a request that streams its body.
+        duplex: "half",
+      } as RequestInit),
+    );
+  }
+
+  /** An event this product does not act on — a 200 means it got all the way in. */
+  function padded(bytes: number) {
+    return JSON.stringify({
+      id: "evt_bound",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "x".repeat(bytes) } },
+    });
+  }
+
+  it("refuses an oversized body that declares no length", async () => {
+    // Correctly signed, so the only thing that can refuse it is the bound. And
+    // `malformed`, not `no-match`: it never reached the signature at all.
+    const { app } = buildApp();
+    const payload = padded(80 * 1024);
+    const res = await deliverStream(app, payload, [new TextEncoder().encode(payload)]);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("counts bytes, not UTF-16 code units", async () => {
+    // 30k three-byte characters: 90KB on the wire, but `String.length` is 30k,
+    // comfortably under a 64KB bound expressed in `payload.length`. That was the
+    // second half of S-H1 — a bound in the wrong unit is no bound for anyone
+    // writing in a non-Latin script.
+    const { app } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_wide",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "な".repeat(30_000) } },
+    });
+    expect(payload.length).toBeLessThan(64 * 1024);
+    const bytes = new TextEncoder().encode(payload);
+    expect(bytes.byteLength).toBeGreaterThan(64 * 1024);
+
+    const res = await deliverStream(app, payload, [bytes]);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("verifies a signed body whose characters straddle two chunks", async () => {
+    // The decode is incremental, so a three-byte character split across a chunk
+    // boundary must come back as one character rather than replacement ones —
+    // the signature is over the exact text, and a mangled decode would be a 400
+    // for a body Stripe signed correctly.
+    const { app } = buildApp();
+    const payload = JSON.stringify({
+      id: "evt_split",
+      type: "invoice.paid",
+      created: nowSeconds(),
+      data: { object: { note: "な".repeat(64) } },
+    });
+    const bytes = new TextEncoder().encode(payload);
+    // A continuation byte: mid-character by construction, not by luck.
+    const cut = bytes.findIndex((b, i) => i > 0 && (b & 0b1100_0000) === 0b1000_0000);
+    expect(cut).toBeGreaterThan(0);
+
+    const res = await deliverStream(app, payload, [bytes.slice(0, cut), bytes.slice(cut)]);
+    expect(res.status).toBe(200);
+  });
+
+  it("still refuses on the declared length, before a byte is buffered", async () => {
+    // The cheap check stays: an honest `Content-Length` over the bound costs one
+    // header lookup rather than an 80KB read.
+    const { app } = buildApp();
+    const res = await deliver(app, padded(80 * 1024));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_signature", reason: "malformed" });
+  });
+
+  it("lets an ordinary event through", async () => {
+    // The control: same shape, same path, under the bound.
+    const { app } = buildApp();
+    const payload = padded(1024);
+    const res = await deliverStream(app, payload, [new TextEncoder().encode(payload)]);
+    expect(res.status).toBe(200);
   });
 });

@@ -1,0 +1,14 @@
+-- 0059_contribution_payment_intent.sql — the column a refund arrives by.
+--
+-- `charge.refunded` names a payment intent and nothing else: Stripe does not
+-- carry the checkout session through to the refund event, and the connected
+-- account's own metadata is not ours to trust. So the row a refund moves has to
+-- be found by `stripe_payment_intent_id`, which until now was written and never
+-- read back — an unindexed column, and a full scan of every gift the platform
+-- holds on each refund.
+--
+-- Not UNIQUE. One payment intent settles one contribution today, but a UNIQUE
+-- here would turn any future shape that reuses one (a multi-item basket, a
+-- retried intent) into a write that fails at 2 a.m. inside a webhook, and an
+-- index is all the read wants.
+CREATE INDEX IF NOT EXISTS `registry_contributions_payment_intent_idx` ON `registry_contributions` (`stripe_payment_intent_id`);

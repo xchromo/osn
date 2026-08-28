@@ -120,7 +120,7 @@ describe("createStripeClient", () => {
   });
 
   it("returns Stripe's code and never its message", async () => {
-    const { impl } = stubFetch(() =>
+    const { impl, calls } = stubFetch(() =>
       json(
         {
           error: {
@@ -138,6 +138,11 @@ describe("createStripeClient", () => {
     expect(failure.reason).toBe("rejected");
     expect(failure.status).toBe(400);
     expect(failure.code).toBe("account_invalid");
+    // The account read is a GET at the account's own path — asserted here
+    // because every other test of it goes through an error path.
+    const call = calls[0];
+    expect(call?.init.method).toBe("GET");
+    expect(call?.url).toContain("/v1/accounts/acct_missing");
     // Stripe writes `message` for a developer's console and quotes the request
     // back into it. Nothing that reaches a log line may carry it.
     expect(JSON.stringify(failure)).not.toContain("sk_live_abc");
@@ -177,6 +182,66 @@ describe("createStripeClient", () => {
     expect(body).toContain("type=account_onboarding");
     expect(body).toContain("refresh_url=");
     expect(body).toContain("return_url=");
+  });
+});
+
+describe("createCheckoutSession", () => {
+  const INPUT = {
+    accountId: "acct_couple",
+    amountMinor: 12_500,
+    currency: "AUD",
+    productName: "Wedding gift",
+    successUrl: "https://invite.test/x/registry?gift=thanks",
+    cancelUrl: "https://invite.test/x/registry?gift=cancelled",
+    metadata: { contributionId: "rct_1" },
+    idempotencyKey: "cire-gift-abc",
+  };
+
+  /**
+   * THE HEADER IS THE WHOLE MECHANISM. Without `Stripe-Account` the session is
+   * created on the PLATFORM's account: the money lands in cire's balance
+   * instead of the couple's, and the product is doing money transmission —
+   * the exact thing the Connect design exists to avoid. It is also the hardest
+   * failure to notice in production, because the guest still pays and still
+   * gets a receipt.
+   */
+  it("acts as the couple's connected account, which is what makes the charge direct", async () => {
+    const { impl, calls } = stubFetch(() => json({ id: "cs_1", url: "https://pay.test/cs_1" }));
+    const client = createStripeClient({
+      secretKey: "sk_test",
+      apiBase: "https://stripe.test",
+      fetchImpl: impl,
+    });
+
+    const session = await Effect.runPromise(client.createCheckoutSession(INPUT));
+
+    expect(session).toEqual({ id: "cs_1", url: "https://pay.test/cs_1" });
+    const call = calls[0];
+    expect(call?.url).toBe("https://stripe.test/v1/checkout/sessions");
+    const headers = call?.init.headers as Headers;
+    expect(headers.get("stripe-account")).toBe("acct_couple");
+    // And the caller's key rides along: one press, one session.
+    expect(headers.get("idempotency-key")).toBe("cire-gift-abc");
+  });
+
+  it("prices the gift inline, in minor units", async () => {
+    const { impl, calls } = stubFetch(() => json({ id: "cs_1", url: "https://pay.test/cs_1" }));
+    const client = createStripeClient({ secretKey: "sk_test", fetchImpl: impl });
+
+    await Effect.runPromise(client.createCheckoutSession(INPUT));
+
+    const body = String(calls[0]?.init.body);
+    expect(body).toContain("mode=payment");
+    expect(body).toContain("line_items%5B0%5D%5Bprice_data%5D%5Bunit_amount%5D=12500");
+    expect(body).toContain("line_items%5B0%5D%5Bprice_data%5D%5Bcurrency%5D=aud");
+    expect(body).toContain("metadata%5BcontributionId%5D=rct_1");
+  });
+
+  it("refuses a 200 that is not a session it can send anyone to", async () => {
+    const { impl } = stubFetch(() => json({ id: "cs_1" }));
+    const client = createStripeClient({ secretKey: "sk_test", fetchImpl: impl });
+    const failure = await Effect.runPromise(Effect.flip(client.createCheckoutSession(INPUT)));
+    expect(failure.reason).toBe("unexpected checkout session payload");
   });
 });
 

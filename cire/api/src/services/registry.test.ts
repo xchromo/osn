@@ -87,9 +87,10 @@ function seedContribution(
     currency: string;
     primaryAmountMinor: number | null;
     primaryCurrency: string | null;
-    status: "pending" | "succeeded";
+    status: "pending" | "succeeded" | "failed" | "refunded";
     familyId: string;
     sessionId: string;
+    paymentIntentId: string | null;
     createdAt: Date;
   }> = {},
 ) {
@@ -110,7 +111,7 @@ function seedContribution(
       fxRate: null,
       fxRateAt: null,
       stripeCheckoutSessionId: over.sessionId ?? `cs_${crypto.randomUUID()}`,
-      stripePaymentIntentId: null,
+      stripePaymentIntentId: over.paymentIntentId ?? null,
       message: null,
       displayName: null,
       thankedAt: null,
@@ -918,5 +919,230 @@ describe("registryService.hasRows", () => {
     expect(await ok(db, registryService.hasRows(BOOTSTRAP_WEDDING_ID))).toBe(true);
     // Scoped: the other wedding is still clean.
     expect(await ok(db, registryService.hasRows(OTHER))).toBe(false);
+  });
+});
+
+/** Point the wedding's settings row at a connected account. */
+function ownAccount(db: Db0, accountId: string, weddingId = BOOTSTRAP_WEDDING_ID) {
+  const now = new Date();
+  db.insert(registrySettings)
+    .values({ weddingId, stripeAccountId: accountId, createdAt: now, updatedAt: now })
+    .onConflictDoUpdate({
+      target: registrySettings.weddingId,
+      set: { stripeAccountId: accountId },
+    })
+    .run();
+}
+
+const ACCOUNT = "acct_connected";
+
+/** The one row the contribution tests read back. */
+function contribution(db: Db0, id: string) {
+  return db.select().from(registryContributions).where(eq(registryContributions.id, id)).get() as {
+    status: string;
+    stripePaymentIntentId: string | null;
+  };
+}
+
+describe("failContribution", () => {
+  it("closes a pending gift whose money is never coming", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+      }),
+    );
+
+    expect(outcome).toBe("failed");
+    expect(contribution(db, id).status).toBe("failed");
+  });
+
+  /**
+   * THE ONE THAT MATTERS. `checkout.session.expired` is a plausible thing for a
+   * hostile connected account to send, and a service that could turn
+   * `succeeded` into `failed` on receipt of it would be a way to make a
+   * couple's gift vanish.
+   */
+  it("cannot un-settle a gift somebody actually gave", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "succeeded", sessionId: "cs_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+      }),
+    );
+
+    expect(outcome).toBe("ignored");
+    expect(contribution(db, id).status).toBe("succeeded");
+  });
+
+  it("refuses a failure sent on an account the wedding does not own", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_1",
+        stripeAccountId: "acct_someone_else",
+      }),
+    );
+
+    expect(outcome).toBe("rejected");
+    expect(contribution(db, id).status).toBe("pending");
+  });
+
+  it("refuses a failure naming another session", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "pending", sessionId: "cs_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: id,
+        checkoutSessionId: "cs_other",
+        stripeAccountId: ACCOUNT,
+      }),
+    );
+
+    expect(outcome).toBe("rejected");
+    expect(contribution(db, id).status).toBe("pending");
+  });
+
+  it("writes nothing for a contribution id that does not exist", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+
+    const outcome = await ok(
+      db,
+      registryService.failContribution({
+        contributionId: "rct_forged",
+        checkoutSessionId: "cs_1",
+        stripeAccountId: ACCOUNT,
+      }),
+    );
+
+    expect(outcome).toBe("unknown");
+    expect(db.select().from(registryContributions).all()).toHaveLength(0);
+  });
+});
+
+describe("refundContribution", () => {
+  it("marks a settled gift refunded, found by its payment intent", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.refundContribution({ paymentIntentId: "pi_1", stripeAccountId: ACCOUNT }),
+    );
+
+    expect(outcome).toBe("refunded");
+    expect(contribution(db, id).status).toBe("refunded");
+  });
+
+  it("refuses a refund from an account the wedding does not own", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.refundContribution({
+        paymentIntentId: "pi_1",
+        stripeAccountId: "acct_someone_else",
+      }),
+    );
+
+    expect(outcome).toBe("rejected");
+    expect(contribution(db, id).status).toBe("succeeded");
+  });
+
+  it("is a no-op the second time Stripe delivers the same refund", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "refunded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.refundContribution({ paymentIntentId: "pi_1", stripeAccountId: ACCOUNT }),
+    );
+
+    expect(outcome).toBe("ignored");
+    expect(contribution(db, id).status).toBe("refunded");
+  });
+
+  it("never matches a pending row, which has no intent to refund", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    // A pending row carrying an intent is not a state the settle path writes,
+    // but the guard is what keeps a forged refund off a gift still in flight.
+    const id = seedContribution(db, { status: "pending", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.refundContribution({ paymentIntentId: "pi_1", stripeAccountId: ACCOUNT }),
+    );
+
+    expect(outcome).toBe("unknown");
+    expect(contribution(db, id).status).toBe("pending");
+  });
+
+  it("takes a refunded gift out of the primary-currency total", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    seedContribution(db, { amountMinor: 10_000, currency: "AUD" });
+    seedContribution(db, {
+      amountMinor: 4_000,
+      currency: "AUD",
+      status: "succeeded",
+      paymentIntentId: "pi_1",
+    });
+    expect(
+      (await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID))).contributionsPrimaryMinor,
+    ).toBe(14_000);
+
+    await ok(
+      db,
+      registryService.refundContribution({ paymentIntentId: "pi_1", stripeAccountId: ACCOUNT }),
+    );
+
+    const snap = await ok(db, registryService.get(BOOTSTRAP_WEDDING_ID));
+    expect(snap.contributionsPrimaryMinor).toBe(10_000);
+  });
+});
+
+describe("what the couple sees of a gift that failed", () => {
+  it("hides a failed contribution and keeps a refunded one", async () => {
+    const db = db0();
+    seedContribution(db, { amountMinor: 10_000, status: "succeeded" });
+    seedContribution(db, { amountMinor: 7_000, status: "refunded", paymentIntentId: "pi_1" });
+    // Money that never moved is not a gift, and a guest who abandoned checkout
+    // never meant to tell the couple anything.
+    seedContribution(db, { amountMinor: 99_999, status: "failed" });
+
+    const { entries } = await ok(db, registryService.giftLog(BOOTSTRAP_WEDDING_ID));
+
+    expect(entries.map((g) => g.amountMinor).toSorted((a, b) => (a ?? 0) - (b ?? 0))).toEqual([
+      7_000, 10_000,
+    ]);
+    // A refund is a thing that HAPPENED to the couple's record, so it stays
+    // visible — out of the total, still in the log.
+    expect(entries.some((g) => g.status === "refunded")).toBe(true);
   });
 });

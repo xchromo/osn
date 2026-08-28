@@ -400,6 +400,20 @@
       "when": 1786784249753,
       "tag": "0057_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1786784249754,
+      "tag": "0058_gift_summary",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1786784249755,
+      "tag": "0059_contribution_payment_intent",
+      "breakpoints": true
     }
   ]
 }

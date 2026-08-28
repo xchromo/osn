@@ -606,6 +606,17 @@ export const registrySettings = sqliteTable("registry_settings", {
     .notNull()
     .default(false),
   stripeAccountUpdatedAt: integer("stripe_account_updated_at", { mode: "timestamp" }),
+  // ── What survives the 1-year sweep ──────────────────────────────────────
+  // Gifts are guest data: `registry_claims` and `registry_contributions` both
+  // hang off `families`, so the retention sweep's family delete cascades them
+  // away a year after the wedding, and the couple's record of what arrived goes
+  // with it. This row is KEPT by that sweep (it carries no guest PII and the
+  // published invite depends on it), which makes it the right home for a
+  // parting summary: written just before the delete, aggregates only — counts
+  // and totals, never a household, a name or a note. See
+  // `wiki/compliance/retention.md`.
+  giftSummaryJson: text("gift_summary_json"),
+  giftSummaryAt: integer("gift_summary_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
@@ -778,6 +789,10 @@ export const registryContributions = sqliteTable(
   (t) => [
     index("registry_contributions_wedding_created_idx").on(t.weddingId, t.createdAt),
     index("registry_contributions_item_idx").on(t.itemId),
+    // A refund event names a payment intent and nothing else — no session id,
+    // and no metadata worth trusting — so this is the column the refund path
+    // reads by. Without the index that read scans every gift on the platform.
+    index("registry_contributions_payment_intent_idx").on(t.stripePaymentIntentId),
   ],
 );
 
