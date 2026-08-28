@@ -15,10 +15,10 @@ import { clientNameSkeleton } from "../../../src/services/auth/oidc";
  * prove the guard checks OWN membership rather than trusting on that absence.
  */
 afterEach(() => {
-  // S-L2 lesson (see AuthorizePage.test.tsx:128-135): a `finally` does not
-  // run when vitest abandons a timed-out test body, so one hang would leak
-  // `Object.prototype.δ` into every later test in this file. This runs on
-  // every exit path; the `try`/`finally` below stays too, keeping the
+  // Same reason as the guard in AuthorizePage.test.tsx:127-135: a `finally`
+  // does not run when vitest abandons a timed-out test body, so one hang
+  // would leak `Object.prototype.δ` into every later test in this file. This
+  // runs on every exit path; the `try`/`finally` below stays too, keeping the
   // pollution window as short as it is today.
   delete (Object.prototype as Record<string, unknown>).δ;
 });
