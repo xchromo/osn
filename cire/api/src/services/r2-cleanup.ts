@@ -105,10 +105,10 @@ export function reapR2Objects(
           } catch {
             // Binding rejected the array form — fall through to per-key deletes.
           }
-          for (const key of batch) {
-            // eslint-disable-next-line no-await-in-loop
-            await bucket.delete(key);
-          }
+          // The per-key deletes are independent of one another and the chunk
+          // is already bounded by CHUNK_SIZE, so they go out together rather
+          // than one round-trip at a time.
+          await Promise.all(batch.map((key) => bucket.delete(key)));
         },
         catch: (cause) => cause,
       }).pipe(
