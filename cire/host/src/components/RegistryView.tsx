@@ -1,7 +1,9 @@
 import { useAuth } from "@shared/rp-auth/solid";
+import { toast } from "@shared/toast";
 import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 
 import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
+import { downloadBlob } from "../lib/download";
 import { haptic } from "../lib/haptics";
 import { formatMinor, formatMinorPair, minorToInput, parseMinor } from "../lib/money";
 import {
@@ -29,6 +31,10 @@ interface RegistryViewProps {
   /** Owner/editor may add, edit, reorder and delete items, and mark a gift
    *  thanked. A viewer reads both sub-views and writes nothing. */
   canEdit?: boolean;
+  /** The wedding's slug, used to name the downloaded gift-log CSV. Passed in
+   *  rather than read from the snapshot so the filename is right on the first
+   *  click, before the registry has loaded. */
+  weddingSlug: string;
 }
 
 /** Quantity range the API's schema allows (`Quantity` in `schemas/registry.ts`). */
@@ -109,6 +115,7 @@ export default function RegistryView(props: RegistryViewProps) {
   const snapshot = registryAccessor(props.weddingId);
   const [error, setError] = createSignal<string | null>(null);
   const [loadingMore, setLoadingMore] = createSignal(false);
+  const [exporting, setExporting] = createSignal(false);
 
   // Add-item form state.
   const [newTitle, setNewTitle] = createSignal("");
@@ -493,6 +500,34 @@ export default function RegistryView(props: RegistryViewProps) {
     }
   };
 
+  // ── Export ────────────────────────────────────────────────────────────────
+  // The couple's own copy of the gift log. The view above pages 50 at a time
+  // and the whole log is deleted a year after the wedding (the summary band
+  // says so), so a download is the only way they keep who gave what, in which
+  // currency, and what the guest wrote.
+  //
+  // Reports outcome through toasts rather than the `error()` Notice above: that
+  // Notice is for a view that failed to load and stays broken, and a download
+  // that failed is a transient thing the couple retries — the same shape the
+  // guest and RSVP exports already use in `GuestTable`.
+  const exportGifts = async () => {
+    if (exporting()) return;
+    setExporting(true);
+    try {
+      const res = await authFetch(apiUrl(`/api/organiser/weddings/${wedding()}/gifts.csv`));
+      if (res.status === 401) return redirectToLogin();
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      downloadBlob(`cire-gifts-${props.weddingSlug}.csv`, await res.blob());
+      toast.success("Gift log downloaded");
+    } catch (err) {
+      if (isAuthExpired(err)) return redirectToLogin();
+      haptic("reject");
+      toast.error("Gift export failed. Try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div class="flex flex-col gap-6">
       <Show when={error()}>
@@ -841,6 +876,22 @@ export default function RegistryView(props: RegistryViewProps) {
               </div>
             </Show>
           )}
+        </Show>
+
+        {/* Shown only when there is a log to download — after the retention
+            sweep the list is empty and an export would hand back a header row.
+            `Button` rather than the raw classes `GuestTable` uses, to match the
+            "Load more gifts" control below it. */}
+        <Show when={gifts().length > 0}>
+          <Button
+            variant="quiet"
+            size="sm"
+            class="self-start"
+            disabled={exporting()}
+            onClick={() => void exportGifts()}
+          >
+            {exporting() ? "Exporting…" : "Download gifts (CSV)"}
+          </Button>
         </Show>
 
         <Show
