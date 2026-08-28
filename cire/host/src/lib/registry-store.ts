@@ -154,6 +154,25 @@ export function stillWanted(item: RegistryItem): number {
 
 const inflight = new Map<string, Promise<void>>();
 
+/**
+ * Weddings whose Stripe capability has already been re-read this page load.
+ *
+ * It lives here rather than in the settings panel because the panel is behind a
+ * `<Show>` and remounts on every sub-tab switch, and module state in the panel
+ * would then outlive the cache it guards — including across tests. The state it
+ * re-reads for (an account mid-onboarding) can sit unchanged for days; a page
+ * reload is the one moment the answer is likely to have moved, and a reload
+ * clears this.
+ */
+const stripeChecked = new Set<string>();
+
+/** Claim the one live Stripe read this page load allows. False if already taken. */
+export function claimStripeCheck(weddingId: string): boolean {
+  if (stripeChecked.has(weddingId)) return false;
+  stripeChecked.add(weddingId);
+  return true;
+}
+
 export function ensureRegistryLoaded(
   weddingId: string,
   fetcher: () => Promise<RegistrySnapshot>,
@@ -176,4 +195,5 @@ export function ensureRegistryLoaded(
 export function __resetRegistryCache(): void {
   cache.clear();
   inflight.clear();
+  stripeChecked.clear();
 }

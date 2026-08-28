@@ -42,8 +42,10 @@ import type { StripeClient, StripeError } from "../services/stripe";
  *
  * **Key-optional.** With no `STRIPE_SECRET_KEY` the client is `null` and these
  * routes are not mounted at all, so a deployment without Stripe has no payment
- * surface rather than a broken one. The portal probes and hides the panel — the
- * same shape as the account-linking flag.
+ * surface rather than a broken one. Unlike the account-linking flag, the portal
+ * does NOT probe: nothing in `@cire/host` reads a capability, the Money-gifts
+ * panel renders on every tier, and a keyless deployment surfaces itself as the
+ * 404 this route's absence produces when a couple presses Connect (C-L1).
  */
 
 /**
@@ -105,9 +107,14 @@ export interface RegistryStripeDeps {
   readonly defaultCountry?: string;
 }
 
-/** Where Stripe returns the couple: their own registry module, in the portal. */
+/**
+ * Where Stripe returns the couple: the registry's SETTINGS tab, which is where
+ * the button they pressed lives and where the panel that reads their new status
+ * is. Landing them on the gift list would be landing them one tab away from the
+ * thing they just did.
+ */
 function portalRegistryUrl(origin: string, weddingId: string): string {
-  return `${origin.replace(/\/+$/, "")}/#/w/${encodeURIComponent(weddingId)}/registry`;
+  return `${origin.replace(/\/+$/, "")}/#/w/${encodeURIComponent(weddingId)}/registry/settings`;
 }
 
 export const createRegistryStripeRoutes = (

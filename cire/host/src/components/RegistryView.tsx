@@ -54,6 +54,48 @@ function isHttpsUrl(value: string): boolean {
 }
 
 /**
+ * What a gift's status means, in the words the couple would use for it.
+ *
+ * The two tables behind the log share this column and do not share its values: a
+ * CLAIM is `reserved` / `purchased` / `released`, a CONTRIBUTION is `pending` /
+ * `succeeded` / `refunded`. Rendering the raw column made the couple read
+ * "succeeded" about a wedding present.
+ *
+ * `failed` is handled for completeness only — the API's gift log leaves those
+ * rows out, because money that never moved is not a gift.
+ *
+ * Module scope, not the component: it reads nothing but its argument, so keeping
+ * it inside meant rebuilding the closure on every render of a view that renders
+ * on every keystroke in the list's forms.
+ */
+function giftStatus(gift: GiftLogEntry) {
+  if (gift.kind === "claim") {
+    switch (gift.status) {
+      case "reserved":
+        return { label: "Promised", gone: false };
+      case "purchased":
+        return { label: "Bought", gone: false };
+      case "released":
+        return { label: "No longer coming", gone: true };
+    }
+  } else {
+    switch (gift.status) {
+      case "pending":
+        return { label: "Not cleared yet", gone: false };
+      case "succeeded":
+        return { label: "Received", gone: false };
+      case "refunded":
+        return { label: "Refunded", gone: true };
+      case "failed":
+        return { label: "Didn't go through", gone: true };
+    }
+  }
+  // A value this build has no word for is a newer API than this build. Show it
+  // as it came rather than swallowing the row's only state.
+  return { label: gift.status, gone: false };
+}
+
+/**
  * The gift registry — the couple's list, and the log of gifts against it.
  *
  * Guest-authored text (`note`, `displayName`, and the household's `familyName`)
@@ -732,6 +774,7 @@ export default function RegistryView(props: RegistryViewProps) {
                 // three times in the markup below, and it is the only
                 // non-trivial work a gift row does (REG-P-I1).
                 const money = giftMoney(gift);
+                const status = giftStatus(gift);
                 return (
                   <li class="border-border bg-surface/10 flex flex-col gap-1 rounded-sm border px-3 py-2">
                     <div class="flex flex-wrap items-center gap-3">
@@ -753,8 +796,14 @@ export default function RegistryView(props: RegistryViewProps) {
                           </Show>
                         </span>
                       </Show>
-                      <span class="bg-surface/60 text-text-muted rounded-full px-2 py-0.5 text-[0.72rem]">
-                        {gift.status}
+                      <span
+                        class={
+                          status.gone
+                            ? "bg-error/10 text-error rounded-full px-2 py-0.5 text-[0.72rem]"
+                            : "bg-surface/60 text-text-muted rounded-full px-2 py-0.5 text-[0.72rem]"
+                        }
+                      >
+                        {status.label}
                       </span>
                       <Show
                         when={props.canEdit}
@@ -775,6 +824,13 @@ export default function RegistryView(props: RegistryViewProps) {
                         </button>
                       </Show>
                     </div>
+                    {/* A refunded gift stays in the log and stays out of the
+                        total, which is two facts a one-word pill cannot carry. */}
+                    <Show when={gift.kind === "contribution" && gift.status === "refunded"}>
+                      <p class="text-text-muted text-[0.78rem]">
+                        This one went back to the guest, so it is not counted in the total above.
+                      </p>
+                    </Show>
                     <Show when={gift.note}>
                       {/* Guest-authored — a text node, never markup (S-L3). */}
                       <p class="text-text-muted text-[0.82rem] italic">{gift.note}</p>

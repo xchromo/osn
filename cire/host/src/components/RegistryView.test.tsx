@@ -541,6 +541,59 @@ describe("RegistryView — gifts received", () => {
     );
   });
 
+  it("says what a status means rather than printing the enum value", async () => {
+    // The column is raw on the wire and shared by two tables that do not share
+    // its values. A couple reading their own gift log should not meet the word
+    // "succeeded".
+    setCachedRegistry(
+      "wed_1",
+      snapshot({
+        gifts: [
+          gift({ id: "a", kind: "claim", status: "reserved" }),
+          gift({ id: "b", kind: "claim", status: "purchased" }),
+          gift({ id: "c", kind: "claim", status: "released" }),
+          gift({ id: "d", kind: "contribution", status: "pending", amountMinor: 5_000 }),
+          gift({ id: "e", kind: "contribution", status: "succeeded", amountMinor: 5_000 }),
+        ],
+      }),
+    );
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    expect(await screen.findByText("Promised")).toBeInTheDocument();
+    expect(screen.getByText("Bought")).toBeInTheDocument();
+    expect(screen.getByText("No longer coming")).toBeInTheDocument();
+    expect(screen.getByText("Not cleared yet")).toBeInTheDocument();
+    expect(screen.getByText("Received")).toBeInTheDocument();
+    for (const raw of ["reserved", "purchased", "released", "pending", "succeeded"]) {
+      expect(screen.queryByText(raw)).not.toBeInTheDocument();
+    }
+  });
+
+  it("says a refunded gift went back and is out of the total", async () => {
+    // It stays in the log — it happened — and stays out of the summed total.
+    // A one-word pill carries neither fact.
+    setCachedRegistry(
+      "wed_1",
+      snapshot({
+        contributionsPrimaryMinor: 0,
+        gifts: [gift({ id: "r", kind: "contribution", status: "refunded", amountMinor: 5_000 })],
+      }),
+    );
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    expect(await screen.findByText("Refunded")).toBeInTheDocument();
+    expect(screen.getByText(/not counted in the total/i)).toBeInTheDocument();
+  });
+
+  it("leaves an unfamiliar status showing rather than blanking the pill", async () => {
+    // A newer API than this build. Swallowing the value would leave the row
+    // with no state at all.
+    setCachedRegistry(
+      "wed_1",
+      snapshot({ gifts: [gift({ id: "x", kind: "contribution", status: "disputed" })] }),
+    );
+    render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
+    expect(await screen.findByText("disputed")).toBeInTheDocument();
+  });
+
   it("says so when there are no gifts yet", async () => {
     setCachedRegistry("wed_1", snapshot());
     render(() => <RegistryView weddingId="wed_1" view="gifts" canEdit={true} />);
