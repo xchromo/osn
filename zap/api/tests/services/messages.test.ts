@@ -407,7 +407,7 @@ describe("messages service", () => {
       }
 
       expect(seen).toHaveLength(5);
-      expect([...seen].sort()).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      expect(seen.toSorted()).toEqual(["m1", "m2", "m3", "m4", "m5"]);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -430,7 +430,7 @@ describe("messages service", () => {
       }
 
       expect(seen).toHaveLength(5);
-      expect([...seen].sort()).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+      expect(seen.toSorted()).toEqual(["c1", "c2", "c3", "c4", "c5"]);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
