@@ -169,15 +169,15 @@ Tracked with `C-` IDs in `xchromo/osn-tracker` under `label:compliance`:
    (2026-08-14). Upstream publishes no package — the plugin is meant to be copied
    in — so there is no version to resolve, no integrity hash from a registry and
    no advisory feed to subscribe to. Integrity is asserted in-repo instead, by
-   three checks that each cover a different failure:
-   `tools/oxlint/anti-slop/SHA256SUMS` plus `scripts/verify-vendored-anti-slop.sh`
-   catch a change to the tree's contents or file set;
-   `scripts/verify-vendored-anti-slop-pin.sh` catches a change to that tree with
-   no matching change to the pinned commit, which is what a self-certifying
-   manifest cannot see; and `.github/CODEOWNERS` puts the tree behind a named
-   owner. What none of them do is compare the tree against upstream — that claim
-   rests on the pin and on whoever performs the next re-vendor. Reviewing the
-   pin is a manual step at each re-vendor, not a scheduled control.
+   checks that each cover a different failure: `tools/oxlint/anti-slop/SHA256SUMS`
+   plus `scripts/verify-vendored-anti-slop.sh` catch a change to the tree's
+   contents or file set; the same script, given a base ref, also catches a
+   change to that tree with no matching change to the pinned commit, which is
+   what a self-certifying manifest cannot see; and `.github/CODEOWNERS` puts the
+   tree behind a named owner. What none of them do is compare the tree against
+   upstream — that claim rests on the pin and on whoever performs the next
+   re-vendor. Reviewing the pin is a manual step at each re-vendor, not a
+   scheduled control.
 6. **`security.txt` + VDP** — public coordinated-disclosure channel + 90-day disclosure clock. ID: **C-M8**.
 7. **Quarterly access review** — calendar event + checklist landing in `wiki/compliance/access-reviews/<YYYY>-<Q>.md`. ID: **C-L3**.
 8. **Org-level GitHub hardening** — required MFA, required signed commits, branch
