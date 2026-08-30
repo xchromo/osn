@@ -3,6 +3,7 @@ import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
 
@@ -61,7 +62,8 @@ const buildApp = (
   layer: ReturnType<typeof createTestLayer>,
   share: RateLimiterBackend,
   exposure: RateLimiterBackend,
-) => createEventsRoutes(layer, "", testPublicKey, allow, share, exposure, {}, PROXIED);
+) =>
+  createEventsRoutes(layer, TEST_VERIFICATION, testPublicKey, allow, share, exposure, {}, PROXIED);
 
 describe("P4 — per-IP share / exposure rate limiting", () => {
   let layer: ReturnType<typeof createTestLayer>;

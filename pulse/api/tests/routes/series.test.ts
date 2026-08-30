@@ -1,6 +1,7 @@
 import { makeAccessTokenSigner, type AccessTokenSigner } from "@shared/crypto/testing";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createSeriesRoutes } from "../../src/routes/series";
 import { createTestLayer } from "../helpers/db";
 
@@ -56,7 +57,7 @@ describe("series routes", () => {
 
   beforeEach(async () => {
     const layer = createTestLayer();
-    app = createSeriesRoutes(layer, "", testPublicKey);
+    app = createSeriesRoutes(layer, TEST_VERIFICATION, testPublicKey);
     aliceToken = await makeToken("usr_alice");
     bobToken = await makeToken("usr_bob");
   });

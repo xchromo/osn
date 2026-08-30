@@ -26,6 +26,8 @@ export interface Env {
    * token verification unanchored.
    */
   OSN_JWKS_URL?: string;
+  /** Expected `iss` on access tokens — osn-api's own `OSN_ISSUER_URL`. */
+  OSN_ISSUER_URL?: string;
   /** CORS allowlist (S-M2), comma-separated. */
   ZAP_CORS_ORIGIN?: string;
   /** Environment discriminator — `local` vs anything else. */
@@ -54,6 +56,16 @@ function buildApp(env: Env): App {
     throw new Error("OSN_JWKS_URL must be set and use HTTPS in non-local environments");
   }
 
+  // The JWKS proves a key is genuine; `iss` proves the token was minted for
+  // this deployment rather than another OSN install. Required in a deployed
+  // env for the same reason the JWKS URL is: an unset expected issuer is not
+  // a soft default, it is the check not running. It must match osn-api's own
+  // `OSN_ISSUER_URL` byte for byte, so the two flip in the same deploy.
+  const issuer = env.OSN_ISSUER_URL;
+  if (nonLocal && (!issuer || issuer.startsWith("http://"))) {
+    throw new Error("OSN_ISSUER_URL must be set and use HTTPS in non-local environments");
+  }
+
   // S-M2: restrict CORS to a known origin allowlist instead of the open
   // reflect-any default. Fail closed in non-local envs (empty allowlist throws).
   const corsOrigins = resolveCorsOrigins({ ZAP_CORS_ORIGIN: env.ZAP_CORS_ORIGIN });
@@ -61,7 +73,7 @@ function buildApp(env: Env): App {
 
   return createApp({
     dbLayer: makeDbD1Live(env.DB as D1Database),
-    jwksUrl,
+    verification: { jwksUrl: jwksUrl!, issuer: issuer! },
     corsOrigins,
   });
 }

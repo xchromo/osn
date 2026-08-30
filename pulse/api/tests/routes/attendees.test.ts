@@ -2,6 +2,7 @@ import { makeAccessTokenSigner, type AccessTokenSigner } from "@shared/crypto/te
 import { Effect } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { canViewAttendees } from "../../src/services/eventAccess";
 import { createTestLayer, seedEvent } from "../helpers/db";
@@ -39,7 +40,7 @@ describe("GET /events/:id/rsvps — additive canViewAttendees flag", () => {
 
   beforeEach(async () => {
     layer = createTestLayer();
-    app = createEventsRoutes(layer, "", testPublicKey);
+    app = createEventsRoutes(layer, TEST_VERIFICATION, testPublicKey);
     const event = await Effect.runPromise(
       seedEvent({
         title: "Public",

@@ -3,6 +3,7 @@ import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
 
@@ -47,7 +48,7 @@ describe("GET /events/discover", () => {
     layer = createTestLayer();
     app = createEventsRoutes(
       layer,
-      "",
+      TEST_VERIFICATION,
       testPublicKey,
       allowAllLimiter,
       undefined,
@@ -130,7 +131,7 @@ describe("GET /events/discover", () => {
     const blockingLimiter: RateLimiterBackend = { check: () => false };
     const blockedApp = createEventsRoutes(
       layer,
-      "",
+      TEST_VERIFICATION,
       testPublicKey,
       blockingLimiter,
       undefined,
@@ -151,7 +152,7 @@ describe("GET /events/discover", () => {
     };
     const failedApp = createEventsRoutes(
       layer,
-      "",
+      TEST_VERIFICATION,
       testPublicKey,
       failingLimiter,
       undefined,

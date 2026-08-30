@@ -20,6 +20,7 @@ vi.mock("../../src/lib/osn-bridge", () => ({
   notifyAppLeft: vi.fn(() => Effect.succeed({ closed: true } as const)),
 }));
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createAccountRoutes } from "../../src/routes/account";
 
 let signer: AccessTokenSigner;
@@ -33,7 +34,7 @@ beforeAll(async () => {
 const makeToken = (profileId: string) => signer.sign(profileId);
 
 function makeApp() {
-  return createAccountRoutes(createTestLayer(), "http://unused.test/jwks", testPublicKey);
+  return createAccountRoutes(createTestLayer(), TEST_VERIFICATION, testPublicKey);
 }
 
 describe("account routes — auth gates", () => {

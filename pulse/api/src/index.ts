@@ -6,6 +6,7 @@ import { Effect } from "effect";
 
 import { createApp, type App, type AppOptions } from "./app";
 import { assertCorsOriginsConfigured, resolveCorsOrigins } from "./lib/cors-config";
+import { DEFAULT_ISSUER_URL, DEFAULT_JWKS_URL } from "./lib/jwks";
 import { buildPulseOidcConfig } from "./lib/oidc";
 import { makeMemoryRateLimiters, type PulseRateLimiters } from "./redis";
 
@@ -98,6 +99,16 @@ function buildApp(env: Env): App {
     throw new Error("OSN_JWKS_URL must be set and use HTTPS in non-local environments");
   }
 
+  // The JWKS proves a key is genuine; `iss` proves the token was minted for
+  // this deployment rather than another OSN install. Required in a deployed
+  // env for the same reason the JWKS URL is: an unset expected issuer is not
+  // a soft default, it is the check not running. It must equal osn-api's own
+  // `OSN_ISSUER_URL` byte for byte, so the two flip in the same deploy.
+  const issuerUrl = env.OSN_ISSUER_URL;
+  if (secure && (!issuerUrl || issuerUrl.startsWith("http://"))) {
+    throw new Error("OSN_ISSUER_URL must be set and use HTTPS in non-local environments");
+  }
+
   // CORS allowlist — fail closed in non-local envs where PULSE_CORS_ORIGIN is
   // unset (an empty allowlist in a secure env is a misconfiguration).
   const corsOrigins = resolveCorsOrigins({ PULSE_CORS_ORIGIN: env.PULSE_CORS_ORIGIN }, secure);
@@ -120,7 +131,10 @@ function buildApp(env: Env): App {
 
   const options: AppOptions = {
     dbLayer: makeDbD1Live(env.DB as D1Database),
-    jwksUrl,
+    verification: {
+      jwksUrl: jwksUrl ?? DEFAULT_JWKS_URL,
+      issuer: issuerUrl ?? DEFAULT_ISSUER_URL,
+    },
     rateLimiters,
     clientIpConfig: resolveClientIpConfig(env),
     corsOrigins,

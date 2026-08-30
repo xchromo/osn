@@ -14,6 +14,7 @@ vi.mock("../../src/services/graphBridge", () => ({
   getProfileDisplays: vi.fn(() => Effect.succeed(new Map())),
 }));
 
+import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import * as bridge from "../../src/services/graphBridge";
 
 let signer: AccessTokenSigner;
@@ -54,7 +55,7 @@ describe("close-friends routes", () => {
 
   beforeEach(async () => {
     layer = createTestLayer();
-    app = createCloseFriendsRoutes(layer, "", testPublicKey);
+    app = createCloseFriendsRoutes(layer, TEST_VERIFICATION, testPublicKey);
     aliceToken = await makeToken("usr_alice");
     vi.mocked(bridge.getConnectionIds).mockReturnValue(Effect.succeed(new Set()));
     vi.mocked(bridge.getProfileDisplays).mockReturnValue(Effect.succeed(new Map()));
