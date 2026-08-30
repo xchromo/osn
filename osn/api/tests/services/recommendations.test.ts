@@ -279,33 +279,63 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // The fan-out selects ids only and hydrates the surviving organisations
-  // afterwards, so the label has to survive that round trip — and be the same
-  // label on two identical requests. Without the ORDER BY the LIMIT took an
-  // arbitrary slice, so which organisation labelled a co-member could differ
-  // between calls.
-  it.effect("labels a co-member with the same organisation on repeated calls", () =>
+  // The hydration is a keyed lookup into a map built after ranking, which the
+  // old inner join could not get wrong. Two candidates in two different live
+  // organisations is the smallest case that tells a keyed lookup from an
+  // unkeyed one: with only one organisation in the map, returning "whatever is
+  // in there" and returning "the right one" are the same answer, and a card
+  // wearing another organisation's name would ship green.
+  it.effect("labels each candidate with the organisation it actually shares", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
       const bob = yield* auth.registerProfile("b@e.com", "bob");
-      // bob shares three organisations with alice, so there is something to be
-      // arbitrary about.
+      const cara = yield* auth.registerProfile("c@e.com", "cara");
       const acme = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
       const beta = yield* orgs.createOrganisation(alice.id, "beta", "Beta Ltd");
-      const gamma = yield* orgs.createOrganisation(alice.id, "gamma", "Gamma Co");
       yield* orgs.addMember(acme.id, alice.id, bob.id, "member");
-      yield* orgs.addMember(beta.id, alice.id, bob.id, "member");
-      yield* orgs.addMember(gamma.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, cara.id, "member");
 
-      const first = yield* recs.suggestConnections(alice.id);
-      const second = yield* recs.suggestConnections(alice.id);
+      const result = yield* recs.suggestConnections(alice.id);
+      const byHandle = new Map(result.map((x) => [x.handle, x.sharedOrganisation]));
 
-      expect(first).toHaveLength(1);
-      expect(first[0]!.handle).toBe("bob");
-      expect(first[0]!.sharedOrganisation).not.toBeNull();
-      expect(second[0]!.sharedOrganisation).toEqual(first[0]!.sharedOrganisation);
-      // Whichever one it is, it is one alice actually shares with bob.
-      expect(["acme", "beta", "gamma"]).toContain(first[0]!.sharedOrganisation!.handle);
+      expect(byHandle.get("bob")).toEqual({ handle: "acme", name: "Acme Inc" });
+      expect(byHandle.get("cara")).toEqual({ handle: "beta", name: "Beta Ltd" });
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The same lookup when the map is only partly populated: one label survives,
+  // one candidate loses its organisation but keeps its mutual connection, and
+  // a third loses the only basis it had.
+  it.effect("hydrates a partial map without borrowing another candidate's label", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const cara = yield* auth.registerProfile("c@e.com", "cara");
+      const dana = yield* auth.registerProfile("d@e.com", "dana");
+      const erin = yield* auth.registerProfile("e@e.com", "erin");
+
+      const acme = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      const beta = yield* orgs.createOrganisation(alice.id, "beta", "Beta Ltd");
+      yield* orgs.addMember(acme.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, cara.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, erin.id, "member");
+      // dana is a friend-of-friend, so she survives losing her label.
+      yield* connect(alice.id, cara.id);
+      yield* connect(cara.id, dana.id);
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() => db.delete(organisations).where(eq(organisations.id, beta.id)));
+
+      const result = yield* recs.suggestConnections(alice.id);
+      const byHandle = new Map(result.map((x) => [x.handle, x.sharedOrganisation]));
+
+      // bob keeps the organisation he actually shares — not beta's name, and
+      // not a label borrowed from the one entry left in the map.
+      expect(byHandle.get("bob")).toEqual({ handle: "acme", name: "Acme Inc" });
+      // dana stands on the mutual connection, with no label.
+      expect(byHandle.get("dana")).toBeNull();
+      // erin's only basis was beta, which is gone.
+      expect(byHandle.has("erin")).toBe(false);
     }).pipe(Effect.provide(createTestLayer())),
   );
 
@@ -336,11 +366,12 @@ describe("suggestConnections", () => {
   // The suggestion has to survive that with no label rather than vanish or
   // carry a stale one.
   //
-  // The state is reached by deleting the row directly, because the service
-  // layer cannot produce it: `deleteOrganisation` removes the membership rows
-  // and the organisation in one batch. This pins the defensive branch, not a
-  // reachable bug — which also means dropping the old `innerJoin(organisations)`
-  // from the fan-out changed no candidate that a real database can hold.
+  // The state is reached by deleting the row directly. It cannot persist —
+  // `deleteOrganisation` removes the membership rows and the organisation in
+  // one batch, and D1 enforces the foreign key besides (this harness does not;
+  // see the pragma finding). What it can be is a read race: the fan-out and
+  // the hydration are two statements now rather than one join, so an
+  // organisation deleted between them lands exactly here.
   it.effect("drops the label, not the suggestion, when the organisation is gone", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
