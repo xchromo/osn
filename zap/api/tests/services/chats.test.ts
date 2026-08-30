@@ -630,4 +630,35 @@ describe("chats service", () => {
       expect(chat.title).toBe("Enquiry #1");
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // Both create paths now return the row they wrote instead of reading it
+  // back, so the returned object has to match what the database stored —
+  // including `class`, which used to come from the column default, and
+  // `createdAt`/`updatedAt`, which are stored as whole seconds.
+  it.effect("provisionC2bChat returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const returned = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+        title: "Enquiry #1",
+      });
+      const stored = yield* getChat(returned.id);
+      expect(stored).toEqual(returned);
+      expect(returned.class).toBe("c2b");
+      expect(returned.createdAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("createChat returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const returned = yield* createChat(
+        { type: "group", title: "Team", memberProfileIds: ["usr_bob"] },
+        "usr_alice",
+      );
+      const stored = yield* getChat(returned.id);
+      expect(stored).toEqual(returned);
+      expect(returned.class).toBe("c2c");
+      expect(returned.createdAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });

@@ -321,4 +321,76 @@ describe("messages service", () => {
       }
     }).pipe(Effect.provide(createTestLayer())),
   );
+
+  // Same contract as listMessages. Falling back to page 1 sends a paginating
+  // caller round the same page for ever, and it cannot tell that from a
+  // genuinely short history.
+  it.effect("listC2bMessages rejects an unknown before cursor", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      yield* sendC2bMessage(chat.id, "usr_a", { body: "first" });
+
+      const result = yield* Effect.either(listC2bMessages(chat.id, { before: "msg_nope" }));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ValidationError");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // A cursor belonging to a different chat is unknown *to this chat*, so it
+  // takes the same branch — the lookup is scoped by chatId.
+  it.effect("listC2bMessages rejects a cursor from another chat", () =>
+    Effect.gen(function* () {
+      const mine = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const theirs = yield* provisionC2bChat({
+        memberProfileIds: ["usr_c", "usr_d"],
+        createdByProfileId: "usr_c",
+      });
+      yield* sendC2bMessage(mine.id, "usr_a", { body: "mine" });
+      const other = yield* sendC2bMessage(theirs.id, "usr_c", { body: "theirs" });
+
+      const result = yield* Effect.either(listC2bMessages(mine.id, { before: other.id }));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("ValidationError");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Both send paths now return the row they wrote instead of reading it back.
+  // That is only safe while the returned object matches what the database
+  // actually stored — including `createdAt`, which is stored as whole seconds.
+  it.effect("sendC2bMessage returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const returned = yield* sendC2bMessage(chat.id, "usr_a", { body: "hello" });
+      const [stored] = yield* listC2bMessages(chat.id);
+      expect(stored).toEqual(returned);
+      expect(returned.createdAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("sendMessage returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+      const returned = yield* sendMessage(chat.id, "usr_alice", {
+        ciphertext: "dGVzdCBtZXNzYWdl",
+        nonce: "YWJjZGVmMTIzNDU2",
+      });
+      const [stored] = yield* listMessages(chat.id, "usr_alice");
+      expect(stored).toEqual(returned);
+      expect(returned.createdAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
 });

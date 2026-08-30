@@ -28,7 +28,6 @@ export function createTestLayer() {
     )
   `);
   sqlite.run(`CREATE INDEX chats_type_idx ON chats (type)`);
-  sqlite.run(`CREATE INDEX chats_class_idx ON chats (class)`);
   sqlite.run(`CREATE INDEX chats_event_id_idx ON chats (event_id)`);
   sqlite.run(`CREATE INDEX chats_created_by_profile_id_idx ON chats (created_by_profile_id)`);
   sqlite.run(`

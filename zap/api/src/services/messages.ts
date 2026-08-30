@@ -11,6 +11,7 @@ import {
   MAX_MESSAGE_LIMIT,
   MAX_BODY_LENGTH,
 } from "../lib/limits";
+import { storedNow } from "../lib/storedNow";
 import { metricMessageSent, metricMessagesListed } from "../metrics";
 import { NotC2bChat } from "./chats";
 
@@ -81,29 +82,28 @@ export const sendMessage = (
     );
 
     const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const now = new Date();
+    const now = storedNow();
+
+    const row: Message = {
+      id,
+      chatId,
+      senderProfileId,
+      ciphertext: validated.ciphertext,
+      nonce: validated.nonce,
+      body: null,
+      createdAt: now,
+      expiresAt: null,
+    };
 
     yield* Effect.tryPromise({
-      try: () =>
-        db.insert(messages).values({
-          id,
-          chatId,
-          senderProfileId,
-          ciphertext: validated.ciphertext,
-          nonce: validated.nonce,
-          createdAt: now,
-        }),
+      try: () => db.insert(messages).values(row),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
     metricMessageSent(chat.type as "dm" | "group" | "event", validated.ciphertext.length, "ok");
 
-    const [msg] = yield* Effect.tryPromise({
-      try: (): Promise<Message[]> =>
-        db.select().from(messages).where(eq(messages.id, id)) as Promise<Message[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    return msg!;
+    // Returned from the values just written — see `sendC2bMessage`.
+    return row;
   }).pipe(Effect.withSpan("zap.messages.send"));
 
 export const listMessages = (
@@ -203,19 +203,21 @@ export const sendC2bMessage = (
     );
 
     const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const now = new Date();
+    const now = storedNow();
+
+    const row: Message = {
+      id,
+      chatId,
+      senderProfileId,
+      ciphertext: null,
+      nonce: null,
+      body: validated.body,
+      createdAt: now,
+      expiresAt: null,
+    };
 
     yield* Effect.tryPromise({
-      try: () =>
-        db.insert(messages).values({
-          id,
-          chatId,
-          senderProfileId,
-          ciphertext: null,
-          nonce: null,
-          body: validated.body,
-          createdAt: now,
-        }),
+      try: () => db.insert(messages).values(row),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
@@ -225,18 +227,17 @@ export const sendC2bMessage = (
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    const [msg] = yield* Effect.tryPromise({
-      try: (): Promise<Message[]> =>
-        db.select().from(messages).where(eq(messages.id, id)) as Promise<Message[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    return msg!;
+    // Returned from the values just written rather than read back. Every
+    // column is known here — nothing is defaulted or computed by the database
+    // — so the read was a third sequential round-trip that could only return
+    // what we already had.
+    return row;
   }).pipe(Effect.withSpan("zap.messages.send_c2b"));
 
 export const listC2bMessages = (
   chatId: string,
   opts: { limit?: number; before?: string } = {},
-): Effect.Effect<Message[], ChatNotFound | NotC2bChat | DatabaseError, Db> =>
+): Effect.Effect<Message[], ChatNotFound | NotC2bChat | ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
@@ -270,9 +271,13 @@ export const listC2bMessages = (
             .limit(1) as Promise<Message[]>,
         catch: (cause) => new DatabaseError({ cause }),
       });
-      if (cursorRows.length > 0) {
-        conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
+      // Same contract as `listMessages`: an unknown cursor is a caller bug,
+      // not page 1. Silently restarting sends the caller round the same page
+      // for ever, and it cannot tell that from a genuinely short history.
+      if (cursorRows.length === 0) {
+        return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this chat" }));
       }
+      conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
     }
 
     const results = yield* Effect.tryPromise({

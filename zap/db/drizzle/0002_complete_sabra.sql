@@ -1,0 +1,1 @@
+DROP INDEX `chats_class_idx`;
