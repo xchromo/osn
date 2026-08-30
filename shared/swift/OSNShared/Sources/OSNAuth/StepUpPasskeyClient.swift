@@ -14,7 +14,11 @@ public final class StepUpPasskeyClient: Sendable {
     ///   `PasskeyManagementClient.init` for why a second one on the same
     ///   cookie jar revokes the session family.
     public init(session: URLSession, environment: Environment, tokenRefresher: TokenRefresher) {
-        self.transport = AuthenticatedTransport(session: session, tokenRefresher: tokenRefresher)
+        self.transport = AuthenticatedTransport(
+            session: session,
+            environment: environment,
+            tokenRefresher: tokenRefresher
+        )
         self.environment = environment
     }
 
@@ -64,14 +68,18 @@ public final class StepUpPasskeyClient: Sendable {
         return try await complete(assertion: assertion, purpose: purpose)
     }
 
-    private func begin() async throws -> StepUpPasskeyBeginResponse {
+    /// `internal`, not `private`, so a test can assert the request shape
+    /// without running a real passkey ceremony — `mintStepUpToken` cannot run
+    /// headless, and this is the half that talks to the server.
+    func begin() async throws -> StepUpPasskeyBeginResponse {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("step-up/passkey/begin"))
         request.httpMethod = "POST"
 
         return try await transport.decode(StepUpPasskeyBeginResponse.self, from: request)
     }
 
-    private func complete(
+    /// `internal` for the same reason as `begin()`.
+    func complete(
         assertion: AuthenticationResponseJSON,
         purpose: StepUpPurpose
     ) async throws -> StepUpPasskeyCompleteResponse {

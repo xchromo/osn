@@ -130,9 +130,9 @@ public final class OSNSession {
     public func restore() async {
         state = .restoring
         do {
-            try await tokenRefresher.refresh()
+            let grant = try await tokenRefresher.refresh()
             state = .signedIn(nil)
-            reconcileIdentity()
+            reconcileIdentity(token: grant.accessToken)
         } catch {
             state = .signedOut
         }
@@ -230,7 +230,12 @@ public final class OSNSession {
     /// `TokenRefresher.refresh()` persists it to the Keychain; this method
     /// never writes there directly.
     public func ensureFreshAccessToken() async throws {
-        let stored = try KeychainAccessTokenStore.load()
+        // `AccessTokenProvider.storedAccessToken()` rather than
+        // `KeychainAccessTokenStore.load()` directly: this class is
+        // `@MainActor`, and the load is a synchronous IPC to `securityd`.
+        // The provider's accessor is `@concurrent`, so the read runs on the
+        // cooperative pool and only the state write below lands back here.
+        let stored = try await AccessTokenProvider.storedAccessToken()
         if let stored, stored.expiresAt.timeIntervalSinceNow > AccessTokenProvider.expirySkew {
             reconcileIdentity(token: stored.token)
             return

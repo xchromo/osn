@@ -21,7 +21,11 @@ public final class PasskeyManagementClient: Sendable {
     ///   whole session family. `OSNSession.tokenRefresher` is public for
     ///   exactly this.
     public init(session: URLSession, environment: Environment, tokenRefresher: TokenRefresher) {
-        self.transport = AuthenticatedTransport(session: session, tokenRefresher: tokenRefresher)
+        self.transport = AuthenticatedTransport(
+            session: session,
+            environment: environment,
+            tokenRefresher: tokenRefresher
+        )
         self.environment = environment
     }
 

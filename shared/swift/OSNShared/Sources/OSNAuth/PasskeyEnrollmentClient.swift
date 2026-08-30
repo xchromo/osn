@@ -11,7 +11,11 @@ public final class PasskeyEnrollmentClient: Sendable {
     ///   `PasskeyManagementClient.init` for why a second one on the same
     ///   cookie jar revokes the session family.
     public init(session: URLSession, environment: Environment, tokenRefresher: TokenRefresher) {
-        self.transport = AuthenticatedTransport(session: session, tokenRefresher: tokenRefresher)
+        self.transport = AuthenticatedTransport(
+            session: session,
+            environment: environment,
+            tokenRefresher: tokenRefresher
+        )
         self.environment = environment
     }
 
@@ -76,7 +80,9 @@ public final class PasskeyEnrollmentClient: Sendable {
         return try await completeRegistration(profileId: profileId, attestation: attestation)
     }
 
-    private func beginRegistration(
+    /// `internal`, not `private`, so a test can assert the conditional
+    /// `X-Step-Up-Token` header without running a real passkey ceremony.
+    func beginRegistration(
         profileId: String,
         stepUpToken: String?
     ) async throws -> PublicKeyCredentialCreationOptionsJSON {
@@ -93,7 +99,8 @@ public final class PasskeyEnrollmentClient: Sendable {
         return try await transport.decode(PublicKeyCredentialCreationOptionsJSON.self, from: request)
     }
 
-    private func completeRegistration(
+    /// `internal` for the same reason as `beginRegistration`.
+    func completeRegistration(
         profileId: String,
         attestation: RegistrationResponseJSON
     ) async throws -> PasskeyEnrollmentResult {

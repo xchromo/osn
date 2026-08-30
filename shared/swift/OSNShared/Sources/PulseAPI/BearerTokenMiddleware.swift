@@ -28,10 +28,15 @@ public struct BearerTokenMiddleware: ClientMiddleware {
         next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
     ) async throws -> (HTTPResponse, HTTPBody?) {
         var request = request
-        request.headerFields[.authorization] = "Bearer \(try await validToken())"
+        let resolved = try await tokens.bearerTokenRefreshingWhenAbsent()
+        request.headerFields[.authorization] = "Bearer \(resolved.token)"
 
         let (response, responseBody) = try await next(request, body, baseURL)
-        guard response.status.code == 401 else {
+        // A token minted moments ago inside this very call is not worth
+        // retrying: the server rejecting one it just issued will reject its
+        // replacement too, and the second `/token` grant rotates the session
+        // cookie again for nothing.
+        guard response.status.code == 401, !resolved.wasJustMinted else {
             return (response, responseBody)
         }
 
@@ -44,12 +49,8 @@ public struct BearerTokenMiddleware: ClientMiddleware {
             return (response, responseBody)
         }
 
-        let freshToken = try await tokens.refreshedBearerToken()
+        let freshToken = try await tokens.refreshedBearerToken(replacing: resolved.token)
         request.headerFields[.authorization] = "Bearer \(freshToken)"
         return try await next(request, body, baseURL)
-    }
-
-    private func validToken() async throws -> String {
-        try await tokens.bearerTokenRefreshingWhenAbsent()
     }
 }
