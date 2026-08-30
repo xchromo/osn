@@ -217,6 +217,15 @@ export const createChatsRoutes = (
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
               Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("chat", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -299,6 +308,15 @@ export const createChatsRoutes = (
           const result = await runtime.runPromise(
             addMember(params.id, body.profileId, claims.profileId).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("members", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -357,6 +375,15 @@ export const createChatsRoutes = (
             removeMember(params.id, params.profileId, claims.profileId).pipe(
               Effect.map(() => ({ ok: true }) as const),
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("members", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -408,9 +435,12 @@ export const createChatsRoutes = (
               // 409, matching how the internal route reports the same class
               // mismatch the other way round. Not 403: the caller may well be
               // a member, they are just using the wrong endpoint for this
-              // chat's class.
+              // chat's class. Counted like the other denials on this route —
+              // an attempt to write ciphertext into a moderatable chat is the
+              // one worth being able to see.
               Effect.catchTag("NotC2cChat", () =>
                 Effect.sync(() => {
+                  metricAccessDenied("messages", "wrong_class");
                   set.status = 409;
                   return { message: "Not a c2c chat" } as const;
                 }),
@@ -461,6 +491,15 @@ export const createChatsRoutes = (
               cursor: query.cursor,
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("messages", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatMember", () =>
                 Effect.sync(() => {
                   metricAccessDenied("messages", "not_member");

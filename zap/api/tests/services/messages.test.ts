@@ -245,6 +245,23 @@ describe("messages service", () => {
   // export (which filters on a non-null body) and rendered as an empty string
   // by the internal reader, so it escapes both the export and moderation in
   // the one chat class that promises both.
+  // The read half. Without it the public route serves a c2b chat's plaintext
+  // `body` to any member, going round the ARC-gated `chat:c2b` reader that is
+  // supposed to be the only way to it.
+  it.effect("listMessages fails NotC2cChat on a c2b chat", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      yield* sendC2bMessage(chat.id, "usr_a", { body: "commercially sensitive" });
+
+      const result = yield* Effect.either(listMessages(chat.id, "usr_a"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotC2cChat");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("sendMessage fails NotC2cChat on a c2b chat", () =>
     Effect.gen(function* () {
       const chat = yield* provisionC2bChat({
@@ -262,10 +279,12 @@ describe("messages service", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // The guard runs before the membership check, so a non-member gets the class
-  // mismatch rather than a 403 — the endpoint is wrong for this chat whoever
-  // is calling it.
-  it.effect("sendMessage reports the class mismatch ahead of membership", () =>
+  // The guard runs AFTER the membership check, so a non-member learns nothing
+  // about the chat's class. This is a public route: answering "not a c2c
+  // chat" to any authenticated stranger holding a chat id would tell them
+  // which ids are commercial. `sendC2bMessage` orders it the other way round
+  // because that route is ARC-gated and only cire reaches it.
+  it.effect("sendMessage does not disclose the class to a non-member", () =>
     Effect.gen(function* () {
       const chat = yield* provisionC2bChat({
         memberProfileIds: ["usr_a", "usr_b"],
@@ -277,7 +296,7 @@ describe("messages service", () => {
       );
       expect(Either.isLeft(result)).toBe(true);
       if (Either.isLeft(result)) {
-        expect(result.left._tag).toBe("NotC2cChat");
+        expect(result.left._tag).toBe("NotChatMember");
       }
     }).pipe(Effect.provide(createTestLayer())),
   );

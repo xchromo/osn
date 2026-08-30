@@ -655,6 +655,59 @@ describe("chats service", () => {
   // Both now return the row they wrote instead of reading it back, so both
   // need the same anchor: what the caller gets must equal what a later read
   // gives, `createdAt`/`updatedAt` truncation included.
+  // `class` is a rule about the chat, not about the verb. A c2b chat's
+  // membership is cire's to grant and revoke through the internal routes, and
+  // its messages are server-visible — so every c2c-shaped operation refuses
+  // one. Before these guards, `updateChat` and `addMember` were closed only by
+  // accident: `provisionC2bChat` gives every member `role: "member"`, so
+  // `assertAdmin` could never pass, and the first flow to promote a c2b member
+  // would have opened both.
+  it.effect("updateChat rejects a c2b chat", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const result = yield* Effect.either(updateChat(chat.id, { title: "Nope" }, "usr_a"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotC2cChat");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("addMember rejects a c2b chat", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const result = yield* Effect.either(addMember(chat.id, "usr_c", "usr_a"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotC2cChat");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The sharpest of the three. `removeMember` lets a member leave without an
+  // admin check, and a c2b chat has no admin, so both the admin gate and the
+  // last-admin guard were inert: any member could delete their own membership
+  // row from a chat cire authorised. The DSAR export reaches a profile's c2b
+  // message bodies only through `chat_members`, so leaving silently truncated
+  // the leaver's own export while the rows stayed in the database.
+  it.effect("removeMember rejects a c2b chat, including self-removal", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const selfLeave = yield* Effect.either(removeMember(chat.id, "usr_a", "usr_a"));
+      expect(Either.isLeft(selfLeave)).toBe(true);
+      if (Either.isLeft(selfLeave)) expect(selfLeave.left._tag).toBe("NotC2cChat");
+
+      // And the membership row is still there.
+      const { members } = yield* getChatMembers(chat.id);
+      expect(members.map((m) => m.profileId).toSorted()).toEqual(["usr_a", "usr_b"]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("addMember returns exactly what a later read returns", () =>
     Effect.gen(function* () {
       const chat = yield* createChat({ type: "group" }, "usr_alice");

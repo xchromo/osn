@@ -290,11 +290,30 @@ export const createChat = (
     return row;
   }).pipe(Effect.withSpan("zap.chats.create"));
 
+/**
+ * Rejects a `c2b` chat on the public, member-facing API.
+ *
+ * `class` is not a per-verb rule. A c2b chat's membership is cire's to grant
+ * and revoke through the ARC-gated internal routes, and its messages are
+ * server-visible by definition — so every c2c-shaped operation has to refuse
+ * one, whether it reads, writes or changes who is in it. Without that, the
+ * guards depend on accidents: a c2b chat has no admin (`provisionC2bChat`
+ * writes `role: "member"` for everyone), so `assertAdmin` happens to close
+ * the admin-only paths, and the first flow that promotes a c2b member opens
+ * them all again.
+ */
+const assertC2c = (chat: Chat): Effect.Effect<void, NotC2cChat> =>
+  chat.class === "c2c" ? Effect.void : Effect.fail(new NotC2cChat({ chatId: chat.id }));
+
 export const updateChat = (
   id: string,
   data: unknown,
   requestingProfileId: string,
-): Effect.Effect<Chat, ChatNotFound | NotChatAdmin | ValidationError | DatabaseError, Db> =>
+): Effect.Effect<
+  Chat,
+  ChatNotFound | NotChatAdmin | NotC2cChat | ValidationError | DatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     // The row this returns, built from what was already read plus what is
@@ -303,6 +322,7 @@ export const updateChat = (
     // timestamp as whole seconds, and an untruncated `Date` here would make
     // the response disagree with every later read of the same row.
     const chat = yield* getChat(id);
+    yield* assertC2c(chat);
 
     // Check that the requesting user is an admin.
     yield* assertAdmin(id, requestingProfileId);
@@ -323,7 +343,16 @@ export const updateChat = (
     // stored one alone — and the row handed back has to say the same. The
     // read-back this replaced got that right by accident; the compiler caught
     // it here, which is the argument for annotating these rows at all.
-    return { ...chat, title: validated.title ?? chat.title, updatedAt: now };
+    // `=== undefined`, not `??`. Drizzle filters exactly `undefined` out of
+    // the SET clause; a `null` would be written. The schema rejects `null`
+    // today, so the two behave alike — but the moment "send null to clear the
+    // title" is added, `??` would write NULL and hand the caller back the old
+    // title, breaking the one property this conversion rests on.
+    return {
+      ...chat,
+      title: validated.title === undefined ? chat.title : validated.title,
+      updatedAt: now,
+    };
   }).pipe(Effect.withSpan("zap.chats.update"));
 
 export const addMember = (
@@ -334,6 +363,7 @@ export const addMember = (
   ChatMember,
   | ChatNotFound
   | NotChatAdmin
+  | NotC2cChat
   | MemberLimitReached
   | AlreadyMember
   | ConsentDenied
@@ -344,6 +374,7 @@ export const addMember = (
   Effect.gen(function* () {
     const { db } = yield* Db;
     const chat = yield* getChat(chatId);
+    yield* assertC2c(chat);
     yield* assertAdmin(chatId, requestingProfileId);
 
     // Z3: a DM is sealed at two members — no widening into a group via add.
@@ -411,12 +442,13 @@ export const removeMember = (
   requestingProfileId: string,
 ): Effect.Effect<
   void,
-  ChatNotFound | NotChatAdmin | NotChatMember | LastAdmin | DatabaseError,
+  ChatNotFound | NotChatAdmin | NotChatMember | NotC2cChat | LastAdmin | DatabaseError,
   Db
 > =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    yield* getChat(chatId);
+    const chat = yield* getChat(chatId);
+    yield* assertC2c(chat);
 
     // Allow self-removal (leaving) or admin removal of others.
     if (profileId !== requestingProfileId) {
