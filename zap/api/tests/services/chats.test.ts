@@ -13,7 +13,7 @@ import {
   provisionC2bChat,
 } from "../../src/services/chats";
 import { setConsentGate, resetConsentGate } from "../../src/services/consent";
-import { createTestLayer, seedChat, seedMember } from "../helpers/db";
+import { createTestLayer, seedC2bChat, seedChat, seedMember } from "../helpers/db";
 
 describe("chats service", () => {
   // The CRUD suite exercises membership/admin logic, not the social graph, so
@@ -662,7 +662,40 @@ describe("chats service", () => {
   // accident: `provisionC2bChat` gives every member `role: "member"`, so
   // `assertAdmin` could never pass, and the first flow to promote a c2b member
   // would have opened both.
-  it.effect("updateChat rejects a c2b chat", () =>
+  // The non-disclosure property, per verb. It is stated in three source
+  // comments and in the changeset; without a test it is a convention, and a
+  // later refactor that hoists the cheap class check above the gate reopens
+  // the oracle silently.
+  it.effect("removeMember does not disclose the class to a non-member", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      // A stranger attempting to remove themselves: no admin gate on the
+      // self-removal path, so the membership lookup is what must stop them.
+      const result = yield* Effect.either(removeMember(chat.id, "usr_zed", "usr_zed"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotChatMember");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("updateChat does not disclose the class to a non-member", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const result = yield* Effect.either(updateChat(chat.id, { title: "x" }, "usr_zed"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotChatAdmin");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Same shape as `addMember`: a c2b chat has no admin, so a member is stopped
+  // by the authorisation gate and learns nothing about the class; the class
+  // guard behind it fires only once someone can pass that gate.
+  it.effect("updateChat rejects a c2b chat member without disclosing the class", () =>
     Effect.gen(function* () {
       const chat = yield* provisionC2bChat({
         memberProfileIds: ["usr_a", "usr_b"],
@@ -670,16 +703,46 @@ describe("chats service", () => {
       });
       const result = yield* Effect.either(updateChat(chat.id, { title: "Nope" }, "usr_a"));
       expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotChatAdmin");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("updateChat rejects a c2b chat once someone can pass the admin gate", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedC2bChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_a", "admin");
+
+      const result = yield* Effect.either(updateChat(chat.id, { title: "Nope" }, "usr_a"));
+      expect(Either.isLeft(result)).toBe(true);
       if (Either.isLeft(result)) expect(result.left._tag).toBe("NotC2cChat");
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  it.effect("addMember rejects a c2b chat", () =>
+  // Two halves, and the order matters. A c2b chat has no admin today, so a
+  // member calling `addMember` is stopped by `assertAdmin` and never learns
+  // the chat's class — which is the point of putting the class check behind
+  // the authorisation gate rather than in front of it.
+  it.effect("addMember rejects a c2b chat member without disclosing the class", () =>
     Effect.gen(function* () {
       const chat = yield* provisionC2bChat({
         memberProfileIds: ["usr_a", "usr_b"],
         createdByProfileId: "usr_a",
       });
+      const result = yield* Effect.either(addMember(chat.id, "usr_c", "usr_a"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotChatAdmin");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // And the guard itself, which is dormant rather than dead: it fires the
+  // moment a c2b chat has an admin to get past `assertAdmin`. That is the
+  // future this guards — before it existed, `updateChat` and `addMember` were
+  // closed to c2b chats only because no code path grants that role.
+  it.effect("addMember rejects a c2b chat once someone can pass the admin gate", () =>
+    Effect.gen(function* () {
+      const chat = yield* seedC2bChat({ type: "group" });
+      yield* seedMember(chat.id, "usr_a", "admin");
+
       const result = yield* Effect.either(addMember(chat.id, "usr_c", "usr_a"));
       expect(Either.isLeft(result)).toBe(true);
       if (Either.isLeft(result)) expect(result.left._tag).toBe("NotC2cChat");
@@ -710,6 +773,7 @@ describe("chats service", () => {
 
   it.effect("addMember returns exactly what a later read returns", () =>
     Effect.gen(function* () {
+      const past = new Date(1_700_000_000_000);
       const chat = yield* createChat({ type: "group" }, "usr_alice");
       const returned = yield* addMember(chat.id, "usr_bob", "usr_alice");
 
@@ -717,18 +781,33 @@ describe("chats service", () => {
       const stored = members.find((m) => m.profileId === "usr_bob");
       expect(stored).toEqual(returned);
       expect(returned.joinedAt.getTime() % 1000).toBe(0);
+      // The equality above compares the returned object against a round-trip
+      // of itself — it is the same object that was inserted — so it cannot
+      // catch a constant that is wrong on both sides. These two can: the id
+      // prefix is minted in four places in this file and asserted in none, and
+      // a frozen `joinedAt` passes the truncation check.
+      expect(returned.id).toMatch(/^cmem_/);
+      expect(returned.joinedAt.getTime()).toBeGreaterThan(past.getTime());
     }).pipe(Effect.provide(createTestLayer())),
   );
 
   it.effect("updateChat returns exactly what a later read returns", () =>
     Effect.gen(function* () {
-      const chat = yield* createChat({ type: "group", title: "Before" }, "usr_alice");
+      // Seeded in the past, deliberately. Creating and updating in the same
+      // wall-clock second makes `storedNow()` return the row's existing
+      // `updatedAt`, so an equality check alone cannot tell "the timestamp
+      // advanced" from "the timestamp never moved" — freezing it passes.
+      const past = new Date(1_700_000_000_000);
+      const chat = yield* seedChat({ type: "group", title: "Before", createdAt: past });
+      yield* seedMember(chat.id, "usr_alice", "admin");
+
       const returned = yield* updateChat(chat.id, { title: "After" }, "usr_alice");
 
       const stored = yield* getChat(chat.id);
       expect(stored).toEqual(returned);
       expect(returned.title).toBe("After");
       expect(returned.updatedAt.getTime() % 1000).toBe(0);
+      expect(returned.updatedAt.getTime()).toBeGreaterThan(past.getTime());
     }).pipe(Effect.provide(createTestLayer())),
   );
 

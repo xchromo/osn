@@ -245,6 +245,21 @@ describe("messages service", () => {
   // export (which filters on a non-null body) and rendered as an empty string
   // by the internal reader, so it escapes both the export and moderation in
   // the one chat class that promises both.
+  // The read route's half of the non-disclosure property. It carries the same
+  // comment as `sendMessage` and the same risk on the same public surface —
+  // and is the more attractive probe of the two, needing no request body.
+  it.effect("listMessages does not disclose the class to a non-member", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+      const result = yield* Effect.either(listMessages(chat.id, "usr_outsider"));
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) expect(result.left._tag).toBe("NotChatMember");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   // The read half. Without it the public route serves a c2b chat's plaintext
   // `body` to any member, going round the ARC-gated `chat:c2b` reader that is
   // supposed to be the only way to it.

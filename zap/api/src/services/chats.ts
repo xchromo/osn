@@ -322,10 +322,14 @@ export const updateChat = (
     // timestamp as whole seconds, and an untruncated `Date` here would make
     // the response disagree with every later read of the same row.
     const chat = yield* getChat(id);
-    yield* assertC2c(chat);
 
     // Check that the requesting user is an admin.
     yield* assertAdmin(id, requestingProfileId);
+
+    // After the authorisation gate, not before — see `addMember`. A 409 "not
+    // a c2c chat" reaching a caller with no standing in the chat would tell
+    // them the id names a commercial conversation.
+    yield* assertC2c(chat);
 
     const validated = yield* Schema.decodeUnknown(UpdateChatSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
@@ -374,8 +378,13 @@ export const addMember = (
   Effect.gen(function* () {
     const { db } = yield* Db;
     const chat = yield* getChat(chatId);
-    yield* assertC2c(chat);
     yield* assertAdmin(chatId, requestingProfileId);
+
+    // After the authorisation gate, not before. `assertC2c` answers 409 "not a
+    // c2c chat", which to a caller with no standing in the chat would say the
+    // id names a commercial conversation — the same disclosure the two public
+    // message routes order around. Members and admins already know.
+    yield* assertC2c(chat);
 
     // Z3: a DM is sealed at two members — no widening into a group via add.
     if (chat.type === "dm") {
@@ -448,7 +457,6 @@ export const removeMember = (
   Effect.gen(function* () {
     const { db } = yield* Db;
     const chat = yield* getChat(chatId);
-    yield* assertC2c(chat);
 
     // Allow self-removal (leaving) or admin removal of others.
     if (profileId !== requestingProfileId) {
@@ -469,6 +477,14 @@ export const removeMember = (
     if (memberRows.length === 0) {
       return yield* Effect.fail(new NotChatMember({ chatId }));
     }
+
+    // Below every gate, not above them. `assertC2c` answers 409 "not a c2c
+    // chat", which to a caller with no standing in the chat would say the id
+    // names a commercial conversation — the same disclosure the two public
+    // message routes order around. Self-removal has no admin check, so the
+    // membership lookup above is the gate on that path, and this has to sit
+    // under it to be behind one.
+    yield* assertC2c(chat);
 
     // Z5: never strand a chat with zero admins. If the target is the last
     // remaining admin, the removal (self-leave included) is rejected — an
