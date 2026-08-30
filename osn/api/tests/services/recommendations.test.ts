@@ -1,5 +1,5 @@
 import { it, expect, describe } from "@effect/vitest";
-import { accounts } from "@osn/db/schema";
+import { accounts, organisations } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -279,6 +279,36 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // The fan-out selects ids only and hydrates the surviving organisations
+  // afterwards, so the label has to survive that round trip — and be the same
+  // label on two identical requests. Without the ORDER BY the LIMIT took an
+  // arbitrary slice, so which organisation labelled a co-member could differ
+  // between calls.
+  it.effect("labels a co-member with the same organisation on repeated calls", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      // bob shares three organisations with alice, so there is something to be
+      // arbitrary about.
+      const acme = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      const beta = yield* orgs.createOrganisation(alice.id, "beta", "Beta Ltd");
+      const gamma = yield* orgs.createOrganisation(alice.id, "gamma", "Gamma Co");
+      yield* orgs.addMember(acme.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(gamma.id, alice.id, bob.id, "member");
+
+      const first = yield* recs.suggestConnections(alice.id);
+      const second = yield* recs.suggestConnections(alice.id);
+
+      expect(first).toHaveLength(1);
+      expect(first[0]!.handle).toBe("bob");
+      expect(first[0]!.sharedOrganisation).not.toBeNull();
+      expect(second[0]!.sharedOrganisation).toEqual(first[0]!.sharedOrganisation);
+      // Whichever one it is, it is one alice actually shares with bob.
+      expect(["acme", "beta", "gamma"]).toContain(first[0]!.sharedOrganisation!.handle);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("never suggests a friend-of-friend whose account is tombstoned", () =>
     Effect.gen(function* () {
       // Art. 17 erasure is pending on dana's account — she must not resurface
@@ -296,6 +326,61 @@ describe("suggestConnections", () => {
           .set({ deletedAt: 1_700_000_000 })
           .where(eq(accounts.id, dana.accountId)),
       );
+
+      expect(yield* recs.suggestConnections(alice.id)).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Hydration happens after ranking, so an organisation can disappear between
+  // the fan-out reading its membership row and the lookup reading its name.
+  // The suggestion has to survive that with no label rather than vanish or
+  // carry a stale one.
+  //
+  // The state is reached by deleting the row directly, because the service
+  // layer cannot produce it: `deleteOrganisation` removes the membership rows
+  // and the organisation in one batch. This pins the defensive branch, not a
+  // reachable bug — which also means dropping the old `innerJoin(organisations)`
+  // from the fan-out changed no candidate that a real database can hold.
+  it.effect("drops the label, not the suggestion, when the organisation is gone", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const dana = yield* auth.registerProfile("d@e.com", "dana");
+      // dana is a friend-of-friend as well as a co-member, so the suggestion
+      // still stands on its mutual connection once the label is gone.
+      yield* connect(alice.id, bob.id);
+      yield* connect(bob.id, dana.id);
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.addMember(org.id, alice.id, dana.id, "member");
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() => db.delete(organisations).where(eq(organisations.id, org.id)));
+
+      const result = yield* recs.suggestConnections(alice.id);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.handle).toBe("dana");
+      expect(result[0]!.reason).toBe("mutual_connections");
+      expect(result[0]!.sharedOrganisation).toBeNull();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The other side of the same branch: with no mutual connection, a shared
+  // organisation that no longer exists leaves the candidate with no basis at
+  // all. Asserting `shared_organisation` while naming nothing is worse than
+  // not suggesting them, and this is exactly what the fan-out's old inner
+  // join to `organisations` used to do.
+  it.effect("drops an organisation-only candidate whose organisation is gone", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.addMember(org.id, alice.id, bob.id, "member");
+
+      // bob is suggested while the organisation exists.
+      expect((yield* recs.suggestConnections(alice.id)).map((x) => x.handle)).toEqual(["bob"]);
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() => db.delete(organisations).where(eq(organisations.id, org.id)));
 
       expect(yield* recs.suggestConnections(alice.id)).toEqual([]);
     }).pipe(Effect.provide(createTestLayer())),
