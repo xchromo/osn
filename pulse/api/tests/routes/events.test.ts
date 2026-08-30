@@ -2,9 +2,9 @@ import { makeAccessTokenSigner, type AccessTokenSigner } from "@shared/crypto/te
 import { Effect } from "effect";
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 const FUTURE = "2030-06-01T10:00:00.000Z";
 

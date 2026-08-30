@@ -14,8 +14,8 @@ vi.mock("../../src/services/graphBridge", () => ({
   getProfileDisplays: vi.fn(() => Effect.succeed(new Map())),
 }));
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import * as bridge from "../../src/services/graphBridge";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;

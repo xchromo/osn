@@ -16,6 +16,20 @@ compatibility_flags = ["nodejs_compat", "nodejs_compat_populate_process_env"]
 # local D1) and deployed (`wrangler deploy --env dev`).
 
 # ── dev ────────────────────────────────────────────────────────────────────
+# `dev` is runnable locally (`wrangler dev --env dev`) as well as deployed, so
+# these point at a local osn-api — the same posture, and the same reasoning, as
+# `pulse/api/wrangler.toml`'s dev block. `ZAP_ENV` is deliberately NOT set:
+# setting it would flip `isNonLocalEnv` and fail-close CORS, breaking the local
+# run. Point both at the deployed dev origin in the same commit that gives this
+# env real https origins.
+#
+# They are here at all because access-token verification now pins the issuer.
+# An env block with no vars used to mean "no expected issuer", which the
+# verifier read as "no issuer check" — the state this pinning exists to end.
+[env.dev.vars]
+OSN_JWKS_URL = "http://localhost:4000/.well-known/jwks.json"
+OSN_ISSUER_URL = "http://localhost:4000"
+
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "zap-db"
@@ -23,6 +37,15 @@ database_id = "placeholder-replace-after-d1-create"
 migrations_dir = "../db/drizzle"
 
 # ── staging ──────────────────────────────────────────────────────────────────
+# Mirrors osn-api's own staging value (`osn/api/wrangler.toml`), which is itself
+# a placeholder until the staging tier is real. Both move together — a
+# verifier whose expected issuer disagrees with what osn-api mints 401s every
+# authenticated request.
+[env.staging.vars]
+ZAP_ENV = "staging"
+OSN_JWKS_URL = "https://api.staging.osn.example/.well-known/jwks.json"
+OSN_ISSUER_URL = "https://api.staging.osn.example"
+
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "zap-db-staging"

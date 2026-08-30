@@ -166,7 +166,7 @@ export const createVenuesRoutes = (
   // surfaces are public so we don't currently extract claims.
   // Unused: venues has no authenticated route. Kept so every route
   // factory in this package has the same positional shape.
-  _verification: OsnTokenVerification | string = "",
+  _verification?: OsnTokenVerification,
   _testKey?: CryptoKey,
   /**
    * Per-IP rate limiter for the /venues group. Defaults to the in-memory

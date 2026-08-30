@@ -16,8 +16,8 @@ vi.mock("../../src/services/graphBridge", () => ({
   getProfileDisplays: vi.fn(),
 }));
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import * as bridge from "../../src/services/graphBridge";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 const FUTURE = "2030-06-01T10:00:00.000Z";
 

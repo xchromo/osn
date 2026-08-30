@@ -4,6 +4,7 @@ import { Effect, Logger } from "effect";
 
 import { createApp, SERVICE_NAME, type App } from "./app";
 import { assertCorsOriginsConfigured, isNonLocalEnv, resolveCorsOrigins } from "./lib/cors-config";
+import { DEFAULT_ISSUER_URL, DEFAULT_JWKS_URL } from "./lib/jwks";
 import { registerWithOsnApi } from "./services/zapGraphBridge";
 
 // Re-export the Eden treaty type so `@zap/api` consumers and `./client` keep
@@ -61,8 +62,13 @@ function buildApp(env: Env): App {
   // env for the same reason the JWKS URL is: an unset expected issuer is not
   // a soft default, it is the check not running. It must match osn-api's own
   // `OSN_ISSUER_URL` byte for byte, so the two flip in the same deploy.
-  const issuer = env.OSN_ISSUER_URL;
-  if (nonLocal && (!issuer || issuer.startsWith("http://"))) {
+  // Presence is checked unconditionally; only the HTTPS requirement is
+  // gated on the tier. A Worker whose env block sets neither `ZAP_ENV` nor
+  // `OSN_ENV` reads as local, so gating presence too would let a publicly
+  // reachable deployment run with no expected issuer at all — the check
+  // silently off, which is the state this whole change exists to end.
+  const issuer = env.OSN_ISSUER_URL || DEFAULT_ISSUER_URL;
+  if (nonLocal && (!env.OSN_ISSUER_URL || issuer.startsWith("http://"))) {
     throw new Error("OSN_ISSUER_URL must be set and use HTTPS in non-local environments");
   }
 
@@ -73,7 +79,7 @@ function buildApp(env: Env): App {
 
   return createApp({
     dbLayer: makeDbD1Live(env.DB as D1Database),
-    verification: { jwksUrl: jwksUrl!, issuer: issuer! },
+    verification: { jwksUrl: jwksUrl ?? DEFAULT_JWKS_URL, issuer },
     corsOrigins,
   });
 }

@@ -2,10 +2,10 @@ import { makeAccessTokenSigner, type AccessTokenSigner } from "@shared/crypto/te
 import { Effect } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { canViewAttendees } from "../../src/services/eventAccess";
 import { createTestLayer, seedEvent } from "../helpers/db";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;

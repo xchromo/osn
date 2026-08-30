@@ -1,9 +1,9 @@
 import { makeAccessTokenSigner, type AccessTokenSigner } from "@shared/crypto/testing";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createSeriesRoutes } from "../../src/routes/series";
 import { createTestLayer } from "../helpers/db";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;

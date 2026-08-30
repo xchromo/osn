@@ -3,9 +3,9 @@ import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createTestLayer, seedEvent } from "../helpers/db";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 /**
  * Permissive rate limiter for tests — never trips. Real per-IP limiter

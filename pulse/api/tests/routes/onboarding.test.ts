@@ -25,8 +25,8 @@ vi.mock("../../src/lib/osn-bridge", () => ({
   notifyAppJoined: vi.fn(() => Effect.succeed({ enrolled: true } as const)),
 }));
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import * as bridge from "../../src/services/graphBridge";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;

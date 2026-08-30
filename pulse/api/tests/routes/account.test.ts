@@ -20,8 +20,8 @@ vi.mock("../../src/lib/osn-bridge", () => ({
   notifyAppLeft: vi.fn(() => Effect.succeed({ closed: true } as const)),
 }));
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createAccountRoutes } from "../../src/routes/account";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;

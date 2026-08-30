@@ -3,11 +3,11 @@ import type { RateLimiterBackend } from "@shared/rate-limit";
 import { Effect } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_VERIFICATION as TEST_VERIFICATION } from "../../src/lib/jwks";
 import { createCloseFriendsRoutes } from "../../src/routes/closeFriends";
 import { createEventsRoutes } from "../../src/routes/events";
 import { createSeriesRoutes } from "../../src/routes/series";
 import { createTestLayer, seedEvent } from "../helpers/db";
+import { TEST_VERIFICATION } from "../helpers/verification";
 
 const block: RateLimiterBackend = { check: () => false };
 const throws: RateLimiterBackend = {
