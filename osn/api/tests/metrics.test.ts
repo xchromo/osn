@@ -73,6 +73,21 @@ describe("classifyError", () => {
       const err = new AuthErrorLike({ message: "Invalid or expired code" });
       expect(classifyError(err)).toBe("validation_error");
     });
+
+    // Only error classes declared in this repo may steer a bucket. An error
+    // rebuilt from an upstream payload can carry any key it likes; if that
+    // were enough, a remote fault could report itself as a success.
+    it("ignores metricResult on an error this repo did not tag", () => {
+      const foreign = { _tag: "UpstreamFailure", message: "gateway blew up", metricResult: "ok" };
+      expect(classifyError(foreign)).toBe("error");
+      const untagged = { message: "gateway blew up", metricResult: "ok" };
+      expect(classifyError(untagged)).toBe("error");
+    });
+
+    it("ignores a metricResult that is not a member of RESULT_VALUES", () => {
+      const err = new AuthErrorLike({ message: "Invalid or expired code", metricResult: "banana" });
+      expect(classifyError(err)).toBe("validation_error");
+    });
   });
 
   describe("fallback", () => {

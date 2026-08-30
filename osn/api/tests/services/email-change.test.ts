@@ -412,7 +412,7 @@ describe("beginEmailChange + completeEmailChange", () => {
   it.live("rejects completing after the pending change has expired", () => {
     const { layer, captured } = makeEmailCapture();
     return Effect.gen(function* () {
-      const auth = createAuthService({ ...baseConfig, otpTtl: 2 });
+      const auth = createAuthService({ ...baseConfig, otpTtl: 1 });
       const profile = yield* auth.registerProfile("ec-expired@example.com", "ecexpired");
       yield* auth.beginStepUpOtp(profile.accountId);
       const stepUpOtpCode = captured.latest()!;
@@ -424,8 +424,10 @@ describe("beginEmailChange + completeEmailChange", () => {
       yield* auth.beginEmailChange(profile.accountId, "ec-expired-new@example.com");
       const code = captured.latest()!;
 
-      // Real wall-clock sleep past the 2s otpTtl. CI slack on both ends.
-      yield* Effect.promise(() => new Promise((r) => setTimeout(r, 2500)));
+      // Real wall-clock sleep past the 1s otpTtl, with 500ms of CI slack.
+      // Kept as short as the margin allows: this is the only real sleep in the
+      // package and it is paid on every run.
+      yield* Effect.promise(() => new Promise((r) => setTimeout(r, 1500)));
 
       const err = yield* Effect.flip(
         auth.completeEmailChange(profile.accountId, code, stepUpToken, null),
