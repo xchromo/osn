@@ -169,7 +169,8 @@ Tracked with `C-` IDs in `xchromo/osn-tracker` under `label:compliance`:
    (2026-08-14). Upstream publishes no package — the plugin is meant to be copied
    in — so there is no version to resolve, no integrity hash from a registry and
    no advisory feed to subscribe to. Integrity is asserted in-repo instead, by
-   checks that each cover a different failure: `tools/oxlint/anti-slop/SHA256SUMS`
+   three checks that each cover a different failure:
+   `tools/oxlint/anti-slop/SHA256SUMS`
    plus `scripts/verify-vendored-anti-slop.sh` catch a change to the tree's
    contents or file set; the same script, given a base ref, also catches a
    change to that tree with no matching change to the pinned commit, which is

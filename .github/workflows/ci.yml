@@ -213,41 +213,39 @@ jobs:
       # ordering (see the comment there). This one stays because `script-tests`
       # is the job that owns everything under scripts/, and a shasum costs
       # nothing.
+      #
+      # One script, two halves. Half 1 — the tree matches its own SHA256SUMS —
+      # always runs. Half 2 needs a base ref to diff against, so it only runs
+      # where there is one: it catches a change to vendored source with no
+      # matching move of the pinned upstream commit in that directory's
+      # README, which is either an edit to code the README says is never
+      # edited or a re-vendor that forgot the pin. Both are invisible to
+      # `shasum -c`, because regenerating the manifest certifies whatever the
+      # tree now holds.
       - name: Verify vendored anti-slop matches its checksums
+        if: github.event_name != 'pull_request'
         run: bash scripts/verify-vendored-anti-slop.sh
 
-      # The guard's own tests, beside the run that uses it. They exercise it in
-      # throwaway git repos rather than this checkout, and one case exports
-      # GIT_DIR the way git does for every hook — the state that once made the
-      # guard list the whole repo instead of the vendored subtree and blocked
-      # every local commit.
-      - name: Test the vendored anti-slop guard
-        run: bash scripts/verify-vendored-anti-slop.test.sh
-
-      # The checksums prove the tree matches its own manifest, which is a
-      # self-certification: regenerate them after an edit and the tree certifies
-      # whatever it now holds. This is the other half — a change to vendored
-      # source with no change to the pinned upstream commit is either an edit to
-      # code the README says is never edited, or a re-vendor that forgot to move
-      # the pin. Only meaningful against a base, so it runs on pull requests.
-      #
       # `actions/checkout` clones at depth 1, so the base commit has to be
       # fetched before the guard can read it. One `--depth=1` fetch of that
       # single commit is enough: the guard diffs two trees, which needs no
       # common ancestor between them.
-      - name: Check the vendored anti-slop pin
+      - name: Verify vendored anti-slop matches its checksums and pin
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          bash scripts/verify-vendored-anti-slop-pin.sh "$BASE_SHA"
+          bash scripts/verify-vendored-anti-slop.sh "$BASE_SHA"
 
-      # ...and its own tests, which build throwaway repos with a base and a head
-      # commit rather than reaching for this checkout's history. They run on
-      # every event, unlike the guard itself.
-      - name: Test the vendored anti-slop pin guard
-        run: bash scripts/verify-vendored-anti-slop-pin.test.sh
+      # The guard's own tests, beside the run that uses it. They exercise it in
+      # throwaway git repos rather than this checkout — one case exports
+      # GIT_DIR the way git does for every hook, the state that once made the
+      # guard list the whole repo instead of the vendored subtree and blocked
+      # every local commit; others build a base and a head commit to drive the
+      # pin half. They run on every event, unlike the pin half itself.
+      - name: Test the vendored anti-slop guard
+        run: bash scripts/verify-vendored-anti-slop.test.sh
 
       - uses: oven-sh/setup-bun@v2
         with:
