@@ -1,1 +1,1 @@
-DROP INDEX `chats_class_idx`;
+DROP INDEX IF EXISTS `chats_class_idx`;

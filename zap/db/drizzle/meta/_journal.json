@@ -22,6 +22,13 @@
       "when": 1788086113971,
       "tag": "0002_complete_sabra",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788086694601,
+      "tag": "0003_ordinary_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }

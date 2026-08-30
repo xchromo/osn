@@ -554,6 +554,10 @@ describe("zap internal routes — ARC-gated /internal/chats (chat:c2b)", () => {
     expect(listed.messages[0]!.id).toBe(sent.messageId);
     expect(listed.messages[0]!.body).toBe("Hello from host!");
     expect(listed.messages[0]!.senderProfileId).toBe("usr_host");
+    // The wire-level half of the `storedNow` contract: the timestamp the POST
+    // reports and the one the GET reports are the same string. Untruncated,
+    // the write would answer "…:00.123Z" and every later read "…:00.000Z".
+    expect(listed.messages[0]!.createdAt).toBe(sent.createdAt);
   });
 
   // ── unknown cursor ───────────────────────────────────────────────────────

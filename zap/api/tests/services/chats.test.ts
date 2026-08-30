@@ -649,14 +649,23 @@ describe("chats service", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // `eventId` is the one column no other assertion anchors to a read, so a
+  // create path that returned it but never stored it would go unnoticed —
+  // which is exactly what a returned-row write path makes possible.
   it.effect("createChat returns exactly what a later read returns", () =>
     Effect.gen(function* () {
       const returned = yield* createChat(
-        { type: "group", title: "Team", memberProfileIds: ["usr_bob"] },
+        {
+          type: "event",
+          title: "Team",
+          eventId: "evt_123",
+          memberProfileIds: ["usr_bob"],
+        },
         "usr_alice",
       );
       const stored = yield* getChat(returned.id);
       expect(stored).toEqual(returned);
+      expect(stored.eventId).toBe("evt_123");
       expect(returned.class).toBe("c2c");
       expect(returned.createdAt.getTime() % 1000).toBe(0);
     }).pipe(Effect.provide(createTestLayer())),

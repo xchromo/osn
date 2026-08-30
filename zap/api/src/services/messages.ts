@@ -1,7 +1,7 @@
 import { chats, chatMembers, messages } from "@zap/db/schema";
 import type { Chat, ChatMember, Message } from "@zap/db/schema";
 import { Db } from "@zap/db/service";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
 import {
@@ -149,7 +149,18 @@ export const listMessages = (
       if (cursorRows.length === 0) {
         return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this chat" }));
       }
-      conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
+      // Composite keyset (createdAt, id): created_at has SECOND resolution and
+      // is not unique, so a strict `createdAt <` alone silently skips every
+      // message sharing the cursor's second — the ordinary case for a burst of
+      // replies, and unreachable for ever once the page moves past it. Same
+      // pattern as `listChats` and `getChatMembers`.
+      const cursor = cursorRows[0]!;
+      conditions.push(
+        or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )!,
+      );
     }
 
     const results = yield* Effect.tryPromise({
@@ -158,7 +169,7 @@ export const listMessages = (
           .select()
           .from(messages)
           .where(and(...conditions))
-          .orderBy(desc(messages.createdAt))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(limit) as Promise<Message[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
@@ -277,7 +288,18 @@ export const listC2bMessages = (
       if (cursorRows.length === 0) {
         return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this chat" }));
       }
-      conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
+      // Composite keyset (createdAt, id): created_at has SECOND resolution and
+      // is not unique, so a strict `createdAt <` alone silently skips every
+      // message sharing the cursor's second — the ordinary case for a burst of
+      // replies, and unreachable for ever once the page moves past it. Same
+      // pattern as `listChats` and `getChatMembers`.
+      const cursor = cursorRows[0]!;
+      conditions.push(
+        or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )!,
+      );
     }
 
     const results = yield* Effect.tryPromise({
@@ -286,7 +308,7 @@ export const listC2bMessages = (
           .select()
           .from(messages)
           .where(and(...conditions))
-          .orderBy(desc(messages.createdAt))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(limit) as Promise<Message[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
