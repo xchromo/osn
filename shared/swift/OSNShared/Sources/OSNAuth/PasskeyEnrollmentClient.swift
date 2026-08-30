@@ -4,11 +4,14 @@ import OSNKit
 
 /// `POST /passkey/register/begin` + `/complete` (brief §3).
 public final class PasskeyEnrollmentClient: Sendable {
-    private let session: URLSession
+    private let transport: AuthenticatedTransport
     private let environment: Environment
 
-    public init(session: URLSession, environment: Environment) {
-        self.session = session
+    /// - Parameter tokenRefresher: the session's own refresher — see
+    ///   `PasskeyManagementClient.init` for why a second one on the same
+    ///   cookie jar revokes the session family.
+    public init(session: URLSession, environment: Environment, tokenRefresher: TokenRefresher) {
+        self.transport = AuthenticatedTransport(session: session, tokenRefresher: tokenRefresher)
         self.environment = environment
     }
 
@@ -80,7 +83,6 @@ public final class PasskeyEnrollmentClient: Sendable {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("passkey/register/begin"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try RequestHelpers.applyBearerAccessToken(to: &request)
         if let stepUpToken {
             request.setValue(stepUpToken, forHTTPHeaderField: "X-Step-Up-Token")
         }
@@ -88,15 +90,7 @@ public final class PasskeyEnrollmentClient: Sendable {
             RegisterBeginRequestBody(profileId: profileId, step_up_token: nil)
         )
 
-        let (data, response) = try await session.data(for: request)
-        let http = try Self.httpResponse(response)
-        guard http.statusCode == 200 else {
-            throw RequestHelpers.opaqueFailure(status: http.statusCode, data: data)
-        }
-        guard let decoded = try? JSONDecoder().decode(PublicKeyCredentialCreationOptionsJSON.self, from: data) else {
-            throw OSNAuthError.responseMalformed(status: http.statusCode)
-        }
-        return decoded
+        return try await transport.decode(PublicKeyCredentialCreationOptionsJSON.self, from: request)
     }
 
     private func completeRegistration(
@@ -106,26 +100,10 @@ public final class PasskeyEnrollmentClient: Sendable {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("passkey/register/complete"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try RequestHelpers.applyBearerAccessToken(to: &request)
         request.httpBody = try JSONEncoder().encode(
             RegisterCompleteRequestBody(profileId: profileId, attestation: attestation)
         )
 
-        let (data, response) = try await session.data(for: request)
-        let http = try Self.httpResponse(response)
-        guard http.statusCode == 200 else {
-            throw RequestHelpers.opaqueFailure(status: http.statusCode, data: data)
-        }
-        guard let decoded = try? JSONDecoder().decode(PasskeyEnrollmentResult.self, from: data) else {
-            throw OSNAuthError.responseMalformed(status: http.statusCode)
-        }
-        return decoded
-    }
-
-    private static func httpResponse(_ response: URLResponse) throws -> HTTPURLResponse {
-        guard let http = response as? HTTPURLResponse else {
-            throw OSNAuthError.responseMalformed(status: -1)
-        }
-        return http
+        return try await transport.decode(PasskeyEnrollmentResult.self, from: request)
     }
 }

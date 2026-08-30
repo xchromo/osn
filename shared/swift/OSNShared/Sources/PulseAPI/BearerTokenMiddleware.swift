@@ -10,15 +10,14 @@ import OSNKit
 /// backstop, a 401 from Pulse despite a fresh-looking cached token triggers
 /// one refresh-and-retry — never a loop.
 public struct BearerTokenMiddleware: ClientMiddleware {
-    private let tokenRefresher: TokenRefresher
-
-    /// A cached token within this many seconds of its `expiresAt` is treated
-    /// as already gone, so one is never sent moments before the server
-    /// would reject it mid-flight.
-    private static let expirySkew: TimeInterval = 30
+    /// The skew allowance and the refresh path both live in
+    /// `AccessTokenProvider`, shared with `AuthenticatedTransport` behind the
+    /// `OSNAuth` clients. This middleware used to declare its own `30`, and a
+    /// change to one silently diverged from the other.
+    private let tokens: AccessTokenProvider
 
     public init(tokenRefresher: TokenRefresher) {
-        self.tokenRefresher = tokenRefresher
+        self.tokens = AccessTokenProvider(tokenRefresher: tokenRefresher)
     }
 
     public func intercept(
@@ -45,17 +44,12 @@ public struct BearerTokenMiddleware: ClientMiddleware {
             return (response, responseBody)
         }
 
-        let freshToken = try await tokenRefresher.refresh().accessToken
+        let freshToken = try await tokens.refreshedBearerToken()
         request.headerFields[.authorization] = "Bearer \(freshToken)"
         return try await next(request, body, baseURL)
     }
 
     private func validToken() async throws -> String {
-        if let cached = try KeychainAccessTokenStore.load(),
-            cached.expiresAt.timeIntervalSinceNow > Self.expirySkew
-        {
-            return cached.token
-        }
-        return try await tokenRefresher.refresh().accessToken
+        try await tokens.bearerTokenRefreshingWhenAbsent()
     }
 }

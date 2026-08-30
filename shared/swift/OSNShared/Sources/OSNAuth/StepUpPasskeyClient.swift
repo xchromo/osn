@@ -7,11 +7,14 @@ import OSNKit
 /// OTP step-up (`step-up.ts:105`, `:135`) is web-only fallback and out of
 /// scope here (brief §4).
 public final class StepUpPasskeyClient: Sendable {
-    private let session: URLSession
+    private let transport: AuthenticatedTransport
     private let environment: Environment
 
-    public init(session: URLSession, environment: Environment) {
-        self.session = session
+    /// - Parameter tokenRefresher: the session's own refresher — see
+    ///   `PasskeyManagementClient.init` for why a second one on the same
+    ///   cookie jar revokes the session family.
+    public init(session: URLSession, environment: Environment, tokenRefresher: TokenRefresher) {
+        self.transport = AuthenticatedTransport(session: session, tokenRefresher: tokenRefresher)
         self.environment = environment
     }
 
@@ -64,17 +67,8 @@ public final class StepUpPasskeyClient: Sendable {
     private func begin() async throws -> StepUpPasskeyBeginResponse {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("step-up/passkey/begin"))
         request.httpMethod = "POST"
-        try RequestHelpers.applyBearerAccessToken(to: &request)
 
-        let (data, response) = try await session.data(for: request)
-        let http = try Self.httpResponse(response)
-        guard http.statusCode == 200 else {
-            throw RequestHelpers.opaqueFailure(status: http.statusCode, data: data)
-        }
-        guard let decoded = try? JSONDecoder().decode(StepUpPasskeyBeginResponse.self, from: data) else {
-            throw OSNAuthError.responseMalformed(status: http.statusCode)
-        }
-        return decoded
+        return try await transport.decode(StepUpPasskeyBeginResponse.self, from: request)
     }
 
     private func complete(
@@ -84,26 +78,10 @@ public final class StepUpPasskeyClient: Sendable {
         var request = URLRequest(url: environment.baseURL.appendingPathComponent("step-up/passkey/complete"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try RequestHelpers.applyBearerAccessToken(to: &request)
         request.httpBody = try JSONEncoder().encode(
             StepUpPasskeyCompleteRequestBody(assertion: assertion, purpose: purpose)
         )
 
-        let (data, response) = try await session.data(for: request)
-        let http = try Self.httpResponse(response)
-        guard http.statusCode == 200 else {
-            throw RequestHelpers.opaqueFailure(status: http.statusCode, data: data)
-        }
-        guard let decoded = try? JSONDecoder().decode(StepUpPasskeyCompleteResponse.self, from: data) else {
-            throw OSNAuthError.responseMalformed(status: http.statusCode)
-        }
-        return decoded
-    }
-
-    private static func httpResponse(_ response: URLResponse) throws -> HTTPURLResponse {
-        guard let http = response as? HTTPURLResponse else {
-            throw OSNAuthError.responseMalformed(status: -1)
-        }
-        return http
+        return try await transport.decode(StepUpPasskeyCompleteResponse.self, from: request)
     }
 }
