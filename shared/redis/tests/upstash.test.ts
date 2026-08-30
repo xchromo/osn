@@ -1,7 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Mock } from "vitest";
 
 import type { UpstashLike } from "../src/upstash";
 import { wrapUpstash } from "../src/upstash";
+
+/**
+ * `eval`/`get` are declared generic on `UpstashLike` (mirroring the SDK's own
+ * `<TData = unknown>` escape hatch — see `upstash.ts`), and a concrete mock
+ * function cannot satisfy a generic call signature: assignability requires
+ * validity for an arbitrary `TData`, which a mock resolving to one fixed
+ * type is not. The fake's `eval`/`get`/`ping`/`del` are typed as plain `Mock`s
+ * instead of through `UpstashLike` for exactly this reason; every other
+ * member still comes from the real interface, so a shape drift in `set` (the
+ * one member still statically checked here) is still caught.
+ */
+type FakeUpstash = Omit<UpstashLike, "get" | "ping" | "del" | "eval"> & {
+  store: Map<string, string>;
+  set: Mock;
+  eval: Mock;
+  get: Mock;
+  ping: Mock;
+  del: Mock;
+};
 
 /**
  * Fake `@upstash/redis` client. Backed by a real `Map` so the contract tests
@@ -10,11 +30,7 @@ import { wrapUpstash } from "../src/upstash";
  * Constructed as if `automaticDeserialization: false`, i.e. values are stored
  * and returned verbatim as strings.
  */
-function createFakeUpstash(): UpstashLike & {
-  store: Map<string, string>;
-  set: ReturnType<typeof vi.fn>;
-  eval: ReturnType<typeof vi.fn>;
-} {
+function createFakeUpstash(): FakeUpstash {
   const store = new Map<string, string>();
   const set = vi.fn(async (key: string, value: string, _opts?: { px: number }) => {
     store.set(key, value);
@@ -23,23 +39,22 @@ function createFakeUpstash(): UpstashLike & {
   const evalFn = vi.fn(
     async (_script: string, _keys: readonly string[], _args: readonly (string | number)[]) => 1,
   );
+  const get = vi.fn(async (key: string) => (store.has(key) ? store.get(key)! : null));
+  const ping = vi.fn(async () => "PONG");
+  const del = vi.fn(async (...keys: string[]) => {
+    let count = 0;
+    for (const key of keys) {
+      if (store.delete(key)) count++;
+    }
+    return count;
+  });
   return {
     store,
     set,
     eval: evalFn,
-    async get(key) {
-      return store.has(key) ? store.get(key)! : null;
-    },
-    async ping() {
-      return "PONG";
-    },
-    async del(...keys) {
-      let count = 0;
-      for (const key of keys) {
-        if (store.delete(key)) count++;
-      }
-      return count;
-    },
+    get,
+    ping,
+    del,
   };
 }
 
@@ -69,6 +84,11 @@ describe("wrapUpstash", () => {
 
     it("returns null for a missing key", async () => {
       expect(await client.get("absent")).toBeNull();
+    });
+
+    it("rejects a non-string GET reply naming the command", async () => {
+      fake.get.mockResolvedValueOnce(42);
+      await expect(client.get("k")).rejects.toThrow(/GET/);
     });
   });
 
@@ -154,11 +174,21 @@ describe("wrapUpstash", () => {
       await client.set("b", "2");
       expect(await client.del("a", "b", "missing")).toBe(2);
     });
+
+    it("rejects a non-numeric DEL reply naming the command", async () => {
+      fake.del.mockResolvedValueOnce("not a count");
+      await expect(client.del("a")).rejects.toThrow(/DEL/);
+    });
   });
 
   describe("ping / quit", () => {
     it("delegates ping", async () => {
       expect(await client.ping()).toBe("PONG");
+    });
+
+    it("maps a nil ping reply to an empty string rather than null", async () => {
+      fake.ping.mockResolvedValueOnce(null);
+      expect(await client.ping()).toBe("");
     });
 
     it("quit is a no-op for the stateless REST transport", async () => {

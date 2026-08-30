@@ -50,6 +50,32 @@ export function toRedisReply(value: unknown): RedisReply {
 }
 
 /**
+ * Narrow a driver's answer to the bulk string (or nil) that a Redis GET is
+ * defined to return.
+ *
+ * Unlike `eval`, whose result shape is script-defined and unknowable here,
+ * GET's reply is fixed by the protocol — a bulk string or nil — so a wrapper
+ * that hands back anything else (an SDK-side JSON parse, say) is a bug the
+ * caller needs to see named, not a `TypeError` two call sites downstream.
+ */
+export function toRedisString(value: unknown, command: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  throw new Error(`Redis ${command} returned a ${typeof value}, expected a string or nil.`);
+}
+
+/**
+ * Narrow a driver's answer to the integer that DEL is defined to return.
+ * Accepts `bigint` for the same reason `toRedisReply` does — some drivers
+ * surface large counts that way — and requires a finite `number` otherwise.
+ */
+export function toRedisInteger(value: unknown, command: string): number {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new Error(`Redis ${command} returned a ${typeof value}, expected an integer.`);
+}
+
+/**
  * Backend-agnostic Redis client contract. Node/Bun production uses ioredis via
  * `wrapIoRedis()`; Workers uses `wrapUpstash()`; dev/test uses
  * `createMemoryClient()`.
