@@ -405,6 +405,16 @@ export const createChatsRoutes = (
           const result = await runtime.runPromise(
             sendMessage(params.id, claims.profileId, body).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // 409, matching how the internal route reports the same class
+              // mismatch the other way round. Not 403: the caller may well be
+              // a member, they are just using the wrong endpoint for this
+              // chat's class.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatMember", () =>
                 Effect.sync(() => {
                   metricAccessDenied("messages", "not_member");

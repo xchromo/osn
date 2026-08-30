@@ -256,4 +256,34 @@ describe("Zap DDL lockstep", () => {
     expect(nonTableObjects(emittedDb())).toEqual(nonTableObjects(migratedDb()));
     expect(checks(emittedDb())).toEqual(checks(migratedDb()));
   });
+
+  // `drizzle-kit generate` reads the journal and the latest snapshot, not the
+  // `.sql` files this suite otherwise applies. A journal that has lost an
+  // entry — a hand edit, a half-resolved merge conflict, a partial commit —
+  // makes the next `generate` re-emit a migration already applied to
+  // production D1, and re-running a `DROP INDEX` or `CREATE INDEX` against a
+  // real database is a hard error. The snapshots are a few hundred lines
+  // each, so a conflict in one tends to be resolved by picking a side rather
+  // than by reading it.
+  it("keeps drizzle/meta in step with the migrations beside it", () => {
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_DIR, "meta", "_journal.json"), "utf8"),
+    ) as { entries: { idx: number; tag: string }[] };
+
+    const tags = journal.entries.map((e) => e.tag).toSorted();
+    const basenames = migrationFiles()
+      .map((f) => f.replace(/\.sql$/, ""))
+      .toSorted();
+    // Both directions: a `.sql` with no journal entry never runs, and a
+    // journal entry with no `.sql` breaks the next generate.
+    expect(tags).toEqual(basenames);
+
+    const snapshots = readdirSync(join(MIGRATIONS_DIR, "meta"))
+      .filter((f) => f.endsWith("_snapshot.json"))
+      .map((f) => f.replace(/_snapshot\.json$/, ""))
+      .toSorted();
+    expect(snapshots).toEqual(
+      journal.entries.map((e) => String(e.idx).padStart(4, "0")).toSorted(),
+    );
+  });
 });

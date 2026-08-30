@@ -652,6 +652,46 @@ describe("chats service", () => {
   // `eventId` is the one column no other assertion anchors to a read, so a
   // create path that returned it but never stored it would go unnoticed —
   // which is exactly what a returned-row write path makes possible.
+  // Both now return the row they wrote instead of reading it back, so both
+  // need the same anchor: what the caller gets must equal what a later read
+  // gives, `createdAt`/`updatedAt` truncation included.
+  it.effect("addMember returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const chat = yield* createChat({ type: "group" }, "usr_alice");
+      const returned = yield* addMember(chat.id, "usr_bob", "usr_alice");
+
+      const { members } = yield* getChatMembers(chat.id);
+      const stored = members.find((m) => m.profileId === "usr_bob");
+      expect(stored).toEqual(returned);
+      expect(returned.joinedAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("updateChat returns exactly what a later read returns", () =>
+    Effect.gen(function* () {
+      const chat = yield* createChat({ type: "group", title: "Before" }, "usr_alice");
+      const returned = yield* updateChat(chat.id, { title: "After" }, "usr_alice");
+
+      const stored = yield* getChat(chat.id);
+      expect(stored).toEqual(returned);
+      expect(returned.title).toBe("After");
+      expect(returned.updatedAt.getTime() % 1000).toBe(0);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // Drizzle omits an `undefined` field from the SET clause, so a request with
+  // no title leaves the stored one alone. The row handed back has to agree —
+  // the read-back this replaced got that right by accident.
+  it.effect("updateChat with no title keeps the stored one, in the row it returns", () =>
+    Effect.gen(function* () {
+      const chat = yield* createChat({ type: "group", title: "Keep me" }, "usr_alice");
+      const returned = yield* updateChat(chat.id, {}, "usr_alice");
+
+      expect(returned.title).toBe("Keep me");
+      expect(yield* getChat(chat.id)).toEqual(returned);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("createChat returns exactly what a later read returns", () =>
     Effect.gen(function* () {
       const returned = yield* createChat(

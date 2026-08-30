@@ -67,6 +67,20 @@ export class NotC2bChat extends Data.TaggedError("NotC2bChat")<{
   readonly chatId: string;
 }> {}
 
+/**
+ * The mirror: a c2c-only operation attempted on a c2b chat.
+ *
+ * `class` is the encryption and visibility contract — a c2b chat is
+ * server-visible, moderatable and DSAR-exportable by definition. An encrypted
+ * message written into one is none of those: the export filters on a non-null
+ * `body` so the row is dropped silently, and the internal reader renders it as
+ * an empty string with no signal that content was withheld. Both write paths
+ * have to enforce the column or it stops describing the rows underneath it.
+ */
+export class NotC2cChat extends Data.TaggedError("NotC2cChat")<{
+  readonly chatId: string;
+}> {}
+
 // ---------------------------------------------------------------------------
 // Effect schemas (service-layer validation)
 // ---------------------------------------------------------------------------
@@ -283,7 +297,12 @@ export const updateChat = (
 ): Effect.Effect<Chat, ChatNotFound | NotChatAdmin | ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
-    yield* getChat(id);
+    // The row this returns, built from what was already read plus what is
+    // about to be written — so the second `getChat` that used to follow the
+    // update is gone. `storedNow()` is what makes that safe: Drizzle stores a
+    // timestamp as whole seconds, and an untruncated `Date` here would make
+    // the response disagree with every later read of the same row.
+    const chat = yield* getChat(id);
 
     // Check that the requesting user is an admin.
     yield* assertAdmin(id, requestingProfileId);
@@ -292,14 +311,19 @@ export const updateChat = (
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 
-    const now = new Date();
+    const now = storedNow();
     yield* Effect.tryPromise({
       try: () =>
         db.update(chats).set({ title: validated.title, updatedAt: now }).where(eq(chats.id, id)),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    return yield* getChat(id);
+    // `?? chat.title`, not `validated.title`. Drizzle omits an `undefined`
+    // field from the SET clause, so a request that sends no title leaves the
+    // stored one alone — and the row handed back has to say the same. The
+    // read-back this replaced got that right by accident; the compiler caught
+    // it here, which is the argument for annotating these rows at all.
+    return { ...chat, title: validated.title ?? chat.title, updatedAt: now };
   }).pipe(Effect.withSpan("zap.chats.update"));
 
 export const addMember = (
@@ -360,26 +384,25 @@ export const addMember = (
     }
 
     const id = "cmem_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const now = new Date();
+    const now = storedNow();
+    // Annotated `: ChatMember` so every column is required here — a column
+    // added to the schema later breaks the build rather than quietly going
+    // missing from what callers get back.
+    const row: ChatMember = {
+      id,
+      chatId,
+      profileId,
+      role: "member",
+      joinedAt: now,
+    };
     yield* Effect.tryPromise({
-      try: () =>
-        db.insert(chatMembers).values({
-          id,
-          chatId,
-          profileId,
-          role: "member",
-          joinedAt: now,
-        }),
+      try: () => db.insert(chatMembers).values(row),
       catch: (cause) => new DatabaseError({ cause }),
     });
     metricMemberAdded("ok");
 
-    const [member] = yield* Effect.tryPromise({
-      try: (): Promise<ChatMember[]> =>
-        db.select().from(chatMembers).where(eq(chatMembers.id, id)) as Promise<ChatMember[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    return member!;
+    // Returned from the values just written — see `provisionC2bChat`.
+    return row;
   }).pipe(Effect.withSpan("zap.chats.add_member"));
 
 export const removeMember = (

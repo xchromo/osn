@@ -240,6 +240,48 @@ describe("messages service", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // The mirror of the case below. `class` is the encryption and visibility
+  // contract: a ciphertext row inside a c2b chat is dropped from the DSAR
+  // export (which filters on a non-null body) and rendered as an empty string
+  // by the internal reader, so it escapes both the export and moderation in
+  // the one chat class that promises both.
+  it.effect("sendMessage fails NotC2cChat on a c2b chat", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+
+      const result = yield* Effect.either(
+        sendMessage(chat.id, "usr_a", { ciphertext: "dGVzdA==", nonce: "bm9uY2U=" }),
+      );
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("NotC2cChat");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The guard runs before the membership check, so a non-member gets the class
+  // mismatch rather than a 403 — the endpoint is wrong for this chat whoever
+  // is calling it.
+  it.effect("sendMessage reports the class mismatch ahead of membership", () =>
+    Effect.gen(function* () {
+      const chat = yield* provisionC2bChat({
+        memberProfileIds: ["usr_a", "usr_b"],
+        createdByProfileId: "usr_a",
+      });
+
+      const result = yield* Effect.either(
+        sendMessage(chat.id, "usr_outsider", { ciphertext: "dGVzdA==", nonce: "bm9uY2U=" }),
+      );
+      expect(Either.isLeft(result)).toBe(true);
+      if (Either.isLeft(result)) {
+        expect(result.left._tag).toBe("NotC2cChat");
+      }
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("sendC2bMessage fails NotC2bChat on a c2c chat", () =>
     Effect.gen(function* () {
       const chat = yield* seedChat({ type: "group" });

@@ -13,7 +13,7 @@ import {
 } from "../lib/limits";
 import { storedNow } from "../lib/storedNow";
 import { metricMessageSent, metricMessagesListed } from "../metrics";
-import { NotC2bChat } from "./chats";
+import { NotC2bChat, NotC2cChat } from "./chats";
 
 // ---------------------------------------------------------------------------
 // Tagged errors
@@ -59,7 +59,11 @@ export const sendMessage = (
   chatId: string,
   senderProfileId: string,
   data: unknown,
-): Effect.Effect<Message, ChatNotFound | NotChatMember | ValidationError | DatabaseError, Db> =>
+): Effect.Effect<
+  Message,
+  ChatNotFound | NotChatMember | NotC2cChat | ValidationError | DatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
@@ -73,6 +77,14 @@ export const sendMessage = (
       return yield* Effect.fail(new ChatNotFound({ id: chatId }));
     }
     const chat = chatRows[0]!;
+
+    // Assert this is a c2c chat — the mirror of `sendC2bMessage`'s check.
+    // Without it a member of a c2b chat could write ciphertext into it through
+    // this route, producing a row that escapes both the DSAR export and every
+    // moderation path, in the one chat class that promises both.
+    if (chat.class !== "c2c") {
+      return yield* Effect.fail(new NotC2cChat({ chatId }));
+    }
 
     // Verify sender is a member.
     yield* assertMember(chatId, senderProfileId);
