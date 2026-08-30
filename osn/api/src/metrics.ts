@@ -13,6 +13,7 @@ import {
   createHistogram,
   createUpDownCounter,
   LATENCY_BUCKETS_SECONDS,
+  RESULT_VALUES,
 } from "@shared/observability/metrics";
 import type {
   AppEnrollmentApp,
@@ -275,8 +276,17 @@ const safeErrorSummary = (err: unknown): SafeErrorSummary => {
  * error taxonomy grows. Matches are best-effort and intentionally conservative
  * — unknown error shapes collapse to `"error"`.
  */
+const RESULT_SET: ReadonlySet<string> = new Set(RESULT_VALUES);
+const isResult = (v: unknown): v is Result => typeof v === "string" && RESULT_SET.has(v);
+
 export const classifyError = (err: unknown): Result => {
   if (!err || typeof err !== "object") return "error";
+
+  // An explicit override beats every inference below — set where the
+  // caller-facing message is deliberately vague and the true outcome
+  // would otherwise be unobservable (see AuthError.metricResult).
+  const override = (err as { metricResult?: unknown }).metricResult;
+  if (isResult(override)) return override;
 
   // Effect tagged errors expose `_tag`.
   const tag = (err as { _tag?: unknown })._tag;

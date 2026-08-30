@@ -18,6 +18,10 @@ class NotFoundError extends Data.TaggedError("NotFoundError")<{ message?: string
 class ValidationError extends Data.TaggedError("ValidationError")<{ cause?: unknown }> {}
 class EventNotFound extends Data.TaggedError("EventNotFound")<{ id: string }> {}
 class RandomTag extends Data.TaggedError("SomeUnknownTag")<{ message: string }> {}
+class AuthErrorLike extends Data.TaggedError("AuthError")<{
+  message: string;
+  metricResult?: string;
+}> {}
 
 describe("classifyError", () => {
   describe("effect tagged errors", () => {
@@ -47,6 +51,27 @@ describe("classifyError", () => {
       [new Error("handle taken"), "conflict"],
     ])("maps %o → %s", (err, expected) => {
       expect(classifyError(err)).toBe(expected);
+    });
+  });
+
+  describe("metricResult override", () => {
+    // Regression pin for S3: the message clearly matches the "invalid"
+    // substring rule (→ validation_error), but a caller-set metricResult
+    // must win — this is the whole point of the override.
+    it("an explicit metricResult beats the message-keyword match", () => {
+      const err = new AuthErrorLike({
+        message: "Invalid or expired code",
+        metricResult: "conflict",
+      });
+      expect(classifyError(err)).toBe("conflict");
+    });
+
+    // Precedence pin, not just an outcome pin: with no override present,
+    // the same tag/message combination must still fall through to the
+    // ordinary instanceof-Error / message-keyword path.
+    it("falls through to message classification when metricResult is absent", () => {
+      const err = new AuthErrorLike({ message: "Invalid or expired code" });
+      expect(classifyError(err)).toBe("validation_error");
     });
   });
 

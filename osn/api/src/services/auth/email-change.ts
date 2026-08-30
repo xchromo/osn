@@ -199,7 +199,7 @@ export function createEmailChangeModule(ctx: AuthContext, stepUp: StepUpModule) 
       const preflight = yield* Effect.tryPromise({
         try: async () => {
           const [acct] = await db
-            .select()
+            .select({ email: accounts.email })
             .from(accounts)
             .where(eq(accounts.id, accountId))
             .limit(1);
@@ -263,7 +263,12 @@ export function createEmailChangeModule(ctx: AuthContext, stepUp: StepUpModule) 
             return { ok: true as const, email: pending.newEmail };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            if (/UNIQUE|constraint/i.test(msg)) {
+            // Only a uniqueness violation is a genuine caller-facing conflict
+            // (another account already claimed the address). NOT NULL / FOREIGN
+            // KEY / CHECK constraint failures are DB faults, not user races —
+            // they must surface as DatabaseError, not get mapped to a benign
+            // "someone else got there first" outcome.
+            if (/UNIQUE constraint/i.test(msg)) {
               return { ok: false as const, reason: "conflict" as const };
             }
             throw e;
@@ -276,7 +281,16 @@ export function createEmailChangeModule(ctx: AuthContext, stepUp: StepUpModule) 
         // Only "conflict" can come out of the narrowed TX (preflight
         // already rejected not_found / rate_limit). Map to a generic
         // error that matches the begin-path enumeration posture.
-        return yield* Effect.fail(new AuthError({ message: "Invalid or expired code" }));
+        //
+        // The pending change is deleted here, not just left to expire: a
+        // conflicted pending change can never complete (the UNIQUE
+        // constraint will reject every retry against the same claimed
+        // address), so keeping it around only holds the OTP-attempts
+        // counter open for no reason. Matches the lockout branch above.
+        yield* Effect.promise(() => stores.pendingEmailChanges.delete(accountId));
+        return yield* Effect.fail(
+          new AuthError({ message: "Invalid or expired code", metricResult: "conflict" }),
+        );
       }
 
       yield* Effect.promise(() => stores.pendingEmailChanges.delete(accountId));
