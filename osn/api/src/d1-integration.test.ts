@@ -4,7 +4,10 @@ import type { D1Database as DrizzleD1 } from "@cloudflare/workers-types";
 import {
   accounts,
   appEnrollments,
+  connections,
   deletionJobs,
+  organisationMembers,
+  organisations,
   passkeys,
   recoveryCodes,
   securityEvents,
@@ -16,11 +19,12 @@ import { Db } from "@osn/db/service";
 import { createSchemaSql } from "@osn/db/testing";
 import { commitBatch, createD1Db } from "@shared/db-utils";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Layer, Option, Runtime } from "effect";
 import { Miniflare } from "miniflare";
 
 import { UNIQUE_CONSTRAINT_ERROR } from "./lib/unique-constraint";
 import { cancelErasure, getDeletionStatus, requestErasure } from "./services/account-erasure";
+import { createRecommendationService } from "./services/recommendations";
 
 // Integration tests against a REAL (workerd-backed) D1 database via Miniflare.
 // The rest of the OSN suite runs on synchronous bun:sqlite; these exercise the
@@ -38,11 +42,75 @@ import { cancelErasure, getDeletionStatus, requestErasure } from "./services/acc
 const ACCOUNT_ID = "acc_d1test";
 
 let mf: Miniflare;
+let d1: DrizzleD1;
 let layer: Layer.Layer<Db>;
 let rawDb: ReturnType<typeof createD1Db<typeof schema>>;
 
 const run = <A, E>(eff: Effect.Effect<A, E, Db>): Promise<A> =>
   Effect.runPromise(eff.pipe(Effect.provide(layer)));
+
+/**
+ * Wraps a D1 binding so every `SELECT` whose SQL text contains `tableHint`
+ * has its `meta.rows_read` (D1's own read-accounting figure — see
+ * developers.cloudflare.com/d1/platform/limits/) added to a running total,
+ * readable once every in-flight measurement has resolved.
+ *
+ * This is the only way this repo can *observe* whether a fan-out's read is
+ * actually bounded rather than merely assumed to be: bun:sqlite (every other
+ * test in the suite) reports no such figure, and D1 is the driver production
+ * runs on.
+ *
+ * It cannot read `.meta` off the call drizzle itself makes: for a `select({
+ * ... })` with an explicit field list, drizzle's D1 driver calls
+ * `.raw()`, not `.all()`/`.run()` — `.raw()` returns bare row tuples with no
+ * `.meta` at all (`D1PreparedStatement.raw()` in `@cloudflare/workers-types`).
+ * So on every matching `bind()`, this fires a second, identically-bound
+ * `.all()` purely to read its `meta.rows_read` — safe because every query
+ * this test runs through it is a pure `SELECT` — and leaves the statement
+ * drizzle actually executes untouched, `.raw()` and all, so the real result
+ * path behaves exactly as production does.
+ */
+function trackRowsRead(
+  base: DrizzleD1,
+  tableHint: string,
+): { d1: DrizzleD1; total: () => Promise<number> } {
+  let total = 0;
+  const pending: Promise<void>[] = [];
+  const tracked = new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop !== "prepare") return Reflect.get(target, prop, receiver);
+      return (query: string) => {
+        const stmt = target.prepare(query);
+        if (!query.includes(tableHint)) return stmt;
+        return new Proxy(stmt, {
+          get(stmtTarget, stmtProp, stmtReceiver) {
+            if (stmtProp !== "bind") return Reflect.get(stmtTarget, stmtProp, stmtReceiver);
+            return (...values: unknown[]) => {
+              pending.push(
+                target
+                  .prepare(query)
+                  .bind(...values)
+                  .all()
+                  .then((res) => {
+                    total += res.meta.rows_read ?? 0;
+                    return undefined;
+                  }),
+              );
+              return stmtTarget.bind(...values);
+            };
+          },
+        });
+      };
+    },
+  });
+  return {
+    d1: tracked,
+    total: async () => {
+      await Promise.all(pending);
+      return total;
+    },
+  };
+}
 
 const seedAccount = async (): Promise<void> => {
   const ts = new Date();
@@ -61,7 +129,7 @@ beforeAll(async () => {
     script: "export default { fetch() { return new Response('ok'); } };",
     d1Databases: { DB: ":memory:" },
   });
-  const d1 = (await mf.getD1Database("DB")) as unknown as DrizzleD1;
+  d1 = (await mf.getD1Database("DB")) as unknown as DrizzleD1;
   for (const stmt of createSchemaSql()) {
     await d1.prepare(stmt).run();
   }
@@ -75,7 +143,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   // FK-safe truncation (D1 enforces foreign keys): every table that erasure
-  // writes and references `accounts` must be cleared before the account row.
+  // OR the recommendations tests below write, and that references `accounts`
+  // or `users`, must be cleared before those parent rows.
   for (const table of [
     deletionJobs,
     securityEvents,
@@ -83,6 +152,9 @@ beforeEach(async () => {
     passkeys,
     recoveryCodes,
     appEnrollments,
+    connections,
+    organisationMembers,
+    organisations,
     users,
     accounts,
   ]) {
@@ -156,5 +228,217 @@ describe("UNIQUE_CONSTRAINT_ERROR over real D1 (Miniflare)", () => {
       expect(UNIQUE_CONSTRAINT_ERROR.test(msg)).toBe(false);
     }
     expect(threw).toBe(true);
+  });
+});
+
+// The two describes below are the first D1 coverage of
+// `services/recommendations.ts` — everything else exercising it runs on
+// synchronous bun:sqlite, which cannot see either the read-accounting D1
+// reports or the bound-parameter cap D1 enforces.
+describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", () => {
+  it("stays within the MAX_ORG_COMEMBER_ROWS budget even when one organisation has far more members than its share", async () => {
+    // osn-tracker#574. MAX_ORG_COMEMBER_ROWS (services/recommendations.ts) is
+    // 2 000. This seeds one organisation with 2 500 members — 500 more than
+    // the whole budget — and confirms the fan-out reads no more than the
+    // budget from `organisation_members`, using D1's own `rows_read` figure
+    // rather than assuming the query's LIMIT clauses did their job.
+    const callerId = "usr_boundtest_caller";
+    const callerAccountId = "acc_boundtest_caller";
+    const ts = new Date();
+    await rawDb.insert(accounts).values({
+      id: callerAccountId,
+      email: "boundtest-caller@example.com",
+      passkeyUserId: crypto.randomUUID(),
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await rawDb.insert(users).values({
+      id: callerId,
+      accountId: callerAccountId,
+      handle: "boundtest_caller",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await rawDb.insert(organisations).values({
+      id: "org_boundtest",
+      handle: "boundtest",
+      name: "Bound Test Org",
+      ownerId: callerId,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await rawDb.insert(organisationMembers).values({
+      id: "orgm_boundtest_caller",
+      organisationId: "org_boundtest",
+      profileId: callerId,
+      role: "admin",
+      createdAt: ts,
+    });
+
+    // D1 caps bound parameters at 100 PER STATEMENT (see the FOF test below),
+    // so a multi-row `INSERT ... VALUES (...), (...), …` — one statement,
+    // many binds — hits that cap almost immediately at these row widths.
+    // `commitBatch` (already used above, `@shared/db-utils`) sends many
+    // single-row statements as one D1 `batch()` round trip instead: each
+    // statement stays far under the per-statement cap, and the batch itself
+    // is still one network hop.
+    const MEMBER_COUNT = 2_500;
+    const BATCH = 100;
+    for (let i = 0; i < MEMBER_COUNT; i += BATCH) {
+      const indices = Array.from({ length: Math.min(BATCH, MEMBER_COUNT - i) }, (_, j) => i + j);
+      // eslint-disable-next-line no-await-in-loop -- sequential batches; each
+      // depends on nothing but must land before the assertions below run.
+      await commitBatch(
+        rawDb,
+        indices.map((n) =>
+          rawDb.insert(accounts).values({
+            id: `acc_boundtest_m${n}`,
+            email: `boundtest-m${n}@example.com`,
+            passkeyUserId: crypto.randomUUID(),
+            createdAt: ts,
+            updatedAt: ts,
+          }),
+        ),
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await commitBatch(
+        rawDb,
+        indices.map((n) =>
+          rawDb.insert(users).values({
+            id: `usr_boundtest_m${n}`,
+            accountId: `acc_boundtest_m${n}`,
+            handle: `boundtestm${n}`,
+            createdAt: ts,
+            updatedAt: ts,
+          }),
+        ),
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await commitBatch(
+        rawDb,
+        indices.map((n) =>
+          rawDb.insert(organisationMembers).values({
+            id: `orgm_boundtest_m${n}`,
+            organisationId: "org_boundtest",
+            profileId: `usr_boundtest_m${n}`,
+            role: "member" as const,
+            createdAt: ts,
+          }),
+        ),
+      );
+    }
+
+    const { d1: trackedD1, total } = trackRowsRead(d1, "organisation_members");
+    const trackedLayer = Layer.succeed(Db, { db: createD1Db(trackedD1, schema) });
+    const recs = createRecommendationService();
+
+    const suggestions = await Effect.runPromise(
+      recs.suggestConnections(callerId, 50).pipe(Effect.provide(trackedLayer)),
+    );
+
+    const rowsRead = await total();
+    expect(suggestions.length).toBeGreaterThan(0);
+    // 2 500 members exist; the read must never approach that. The small
+    // margin above the exact 2 000 budget covers the caller's own membership
+    // row (a separate, tiny query against the same table) and planner
+    // overhead — not a second organisation's worth of reads.
+    expect(rowsRead).toBeLessThanOrEqual(2_010);
+  });
+});
+
+describe("osn/api recommendations FOF fan-out over real D1 (Miniflare)", () => {
+  it("suggestConnections throws once the caller's accepted-connection count pushes the FOF query past D1's 100-bound-parameter cap", async () => {
+    // The FOF fan-out (services/recommendations.ts) binds `myConnectionIds`
+    // TWICE — once per edge direction, in
+    // `inArray(requesterId, ids) OR inArray(addresseeId, ids)`.
+    // MAX_MY_CONNECTIONS_FOR_FOF allows up to 500 ids (1 000 binds), but D1's
+    // documented cap is 100 bound parameters per query
+    // (developers.cloudflare.com/d1/platform/limits/: "Maximum bound
+    // parameters per query | 100", applying per statement including within a
+    // batch). 51 accepted connections already produces 102 binds — over the
+    // cap — so `GET /recommendations/connections` already fails in
+    // production for any caller with more than 50 accepted connections.
+    //
+    // Confirmed empirically against THIS Miniflare version before writing
+    // this test: it enforces the same 100-parameter cap D1 documents (100
+    // bound params succeeds, 101 throws "too many SQL variables"), so this
+    // is real coverage of the failure, not a false negative that only
+    // production would catch.
+    const callerId = "usr_bindtest_caller";
+    const callerAccountId = "acc_bindtest_caller";
+    const ts = new Date();
+    await rawDb.insert(accounts).values({
+      id: callerAccountId,
+      email: "bindtest-caller@example.com",
+      passkeyUserId: crypto.randomUUID(),
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await rawDb.insert(users).values({
+      id: callerId,
+      accountId: callerAccountId,
+      handle: "bindtest_caller",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    const FRIEND_COUNT = 60; // 2 x 60 = 120 binds, over D1's 100-bind cap
+    for (let i = 0; i < FRIEND_COUNT; i++) {
+      const friendAccountId = `acc_bindtest_f${i}`;
+      const friendId = `usr_bindtest_f${i}`;
+      // eslint-disable-next-line no-await-in-loop -- sequential, FK-ordered seeding
+      await rawDb.insert(accounts).values({
+        id: friendAccountId,
+        email: `bindtest-f${i}@example.com`,
+        passkeyUserId: crypto.randomUUID(),
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(users).values({
+        id: friendId,
+        accountId: friendAccountId,
+        handle: `bindtestf${i}`,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(connections).values({
+        id: `conn_bindtest_${i}`,
+        requesterId: callerId,
+        addresseeId: friendId,
+        status: "accepted",
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    }
+
+    const recs = createRecommendationService();
+    let threw = false;
+    let message = "";
+    try {
+      await run(recs.suggestConnections(callerId));
+    } catch (e) {
+      threw = true;
+      // The Effect error channel wraps three deep here: the service's own
+      // `DatabaseError`, wrapping drizzle's `DrizzleQueryError`, wrapping the
+      // real `D1_ERROR: too many SQL variables …` — walk `.cause` down to the
+      // bottom rather than asserting on the generic outer message.
+      // `Effect.runPromise` rejects with a `FiberFailure` wrapping the typed
+      // failure, never the tagged error itself — same unwrap `safe-error.ts`
+      // does for route handlers (Runtime.isFiberFailure → Cause.failureOption).
+      const failure = Runtime.isFiberFailure(e)
+        ? Option.getOrNull(Cause.failureOption(e[Runtime.FiberFailureCauseId]))
+        : e;
+      let cause: unknown = failure;
+      for (let depth = 0; depth < 5; depth++) {
+        const next = (cause as { cause?: unknown } | undefined)?.cause;
+        if (next === undefined || next === null) break;
+        cause = next;
+      }
+      message = cause instanceof Error ? cause.message : String(cause);
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("too many SQL variables");
   });
 });

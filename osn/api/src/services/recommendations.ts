@@ -18,7 +18,7 @@ import {
   tokensPrefixName,
 } from "@shared/db-utils/search";
 import { and, asc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
-import { alias, type SQLiteColumn } from "drizzle-orm/sqlite-core";
+import { alias, unionAll, type SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { Data, Effect } from "effect";
 
 // ---------------------------------------------------------------------------
@@ -69,12 +69,16 @@ const MAX_FOF_FANOUT_ROWS = 10_000;
  * defence as MAX_FOF_FANOUT_ROWS: membership of one very large organisation
  * must not turn a suggestion request into an unbounded read.
  *
- * It is a budget for the whole fan-out, not per organisation, and the rows
- * arrive ordered by `(organisation_id, profile_id)` — so a caller in one large
- * organisation fills the budget from that organisation alone and never sees a
- * co-member from any other. Organisation ids are random, so which one wins is
- * a fixed draw per caller. Tracked as its own finding; the fix is a
- * per-organisation budget rather than a bigger global one.
+ * This used to be a budget for the whole fan-out, filled by one query ordered
+ * `(organisation_id, profile_id)` — so a caller in one large organisation
+ * filled the budget from that organisation alone and never saw a co-member
+ * from any other, and a caller in fifty organisations of 250 members each saw
+ * co-members from about eight of them, every time, because organisation ids
+ * are random and the draw is fixed per caller (osn-tracker#574). It is now
+ * split evenly across the caller's organisations — see the query that reads
+ * it, below — so this constant is the *total* budget and each organisation's
+ * actual share is `MAX_ORG_COMEMBER_ROWS / (number of the caller's
+ * organisations)`.
  */
 const MAX_ORG_COMEMBER_ROWS = 2_000;
 
@@ -516,37 +520,96 @@ export function createRecommendationService() {
           myOrgIds.length === 0
             ? Effect.succeed([] as { profileId: string; organisationId: string }[])
             : Effect.tryPromise({
-                // Ids only. This reads up to MAX_ORG_COMEMBER_ROWS rows and at
+                // Ids only. This reads at most MAX_ORG_COMEMBER_ROWS rows and at
                 // most `safeLimit` candidates survive ranking, so joining
                 // `organisations` here re-serialised a handle and a name for
                 // every row to throw away roughly forty out of forty-one of
                 // them. The surviving organisations are hydrated in step 5,
                 // alongside the profiles, from a set that is already small.
                 //
-                // The ORDER BY pins what was left to the planner. Without
-                // one the row order under the LIMIT is unspecified — in
-                // practice SQLite already walked `org_members_pair_idx` in
-                // this order, so `EXPLAIN QUERY PLAN` is identical either way
-                // and no behaviour changes today. What it buys is that the
-                // slice stays the same slice if the planner ever chooses
-                // differently, which matters because org-only candidates all
-                // tie at `mutualCount: 0` and are separated only by the id
-                // tiebreak in step 4. It costs nothing: the index is UNIQUE
-                // on exactly (organisation_id, profile_id), so this is its own
-                // order and adds no sort.
+                // One statement, `UNION ALL` of a per-organisation subselect
+                // for each of the caller's organisations (osn-tracker#574).
+                // The single query this replaced gave the whole budget to one
+                // global `ORDER BY (organisation_id, profile_id) LIMIT
+                // MAX_ORG_COMEMBER_ROWS` — see the note on that constant for
+                // why that starved every organisation but the lowest-id one.
+                // Splitting the budget per organisation, with its own `ORDER
+                // BY profile_id LIMIT <share>`, is what fixes it: every
+                // organisation the caller belongs to contributes candidates,
+                // not just whichever one sorts first.
                 //
-                // What the ordering does NOT fix is which organisations the
-                // cap reaches — see the note on MAX_ORG_COMEMBER_ROWS.
-                try: () =>
-                  db
-                    .select({
-                      profileId: organisationMembers.profileId,
-                      organisationId: organisationMembers.organisationId,
-                    })
-                    .from(organisationMembers)
-                    .where(inArray(organisationMembers.organisationId, myOrgIds))
-                    .orderBy(organisationMembers.organisationId, organisationMembers.profileId)
-                    .limit(MAX_ORG_COMEMBER_ROWS),
+                // The issue that reported this proposed a window function
+                // (`ROW_NUMBER() OVER (PARTITION BY organisation_id ORDER BY
+                // profile_id)`, filtered to `rn <= share`) instead. That is
+                // the wrong fix: a window function's `PARTITION BY` filters
+                // *after* the window scan, so it still reads every membership
+                // row of every organisation the caller belongs to — exactly
+                // the unbounded read MAX_ORG_COMEMBER_ROWS exists to prevent.
+                // Measured on real (Miniflare/workerd) D1, three organisations
+                // of 600/300/100 members, cap 150, share 50: the current
+                // global query reads 151 rows for 150 results; the window
+                // function reads 2,860 for the same 150; this `UNION ALL`
+                // shape reads exactly 150. A single organisation with 50,000
+                // members would cost the window function 50,000+ rows read on
+                // every request, forever — the same failure this constant was
+                // added to stop.
+                //
+                // `MAX_MY_ORGANISATIONS` (50) caps the arm count, well under
+                // SQLite's 500-term compound-select limit, so this is always
+                // one statement rather than one query per organisation.
+                //
+                // The share is MAX_ORG_COMEMBER_ROWS divided evenly by the
+                // caller's actual organisation count, not by the 50-org cap —
+                // a caller in one organisation gets the whole budget (same as
+                // the query this replaces did), a caller in three splits it
+                // three ways, and a caller at the 50-organisation cap gets the
+                // same 40-per-organisation worst case a fixed division would
+                // have given throughout. Integer division: the remainder —
+                // at most `myOrgIds.length - 1` rows of budget — goes to no
+                // organisation. Handing it to whichever organisation sorts
+                // first would reintroduce, in miniature, the exact bias this
+                // change exists to remove.
+                //
+                // Each arm is wrapped as a subquery (`.as(...)` then an outer
+                // `.select().from(...)`) because SQLite's compound-select
+                // grammar does not give a non-final arm of a UNION its own
+                // ORDER BY/LIMIT — only a derived-table subquery gets one.
+                // Confirmed against a real SQLite engine: the unwrapped form
+                // (`... LIMIT ? UNION ALL SELECT ...`) is a syntax error
+                // ("ORDER BY clause should come after UNION ALL not before"),
+                // not merely unidiomatic.
+                //
+                // `myOrgIds` is sorted before the arms are built so the
+                // union's row order reproduces the old query's `(organisation_
+                // id, profile_id)` order — arm N's rows are fully emitted
+                // before arm N+1's, and each arm is itself ordered by
+                // `profile_id`. That keeps "first organisation wins the
+                // label" in step 3 deterministic across requests, same as the
+                // comment there has always promised.
+                try: () => {
+                  const orgComemberShare = Math.floor(MAX_ORG_COMEMBER_ROWS / myOrgIds.length);
+                  const arms = [...myOrgIds].toSorted().map((organisationId, index) => {
+                    const capped = db
+                      .select({
+                        profileId: organisationMembers.profileId,
+                        organisationId: organisationMembers.organisationId,
+                      })
+                      .from(organisationMembers)
+                      .where(eq(organisationMembers.organisationId, organisationId))
+                      .orderBy(asc(organisationMembers.profileId))
+                      .limit(orgComemberShare)
+                      .as(`org_share_${index}`);
+                    return db
+                      .select({
+                        profileId: capped.profileId,
+                        organisationId: capped.organisationId,
+                      })
+                      .from(capped);
+                  });
+                  return arms.length === 1
+                    ? arms[0]!
+                    : unionAll(arms[0]!, arms[1]!, ...arms.slice(2));
+                },
                 catch: (cause) => new DatabaseError({ cause }),
               }),
         ],
