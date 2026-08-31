@@ -207,18 +207,27 @@ doesn't render children, it disposes them, so no further request escapes. But a
 vendor's script that already ran before the switch flipped has already set its
 own globals, attached its own listeners and written its own storage, and none
 of that unwinds just because the DOM node is gone. Under the opt-out defaults
-this is the common case, not an edge one: the banner appears only after the
-gated embeds have already loaded, so "Reject all" is nearly always clicked with
-a third-party context already live.
+this is not an edge case: where a gated embed HAS loaded, the banner appeared
+after it, so "Reject all" is clicked with a third-party context already live.
 
 `saveConsent` (`store.ts`) reloads the page — `location.reload()`, via an
-injectable module-level `reloadPage` reference so tests can substitute a spy —
-whenever a category holding at least one `enforcement: "gated"` vendor moves
-from granted to revoked in that save. Two conditions gate it, both load-bearing:
+injectable module-level `reloadPage` reference so tests can substitute a spy.
+Three conditions gate it, all load-bearing:
 
 1. **Granted → revoked only.** Not revoked → granted, not a no-op save, not a
    first-time grant — none of those leave anything to tear down.
-2. **The cookie write must have actually succeeded**, checked with a read-back
+2. **The category's gated content must actually have rendered this visit**,
+   tracked by `noteGatedContentLoaded`, which `ConsentGate` calls when it
+   renders children for a `"gated"` vendor — never for the placeholder, which
+   runs no third-party code. Both gated vendors (the Pinterest board, the
+   Google Maps preview) mount only inside a click-opened event details sheet,
+   while the banner appears immediately, so a guest who lands and presses
+   "Reject all" has usually opened neither. Reloading them would spend a full
+   document load, every island's hydration and a re-fetch of the invite to
+   clear nothing at all. The tracking is a plain module-level `Set`, not a
+   signal — nothing renders from it, and it resets on reload, which is exactly
+   right, since a reload is what clears the thing it tracks.
+3. **The cookie write must have actually succeeded**, checked with a read-back
    of `document.cookie` (`writeConsentToDocumentAndVerify` in `cookie.ts`)
    rather than trusting that the write call merely returned — it swallows
    failures by design (see "Storage" above). Reloading on an unpersisted
@@ -227,7 +236,8 @@ from granted to revoked in that save. Two conditions gate it, both load-bearing:
    back on the opt-out defaults with no record of having tried.
 
 The preferences dialog states this plainly rather than leaving it implicit — a
-silent reload the guest didn't expect is its own kind of surprising.
+silent reload the guest didn't expect is its own kind of surprising — and
+hedges it on "if", because condition 2 means it does not always happen.
 
 ### Two versions, two jobs
 

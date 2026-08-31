@@ -5,6 +5,7 @@ import { allGrants, defaultGrants } from "./record";
 import {
   acceptAllConsent,
   hydrateConsent,
+  noteGatedContentLoaded,
   rejectAllConsent,
   saveConsent,
   setReloadPageForTest,
@@ -36,9 +37,10 @@ describe("saveConsent — reload on granted → revoked (osn-tracker#162)", () =
     resetConsentForTest();
   });
 
-  it("reloads when a gated category (embeds) goes from granted to revoked", () => {
+  it("reloads when a gated category (embeds) goes from granted to revoked, after its content ran", () => {
     seedConsentForTest({ embeds: true });
     hydrateConsent();
+    noteGatedContentLoaded("embeds");
     setReloadPageForTest(reload);
 
     saveConsent({ ...defaultGrants(), embeds: false });
@@ -46,17 +48,45 @@ describe("saveConsent — reload on granted → revoked (osn-tracker#162)", () =
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("reloads on the FIRST-EVER decision, when 'Reject all' revokes the opt-out default", () => {
-    // The common path per the module doc: the banner appears after the
-    // opt-out-granted embeds have already loaded, so a guest's very first
-    // decision is very often exactly this transition.
+  it("reloads on the FIRST-EVER decision, when the embeds already ran", () => {
+    // A guest who opened an event's details sheet — mounting the moodboard or
+    // the map under the opt-out default — and only then pressed "Reject all".
+    // Third-party code really did run, so there really is something to clear.
+    resetConsentForTest();
+    hydrateConsent();
+    noteGatedContentLoaded("embeds");
+    setReloadPageForTest(reload);
+
+    rejectAllConsent();
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  // P-W1 (found reviewing this branch): the reload exists to tear down code
+  // that already ran, and on the COMMON path none has. Both gated vendors
+  // mount only inside a click-opened details sheet, while the banner appears
+  // immediately — so a guest who lands and presses "Reject all" has almost
+  // never opened one, and reloading them would spend a whole document load,
+  // every island's hydration and a re-fetch of the invite to clear nothing.
+  it("does NOT reload when no gated content ever rendered this visit", () => {
     resetConsentForTest();
     hydrateConsent();
     setReloadPageForTest(reload);
 
     rejectAllConsent();
 
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does NOT reload when the category that ran is not the one revoked", () => {
+    seedConsentForTest({ embeds: true, analytics: true });
+    hydrateConsent();
+    noteGatedContentLoaded("embeds");
+    setReloadPageForTest(reload);
+
+    saveConsent({ ...defaultGrants(), embeds: true });
+
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("does NOT reload on revoked → granted", () => {

@@ -169,8 +169,39 @@ export function setReloadPageForTest(fn: () => void): void {
 function revokesGatedCategory(previous: ConsentGrants, next: ConsentGrants): boolean {
   return CONSENT_CATEGORIES.some(
     (category) =>
-      previous[category] && !next[category] && gatedVendorsInCategory(category).length > 0,
+      previous[category] &&
+      !next[category] &&
+      gatedVendorsInCategory(category).length > 0 &&
+      loadedGatedCategories.has(category),
   );
+}
+
+/**
+ * Categories whose gated content actually rendered during this visit.
+ *
+ * The reload exists to tear down third-party code that already ran. If none
+ * ever ran, there is nothing to tear down and the reload is pure cost — and
+ * that is the COMMON path, not the rare one: both gated vendors (the Pinterest
+ * board and the Google Maps preview) mount only inside a click-opened event
+ * details sheet, while the banner appears immediately, so a guest who lands and
+ * presses "Reject all" has almost never opened one. Reloading them would spend
+ * a full document load, every island's hydration and a re-fetch of the invite
+ * to clear nothing at all.
+ *
+ * A plain module-level `Set`, not a signal: nothing renders from it, it only
+ * has to be readable at save time, and a signal would invalidate the store's
+ * subscribers on every gate mount for no benefit. It resets on reload, which is
+ * exactly right — a reload is what clears the thing it tracks.
+ */
+const loadedGatedCategories = new Set<ConsentCategory>();
+
+/**
+ * Record that a gated vendor's content rendered. Called by `ConsentGate` when
+ * it actually renders children for a `"gated"` vendor — not when it renders the
+ * placeholder, which runs no third-party code.
+ */
+export function noteGatedContentLoaded(category: ConsentCategory): void {
+  loadedGatedCategories.add(category);
 }
 
 /**
@@ -317,4 +348,5 @@ export function resetConsentStoreForTest(): void {
   setPreferencesOpen(false);
   setDialogHostId(null);
   reloadPage = noopReloadPageForTest;
+  loadedGatedCategories.clear();
 }
