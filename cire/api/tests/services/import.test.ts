@@ -414,7 +414,9 @@ describe("diff: scope — single-sheet (partial) changes", () => {
     // Pass an EMPTY event list under scope='guests'. Under the default scope
     // this would remove every event; scoped, the schedule is not in play at all.
     const plan = await Effect.runPromise(
-      diffAgainstDb([], [], BOOTSTRAP_WEDDING_ID, { scope: "guests" }).pipe(Effect.provide(layer)),
+      diffAgainstDb([], [], BOOTSTRAP_WEDDING_ID, { scope: "guests", removeManual: true }).pipe(
+        Effect.provide(layer),
+      ),
     );
     expect(plan.eventRemoves).toHaveLength(0);
   });
@@ -438,8 +440,15 @@ describe("diff: scope — single-sheet (partial) changes", () => {
       .run();
 
     const ev = await Effect.runPromise(parseEventsCsv(FOUR_EVENTS_CSV));
+    // With the provenance toggle the events editor actually ships: it saves
+    // `removeManual: true`, and this household was added by hand, so nothing but
+    // the scope stands between it and a cascade.
     const plan = await Effect.runPromise(
-      diffAgainstDb(ev, [], BOOTSTRAP_WEDDING_ID, { scope: "events" }).pipe(Effect.provide(layer)),
+      diffAgainstDb(ev, [], BOOTSTRAP_WEDDING_ID, {
+        scope: "events",
+        removeManual: true,
+        matchByName: false,
+      }).pipe(Effect.provide(layer)),
     );
 
     expect(plan.familyRemoves).toHaveLength(0);

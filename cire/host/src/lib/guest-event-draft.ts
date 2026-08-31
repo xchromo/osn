@@ -4,9 +4,10 @@
 // store, tracks dirtiness against the loaded baseline, and (on Save) serialises
 // the draft into a DesiredState JSON the `changes/preview` front door consumes.
 // The editor front door diffs with `removeManual` implicit-true, so an omitted
-// row reads as a delete for whichever half the save's `scope` covers — GuestsEditor
-// saves `scope: "both"` and loads every event/household to keep the draft the
-// whole truth; EventsEditor saves `scope: "events"` and only carries events, so
+// row reads as a delete for whichever half the save's `scope` covers —
+// GuestsEditor sends NO scope, which the front door reads as the `"both"`
+// default, and it loads every event/household to keep the draft the whole
+// truth; EventsEditor saves `scope: "events"` and only carries events, so
 // leaving guests/households empty is safe (the scope tells the diff to leave
 // that half alone regardless of what's in the DesiredState).
 //
