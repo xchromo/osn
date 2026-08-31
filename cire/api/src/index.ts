@@ -8,6 +8,7 @@ import { Effect, Layer } from "effect";
 
 import { type AppOptions, createApp } from "./app";
 import { createD1Db, DbService } from "./db";
+import { createSessionRoutedClient, runInD1Session } from "./db/d1-session";
 import { setExecutionCtx } from "./lib/execution-ctx";
 import { CIRE_OIDC_TX_HMAC_INFO } from "./lib/oidc";
 import { runCire } from "./observability";
@@ -238,7 +239,11 @@ const handler: ExportedHandler<Env> = {
     }
 
     if (!cached || cached.dbBinding !== env.DB) {
-      const db = createD1Db(env.DB);
+      // Built over the session-routing shim, not the binding itself: the handle
+      // is baked into the cached app graph, so it must be stable for the life of
+      // the isolate, while the D1 session it queries through has to be per
+      // request. The shim is the seam between the two — see db/d1-session.ts.
+      const db = createD1Db(createSessionRoutedClient(env.DB));
       // Any authenticated OSN user is a first-class organiser: they sign in,
       // see their own weddings (an empty list for a new account — never a 503),
       // and create new ones via POST /api/organiser/weddings. There is no
@@ -461,7 +466,13 @@ const handler: ExportedHandler<Env> = {
     // background after a transform. Keyed by this exact Request instance, which
     // Elysia passes straight through to the handler.
     setExecutionCtx(request, ctx);
-    return cached.app.fetch(request);
+    // One D1 session per request, so replicas can serve every query after the
+    // first (see db/d1-session.ts). Wraps the whole dispatch, which is what puts
+    // the session on the async context every handler inherits.
+    // Bound out of the mutable module-level cache before the closure, so the
+    // narrowing above survives into it.
+    const { app } = cached;
+    return runInD1Session(env.DB, () => app.fetch(request));
   },
 
   // Cron-triggered daily maintenance (C-M2/C-M15 + retention). Configured by the
@@ -488,96 +499,108 @@ const handler: ExportedHandler<Env> = {
   // the other and the isolate stays alive until each delete settles.
   async scheduled(_event, env, ctx) {
     if (!env.DB) return;
-    const db = createD1Db(env.DB);
+    // Same session routing as `fetch`, for the same reason. The sweeps are
+    // write-heavy, so this buys little today — but it keeps one path through
+    // the D1 client rather than two, and the reads each sweep does to find its
+    // work can be served by a replica once the first query has run.
+    const db = createD1Db(createSessionRoutedClient(env.DB));
     const dbLayer = Layer.succeed(DbService, db);
 
-    ctx.waitUntil(
-      Effect.runPromise(
-        sessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled session sweep failed", { reason: err.reason }),
+    // All six sweeps share one session: `waitUntil` only registers the
+    // promises, and each is created inside this scope, so all six inherit it.
+    runInD1Session(env.DB, () => {
+      ctx.waitUntil(
+        Effect.runPromise(
+          sessionService.sweepExpired().pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled session sweep failed", { reason: err.reason }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
 
-    // Organiser sessions expire but do not delete themselves — `validate` only
-    // reports expiry. Same reasoning as the guest sweep above: without this the
-    // table grows for the life of the product, and every row holds a login-time
-    // snapshot of an OSN profile (email, handle, display name), so keeping dead
-    // ones is a data-retention problem as well as a size one.
-    ctx.waitUntil(
-      Effect.runPromise(
-        organiserSessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
+      // Organiser sessions expire but do not delete themselves — `validate` only
+      // reports expiry. Same reasoning as the guest sweep above: without this the
+      // table grows for the life of the product, and every row holds a login-time
+      // snapshot of an OSN profile (email, handle, display name), so keeping dead
+      // ones is a data-retention problem as well as a size one.
+      ctx.waitUntil(
+        Effect.runPromise(
+          organiserSessionService.sweepExpired().pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
 
-    // Pass the SHEETS binding so the retention sweep also reclaims the
-    // personal-data objects it orphans (IB-S-L2 / C-H1): the uploaded guest/event
-    // spreadsheets in `cire-sheets` referenced by the `imports` rows it deletes.
-    // D1's ON DELETE cascade never reaches R2, so without this the CSVs (which
-    // carry guest PII) would outlive the deleted DB rows forever. The `cire-assets`
-    // invite images are NOT reaped here — those rows survive (the invite stays
-    // live); see retentionService.sweepExpiredGuestData.
-    ctx.waitUntil(
-      Effect.runPromise(
-        retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled guest-data retention sweep failed", { reason: err.reason }),
+      // Pass the SHEETS binding so the retention sweep also reclaims the
+      // personal-data objects it orphans (IB-S-L2 / C-H1): the uploaded guest/event
+      // spreadsheets in `cire-sheets` referenced by the `imports` rows it deletes.
+      // D1's ON DELETE cascade never reaches R2, so without this the CSVs (which
+      // carry guest PII) would outlive the deleted DB rows forever. The `cire-assets`
+      // invite images are NOT reaped here — those rows survive (the invite stays
+      // live); see retentionService.sweepExpiredGuestData.
+      ctx.waitUntil(
+        Effect.runPromise(
+          retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled guest-data retention sweep failed", {
+                reason: err.reason,
+              }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
 
-    // Expired vendor-claim tokens: 7-day TTL, nothing else ever deleted them.
-    ctx.waitUntil(
-      Effect.runPromise(
-        maintenanceSweeps.sweepExpiredVendorClaims().pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
+      // Expired vendor-claim tokens: 7-day TTL, nothing else ever deleted them.
+      ctx.waitUntil(
+        Effect.runPromise(
+          maintenanceSweeps.sweepExpiredVendorClaims().pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
 
-    // Abandoned `preview` change rows + their uploaded-sheet CSVs (guest PII
-    // in `cire-sheets`) — previously only reclaimed when the whole wedding
-    // aged out of retention, a year+ later.
-    ctx.waitUntil(
-      Effect.runPromise(
-        maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
+      // Abandoned `preview` change rows + their uploaded-sheet CSVs (guest PII
+      // in `cire-sheets`) — previously only reclaimed when the whole wedding
+      // aged out of retention, a year+ later.
+      ctx.waitUntil(
+        Effect.runPromise(
+          maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
 
-    // IB-S-L2: reconcile orphaned `cire-assets` invite images (re-upload/remove
-    // best-effort-delete failures leave objects no DB row references). Pass the
-    // ASSETS binding; absent ⇒ the reconcile is a no-op. The service refuses to
-    // delete anything unless it can positively confirm the live set (abort on a
-    // failed/empty referenced-key read) and only reaps objects past a 7-day
-    // grace window — so a freshly uploaded image whose row write lags is safe.
-    ctx.waitUntil(
-      Effect.runPromise(
-        assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled cire-assets reconciliation failed", { reason: err.reason }),
+      // IB-S-L2: reconcile orphaned `cire-assets` invite images (re-upload/remove
+      // best-effort-delete failures leave objects no DB row references). Pass the
+      // ASSETS binding; absent ⇒ the reconcile is a no-op. The service refuses to
+      // delete anything unless it can positively confirm the live set (abort on a
+      // failed/empty referenced-key read) and only reaps objects past a 7-day
+      // grace window — so a freshly uploaded image whose row write lags is safe.
+      ctx.waitUntil(
+        Effect.runPromise(
+          assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
+            Effect.catchAll((err) =>
+              Effect.logError("scheduled cire-assets reconciliation failed", {
+                reason: err.reason,
+              }),
+            ),
+            Effect.provide(dbLayer),
           ),
-          Effect.provide(dbLayer),
         ),
-      ),
-    );
+      );
+    });
   },
 };
 
