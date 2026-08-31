@@ -4,6 +4,48 @@ import { devPort } from "@shared/dev-urls";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, sessionDrivers } from "astro/config";
 
+/**
+ * `motion` (plus its `motion-dom`/`motion-utils` deps) is ~187 KB raw of dead
+ * weight in the SSR Worker build (tracker #287). The three `.motion.ts`
+ * modules that import it — `components/Modal.motion.ts`,
+ * `designs/gala/UnlockReveal.motion.ts`, `designs/classic/UnlockReveal.motion.ts`
+ * — are only ever reached from a SolidJS `onMount` prefetch hint or a DOM
+ * event handler (modal open/close, the post-claim reveal), both of which are
+ * client-only and never run while the server renders HTML. But Vite's SSR
+ * build still walks and chunks every module reachable via `import()`,
+ * dynamic imports included, so the whole library ships in `dist/server` with
+ * nothing there ever calling it.
+ *
+ * Stub `motion` out of the SSR module graph only. The client build (this
+ * plugin only intercepts `options.ssr` resolutions) still resolves the real
+ * package, so both design packs keep animating exactly as before — verify
+ * with a client build + `dist/client` inspection after touching this.
+ */
+function stubMotionForSsr() {
+  const STUB_ID = "\0cire-invites:motion-stub-ssr";
+  return {
+    name: "cire-invites:stub-motion-for-ssr",
+    enforce: "pre",
+    resolveId(source, _importer, options) {
+      if (options?.ssr && (source === "motion" || source.startsWith("motion/"))) {
+        return STUB_ID;
+      }
+      return null;
+    },
+    load(id) {
+      if (id !== STUB_ID) return null;
+      // Thrown, not a silent no-op: if a future code path ever calls these
+      // during SSR, that is exactly the assumption above being wrong, and it
+      // should fail loudly rather than animate nothing.
+      const throwStub =
+        "() => { throw new Error(" +
+        '"motion is stubbed out of the cire/invites SSR build (tracker #287); ' +
+        "animate()/stagger() must only run client-side\"); }";
+      return `export const animate = ${throwStub};\nexport const stagger = ${throwStub};\n`;
+    },
+  };
+}
+
 // SSR on a Cloudflare Worker. The invite route resolves which wedding to render
 // FROM THE PATH at request time (`/<slug>`), so the guest site no longer bakes a
 // single wedding slug at build time — any wedding renders from its own link. The
@@ -38,6 +80,6 @@ export default defineConfig({
   session: { driver: sessionDrivers.memory() },
   integrations: [solidJs()],
   vite: {
-    plugins: [tailwindcss()],
+    plugins: [tailwindcss(), stubMotionForSsr()],
   },
 });
