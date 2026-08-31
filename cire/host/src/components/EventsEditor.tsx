@@ -234,9 +234,16 @@ export default function EventsEditor(props: { weddingId: string }) {
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        // 409 = a co-host applied in between; the previewed diff is stale.
+        // 409 is usually a co-host applying in between, which makes the previewed
+        // diff stale. It is no longer only that: the server also 409s a stored
+        // change whose scope it cannot read, and telling that organiser the
+        // schedule changed elsewhere would send them looking for an edit nobody
+        // made. The server's own sentence names the actual cause in each case, so
+        // prefer it and keep the co-host wording as the fallback.
         if (res.status === 409) {
-          throw new Error("The schedule changed elsewhere. Re-open Save to preview afresh.");
+          throw new Error(
+            body.error ?? "The schedule changed elsewhere. Re-open Save to preview afresh.",
+          );
         }
         throw new Error(body.error ?? `Apply failed (${res.status})`);
       }

@@ -441,8 +441,10 @@ describe("diff: scope — single-sheet (partial) changes", () => {
 
     const ev = await Effect.runPromise(parseEventsCsv(FOUR_EVENTS_CSV));
     // With the provenance toggle the events editor actually ships: it saves
-    // `removeManual: true`, and this household was added by hand, so nothing but
-    // the scope stands between it and a cascade.
+    // `removeManual: true`, which lifts the source filter entirely. The fixture
+    // above sets no `source`, so it takes the column default `'import'`
+    // (`cire/db/src/schema.ts`) — removable either way. Nothing but the scope
+    // stands between this household and a cascade.
     const plan = await Effect.runPromise(
       diffAgainstDb(ev, [], BOOTSTRAP_WEDDING_ID, {
         scope: "events",

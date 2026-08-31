@@ -699,9 +699,45 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
 
     const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
     expect(applyRes.status).toBe(409);
+    // Pin the message, not just the code: this route's other 409 says the state
+    // changed under the organiser, and that one is fixed by reloading. This one
+    // is only fixed by previewing again, and the editor shows the text verbatim.
+    expect((await applyRes.json()) as { error: string }).toEqual({
+      error: "Change is missing its scope — re-preview",
+    });
     // The household is still there, with its claim code intact.
     expect(db.select().from(families).all()).toHaveLength(1);
     expect(db.select().from(guests).all()).toHaveLength(1);
+  });
+
+  it("keeps the 'both' fallback for a SHEET row whose stored scope is missing", async () => {
+    const { app, db } = buildApp();
+
+    // The refusal above is deliberately narrow: only an editor row is unsafe to
+    // guess at, because only an editor row pairs an empty half with the
+    // authority to delete it. A spreadsheet upload states each sheet it manages
+    // by uploading it, so `"both"` costs it nothing — and rows previewed before
+    // this feature shipped must still apply rather than dead-ending at a 409.
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      eventsCsv: EVENTS_CSV,
+      guestsCsv: GUESTS_CSV,
+    });
+    expect(previewRes.status).toBe(200);
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+
+    const [row] = db.select().from(imports).where(eq(imports.id, changeId)).all();
+    const summary = JSON.parse(row!.summary) as Record<string, unknown>;
+    delete summary.scope;
+    db.update(imports)
+      .set({ summary: JSON.stringify(summary) })
+      .where(eq(imports.id, changeId))
+      .run();
+
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
+    expect(applyRes.status).toBe(200);
+    // Both sheets reconciled, which is what `"both"` means.
+    expect(db.select().from(events).all()).toHaveLength(2);
+    expect(db.select().from(families).all()).toHaveLength(2);
   });
 
   it("400s a body carrying BOTH front doors' fields", async () => {
@@ -717,6 +753,9 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
       eventsCsv: EVENTS_CSV,
     });
     expect(res.status).toBe(400);
+    // The decode refused it. A 400 carrying anything else would mean some other
+    // guard tripped first and the union fallthrough is still open behind it.
+    expect((await res.json()) as { error: string }).toEqual({ error: "Missing or invalid fields" });
   });
 
   /**

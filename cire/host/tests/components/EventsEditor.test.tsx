@@ -625,7 +625,12 @@ describe("EventsEditor", () => {
     expect(JSON.parse(String((applyCall[1] as RequestInit).body)).changeId).toBe("chg_1");
   });
 
-  it("surfaces a 409 apply as a re-preview prompt", async () => {
+  /**
+   * Drive a rename through preview to a 409 on apply, with `applyBody` as the
+   * response the server sends back. Three tests need the same eight steps and
+   * only differ in that body, which is the thing under test.
+   */
+  async function applyRenameAgainst409(applyBody: unknown) {
     primeLoad();
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
@@ -659,8 +664,7 @@ describe("EventsEditor", () => {
           }),
         );
       }
-      if (u.endsWith("/changes/apply"))
-        return Promise.resolve(json({ error: "State changed — re-preview" }, 409));
+      if (u.endsWith("/changes/apply")) return Promise.resolve(json(applyBody, 409));
       return Promise.resolve(json({}));
     });
 
@@ -669,7 +673,26 @@ describe("EventsEditor", () => {
       expect(screen.getByRole("dialog", { name: /Review changes before applying/i })).toBeTruthy(),
     );
     fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
+  }
 
+  it("surfaces a 409 apply as a re-preview prompt", async () => {
+    await applyRenameAgainst409({ error: "State changed — re-preview" });
+    await waitFor(() => expect(screen.getByText("State changed — re-preview")).toBeTruthy());
+  });
+
+  it("shows the missing-scope 409 verbatim, not the co-host wording", async () => {
+    // A change the server cannot read a scope from is not a concurrency conflict.
+    // Saying the schedule changed elsewhere would send the organiser hunting for
+    // an edit nobody made, so the server's own sentence has to reach the screen.
+    await applyRenameAgainst409({ error: "Change is missing its scope — re-preview" });
+    await waitFor(() =>
+      expect(screen.getByText("Change is missing its scope — re-preview")).toBeTruthy(),
+    );
+    expect(screen.queryByText(/changed elsewhere/i)).toBeNull();
+  });
+
+  it("falls back to the co-host wording when a 409 carries no message", async () => {
+    await applyRenameAgainst409({});
     await waitFor(() => expect(screen.getByText(/changed elsewhere/i)).toBeTruthy());
   });
 
