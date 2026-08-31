@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 /**
  * EventsEditor is the interactive events editor (E6): a re-orderable event list
  * on the shared draft store, an add/edit drawer, delete-with-impact-confirm, and
- * a Save flow that posts the whole draft (events + guests) as DesiredState to
- * changes/preview, renders the shared preview, then applies. Auth/api/toast are
- * stubbed; the shared caches are reset per test.
+ * a Save flow that posts the events half of the draft as a `scope: "events"`
+ * DesiredState to changes/preview, renders the shared preview, then applies.
+ * Auth/api/toast are stubbed; the shared caches are reset per test.
  */
 
 vi.mock("@shared/rp-auth/solid", async () => {
@@ -138,6 +138,41 @@ describe("EventsEditor", () => {
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
     expect(screen.getByText("Reception")).toBeTruthy();
+  });
+
+  it("mounting fetches only /events, not /guests or /households", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    const urls = authFetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.endsWith("/events"))).toBe(true);
+    expect(urls.some((u) => u.endsWith("/guests"))).toBe(false);
+    expect(urls.some((u) => u.endsWith("/households"))).toBe(false);
+  });
+
+  it("saving posts scope: 'events' to changes/preview", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Edit$/i })[0]!);
+    await waitFor(() => expect(screen.getByRole("dialog", { name: /Edit event/i })).toBeTruthy());
+    fireEvent.input(screen.getByLabelText("Event name"), { target: { value: "Wedding Ceremony" } });
+
+    const save = await waitFor(
+      () => screen.getByRole("button", { name: /Save changes/i }) as HTMLButtonElement,
+    );
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(authFetchMock.mock.calls.some((c) => String(c[0]).endsWith("/changes/preview"))).toBe(
+        true,
+      ),
+    );
+    const body = JSON.parse(
+      authFetchMock.mock.calls.find((c) => String(c[0]).endsWith("/changes/preview"))![1].body,
+    );
+    expect(body.scope).toBe("events");
   });
 
   it("opens the drawer and edits an event name", async () => {
@@ -590,7 +625,12 @@ describe("EventsEditor", () => {
     expect(JSON.parse(String((applyCall[1] as RequestInit).body)).changeId).toBe("chg_1");
   });
 
-  it("surfaces a 409 apply as a re-preview prompt", async () => {
+  /**
+   * Drive a rename through preview to a 409 on apply, with `applyBody` as the
+   * response the server sends back. Three tests need the same eight steps and
+   * only differ in that body, which is the thing under test.
+   */
+  async function applyRenameAgainst409(applyBody: unknown) {
     primeLoad();
     render(() => <EventsEditor weddingId="wed_a" />);
     await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
@@ -624,8 +664,7 @@ describe("EventsEditor", () => {
           }),
         );
       }
-      if (u.endsWith("/changes/apply"))
-        return Promise.resolve(json({ error: "State changed — re-preview" }, 409));
+      if (u.endsWith("/changes/apply")) return Promise.resolve(json(applyBody, 409));
       return Promise.resolve(json({}));
     });
 
@@ -634,7 +673,26 @@ describe("EventsEditor", () => {
       expect(screen.getByRole("dialog", { name: /Review changes before applying/i })).toBeTruthy(),
     );
     fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
+  }
 
+  it("surfaces a 409 apply as a re-preview prompt", async () => {
+    await applyRenameAgainst409({ error: "State changed — re-preview" });
+    await waitFor(() => expect(screen.getByText("State changed — re-preview")).toBeTruthy());
+  });
+
+  it("shows the missing-scope 409 verbatim, not the co-host wording", async () => {
+    // A change the server cannot read a scope from is not a concurrency conflict.
+    // Saying the schedule changed elsewhere would send the organiser hunting for
+    // an edit nobody made, so the server's own sentence has to reach the screen.
+    await applyRenameAgainst409({ error: "Change is missing its scope — re-preview" });
+    await waitFor(() =>
+      expect(screen.getByText("Change is missing its scope — re-preview")).toBeTruthy(),
+    );
+    expect(screen.queryByText(/changed elsewhere/i)).toBeNull();
+  });
+
+  it("falls back to the co-host wording when a 409 carries no message", async () => {
+    await applyRenameAgainst409({});
     await waitFor(() => expect(screen.getByText(/changed elsewhere/i)).toBeTruthy());
   });
 
