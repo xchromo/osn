@@ -65,7 +65,8 @@ const UNNAMED_EVENT = "Untitled event";
  * load them just to avoid reading their absence as a delete.
  *
  * Field-invalid drafts can't be submitted — Save disables and the drawer shows
- * errors inline. Guests ride along unchanged (id-matched ⇒ no-op update).
+ * errors inline. Guests and households are outside this save's scope entirely,
+ * so they are neither loaded nor sent.
  *
  * Re-ordering has THREE input paths, and all three are load-bearing: dragging
  * the grip, Arrow Up/Down from the focused grip, and per-row `sr-only` move
