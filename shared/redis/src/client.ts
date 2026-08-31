@@ -25,6 +25,20 @@ import { RATE_LIMIT_SCRIPT } from "./rate-limiter";
 export type RedisReply = string | number | boolean | null | readonly RedisReply[];
 
 /**
+ * True when `value` is already inside the RESP value space, so it needs no
+ * rebuild.
+ *
+ * Recursive, because an array is only clean when every element is: one
+ * `bigint` nested three levels down still has to be converted.
+ */
+function isRedisReply(value: unknown): value is RedisReply {
+  if (value === null) return true;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean") return true;
+  return Array.isArray(value) && value.every(isRedisReply);
+}
+
+/**
  * Narrow a driver's untyped EVAL result to a {@link RedisReply}.
  *
  * ioredis types every `eval`/`evalsha` result as `unknown`, so the check has to
@@ -42,7 +56,14 @@ export function toRedisReply(value: unknown): RedisReply {
   // ioredis surfaces very large integers as BigInt on some servers; the counter
   // scripts only ever produce small ones, so narrowing loses nothing real.
   if (typeof value === "bigint") return Number(value);
-  if (Array.isArray(value)) return value.map(toRedisReply);
+  if (Array.isArray(value)) {
+    // Already in the value space — hand back the original rather than an
+    // identical copy. Only `bigint`, `undefined` and nested arrays holding
+    // either need a rebuild, and a reply built entirely of clean values is
+    // the common case on every hot path.
+    if (value.every(isRedisReply)) return value;
+    return value.map(toRedisReply);
+  }
   throw new Error(
     `Redis EVAL returned a ${typeof value}, which is not a RESP value. A Lua script must ` +
       "return a string, integer, boolean, nil or an array of those.",
