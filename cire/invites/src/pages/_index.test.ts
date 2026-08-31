@@ -1,3 +1,12 @@
+/*
+ * Underscore-prefixed on purpose. Astro routes every file under `src/pages`,
+ * so as `index.test.ts` this drift guard was BUILT AND DEPLOYED: `/index.test`
+ * and `/legal-pages.test` were live routes on the guest site, and the vitest
+ * they import was a 534 KB (119 KB gzip) chunk in the SSR Worker — 28% of the
+ * bundle (tracker #287). A leading `_` is what excludes a file from Astro's
+ * router; it stays colocated beside the `.astro` it reads, and vitest's
+ * default include still picks it up.
+ */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 

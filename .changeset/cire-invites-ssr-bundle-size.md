@@ -2,19 +2,29 @@
 "@cire/invites": patch
 ---
 
-Stop shipping the `motion` animation library in the guest site's server bundle.
+Cut the guest site's server bundle from 470 KB to 290 KB gzip, and stop
+deploying its tests as live routes.
 
-Tracker #287: `dist/server` (the SSR Cloudflare Worker) grew from 289 KB to
-428 KB gzip because three `.motion.ts` modules — `Modal.motion.ts`, and each
-design pack's `UnlockReveal.motion.ts` — only ever call `motion` from a
+Tracker #287: `dist/server` (the SSR Cloudflare Worker) had grown to 470 KB
+gzip from two unrelated mistakes.
+
+`motion` was the first. Three `.motion.ts` modules — `Modal.motion.ts`, and
+each design pack's `UnlockReveal.motion.ts` — only ever call it from a
 client-side `onMount` prefetch hint or a DOM event handler, but Vite's SSR
-build still walks and bundles every module reachable via `import()`. The
-whole library shipped server-side with nothing there ever calling it.
+build still walks and bundles every module reachable via `import()`. The whole
+library shipped server-side with nothing there ever calling it. A Vite plugin
+in `astro.config.mjs` now stubs the `motion` specifier out of the SSR module
+graph only; the client build is untouched, so both design packs animate exactly
+as before.
 
-Added a Vite plugin (`astro.config.mjs`) that stubs the `motion` specifier
-out of the SSR module graph only — the client build is untouched, so both
-design packs still animate exactly as before. `dist/server` is down to
-423 KB gzip. Also added a CI step that measures this total on every deploy
-and fails the build if it grows past a set threshold, so a regression like
-this one gets caught immediately instead of surfacing in a size audit months
-later.
+The three drift-guard tests were the second, and the larger one. Astro routes
+every file under `src/pages`, so `index.test.ts`, `legal-pages.test.ts` and
+`[slug]/registry.test.ts` were built and deployed: `/index.test` and
+`/legal-pages.test` answered as real routes on the guest site, and the vitest
+they import was a 534 KB (119 KB gzip) chunk in the Worker — 28% of the bundle.
+Each is now `_`-prefixed, which is what excludes a file from Astro's router.
+They stay beside the `.astro` file they read and vitest still collects them.
+
+Both deploy jobs gained a step that measures the same total on every build and
+fails if it passes 330 KB, so a regression on either scale is caught at the
+deploy rather than in a size audit months later.

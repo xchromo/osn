@@ -397,14 +397,17 @@ jobs:
           PUBLIC_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
-      # Tracker #287: this Worker's SSR bundle grew from 289 KB to 428 KB gzip
-      # unnoticed (three `.motion.ts` modules dragging the whole `motion`
-      # library into the SSR module graph, though nothing there ever ran it —
-      # fixed by stubbing `motion` out of the SSR build only, see
-      # `astro.config.mjs`). This guard is the thing that would have caught
-      # it: measure the same total again on every build, fail loudly the
-      # moment it grows past a set point, rather than finding out from a
-      # tracker issue months later. See the production job for the threshold
+      # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
+      # from two separate mistakes. Three `.motion.ts` modules dragged the
+      # whole `motion` library into the SSR module graph though nothing there
+      # ever ran it (fixed by stubbing `motion` out of the SSR build only, see
+      # `astro.config.mjs`); and three drift-guard tests sat un-prefixed under
+      # `src/pages`, so Astro routed them, deployed them as `/index.test` and
+      # `/legal-pages.test`, and pulled 119 KB gzip of vitest along with them
+      # (fixed by the `_` prefix Astro's router excludes). This guard is the
+      # thing that would have caught either one: measure the same total again
+      # on every build, fail loudly the moment it grows past a set point,
+      # rather than finding out from a tracker issue months later. See the production job for the threshold
       # and its reasoning — kept identical across both so dev catches a
       # regression before it ever reaches production.
       - name: Guard cire/invites SSR bundle size
@@ -421,13 +424,14 @@ jobs:
           # OWN gzip size is what actually crosses the wire on deploy — not
           # the gzip of the directory as a whole.
           #
-          # Threshold = 422,832 bytes (the measured total right after the
-          # #287 fix) + ~57 KB — about the size of the regression this guard
-          # exists for, so a same-scale mistake still trips it while an
+          # Threshold = 290,436 bytes (the measured total after both #287
+          # fixes) + ~40 KB. The margin is deliberately smaller than either
+          # regression it exists for — motion cost 47 KB gzip, the routed
+          # tests 119 KB — so a same-scale mistake still trips it, while an
           # ordinary dependency bump has room to breathe. Nowhere near the
           # Workers Free-tier's 3 MB cap: this catches a bad trajectory
           # early, it isn't a check against the cap itself.
-          threshold=480000
+          threshold=330000
           if [ "$total" -gt "$threshold" ]; then
             echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what's newly reachable from a server-side import() or import, the way motion was."
             exit 1
@@ -526,14 +530,17 @@ jobs:
           # Present ⇒ real Embed iframe; absent ⇒ CSS-card fallback (key-optional).
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
-      # Tracker #287: this Worker's SSR bundle grew from 289 KB to 428 KB gzip
-      # unnoticed (three `.motion.ts` modules dragging the whole `motion`
-      # library into the SSR module graph, though nothing there ever ran it —
-      # fixed by stubbing `motion` out of the SSR build only, see
-      # `astro.config.mjs`). This guard is the thing that would have caught
-      # it: measure the same total again on every build, fail loudly the
-      # moment it grows past a set point, rather than finding out from a
-      # tracker issue months later.
+      # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
+      # from two separate mistakes. Three `.motion.ts` modules dragged the
+      # whole `motion` library into the SSR module graph though nothing there
+      # ever ran it (fixed by stubbing `motion` out of the SSR build only, see
+      # `astro.config.mjs`); and three drift-guard tests sat un-prefixed under
+      # `src/pages`, so Astro routed them, deployed them as `/index.test` and
+      # `/legal-pages.test`, and pulled 119 KB gzip of vitest along with them
+      # (fixed by the `_` prefix Astro's router excludes). This guard is the
+      # thing that would have caught either one: measure the same total again
+      # on every build, fail loudly the moment it grows past a set point,
+      # rather than finding out from a tracker issue months later.
       - name: Guard cire/invites SSR bundle size
         run: |
           total=0
@@ -548,13 +555,14 @@ jobs:
           # OWN gzip size is what actually crosses the wire on deploy — not
           # the gzip of the directory as a whole.
           #
-          # Threshold = 422,832 bytes (the measured total right after the
-          # #287 fix) + ~57 KB — about the size of the regression this guard
-          # exists for, so a same-scale mistake still trips it while an
+          # Threshold = 290,436 bytes (the measured total after both #287
+          # fixes) + ~40 KB. The margin is deliberately smaller than either
+          # regression it exists for — motion cost 47 KB gzip, the routed
+          # tests 119 KB — so a same-scale mistake still trips it, while an
           # ordinary dependency bump has room to breathe. Nowhere near the
           # Workers Free-tier's 3 MB cap: this catches a bad trajectory
           # early, it isn't a check against the cap itself.
-          threshold=480000
+          threshold=330000
           if [ "$total" -gt "$threshold" ]; then
             echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what's newly reachable from a server-side import() or import, the way motion was."
             exit 1
