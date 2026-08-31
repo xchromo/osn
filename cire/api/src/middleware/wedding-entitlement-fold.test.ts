@@ -93,6 +93,34 @@ function ungatedApp(db: Db, profileId: string) {
     .group("/w/:weddingId", (g) => g.use(weddingMember(db)).get("/thing", () => ({ ok: true })));
 }
 
+/**
+ * A route whose role gate folds ONE key while the entitlement gate asks for
+ * ANOTHER. Nothing in the tree does this today — every pairing in `routes/`
+ * matches — but the mismatch guard is what makes the fold safe to extend, so
+ * it is worth a test rather than a comment. If the guard ever stops working,
+ * the fold answers "registry" with the "vendors" row and the gate lets a
+ * caller past an entitlement they do not hold.
+ */
+function mismatchedApp(db: Db, profileId: string) {
+  return new Elysia({ aot: false })
+    .derive(() => ({ osnProfileId: profileId }))
+    .group("/w/:weddingId", (g) =>
+      g
+        .use(weddingMember(db, "vendors"))
+        .use(weddingEntitlement(db, "registry"))
+        .get("/thing", () => ({ ok: true })),
+    );
+}
+
+/** The entitlement gate with no role gate above it at all. */
+function standaloneApp(db: Db, profileId: string) {
+  return new Elysia({ aot: false })
+    .derive(() => ({ osnProfileId: profileId, weddingId: WEDDING_ID }))
+    .group("/w/:weddingId", (g) =>
+      g.use(weddingEntitlement(db, "vendors")).get("/thing", () => ({ ok: true })),
+    );
+}
+
 function ungatedEditorApp(db: Db, profileId: string) {
   return new Elysia({ aot: false })
     .derive(() => ({ osnProfileId: profileId }))
@@ -178,5 +206,28 @@ describe("P-W1: role-gate/entitlement-gate query fold", () => {
     );
     expect(resOwner.status).toBe(200);
     expect(countOwner()).toBe(1);
+  });
+
+  // The mismatch guard. A fold carries the key it answers; a gate asking a
+  // DIFFERENT key must ignore it and pay for its own query rather than trust
+  // an answer to a question it did not ask.
+  it("refuses a fold for a different key, and falls back to its own query", async () => {
+    // "vendors" granted, "registry" NOT — so trusting the mismatched fold
+    // would wrongly let the caller through.
+    const db = buildDb({ grantVendors: true });
+    const { db: counted, selectCount } = countingDb(db);
+    const res = await appRequest(mismatchedApp(counted, COHOST), `/w/${WEDDING_ID}/thing`);
+    expect(res.status).toBe(402);
+    expect(await jsonBody(res)).toEqual({ error: "payment_required", entitlement: "registry" });
+    // 2 for the role gate, plus the fallback has() the mismatch forced.
+    expect(selectCount()).toBe(3);
+  });
+
+  it("answers correctly with no role gate above it, at the old cost", async () => {
+    const db = buildDb({ grantVendors: true });
+    const { db: counted, selectCount } = countingDb(db);
+    const res = await appRequest(standaloneApp(counted, COHOST), `/w/${WEDDING_ID}/thing`);
+    expect(res.status).toBe(200);
+    expect(selectCount()).toBe(1);
   });
 });
