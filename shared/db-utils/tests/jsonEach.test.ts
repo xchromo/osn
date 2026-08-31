@@ -30,6 +30,14 @@ const widgets = sqliteTable("widgets", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 
+/** A second table for the guard tests: `widgets` has no plain integer column
+ *  to push past 2^53, and a blob column would break its other tests. */
+const guardTable = sqliteTable("guard_rows", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull(),
+  count: integer("count"),
+});
+
 function makeDb() {
   const sqlite = new Database(":memory:");
   sqlite.run(
@@ -175,5 +183,56 @@ describe("insertManyViaJsonEach", () => {
         { id: "a", label: "A", ownerId: null, createdAt: now, bogus: 1 } as never,
       ]),
     ).toThrow(/not a column/);
+  });
+});
+
+// Three guards added after the security review of PR #856. None is reachable
+// from today's two call sites; all three are for the helper's second caller,
+// since it lives in @shared/db-utils rather than being scoped to one package.
+// Each would otherwise write WRONG DATA rather than fail, which is the worst
+// failure mode available to an insert helper.
+describe("insertManyViaJsonEach guards", () => {
+  it("throws when a row omits a key the first row has", () => {
+    expect(() =>
+      insertManyViaJsonEach(guardTable, [
+        { id: "a", label: "one", count: 1 },
+        { id: "b", label: "two" },
+      ] as never),
+    ).toThrow(/different key set from row 0/);
+  });
+
+  it("throws when a row carries a key the first row does not", () => {
+    expect(() =>
+      insertManyViaJsonEach(guardTable, [
+        { id: "a", label: "one" },
+        { id: "b", label: "two", count: 2 },
+      ] as never),
+    ).toThrow(/different key set from row 0/);
+  });
+
+  it("throws when a row swaps one key for another, same count", () => {
+    expect(() =>
+      insertManyViaJsonEach(guardTable, [
+        { id: "a", label: "one" },
+        { id: "b", count: 2 },
+      ] as never),
+    ).toThrow(/different key set from row 0/);
+  });
+
+  // JSON numbers are IEEE-754 doubles: 2^53 + 1 comes back as 2^53.
+  it("throws on an integer outside the safe range rather than truncating it", () => {
+    expect(() =>
+      insertManyViaJsonEach(guardTable, [
+        { id: "a", label: "one", count: Number.MAX_SAFE_INTEGER + 2 },
+      ] as never),
+    ).toThrow(/outside ±2\^53/);
+  });
+
+  it("accepts an integer at the edge of the safe range", () => {
+    expect(() =>
+      insertManyViaJsonEach(guardTable, [
+        { id: "a", label: "one", count: Number.MAX_SAFE_INTEGER },
+      ] as never),
+    ).not.toThrow();
   });
 });

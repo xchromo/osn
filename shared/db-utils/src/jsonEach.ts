@@ -54,12 +54,36 @@ export function jsonEachIn(values: readonly (string | number)[]): SQL {
  * 100-parameter cap (a 31-column table breaks past 3 rows; a 6-column one
  * past 16).
  *
- * Every row must carry the same set of keys — the first row's own keys
- * decide the column list, matching `.values(rows)`'s own uniform-shape
- * assumption. A key that isn't one of the table's columns throws rather
- * than silently dropping data; an empty `rows` also throws, since an empty
- * INSERT is a caller bug to fix at the call site (every site here already
- * guards `rows.length === 0` before reaching this point).
+ * Every row must carry the same set of keys, and that is **enforced**, not
+ * assumed. An earlier version of this comment claimed the requirement
+ * "matches `.values(rows)`'s own uniform-shape assumption". It does not:
+ * drizzle lets each row omit an optional column independently and applies
+ * that column's schema default per row, where this helper derives one
+ * column list from the first row and reads every other row through it. A
+ * row missing one of those keys would get `NULL` written — not the schema
+ * default the equivalent `.values(rows)` call would have applied — and a
+ * row carrying an extra key would have it dropped from the insert
+ * entirely. Both silently. So the key sets are compared up front and a
+ * mismatch throws.
+ *
+ * A key that isn't one of the table's columns throws rather than silently
+ * dropping data; an empty `rows` also throws, since an empty INSERT is a
+ * caller bug to fix at the call site (every site here already guards
+ * `rows.length === 0` before reaching this point).
+ *
+ * Two value types this cannot carry, both of which would write wrong data
+ * rather than fail, so both throw:
+ *
+ *  - **An integer outside ±2^53.** The payload is JSON, and JSON numbers
+ *    are IEEE-754 doubles: `9007199254740993` comes back as
+ *    `9007199254740992`. Verified on real D1, silently.
+ *  - **A blob-mode column.** `mapToDriverValue` hands back a `Buffer`,
+ *    which `JSON.stringify` turns into `{"type":"Buffer","data":[…]}` —
+ *    an object `json_extract` cannot give back to a BLOB column.
+ *
+ * Neither is reachable from today's two call sites, but this helper is in
+ * `@shared/db-utils` rather than scoped to one package, so its second
+ * caller is the one these guards are for.
  *
  * The result is a plain `SQL` statement, run with `db.run(...)` rather than
  * chained off `db.insert(...)` — so `.returning()` and
@@ -86,8 +110,27 @@ export function insertManyViaJsonEach<TTable extends Table>(
     if (!column) {
       throw new Error(`insertManyViaJsonEach: "${key}" is not a column of this table`);
     }
+    if (column.dataType === "buffer") {
+      throw new Error(
+        `insertManyViaJsonEach: "${key}" is a blob column, which cannot survive the JSON payload — insert it with .values() in chunks under the parameter cap`,
+      );
+    }
     return column;
   });
+
+  // Every row's key set must match the first row's exactly. Checked by size
+  // then by membership, so a row that swaps one key for another is caught too.
+  const keySet = new Set<string>(keys);
+  for (const [index, row] of rows.entries()) {
+    const rowKeys = Object.keys(row);
+    const mismatch =
+      rowKeys.length !== keys.length ? rowKeys : rowKeys.filter((key) => !keySet.has(key));
+    if (mismatch.length > 0 || rowKeys.length !== keys.length) {
+      throw new Error(
+        `insertManyViaJsonEach: row ${index} has a different key set from row 0 — every row must name the same columns, or one of them would silently be written as NULL`,
+      );
+    }
+  }
 
   // Mirrors drizzle's own null handling (`sql/sql.ts`: a null value is
   // bound as SQL NULL directly, never run through the column's encoder —
@@ -96,7 +139,18 @@ export function insertManyViaJsonEach<TTable extends Table>(
   const driverRows = rows.map((row) =>
     columns.map((column, i) => {
       const value = row[keys[i]!];
-      return value === null || value === undefined ? null : column.mapToDriverValue(value);
+      if (value === null || value === undefined) return null;
+      const driverValue: unknown = column.mapToDriverValue(value);
+      if (typeof driverValue === "number" && !Number.isSafeInteger(driverValue)) {
+        // Non-integers are fine — a float round-trips through JSON as itself.
+        // An integer past 2^53 does not, and comes back a different number.
+        if (Number.isInteger(driverValue)) {
+          throw new Error(
+            `insertManyViaJsonEach: ${driverValue} is outside ±2^53 and cannot survive a JSON payload intact`,
+          );
+        }
+      }
+      return driverValue;
     }),
   );
 
