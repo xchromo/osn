@@ -398,44 +398,14 @@ jobs:
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
       # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
-      # from two separate mistakes. Three `.motion.ts` modules dragged the
-      # whole `motion` library into the SSR module graph though nothing there
-      # ever ran it (fixed by stubbing `motion` out of the SSR build only, see
-      # `astro.config.mjs`); and three drift-guard tests sat un-prefixed under
-      # `src/pages`, so Astro routed them, deployed them as `/index.test` and
-      # `/legal-pages.test`, and pulled 119 KB gzip of vitest along with them
-      # (fixed by the `_` prefix Astro's router excludes). This guard is the
-      # thing that would have caught either one: measure the same total again
-      # on every build, fail loudly the moment it grows past a set point,
-      # rather than finding out from a tracker issue months later. See the production job for the threshold
-      # and its reasoning — kept identical across both so dev catches a
-      # regression before it ever reaches production.
+      # from two separate mistakes — the whole `motion` library in the SSR
+      # module graph with nothing there calling it, and three drift-guard tests
+      # routed as pages, dragging 119 KB gzip of vitest with them. The guard
+      # script holds the threshold and the full reasoning; it runs here and on
+      # every PR (`ci.yml`), so a regression is caught on the merge gate rather
+      # than after it lands on main.
       - name: Guard cire/invites SSR bundle size
-        run: |
-          total=0
-          while IFS= read -r -d '' f; do
-            size=$(gzip -c "$f" | wc -c)
-            total=$((total + size))
-          done < <(find dist/server -type f -name '*.mjs' -print0)
-          echo "cire/invites dist/server gzip total: ${total} bytes"
-          # `no_bundle: true` (the adapter's generated config) means
-          # `wrangler deploy` ships every chunk in `dist/server` as its own ES
-          # module rather than concatenating them, so the sum of each file's
-          # OWN gzip size is what actually crosses the wire on deploy — not
-          # the gzip of the directory as a whole.
-          #
-          # Threshold = 290,436 bytes (the measured total after both #287
-          # fixes) + ~40 KB. The margin is deliberately smaller than either
-          # regression it exists for — motion cost 47 KB gzip, the routed
-          # tests 119 KB — so a same-scale mistake still trips it, while an
-          # ordinary dependency bump has room to breathe. Nowhere near the
-          # Workers Free-tier's 3 MB cap: this catches a bad trajectory
-          # early, it isn't a check against the cap itself.
-          threshold=330000
-          if [ "$total" -gt "$threshold" ]; then
-            echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what's newly reachable from a server-side import() or import, the way motion was."
-            exit 1
-          fi
+        run: ./scripts/guard-ssr-size.sh
         working-directory: cire/invites
 
       # Two edits to the adapter's generated config, in one pass:
@@ -531,42 +501,14 @@ jobs:
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
       # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
-      # from two separate mistakes. Three `.motion.ts` modules dragged the
-      # whole `motion` library into the SSR module graph though nothing there
-      # ever ran it (fixed by stubbing `motion` out of the SSR build only, see
-      # `astro.config.mjs`); and three drift-guard tests sat un-prefixed under
-      # `src/pages`, so Astro routed them, deployed them as `/index.test` and
-      # `/legal-pages.test`, and pulled 119 KB gzip of vitest along with them
-      # (fixed by the `_` prefix Astro's router excludes). This guard is the
-      # thing that would have caught either one: measure the same total again
-      # on every build, fail loudly the moment it grows past a set point,
-      # rather than finding out from a tracker issue months later.
+      # from two separate mistakes — the whole `motion` library in the SSR
+      # module graph with nothing there calling it, and three drift-guard tests
+      # routed as pages, dragging 119 KB gzip of vitest with them. The guard
+      # script holds the threshold and the full reasoning; it runs here and on
+      # every PR (`ci.yml`), so a regression is caught on the merge gate rather
+      # than after it lands on main.
       - name: Guard cire/invites SSR bundle size
-        run: |
-          total=0
-          while IFS= read -r -d '' f; do
-            size=$(gzip -c "$f" | wc -c)
-            total=$((total + size))
-          done < <(find dist/server -type f -name '*.mjs' -print0)
-          echo "cire/invites dist/server gzip total: ${total} bytes"
-          # `no_bundle: true` (the adapter's generated config) means
-          # `wrangler deploy` ships every chunk in `dist/server` as its own ES
-          # module rather than concatenating them, so the sum of each file's
-          # OWN gzip size is what actually crosses the wire on deploy — not
-          # the gzip of the directory as a whole.
-          #
-          # Threshold = 290,436 bytes (the measured total after both #287
-          # fixes) + ~40 KB. The margin is deliberately smaller than either
-          # regression it exists for — motion cost 47 KB gzip, the routed
-          # tests 119 KB — so a same-scale mistake still trips it, while an
-          # ordinary dependency bump has room to breathe. Nowhere near the
-          # Workers Free-tier's 3 MB cap: this catches a bad trajectory
-          # early, it isn't a check against the cap itself.
-          threshold=330000
-          if [ "$total" -gt "$threshold" ]; then
-            echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what's newly reachable from a server-side import() or import, the way motion was."
-            exit 1
-          fi
+        run: ./scripts/guard-ssr-size.sh
         working-directory: cire/invites
 
       # `@astrojs/cloudflare` writes a top-level `"legacy_env": true` into the

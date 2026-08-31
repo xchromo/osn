@@ -27,7 +27,12 @@ function stubMotionForSsr() {
     name: "cire-invites:stub-motion-for-ssr",
     enforce: "pre",
     resolveId(source, _importer, options) {
-      if (options?.ssr && (source === "motion" || source.startsWith("motion/"))) {
+      // Strip any Vite query suffix (`?url`, `?raw`) before matching, and cover
+      // the two sibling packages `motion` re-exports from — a bare `motion-dom`
+      // or `motion-utils` import would otherwise walk straight past this stub
+      // and put the same bytes back into the server graph.
+      const bare = source.split("?")[0];
+      if (options?.ssr && /^motion(-dom|-utils)?(\/|$)/.test(bare)) {
         return STUB_ID;
       }
       return null;
@@ -35,12 +40,16 @@ function stubMotionForSsr() {
     load(id) {
       if (id !== STUB_ID) return null;
       // Thrown, not a silent no-op: if a future code path ever calls these
-      // during SSR, that is exactly the assumption above being wrong, and it
-      // should fail loudly rather than animate nothing.
+      // during SSR, that is exactly the assumption above being wrong. How loud
+      // that is depends on the caller — `Modal.motion.ts:27` lets it propagate,
+      // but both `UnlockReveal.motion.ts` files catch and resolve, so an SSR
+      // call there degrades to no animation rather than an error. A throw is
+      // still better than a silent no-op: it is at least visible in a stack
+      // trace and in any caller that does not swallow it.
       const throwStub =
         "() => { throw new Error(" +
         '"motion is stubbed out of the cire/invites SSR build (tracker #287); ' +
-        "animate()/stagger() must only run client-side\"); }";
+        'animate()/stagger() must only run client-side"); }';
       return `export const animate = ${throwStub};\nexport const stagger = ${throwStub};\n`;
     },
   };

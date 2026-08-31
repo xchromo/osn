@@ -167,6 +167,17 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Tracker #287: the cire/invites SSR Worker bundle reached 470 KB gzip
+      # unnoticed — a whole animation library in the server module graph with
+      # nothing there calling it, and three drift-guard tests routed as pages.
+      # `bun run build` above already produced `cire/invites/dist/server`, so
+      # measuring it here costs a few seconds and puts the budget check on the
+      # merge gate. The deploy workflow runs the same script, but only after a
+      # merge to main — which is one merge too late to stop the regression.
+      - name: Guard cire/invites SSR bundle size
+        run: ./scripts/guard-ssr-size.sh
+        working-directory: cire/invites
+
       - name: Test
         run: bun run test
 

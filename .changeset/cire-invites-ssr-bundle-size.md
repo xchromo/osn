@@ -19,12 +19,16 @@ as before.
 
 The three drift-guard tests were the second, and the larger one. Astro routes
 every file under `src/pages`, so `index.test.ts`, `legal-pages.test.ts` and
-`[slug]/registry.test.ts` were built and deployed: `/index.test` and
-`/legal-pages.test` answered as real routes on the guest site, and the vitest
-they import was a 534 KB (119 KB gzip) chunk in the Worker — 28% of the bundle.
+`[slug]/registry.test.ts` were built and deployed: `/index.test`,
+`/legal-pages.test` and `/<slug>/registry.test` answered as real routes on the
+guest site, and the vitest they import was a 534 KB (119 KB gzip) chunk in the
+Worker — 28% of the bundle.
 Each is now `_`-prefixed, which is what excludes a file from Astro's router.
 They stay beside the `.astro` file they read and vitest still collects them.
 
-Both deploy jobs gained a step that measures the same total on every build and
-fails if it passes 330 KB, so a regression on either scale is caught at the
-deploy rather than in a size audit months later.
+A guard script, `cire/invites/scripts/guard-ssr-size.sh`, measures the same
+total — the gzip size of every deployable file in `dist/server`, summed,
+because `no_bundle` ships each chunk as its own module — and fails if it passes
+310 KB. It runs on every pull request as well as on both deploy jobs, so a
+regression is refused at the merge gate rather than found in a size audit
+months later.
