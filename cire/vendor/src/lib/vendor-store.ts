@@ -152,14 +152,24 @@ interface ClaimedListingSeed {
 }
 
 /**
- * The three fields {@link isValidListing} reads, each still `unknown` because
- * the value came out of a JSON.parse of a sessionStorage string, not the
- * network — same idiom as `CropCandidate` in `cire/api/src/schemas/invite.ts`.
+ * The fields {@link isValidListing} reads, each still `unknown` because the
+ * value came out of a JSON.parse of a sessionStorage string, not the network —
+ * same idiom as `CropCandidate` in `cire/api/src/schemas/invite.ts`.
+ *
+ * These are every field {@link Listing} declares as required and non-nullable.
+ * The nullable ones are deliberately left unchecked: `null` and absent are the
+ * same thing to every reader of them, so a seed missing one behaves exactly
+ * like a listing that never had it. The required ones are not so forgiving —
+ * `ListingEditor` renders `listed` straight into the status chip, so a seed
+ * without it puts the word "undefined" on screen (S-L1).
  */
 interface ListingCandidate {
   id?: unknown;
   name?: unknown;
+  listed?: unknown;
   categories?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 function isListingCandidate(value: unknown): value is ListingCandidate {
@@ -168,8 +178,16 @@ function isListingCandidate(value: unknown): value is ListingCandidate {
 
 function isValidListing(value: unknown): value is Listing {
   if (!isListingCandidate(value)) return false;
-  const { id, name, categories } = value;
-  return typeof id === "string" && typeof name === "string" && Array.isArray(categories);
+  const { id, name, listed, categories, createdAt, updatedAt } = value;
+  return (
+    typeof id === "string" &&
+    typeof name === "string" &&
+    typeof listed === "string" &&
+    Array.isArray(categories) &&
+    categories.every((entry) => typeof entry === "string") &&
+    typeof createdAt === "number" &&
+    typeof updatedAt === "number"
+  );
 }
 
 /**
