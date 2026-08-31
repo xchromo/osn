@@ -19,6 +19,11 @@
  *   JSON-parsed them. `get`'s own type is generic (`get<TData>`), the same
  *   unchecked-claim shape as `eval`, so the reply is narrowed at this
  *   boundary rather than trusted from the SDK's type.
+ *   Subsequent calls for the same script body try `EVALSHA` first and fall
+ *   back to a full `EVAL` on `NOSCRIPT` (P-I1) — see the doc comment on
+ *   `eval` in {@link wrapUpstash} for why this is safe over HTTP/REST
+ *   specifically, where a naive port of the ioredis retry-loop pattern would
+ *   double-retry.
  * - `set(key, value, pxMs?)` → `redis.set(key, value, { px })`.
  * - `del(...keys)` → `toRedisInteger(await redis.del(...keys), "DEL")`.
  * - `ping()` → `toRedisString(await redis.ping(), "PING") ?? ""`. PING never
@@ -85,6 +90,18 @@ export interface UpstashLike {
    * passes through {@link toRedisReply} before a caller sees it.
    */
   eval<TData = unknown>(script: string, keys: string[], args: (string | number)[]): Promise<TData>;
+  /**
+   * Same generic shape as `eval`, for the same reason: the reply is an
+   * unvalidated HTTP body until {@link wrapUpstash} narrows it through
+   * {@link toRedisReply}.
+   *
+   * No `scriptLoad` alongside this: a script the server has never seen fails
+   * `EVALSHA` with `NOSCRIPT`, and the fallback below is a full `EVAL` —
+   * which loads the script as a side effect of running it. A separate
+   * `SCRIPT LOAD` would only spend a second round trip to do the same thing
+   * `EVAL` already does for free.
+   */
+  evalsha<TData = unknown>(sha1: string, keys: string[], args: (string | number)[]): Promise<TData>;
   ping(): Promise<string>;
   /**
    * `TData` mirrors `eval`'s generic default for the same reason: the SDK's
@@ -97,6 +114,12 @@ export interface UpstashLike {
   del(...keys: string[]): Promise<number>;
 }
 
+/** Compute a script's SHA-1 digest the way Redis identifies it for EVALSHA. */
+async function computeSha(script: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(script));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /**
  * Adapt an `@upstash/redis` client (or structural equivalent) as a
  * `RedisClient`.
@@ -106,13 +129,59 @@ export interface UpstashLike {
  * returns raw strings rather than JSON-parsed values.
  */
 export function wrapUpstash(redis: UpstashLike): RedisClient {
+  // Per-client cache, mirroring `wrapIoRedis`'s `scriptShas` in ./ioredis. No
+  // lock around a concurrent first call for the same script: computeSha is a
+  // pure function of the script body, so two callers racing here at worst
+  // hash the same string twice — wasted work, not a correctness issue.
+  const scriptShas = new Map<string, string>();
+
   return {
     async eval(script, keys, args) {
       // Copied because the SDK takes mutable arrays; both are two elements
-      // long and the call behind them is an HTTP round-trip. The reply itself
-      // is unvalidated JSON off the wire until toRedisReply narrows it — same
-      // boundary check the ioredis path applies in ./ioredis.
-      return toRedisReply(await redis.eval(script, [...keys], [...args]));
+      // long and the call behind them is an HTTP round-trip.
+      const keysCopy = [...keys];
+      const argsCopy = [...args];
+
+      const sha = scriptShas.get(script);
+
+      // First sight of this script body: this adapter has no SHA to try, and
+      // there is nothing to gain by computing one up front only to still send
+      // the full script — a fresh Upstash REST connection has no notion of
+      // "the server already has this loaded" the way a long-lived ioredis TCP
+      // connection might. So the first call is always a full EVAL, which
+      // loads the script on the server as a side effect; only once that has
+      // actually succeeded is the SHA cached for later calls to use.
+      if (sha === undefined) {
+        const reply = await redis.eval(script, keysCopy, argsCopy);
+        scriptShas.set(script, await computeSha(script));
+        return toRedisReply(reply);
+      }
+
+      // Every later call for this script tries EVALSHA first (P-I1), saving
+      // the HTTP body weight of the full script on every request.
+      //
+      // The retry here is intentionally narrower than ioredis's TCP-level
+      // NOSCRIPT handling in ./ioredis: `@upstash/redis`'s own transport
+      // already retries a *transport* failure internally (chunk-2X4SLXT7.mjs
+      // lines 168–188, honoring `this.retry.attempts`/`backoff`), and a
+      // non-2xx REST response is turned into a thrown `UpstashError` whose
+      // message is built from the server's own error body (line 203) — or,
+      // for the streaming path, from the deserialized `error` field (line
+      // 386). NOSCRIPT is a server-side "I don't have this script" answer,
+      // not a transport hiccup, so it always surfaces as exactly one thrown
+      // error with that text; nothing upstream of this catch would already
+      // have retried it. Any other error (bad arguments, a real network
+      // failure that exhausted the SDK's own retries) is not this adapter's
+      // to paper over, so it propagates unchanged.
+      try {
+        return toRedisReply(await redis.evalsha(sha, keysCopy, argsCopy));
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (!/NOSCRIPT/i.test(message)) throw cause;
+        // The server evicted the script (e.g. a restart, or a FLUSHALL).
+        // Re-send the body, which reloads it for next time.
+        return toRedisReply(await redis.eval(script, keysCopy, argsCopy));
+      }
     },
     async ping() {
       return toRedisString(await redis.ping(), "PING") ?? "";

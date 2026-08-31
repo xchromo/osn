@@ -14,10 +14,11 @@ import { wrapUpstash } from "../src/upstash";
  * member still comes from the real interface, so a shape drift in `set` (the
  * one member still statically checked here) is still caught.
  */
-type FakeUpstash = Omit<UpstashLike, "get" | "ping" | "del" | "eval"> & {
+type FakeUpstash = Omit<UpstashLike, "get" | "ping" | "del" | "eval" | "evalsha"> & {
   store: Map<string, string>;
   set: Mock;
   eval: Mock;
+  evalsha: Mock;
   get: Mock;
   ping: Mock;
   del: Mock;
@@ -39,6 +40,9 @@ function createFakeUpstash(): FakeUpstash {
   const evalFn = vi.fn(
     async (_script: string, _keys: readonly string[], _args: readonly (string | number)[]) => 1,
   );
+  const evalshaFn = vi.fn(
+    async (_sha1: string, _keys: readonly string[], _args: readonly (string | number)[]) => 1,
+  );
   const get = vi.fn(async (key: string) => (store.has(key) ? store.get(key)! : null));
   const ping = vi.fn(async () => "PONG");
   const del = vi.fn(async (...keys: string[]) => {
@@ -52,6 +56,7 @@ function createFakeUpstash(): FakeUpstash {
     store,
     set,
     eval: evalFn,
+    evalsha: evalshaFn,
     get,
     ping,
     del,
@@ -158,6 +163,82 @@ describe("wrapUpstash", () => {
     it("rejects a reply RESP cannot carry (toRedisReply's contract)", async () => {
       fake.eval.mockResolvedValueOnce({ not: "a RESP value" });
       await expect(client.eval("script", ["k"], [1])).rejects.toThrow(/not a RESP value/);
+    });
+  });
+
+  describe("eval — EVALSHA after the first call (P-I1)", () => {
+    const SHA_HEX = /^[0-9a-f]{40}$/;
+
+    it("sends a full EVAL the first time it sees a script", async () => {
+      const result = await client.eval("first-sight", ["k"], [1]);
+      expect(result).toBe(1);
+      expect(fake.eval).toHaveBeenCalledTimes(1);
+      expect(fake.evalsha).not.toHaveBeenCalled();
+    });
+
+    it("sends EVALSHA on every later call for the same script", async () => {
+      await client.eval("cached", ["k"], [1]);
+      await client.eval("cached", ["k"], [2]);
+      await client.eval("cached", ["k"], [3]);
+      // The full body went over the wire exactly once, on the cold call.
+      expect(fake.eval).toHaveBeenCalledTimes(1);
+      expect(fake.evalsha).toHaveBeenCalledTimes(2);
+    });
+
+    it("passes a stable 40-character lowercase hex SHA to EVALSHA", async () => {
+      await client.eval("stable", ["k"], [1]);
+      await client.eval("stable", ["k"], [2]);
+      await client.eval("stable", ["k"], [3]);
+      const shas = fake.evalsha.mock.calls.map((call) => call[0]);
+      expect(shas).toHaveLength(2);
+      for (const sha of shas) {
+        expect(sha).toMatch(SHA_HEX);
+      }
+      expect(shas[0]).toBe(shas[1]);
+    });
+
+    it("forwards keys and args to EVALSHA unchanged", async () => {
+      await client.eval("forwarding", ["k1", "k2"], [10, 1000]);
+      await client.eval("forwarding", ["k1", "k2"], [10, 1000]);
+      const call = fake.evalsha.mock.calls[0];
+      expect(call?.[1]).toEqual(["k1", "k2"]);
+      expect(call?.[2]).toEqual([10, 1000]);
+    });
+
+    it("caches each script body separately", async () => {
+      await client.eval("script-a", ["k"], [1]);
+      await client.eval("script-b", ["k"], [1]);
+      await client.eval("script-a", ["k"], [2]);
+      await client.eval("script-b", ["k"], [2]);
+      // Two cold EVALs, one per body; then one EVALSHA each, with two
+      // different digests.
+      expect(fake.eval).toHaveBeenCalledTimes(2);
+      expect(fake.evalsha).toHaveBeenCalledTimes(2);
+      const [shaA, shaB] = fake.evalsha.mock.calls.map((call) => call[0]);
+      expect(shaA).toMatch(SHA_HEX);
+      expect(shaB).toMatch(SHA_HEX);
+      expect(shaA).not.toBe(shaB);
+    });
+
+    it("falls back to a full EVAL when the server has evicted the script", async () => {
+      await client.eval("evicted", ["k"], [1]);
+      fake.evalsha.mockRejectedValueOnce(
+        new Error("NOSCRIPT No matching script. Please use EVAL."),
+      );
+      fake.eval.mockResolvedValueOnce(7);
+      expect(await client.eval("evicted", ["k"], [2])).toBe(7);
+      // Cold call plus the reload — the reload is what puts the script back
+      // in the server's cache.
+      expect(fake.eval).toHaveBeenCalledTimes(2);
+    });
+
+    it("propagates a non-NOSCRIPT EVALSHA failure without re-running the script", async () => {
+      await client.eval("failing", ["k"], [1]);
+      fake.evalsha.mockRejectedValueOnce(new Error("ERR max daily request limit exceeded"));
+      await expect(client.eval("failing", ["k"], [2])).rejects.toThrow(/max daily request/);
+      // Only the cold call. Retrying here would double-execute a script that
+      // may already have run server-side — an extra INCR on the rate limiter.
+      expect(fake.eval).toHaveBeenCalledTimes(1);
     });
   });
 
