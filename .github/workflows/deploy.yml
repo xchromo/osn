@@ -188,7 +188,7 @@ jobs:
             cire/vendor/node_modules/.astro
             cire/host/node_modules/.astro
             cire/landing/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/vendor/astro.config.mjs', 'cire/host/astro.config.mjs', 'cire/landing/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs', 'cire/host/astro.config.mjs', 'cire/landing/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -567,7 +567,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/host/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/host/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/host/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -644,7 +644,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/host/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/host/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/host/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -714,7 +714,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/vendor/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/vendor/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -782,7 +782,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/vendor/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/vendor/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -849,7 +849,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/landing/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/landing/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/landing/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 
@@ -919,7 +919,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cire/landing/node_modules/.astro
-          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('cire/landing/astro.config.mjs') }}
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/landing/astro.config.mjs') }}
           restore-keys: |
             ${{ runner.os }}-astro-fonts-
 

@@ -59,32 +59,68 @@ export type Finding = {
  * as an empty one — no fonts were emitted — so both report `false`.
  */
 async function hasAnyFile(dir: string): Promise<boolean> {
-  let entries: string[];
   try {
-    entries = await readdir(dir, { recursive: true });
+    // `withFileTypes`, because a bare recursive `readdir` returns
+    // subdirectories as well as files with no way to tell them apart from the
+    // returned strings — an empty nested directory would then read as "fonts
+    // present" and defeat half this guard's contract. The three packages write
+    // font files flat today, so this is a latent false pass rather than a live
+    // one, and it costs nothing to close.
+    const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+    return entries.some((entry) => entry.isFile());
   } catch {
     return false;
   }
-  return entries.length > 0;
 }
 
 /**
- * True if any `.css` or `.html` file under `distDir` contains a literal
- * `@font-face` rule. This is a substring check, not a CSS parse — the same
- * shortcut `verify-vendored-anti-slop.sh`-style guards in this repo take,
- * and adequate here: nothing legitimate emits the literal text
- * `@font-face` other than a real font-face rule.
+ * The `name:` of every family in an Astro config's `fonts` array.
+ *
+ * Read out of the config's TEXT rather than by importing it: importing pulls
+ * in Astro's whole toolchain to answer a question a regex answers, and this
+ * guard runs at the end of every build in three packages.
+ *
+ * A parse that finds nothing is reported as a finding by the caller, never
+ * silently treated as "no families to check" — a guard that quietly stops
+ * guarding when its input changes shape is worse than no guard.
  */
-async function distContainsFontFace(distDir: string): Promise<boolean> {
-  const glob = new Glob("**/*.{css,html}");
-  for await (const relativePath of glob.scan({ cwd: distDir, dot: true })) {
-    const text = await Bun.file(join(distDir, relativePath)).text();
-    if (text.includes("@font-face")) return true;
+export function familyNamesFromAstroConfig(configText: string): readonly string[] {
+  const fontsBlock = /\bfonts\s*:\s*\[/.exec(configText);
+  if (!fontsBlock) return [];
+  const names: string[] = [];
+  // Slice from the `fonts:` array and scan forward. Deliberately NOT
+  // `namePattern.lastIndex = fontsBlock.index` on top of the slice — that
+  // starts `matchAll` a second `fontsBlock.index` characters in and skips
+  // every family, which is exactly the silent no-op this guard must not have.
+  const namePattern = /\bname\s*:\s*["'`]([^"'`]+)["'`]/g;
+  for (const match of configText.slice(fontsBlock.index).matchAll(namePattern)) {
+    const name = match[1];
+    if (name !== undefined && !names.includes(name)) names.push(name);
   }
-  return false;
+  return names;
 }
 
-export async function checkAstroFonts(distDir: string): Promise<readonly Finding[]> {
+/** Every `.css` and `.html` file under `distDir`, concatenated. */
+async function readBuiltText(distDir: string): Promise<string> {
+  const glob = new Glob("**/*.{css,html}");
+  const parts: string[] = [];
+  try {
+    for await (const relativePath of glob.scan({ cwd: distDir, dot: true })) {
+      parts.push(await Bun.file(join(distDir, relativePath)).text());
+    }
+  } catch {
+    // No dist at all — a missing directory reads the same as an empty one, and
+    // the caller turns that into the "no @font-face anywhere" finding rather
+    // than an unhandled ENOENT that says nothing about what went wrong.
+    return "";
+  }
+  return parts.join("\n");
+}
+
+export async function checkAstroFonts(
+  distDir: string,
+  configText?: string,
+): Promise<readonly Finding[]> {
   const findings: Finding[] = [];
 
   const fontsDir = join(distDir, "_astro", "fonts");
@@ -94,10 +130,37 @@ export async function checkAstroFonts(distDir: string): Promise<readonly Finding
     });
   }
 
-  if (!(await distContainsFontFace(distDir))) {
+  const built = await readBuiltText(distDir);
+  if (!built.includes("@font-face")) {
     findings.push({
       problem: `no "@font-face" rule found in any .css or .html file under ${distDir}`,
     });
+  }
+
+  // Per family, not just "at least one font somewhere". Astro drops a family
+  // whose metadata fetch failed and CONTINUES to the next one — it emits
+  // neither a real `@font-face` nor even the `optimizedFallbacks` rule for
+  // that family. Every package here declares two families, so a partial
+  // outage (one family's metadata served, the other's 403ing) would leave the
+  // surviving family satisfying both checks above while the wordmark and the
+  // couple's name fell back to a default serif. Same failure a reader sees,
+  // scoped to one family, and the whole-build checks cannot see it.
+  if (configText !== undefined) {
+    const families = familyNamesFromAstroConfig(configText);
+    if (families.length === 0) {
+      findings.push({
+        problem:
+          "could not read any font family name out of the astro config — this guard cannot " +
+          "check per-family coverage, and is failing rather than passing on an unknown shape",
+      });
+    }
+    for (const family of families) {
+      if (!built.includes(family)) {
+        findings.push({
+          problem: `font family "${family}" is declared in the astro config but appears nowhere in the built CSS or HTML — its metadata fetch failed and Astro dropped it`,
+        });
+      }
+    }
   }
 
   return findings;
@@ -131,7 +194,18 @@ if (import.meta.main) {
     // No readable package.json — fall back to the cwd already assigned above.
   }
 
-  const findings = await checkAstroFonts(distDir);
+  // The config sits beside the `package.json` read above — same cwd, because
+  // every package invokes this from its own directory.
+  let configText: string | undefined;
+  try {
+    configText = await Bun.file(join(process.cwd(), "astro.config.mjs")).text();
+  } catch {
+    // No config to read: the whole-build checks below still apply, the
+    // per-family ones are skipped. A package with no astro.config.mjs has no
+    // families to check.
+  }
+
+  const findings = await checkAstroFonts(distDir, configText);
 
   if (findings.length > 0) {
     console.error(`❌ check-astro-fonts: ${packageName} shipped a fontless build.`);
