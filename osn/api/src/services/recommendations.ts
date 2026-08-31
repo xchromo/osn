@@ -516,11 +516,23 @@ export function createRecommendationService() {
       // this slice has to describe the same cap the query's own seed
       // subquery applies. They read the caller's edges independently and
       // SQLite gives no ordering guarantee over an unindexed `LIMIT`, so for
-      // a caller past MAX_MY_CONNECTIONS_FOR_FOF accepted connections the two
-      // reads can choose slightly different subsets — never a wrong
-      // suggestion (an edge either side fails to recognise is caught by
-      // `excludeIds` instead, built below from the uncapped `myEdgeRows`),
-      // only a rare miss in an already-approximate regime for hub accounts.
+      // a caller past MAX_MY_CONNECTIONS_FOR_FOF accepted connections the
+      // two reads can choose slightly different subsets of the *same*
+      // snapshot. `myEdgeRows` is capped too (`MAX_MY_EDGE_ROWS`, 1 000),
+      // not uncapped, so `excludeIds` below cannot be assumed to catch
+      // whatever this slice misses on ordering grounds alone. Measured
+      // instead of assumed: for a caller with 500–1,000 accepted
+      // connections, both this `LIMIT` and the seed subquery's `LIMIT`
+      // compile to the same `MULTI-INDEX OR` plan over the same two
+      // indexes and select the identical subset, so that ordering
+      // divergence does not in practice produce a wrong suggestion.
+      //
+      // A second, unrelated divergence is real, though: the seed subquery
+      // runs later than this read, in its own D1 round trip, so it can see
+      // a connection accepted for the caller *after* this snapshot was
+      // taken — a temporal gap this slice cannot close no matter how it is
+      // capped. See the fresh re-check before hydration, below (S-H1),
+      // which is what actually closes that one.
       const myConnectionIds = myEdgeRows
         .filter((r) => r.status === "accepted")
         .map(counterpartOf)
@@ -818,9 +830,119 @@ export function createRecommendationService() {
         )
         .slice(0, safeLimit);
 
-      const candidateIds = sorted.map(([id]) => id);
+      // Step 4.5: fresh re-check (osn-tracker#589 follow-up, S-H1).
+      //
+      // Steps 1 and 2 are two separate, un-transacted D1 round trips — no
+      // `db.batch`/`db.transaction` joins them. Step 1 snapshots the
+      // caller's edges into `myEdgeRows`; step 2's FOF seed subquery
+      // re-reads `connections` live, at whatever the table holds when step
+      // 2 actually runs, not when step 1 ran. If a connection is accepted
+      // for the caller in that window — the same account, a second request
+      // in flight from another tab or device — its id was never seen by
+      // `myEdgeRows`, so it is in neither `myConnectionIdSet` nor
+      // `excludeIds`, but it IS inside the live seed subquery's result. The
+      // fan-out row for that edge is then misclassified in step 3: neither
+      // `isMutualRequester` nor `isMutualAddressee` is true (both compare
+      // against the stale set), so the code takes the "candidate" branch,
+      // and `excludeIds.has(candidateId)` misses it too. The caller's own
+      // brand-new connection would come back as "someone you may know."
+      // `profileId` is always the caller's own, so this can only misfile
+      // the owner's freshest edge against themselves — never leak or
+      // block-bypass another account's state.
+      //
+      // Fixed by re-reading, fresh, immediately before hydration, for just
+      // the ids that survived ranking — at most `safeLimit` (≤ 50), so this
+      // cannot reopen #589's 100-bound cap. That safety is measured, not
+      // asserted: naively filtering with `or(inArray(requesterId, ids),
+      // inArray(addresseeId, ids))` binds the id list TWICE, the same
+      // mistake #589 fixed, and at safeLimit's ceiling of 50 that is 102
+      // params (`bun run` against `.toSQL()` — 2 profileId equality binds +
+      // 2 × 50-id `inArray`s — over D1's 100-per-statement cap). Each query
+      // below instead runs the id filter once, against a subquery that
+      // projects the counterpart id itself, so the id list is bound once:
+      // 3 profileId binds (one in the `CASE`, two in the seed `WHERE`) + up
+      // to 50 for the single `inArray` = 53 params, confirmed the same way.
+      // No status filter on the connections re-check — any row, pending or
+      // accepted, means "no longer a suggestion", same as `excludeIds`
+      // above already treats every edge, not just accepted ones.
+      //
+      // `db.batch()` across steps 1 and 2 was considered instead and
+      // rejected without running it: D1's docs do not state that a batch is
+      // snapshot-isolated against a concurrent write from a different
+      // request, and this repo has already been burned three times (see
+      // MAX_MY_CONNECTIONS_FOR_FOF and MAX_ORG_COMEMBER_ARMS_PER_QUERY,
+      // above) by taking an engine property on faith instead of measuring
+      // it. A bounded re-check needs no such assumption: it is correct
+      // whether or not D1 batches are isolated, so it costs one extra
+      // pair of round trips to avoid depending on an unverified guarantee.
+      //
+      // No backfill: a dropped candidate is not replaced from the next rank
+      // down. That would need re-ranking against a larger candidate pool,
+      // which is a recall decision, not this fix's job — the caller sees a
+      // list one entry shorter on the rare request that races its own
+      // second tab, never a wrong one.
+      const rankedIds = sorted.map(([id]) => id);
+      const recheckExcludedIds =
+        rankedIds.length === 0
+          ? new Set<string>()
+          : yield* Effect.tryPromise({
+              try: async () => {
+                const freshConnectionCounterparts = db
+                  .select({
+                    counterpart:
+                      sql<string>`(CASE WHEN ${connections.requesterId} = ${profileId} THEN ${connections.addresseeId} ELSE ${connections.requesterId} END)`.as(
+                        "counterpart",
+                      ),
+                  })
+                  .from(connections)
+                  .where(
+                    or(
+                      eq(connections.requesterId, profileId),
+                      eq(connections.addresseeId, profileId),
+                    ),
+                  )
+                  .as("fresh_connection_counterparts");
+
+                const freshBlockCounterparts = db
+                  .select({
+                    counterpart:
+                      sql<string>`(CASE WHEN ${blocks.blockerId} = ${profileId} THEN ${blocks.blockedId} ELSE ${blocks.blockerId} END)`.as(
+                        "counterpart",
+                      ),
+                  })
+                  .from(blocks)
+                  .where(or(eq(blocks.blockerId, profileId), eq(blocks.blockedId, profileId)))
+                  .as("fresh_block_counterparts");
+
+                const [freshEdges, freshBlocks] = await Promise.all([
+                  db
+                    .select({ counterpart: freshConnectionCounterparts.counterpart })
+                    .from(freshConnectionCounterparts)
+                    .where(inArray(freshConnectionCounterparts.counterpart, rankedIds)),
+                  db
+                    .select({ counterpart: freshBlockCounterparts.counterpart })
+                    .from(freshBlockCounterparts)
+                    .where(inArray(freshBlockCounterparts.counterpart, rankedIds)),
+                ]);
+
+                return new Set([
+                  ...freshEdges.map((r) => r.counterpart),
+                  ...freshBlocks.map((r) => r.counterpart),
+                ]);
+              },
+              catch: (cause) => new DatabaseError({ cause }),
+            });
+
+      const survivors =
+        recheckExcludedIds.size === 0
+          ? sorted
+          : sorted.filter(([id]) => !recheckExcludedIds.has(id));
+
+      if (survivors.length === 0) return [];
+
+      const candidateIds = survivors.map(([id]) => id);
       const survivingOrgIds = [
-        ...new Set(sorted.map(([, c]) => c.sharedOrganisationId).filter((id) => id !== null)),
+        ...new Set(survivors.map(([, c]) => c.sharedOrganisationId).filter((id) => id !== null)),
       ];
 
       // Step 5: hydrate the survivors — profiles and organisation labels.
@@ -874,7 +996,7 @@ export function createRecommendationService() {
       const profileMap = new Map(profiles.map((p) => [p.id, p]));
       const organisationMap = new Map(organisationRows.map((o) => [o.id, o]));
 
-      return sorted
+      return survivors
         .map(([id, candidate]) => {
           const p = profileMap.get(id);
           if (!p) return null;

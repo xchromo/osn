@@ -22,3 +22,16 @@ result set.
 broken behaviour (added on the parent branch); it now asserts the call
 succeeds with a connection count well past the old cliff and returns the
 correct friend-of-friend candidates.
+
+Security review of that fix found a regression it introduced (S-H1): the
+fan-out's new seed subquery reads `connections` live, in its own D1 round
+trip, separate from the earlier snapshot `suggestConnections` takes of the
+caller's own edges — a window the old, single-snapshot query could not open.
+A connection the caller accepted from a second in-flight request, in that
+window, was misclassified as a suggestion candidate rather than a mutual
+connection, so the caller's own brand-new connection could come back as
+"someone you may know." Fixed by re-checking, fresh, against `connections`
+and `blocks` immediately before hydration, for just the ids that survived
+ranking (at most 50) — bound once per query via the same `IN (<subquery>)`
+shape, 53 params measured against real D1, not the 102 a naive two-sided
+`inArray` would cost at that size.
