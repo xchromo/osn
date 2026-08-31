@@ -1,7 +1,11 @@
 import { createSignal } from "solid-js";
 
 import { CONSENT_CATEGORIES, type ConsentCategory } from "./categories";
-import { readConsentFromDocument, writeConsentToDocumentAndVerify } from "./cookie";
+import {
+  migrateBareConsentCookie,
+  readConsentFromDocument,
+  writeConsentToDocumentAndVerify,
+} from "./cookie";
 import {
   allGrants,
   type ConsentGrants,
@@ -76,6 +80,12 @@ function clearLegacyPinterestConsent(): void {
 export function hydrateConsent(): void {
   if (hydrated()) return;
   clearLegacyPinterestConsent();
+  // Move an already-decided guest onto the `__Host-` name before reading. It
+  // has to happen here, on the read path, because the write path never runs
+  // again for them: their stored choice reads back fine, so the banner stays
+  // away and nothing would ever perform the secure write the fix for
+  // osn-tracker#163 depends on. See `migrateBareConsentCookie`.
+  migrateBareConsentCookie();
   setRecord(readConsentFromDocument());
   setHydrated(true);
 }

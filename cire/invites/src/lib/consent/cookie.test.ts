@@ -4,6 +4,7 @@ import {
   CONSENT_COOKIE_MAX_AGE_SECONDS,
   CONSENT_COOKIE_NAME,
   PREFIXED_CONSENT_COOKIE_NAME,
+  migrateBareConsentCookie,
   readConsentCookieValue,
   readConsentFromDocument,
   readConsentRecord,
@@ -19,6 +20,16 @@ const encoded = encodeConsentRecord(record);
 const OTHER_NOW = new Date("2026-07-30T10:00:00.000Z");
 const otherRecord = makeConsentRecord({ ...defaultGrants(), embeds: false }, OTHER_NOW);
 const otherEncoded = encodeConsentRecord(otherRecord);
+
+function readNamed(cookieString: string, name: string): string | null {
+  for (const part of cookieString.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim();
+  }
+  return null;
+}
 
 function clearBothCookies(): void {
   document.cookie = `${CONSENT_COOKIE_NAME}=; Path=/; Max-Age=0`;
@@ -169,5 +180,118 @@ describe("writeConsentToDocumentAndVerify (osn-tracker#162 read-back)", () => {
         Object.defineProperty(document, "cookie", originalCookieDescriptor);
       }
     }
+  });
+});
+
+/**
+ * Drive the module's `isSecureContext()` — it reads `location.protocol`, and
+ * jsdom serves the suite over http, so the `__Host-` half of every path below
+ * is unreachable without this. Also swaps in a cookie jar we control, because
+ * jsdom on http refuses a `Secure` cookie outright and the migration's whole
+ * point is what it writes on https.
+ */
+function onSecureOriginWithJar(initial: string, body: (jar: () => string) => void): void {
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const originalCookie = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
+  const jar = new Map<string, string>();
+  for (const part of initial.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    jar.set(part.slice(0, separator).trim(), part.slice(separator + 1).trim());
+  }
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    get: () => ({ protocol: "https:" }),
+  });
+  Object.defineProperty(document, "cookie", {
+    configurable: true,
+    get: () => [...jar.entries()].map(([name, value]) => `${name}=${value}`).join("; "),
+    set: (assignment: string) => {
+      const [pair, ...attributes] = assignment.split(";");
+      const separator = pair!.indexOf("=");
+      const name = pair!.slice(0, separator).trim();
+      const value = pair!.slice(separator + 1).trim();
+      // A browser deletes on Max-Age=0 rather than storing an empty value.
+      if (attributes.some((a) => a.trim().toLowerCase() === "max-age=0")) jar.delete(name);
+      else jar.set(name, value);
+    },
+  });
+  try {
+    body(() => document.cookie);
+  } finally {
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    if (originalCookie) Object.defineProperty(document, "cookie", originalCookie);
+  }
+}
+
+/**
+ * S-M1 (found reviewing this branch): preferring the prefixed name on read only
+ * helps once this origin has WRITTEN the prefixed name — and for an
+ * already-decided guest that write never happens, because their choice reads
+ * back fine, the banner stays away, and `saveConsent` is never called again.
+ * Without a read-path migration their refusal stays shadowable for the cookie's
+ * whole 182 days.
+ */
+describe("migrateBareConsentCookie (S-M1)", () => {
+  it("moves an already-decided guest onto the prefixed name, and drops the bare one", () => {
+    onSecureOriginWithJar(`${CONSENT_COOKIE_NAME}=${encoded}`, (jar) => {
+      migrateBareConsentCookie();
+      expect(jar()).toContain(`${PREFIXED_CONSENT_COOKIE_NAME}=${encoded}`);
+      expect(readConsentCookieValue(jar())).toBe(encoded);
+      // The shadowable name is gone, not merely out-ranked.
+      expect(readNamed(jar(), CONSENT_COOKIE_NAME)).toBeNull();
+    });
+  });
+
+  it("preserves the decision itself, not just the name", () => {
+    onSecureOriginWithJar(`${CONSENT_COOKIE_NAME}=${encoded}`, (jar) => {
+      migrateBareConsentCookie();
+      expect(readConsentRecord(jar())?.grants).toEqual(record.grants);
+    });
+  });
+
+  it("leaves a guest already on the prefixed name alone", () => {
+    onSecureOriginWithJar(`${PREFIXED_CONSENT_COOKIE_NAME}=${encoded}`, (jar) => {
+      migrateBareConsentCookie();
+      expect(jar()).toBe(`${PREFIXED_CONSENT_COOKIE_NAME}=${encoded}`);
+    });
+  });
+
+  it("prefers the prefixed value and still clears the bare one when both exist", () => {
+    // The planted-cookie case: a sibling origin's bare cookie sitting beside
+    // ours. The prefixed one already exists, so nothing is rewritten — the read
+    // precedence is what defends here, and it does.
+    onSecureOriginWithJar(
+      `${PREFIXED_CONSENT_COOKIE_NAME}=${encoded}; ${CONSENT_COOKIE_NAME}=${otherEncoded}`,
+      (jar) => {
+        migrateBareConsentCookie();
+        expect(readConsentCookieValue(jar())).toBe(encoded);
+      },
+    );
+  });
+
+  it("does nothing when there is no decision to move", () => {
+    onSecureOriginWithJar("", (jar) => {
+      migrateBareConsentCookie();
+      expect(jar()).toBe("");
+    });
+  });
+
+  it("does nothing when the bare cookie holds something unparseable", () => {
+    onSecureOriginWithJar(`${CONSENT_COOKIE_NAME}=not-a-record`, (jar) => {
+      migrateBareConsentCookie();
+      // Left exactly as found rather than replaced with a fabricated record.
+      expect(jar()).toBe(`${CONSENT_COOKIE_NAME}=not-a-record`);
+    });
+  });
+});
+
+describe("a secure write expires the bare name (S-M1)", () => {
+  it("clears a stale bare cookie as a side effect of saving", () => {
+    onSecureOriginWithJar(`${CONSENT_COOKIE_NAME}=${otherEncoded}`, (jar) => {
+      expect(writeConsentToDocumentAndVerify(record)).toBe(true);
+      expect(readNamed(jar(), CONSENT_COOKIE_NAME)).toBeNull();
+      expect(readNamed(jar(), PREFIXED_CONSENT_COOKIE_NAME)).toBe(encoded);
+    });
   });
 });

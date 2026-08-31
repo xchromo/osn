@@ -162,11 +162,31 @@ prefix, a script on a sibling `*.cireweddings.com` origin could set its own
 same-named cookies a browser returns first is unspecified — so a guest's
 stored REFUSAL could be silently overridden back to "allowed". `__Host-` is a
 browser-enforced promise (rejected without `Secure`, `Path=/`, and no
-`Domain`), which the cookie's existing attributes already satisfy. Preferring
-the prefixed name on read is what makes a planted bare-name cookie inert the
-moment this origin has made its own secure write, and reading the bare name at
-all is what lets an existing guest's pre-upgrade choice keep working with no
-migration step.
+`Domain`), which the cookie's existing attributes already satisfy.
+
+**The bare name is removed, not merely out-ranked.** Preferring the prefixed
+name on read only defends this origin, and only once the prefixed cookie
+actually exists — so two writes end the ambiguity rather than out-running it:
+
+- a secure write also expires the bare name, so saving clears the old cookie;
+- `hydrateConsent` calls `migrateBareConsentCookie` on the way in, which on a
+  secure origin moves a bare-name record onto the prefixed name and expires the
+  bare one.
+
+The second is the one that matters, and it is not belt-and-braces. `saveConsent`
+runs only when a guest touches the consent UI, and a guest who has already
+decided is exactly the one the banner never shows again — their stored choice
+reads back fine through the bare-name fallback, so `needsConsentDecision()`
+stays false and nothing would ever perform the secure write. Without a migration
+on the READ path, their refusal would stay shadowable for the cookie's full 182
+days. Migrating on read moves them silently on their next visit. On http dev
+there is nothing to migrate: `__Host-` needs `Secure`, so the bare name is the
+correct and only form there.
+
+A page cannot delete a `Domain=.cireweddings.com` cookie another origin set, and
+does not try — the read precedence is what defends against that one. The expiry
+is host-only, `Path=/`, no `Domain`, so it clears our own old cookie and nothing
+else.
 
 **Why a cookie and not `localStorage`** (which the old Pinterest gate used): a
 cookie is the only store the server can read. Both currently-gated embeds mount

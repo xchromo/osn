@@ -76,6 +76,20 @@ export const CONSENT_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 182;
  *    takes precedence, so the planted cookie is inert as soon as this origin
  *    has made its own secure write.
  */
+export function readNamedCookie(
+  cookieString: string | null | undefined,
+  name: string,
+): string | null {
+  if (!cookieString) return null;
+  for (const part of cookieString.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim();
+  }
+  return null;
+}
+
 export function readConsentCookieValue(cookieString: string | null | undefined): string | null {
   if (!cookieString) return null;
 
@@ -147,10 +161,73 @@ export function readConsentFromDocument(): ConsentRecord | null {
  */
 export function writeConsentToDocument(record: ConsentRecord): void {
   if (typeof document === "undefined") return;
+  const secure = isSecureContext();
   try {
-    document.cookie = serialiseConsentCookie(record, isSecureContext());
+    document.cookie = serialiseConsentCookie(record, secure);
+    if (secure) expireBareConsentCookie();
   } catch {
     // Storage disabled — consent applies for this visit only.
+  }
+}
+
+/**
+ * Expire the bare-named cookie, leaving the `__Host-` one as the only match.
+ *
+ * Writing the prefixed name does NOT remove a bare `cire_consent` sitting
+ * beside it, and while both exist the ambiguity S-L1 (osn-tracker#163) is
+ * about is still there — `readConsentCookieValue` prefers the prefixed one, so
+ * this origin is safe, but the shadowing cookie is still in the jar and any
+ * reader that does not know the precedence rule can still pick the wrong one.
+ * Removing the name outright is the only thing that ends the condition rather
+ * than out-running it.
+ *
+ * Host-only, `Path=/`, no `Domain` — deliberately the same scope this origin
+ * writes with, so it clears OUR old cookie and not a sibling's. A page cannot
+ * delete a `Domain=.cireweddings.com` cookie set by another origin, and should
+ * not try: the read precedence is what defends against that one.
+ */
+function expireBareConsentCookie(): void {
+  document.cookie = `${CONSENT_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
+/**
+ * Move an already-decided guest onto the prefixed cookie without asking them
+ * anything.
+ *
+ * The fix for osn-tracker#163 only bites once this origin has written the
+ * prefixed name — and for the guests who most need it, that write was never
+ * going to happen. `saveConsent` runs only when someone touches the consent UI,
+ * and a guest who already decided is precisely the one the banner never shows
+ * again: their choice reads back fine through the bare-name fallback, so
+ * `needsConsentDecision()` stays false and nothing writes for up to the
+ * cookie's full 182 days. Their stored refusal would sit shadowable for six
+ * months, which is most of the exposure the finding was filed about.
+ *
+ * So the migration runs on READ instead. On a secure origin, when the bare name
+ * is present and the prefixed one is not, re-write the record under the
+ * prefixed name and expire the bare one. The guest is migrated on their next
+ * visit and sees nothing. On http dev there is nothing to do — `__Host-` needs
+ * `Secure`, so the bare name is the correct and only form there.
+ *
+ * Best-effort, like every write in this module: a browser that blocks the write
+ * leaves the guest exactly where they were, which is the status quo, not a
+ * regression.
+ */
+export function migrateBareConsentCookie(): void {
+  if (typeof document === "undefined" || !isSecureContext()) return;
+  const cookies = document.cookie;
+  if (!cookies.includes(`${CONSENT_COOKIE_NAME}=`)) return;
+  // Already on the prefixed name — nothing to move. Checked by parsing rather
+  // than substring, because `cire_consent=` is itself a substring of
+  // `__Host-cire_consent=`.
+  if (readNamedCookie(cookies, PREFIXED_CONSENT_COOKIE_NAME) !== null) return;
+  const record = readConsentRecord(cookies);
+  if (!record) return;
+  try {
+    document.cookie = serialiseConsentCookie(record, true);
+    expireBareConsentCookie();
+  } catch {
+    // Blocked — the guest stays on the bare cookie, same as before.
   }
 }
 
