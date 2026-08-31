@@ -901,6 +901,18 @@ export function createRecommendationService() {
                       eq(connections.addresseeId, profileId),
                     ),
                   )
+                  // Bounded, like every other read in this function. The
+                  // `IN (rankedIds)` that narrows this to the <=50 ids we
+                  // actually care about is applied in the OUTER query, so
+                  // without a limit here the inner read walks every edge the
+                  // caller has — 2,000 rows read to answer a question about
+                  // 50 — on a query that now runs on every request whether or
+                  // not anything raced. Same cap and same reasoning as step
+                  // 1's read of this table: a candidate that appears among
+                  // the caller's most recent MAX_MY_EDGE_ROWS edges is
+                  // caught, which is the approximation this file already
+                  // accepts everywhere else.
+                  .limit(MAX_MY_EDGE_ROWS)
                   .as("fresh_connection_counterparts");
 
                 const freshBlockCounterparts = db
@@ -912,6 +924,12 @@ export function createRecommendationService() {
                   })
                   .from(blocks)
                   .where(or(eq(blocks.blockerId, profileId), eq(blocks.blockedId, profileId)))
+                  // Same bound, same reason. Step 1's own block read is
+                  // uncapped, but it is one read per request against a table
+                  // that is small per caller by nature; this one sits on the
+                  // hot path beside the connections read above and should not
+                  // be the single place a caller's graph size is unbounded.
+                  .limit(MAX_MY_EDGE_ROWS)
                   .as("fresh_block_counterparts");
 
                 const [freshEdges, freshBlocks] = await Promise.all([
