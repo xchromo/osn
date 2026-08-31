@@ -4,7 +4,7 @@ tags: [architecture, privacy, compliance, web, cire]
 related:
   - "[[index]]"
   - "[[cire-invite-builder]]"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-08-31
 ---
 # Site-wide consent framework
 
@@ -100,7 +100,7 @@ Two traps this separation exists to avoid:
 | `lib/consent/categories.ts` | The category enum + display metadata. `necessary` is the only required one. |
 | `lib/consent/vendors.ts` | **The vendor registry** — one source of truth (see below). |
 | `lib/consent/record.ts` | The persisted record: versions, grant normalisation, encode/decode. |
-| `lib/consent/cookie.ts` | Cookie transport (`cire_consent`). |
+| `lib/consent/cookie.ts` | Cookie transport (`__Host-cire_consent` / `cire_consent`). |
 | `lib/consent/store.ts` | Module-level Solid signals shared by every island. |
 | `lib/consent/testing.ts` | `seedConsentForTest` / `resetConsentForTest`. |
 | `components/consent/ConsentGate.tsx` | The wrapper + the default blocked-content placeholder. |
@@ -149,8 +149,24 @@ voice.
 
 ## Storage
 
-A cookie, `cire_consent`, `Path=/`, `Max-Age` 182 days, `SameSite=Lax`, `Secure`
-on https only. Not `HttpOnly` — client code rewrites it.
+A cookie, `Path=/`, `Max-Age` 182 days, `SameSite=Lax`. Not `HttpOnly` — client
+code rewrites it.
+
+**Two names, chosen by `secure`.** On https the cookie is written as
+`__Host-cire_consent`; on http (local dev) it falls back to the bare
+`cire_consent`, because `__Host-` cookies are rejected outright without
+`Secure`, which http can never set. A read accepts BOTH names and prefers the
+prefixed one when both are present. This is osn-tracker#163 (S-L1): without the
+prefix, a script on a sibling `*.cireweddings.com` origin could set its own
+`Domain=.cireweddings.com` cookie of the same bare name, and which of the two
+same-named cookies a browser returns first is unspecified — so a guest's
+stored REFUSAL could be silently overridden back to "allowed". `__Host-` is a
+browser-enforced promise (rejected without `Secure`, `Path=/`, and no
+`Domain`), which the cookie's existing attributes already satisfy. Preferring
+the prefixed name on read is what makes a planted bare-name cookie inert the
+moment this origin has made its own secure write, and reading the bare name at
+all is what lets an existing guest's pre-upgrade choice keep working with no
+migration step.
 
 **Why a cookie and not `localStorage`** (which the old Pinterest gate used): a
 cookie is the only store the server can read. Both currently-gated embeds mount
@@ -163,6 +179,35 @@ late: the request has gone before any script reads it.
 `SameSite=Lax` not `Strict`, because a guest arriving from the couple's emailed
 link is a cross-site top-level navigation and `Strict` would withhold the cookie
 on exactly that first hop — re-prompting someone who already decided.
+
+### Withdrawal tears down what already ran (osn-tracker#162 / CON-S-M1)
+
+Switching a category off unmounts its gated embeds immediately — `ConsentGate`
+doesn't render children, it disposes them, so no further request escapes. But a
+vendor's script that already ran before the switch flipped has already set its
+own globals, attached its own listeners and written its own storage, and none
+of that unwinds just because the DOM node is gone. Under the opt-out defaults
+this is the common case, not an edge one: the banner appears only after the
+gated embeds have already loaded, so "Reject all" is nearly always clicked with
+a third-party context already live.
+
+`saveConsent` (`store.ts`) reloads the page — `location.reload()`, via an
+injectable module-level `reloadPage` reference so tests can substitute a spy —
+whenever a category holding at least one `enforcement: "gated"` vendor moves
+from granted to revoked in that save. Two conditions gate it, both load-bearing:
+
+1. **Granted → revoked only.** Not revoked → granted, not a no-op save, not a
+   first-time grant — none of those leave anything to tear down.
+2. **The cookie write must have actually succeeded**, checked with a read-back
+   of `document.cookie` (`writeConsentToDocumentAndVerify` in `cookie.ts`)
+   rather than trusting that the write call merely returned — it swallows
+   failures by design (see "Storage" above). Reloading on an unpersisted
+   refusal would discard the very refusal the reload exists to enforce: the
+   guest would watch the page reload believing they'd just refused, and land
+   back on the opt-out defaults with no record of having tried.
+
+The preferences dialog states this plainly rather than leaving it implicit — a
+silent reload the guest didn't expect is its own kind of surprising.
 
 ### Two versions, two jobs
 
