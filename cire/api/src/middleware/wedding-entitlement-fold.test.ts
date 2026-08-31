@@ -25,7 +25,9 @@ const WEDDING_ID = "wed_fold";
 const OWNER = "usr_owner";
 const COHOST = "usr_cohost";
 
-function buildDb(opts: { grantVendors: boolean }): Db {
+// No explicit `Db` return type: these tests reach for `$client.exec` to break
+// one table on purpose, and `Db` does not surface the underlying client.
+function buildDb(opts: { grantVendors: boolean }) {
   const db = createDb(":memory:");
   const now = new Date();
   db.insert(weddings)
@@ -229,5 +231,31 @@ describe("P-W1: role-gate/entitlement-gate query fold", () => {
     const res = await appRequest(standaloneApp(counted, COHOST), `/w/${WEDDING_ID}/thing`);
     expect(res.status).toBe(200);
     expect(selectCount()).toBe(1);
+  });
+
+  // S-L1 (found reviewing this branch): folding the entitlement probe into the
+  // role query folded their failure modes together too. A defect confined to
+  // `wedding_entitlements` used to deny only the entitlement half — a scoped
+  // 402 — while the role check, a separate query, still answered. In one
+  // SELECT it would take the whole route down with a generic 500. The fold now
+  // catches its own defect and falls back to the plain role query, which
+  // restores the old contract.
+  it("degrades to a scoped 402, not a 500, when the entitlement table is broken", async () => {
+    const db = buildDb({ grantVendors: true });
+    // Break ONLY the entitlement side. The role tables are untouched, so the
+    // plain fallback can still answer who the caller is.
+    db.$client.exec("DROP TABLE wedding_entitlements");
+    const res = await appRequest(gatedApp(db, COHOST), `/w/${WEDDING_ID}/thing`);
+    expect(res.status).toBe(402);
+    expect(await jsonBody(res)).toEqual({ error: "payment_required", entitlement: "vendors" });
+  });
+
+  it("still answers the owner's role through the fallback when the fold breaks", async () => {
+    const db = buildDb({ grantVendors: true });
+    db.$client.exec("DROP TABLE wedding_entitlements");
+    const res = await appRequest(ungatedApp(db, OWNER), `/w/${WEDDING_ID}/thing`);
+    // No entitlement gate on this route at all, so a broken entitlement table
+    // must not touch it — the role gate passes no key and never folds.
+    expect(res.status).toBe(200);
   });
 });

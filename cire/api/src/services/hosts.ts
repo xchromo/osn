@@ -99,6 +99,62 @@ export function hostConflictReason(message: string): HostConflict["reason"] | nu
   return null;
 }
 
+type AuthorizeResult = {
+  ownerOsnProfileId: string;
+  isOwner: boolean;
+  isHost: boolean;
+  role: "owner" | HostRole | null;
+};
+
+/**
+ * The entitlement-free `authorize()` — the query shape this service has always
+ * run, extracted so both the plain caller and
+ * {@link authorizeWithEntitlement}'s defect fallback can reach it.
+ */
+function authorizePlain(
+  weddingId: string,
+  osnProfileId: string,
+): Effect.Effect<AuthorizeResult | null, never, DbService> {
+  return Effect.gen(function* () {
+    const db = yield* DbService;
+    const [owner] = yield* dbQuery(() =>
+      db
+        .select({ owner: weddings.ownerOsnProfileId })
+        .from(weddings)
+        .where(eq(weddings.id, weddingId))
+        .all(),
+    );
+    if (!owner) return null;
+
+    const isOwner = owner.owner === osnProfileId;
+    if (isOwner) {
+      return {
+        ownerOsnProfileId: owner.owner,
+        isOwner: true,
+        isHost: false,
+        role: "owner" as const,
+      };
+    }
+
+    const [host] = yield* dbQuery(() =>
+      db
+        .select({ id: weddingHosts.id, role: weddingHosts.role })
+        .from(weddingHosts)
+        .where(
+          and(eq(weddingHosts.weddingId, weddingId), eq(weddingHosts.osnProfileId, osnProfileId)),
+        )
+        .limit(1)
+        .all(),
+    );
+    return {
+      ownerOsnProfileId: owner.owner,
+      isOwner: false,
+      isHost: Boolean(host),
+      role: host ? normaliseHostRole(host.role) : null,
+    };
+  }).pipe(Effect.withSpan("cire.host.authorize"));
+}
+
 /**
  * The `entitlementKey`-carrying half of `authorize()` — kept as a separate
  * function rather than an inline branch so the plain path above stays exactly
@@ -113,17 +169,7 @@ function authorizeWithEntitlement(
   weddingId: string,
   osnProfileId: string,
   entitlementKey: EntitlementKey,
-): Effect.Effect<
-  {
-    ownerOsnProfileId: string;
-    isOwner: boolean;
-    isHost: boolean;
-    role: "owner" | HostRole | null;
-    entitled: boolean;
-  } | null,
-  never,
-  DbService
-> {
+): Effect.Effect<(AuthorizeResult & { entitled?: boolean }) | null, never, DbService> {
   const entitledExists = sql<number>`EXISTS (SELECT 1 FROM ${weddingEntitlements} WHERE ${weddingEntitlements.weddingId} = ${weddingId} AND ${weddingEntitlements.entitlement} = ${entitlementKey})`;
 
   return Effect.gen(function* () {
@@ -168,7 +214,34 @@ function authorizeWithEntitlement(
       // 403s before anything reads it), so `false` rather than a bogus query.
       entitled: host ? Boolean(host.entitled) : false,
     };
-  }).pipe(Effect.withSpan("cire.host.authorize"));
+  }).pipe(
+    Effect.withSpan("cire.host.authorize"),
+    // S-L1 (found reviewing this branch): folding the entitlement probe into
+    // the role query also folded their FAILURE modes together. Before the
+    // fold, a defect confined to `wedding_entitlements` — a bad row, a lock,
+    // an index problem — denied only the entitlement half (a scoped 402, with
+    // a log line naming the wedding and the key) while the role check, a
+    // separate query, still answered. In one SELECT, that same defect throws
+    // out of the gate's derive and the whole route 500s, on all nine gated
+    // mount sites, with a generic log nobody can triage from.
+    //
+    // Fall back to the query shape this service always ran. It answers the
+    // role on its own, and returns no `entitled` — so no fold reaches the
+    // context, and `weddingEntitlement` runs its own `has()`, still wrapped in
+    // its own defect-to-false-with-log. That is exactly the old contract: the
+    // two checks fail independently, each with its own scoped outcome. If the
+    // role half is what defected, `authorizePlain` defects too and the request
+    // 500s as it always would have.
+    Effect.catchAllDefect((defect) =>
+      Effect.logWarning(
+        "cire.host.authorize entitlement fold failed — falling back to the plain role query",
+      ).pipe(
+        Effect.annotateLogs({ weddingId, entitlement: entitlementKey }),
+        Effect.zipRight(Effect.logDebug(String(defect))),
+        Effect.zipRight(authorizePlain(weddingId, osnProfileId)),
+      ),
+    ),
+  );
 }
 
 export const hostsService = {
@@ -437,43 +510,6 @@ export const hostsService = {
     if (entitlementKey) {
       return authorizeWithEntitlement(weddingId, osnProfileId, entitlementKey);
     }
-    return Effect.gen(function* () {
-      const db = yield* DbService;
-      const [owner] = yield* dbQuery(() =>
-        db
-          .select({ owner: weddings.ownerOsnProfileId })
-          .from(weddings)
-          .where(eq(weddings.id, weddingId))
-          .all(),
-      );
-      if (!owner) return null;
-
-      const isOwner = owner.owner === osnProfileId;
-      if (isOwner) {
-        return {
-          ownerOsnProfileId: owner.owner,
-          isOwner: true,
-          isHost: false,
-          role: "owner" as const,
-        };
-      }
-
-      const [host] = yield* dbQuery(() =>
-        db
-          .select({ id: weddingHosts.id, role: weddingHosts.role })
-          .from(weddingHosts)
-          .where(
-            and(eq(weddingHosts.weddingId, weddingId), eq(weddingHosts.osnProfileId, osnProfileId)),
-          )
-          .limit(1)
-          .all(),
-      );
-      return {
-        ownerOsnProfileId: owner.owner,
-        isOwner: false,
-        isHost: Boolean(host),
-        role: host ? normaliseHostRole(host.role) : null,
-      };
-    }).pipe(Effect.withSpan("cire.host.authorize"));
+    return authorizePlain(weddingId, osnProfileId);
   },
 };
