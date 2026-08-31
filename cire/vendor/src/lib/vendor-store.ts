@@ -136,3 +136,83 @@ export async function consumeClaim(
   if (!body?.listing) throw new Error("Invalid response consuming claim");
   return body.listing;
 }
+
+// ── Claim → editor handoff (VP-P-W2) ────────────────────────────────────────
+// `consumeClaim` already returns the listing, but the claim page redirects
+// with a full document navigation (`window.location.href`), which drops
+// everything in memory. sessionStorage crosses that gap the same way
+// CLAIM_TOKEN_KEY crosses the sign-in redirect in ClaimApp. The key is read
+// once: `takeSeededListing` deletes it on the way out, whether or not the
+// value turns out usable, so it can never leak into a later, unrelated load.
+const CLAIMED_LISTING_KEY = "cire.vendor.claimed-listing";
+
+interface ClaimedListingSeed {
+  orgId: string;
+  listing: Listing;
+}
+
+/**
+ * The three fields {@link isValidListing} reads, each still `unknown` because
+ * the value came out of a JSON.parse of a sessionStorage string, not the
+ * network — same idiom as `CropCandidate` in `cire/api/src/schemas/invite.ts`.
+ */
+interface ListingCandidate {
+  id?: unknown;
+  name?: unknown;
+  categories?: unknown;
+}
+
+function isListingCandidate(value: unknown): value is ListingCandidate {
+  return typeof value === "object" && value !== null;
+}
+
+function isValidListing(value: unknown): value is Listing {
+  if (!isListingCandidate(value)) return false;
+  const { id, name, categories } = value;
+  return typeof id === "string" && typeof name === "string" && Array.isArray(categories);
+}
+
+/**
+ * Stash the listing `consumeClaim` just returned, keyed to the org it
+ * belongs to, so the editor can seed from it instead of re-fetching.
+ * Best-effort: sessionStorage can throw (private mode, blocked site data);
+ * a failure here just means the editor falls back to its normal fetch.
+ */
+export function seedClaimedListing(orgId: string, listing: Listing): void {
+  try {
+    sessionStorage.setItem(CLAIMED_LISTING_KEY, JSON.stringify({ orgId, listing }));
+  } catch {
+    // No seed, no problem.
+  }
+}
+
+/**
+ * Take the listing seeded by a just-completed claim, if any, for `orgId`.
+ * Returns `undefined` on every failure mode — key absent, unparseable JSON,
+ * a mismatched org, a shape that doesn't look like `Listing`, or
+ * sessionStorage throwing on read — so the caller always has a clean
+ * fall-through to fetchListing.
+ */
+export function takeSeededListing(orgId: string): Listing | undefined {
+  let raw: string | null;
+  try {
+    raw = sessionStorage.getItem(CLAIMED_LISTING_KEY);
+  } catch {
+    return undefined;
+  }
+  if (raw === null) return undefined;
+  try {
+    sessionStorage.removeItem(CLAIMED_LISTING_KEY);
+  } catch {
+    // Read succeeded but removal failed — proceed anyway; a stale key left
+    // behind gets rejected below on org mismatch or bad shape at worst.
+  }
+  try {
+    const seed = JSON.parse(raw) as ClaimedListingSeed;
+    if (seed.orgId !== orgId) return undefined;
+    if (!isValidListing(seed.listing)) return undefined;
+    return seed.listing;
+  } catch {
+    return undefined;
+  }
+}
