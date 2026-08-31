@@ -238,10 +238,21 @@ describe("UNIQUE_CONSTRAINT_ERROR over real D1 (Miniflare)", () => {
 describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", () => {
   it("stays within the MAX_ORG_COMEMBER_ROWS budget even when one organisation has far more members than its share", async () => {
     // osn-tracker#574. MAX_ORG_COMEMBER_ROWS (services/recommendations.ts) is
-    // 2 000. This seeds one organisation with 2 500 members — 500 more than
-    // the whole budget — and confirms the fan-out reads no more than the
-    // budget from `organisation_members`, using D1's own `rows_read` figure
-    // rather than assuming the query's LIMIT clauses did their job.
+    // 2 000, split evenly across the caller's organisations. Seeding a single
+    // organisation the caller belongs to gives that organisation the *whole*
+    // budget as its share, so proving the cap requires seeding upwards of
+    // 2 000 members regardless of fixture size — that was the original form
+    // of this test, and it cost ~4.8s, nearly all of it seeding 2 500 rows
+    // through three FK-linked tables (osn-tracker#589 / P-W1).
+    //
+    // Putting the caller in ORG_COUNT organisations instead shrinks each
+    // one's share to `MAX_ORG_COMEMBER_ROWS / ORG_COUNT`, so the same "far
+    // more members than its share" property needs far fewer seeded rows:
+    // with 10 organisations the share is 200, and 500 members in the one
+    // oversized organisation is already 2.5x its share — a clear violation
+    // for the fan-out to cap, at a fifth of the previous row count. The other
+    // nine organisations need no extra members; the caller's own membership
+    // row is enough to exercise their arm of the fan-out.
     const callerId = "usr_boundtest_caller";
     const callerAccountId = "acc_boundtest_caller";
     const ts = new Date();
@@ -259,21 +270,29 @@ describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", (
       createdAt: ts,
       updatedAt: ts,
     });
-    await rawDb.insert(organisations).values({
-      id: "org_boundtest",
-      handle: "boundtest",
-      name: "Bound Test Org",
-      ownerId: callerId,
-      createdAt: ts,
-      updatedAt: ts,
-    });
-    await rawDb.insert(organisationMembers).values({
-      id: "orgm_boundtest_caller",
-      organisationId: "org_boundtest",
-      profileId: callerId,
-      role: "admin",
-      createdAt: ts,
-    });
+
+    const ORG_COUNT = 10;
+    const OVERSIZED_ORG_ID = "org_boundtest_0";
+    for (let i = 0; i < ORG_COUNT; i++) {
+      const organisationId = `org_boundtest_${i}`;
+      // eslint-disable-next-line no-await-in-loop -- sequential, FK-ordered seeding
+      await rawDb.insert(organisations).values({
+        id: organisationId,
+        handle: `boundtest${i}`,
+        name: `Bound Test Org ${i}`,
+        ownerId: callerId,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(organisationMembers).values({
+        id: `orgm_boundtest_caller_${i}`,
+        organisationId,
+        profileId: callerId,
+        role: "admin",
+        createdAt: ts,
+      });
+    }
 
     // D1 caps bound parameters at 100 PER STATEMENT (see the FOF test below),
     // so a multi-row `INSERT ... VALUES (...), (...), …` — one statement,
@@ -282,7 +301,7 @@ describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", (
     // single-row statements as one D1 `batch()` round trip instead: each
     // statement stays far under the per-statement cap, and the batch itself
     // is still one network hop.
-    const MEMBER_COUNT = 2_500;
+    const MEMBER_COUNT = 500;
     const BATCH = 100;
     for (let i = 0; i < MEMBER_COUNT; i += BATCH) {
       const indices = Array.from({ length: Math.min(BATCH, MEMBER_COUNT - i) }, (_, j) => i + j);
@@ -319,7 +338,7 @@ describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", (
         indices.map((n) =>
           rawDb.insert(organisationMembers).values({
             id: `orgm_boundtest_m${n}`,
-            organisationId: "org_boundtest",
+            organisationId: OVERSIZED_ORG_ID,
             profileId: `usr_boundtest_m${n}`,
             role: "member" as const,
             createdAt: ts,
@@ -338,11 +357,103 @@ describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", (
 
     const rowsRead = await total();
     expect(suggestions.length).toBeGreaterThan(0);
-    // 2 500 members exist; the read must never approach that. The small
-    // margin above the exact 2 000 budget covers the caller's own membership
-    // row (a separate, tiny query against the same table) and planner
-    // overhead — not a second organisation's worth of reads.
-    expect(rowsRead).toBeLessThanOrEqual(2_010);
+    // 500 members exist in the oversized organisation alone, against a
+    // 200-row share; the read must never approach 500. The other nine
+    // organisations contribute at most one row each (the caller's own
+    // membership), and the caller's own organisation list is a separate,
+    // tiny query against the same table — so 300 comfortably covers the
+    // 200-row share plus that overhead, while still sitting far under both
+    // the oversized organisation's real membership count and the 2 000
+    // global budget.
+    expect(rowsRead).toBeLessThanOrEqual(300);
+  });
+
+  it("does not throw for a caller in 6 organisations — the exact arm count the removed comment claimed was safe", async () => {
+    // osn-tracker#589 (P-C1). The co-member fan-out used to be one `UNION
+    // ALL` of one arm per organisation the caller belongs to, and a removed
+    // comment claimed that was safe because `MAX_MY_ORGANISATIONS` (50) sits
+    // "well under SQLite's 500-term compound-select limit". That figure is
+    // right for `bun:sqlite` and wrong for the engine this actually runs
+    // on: D1 runs on workerd's embedded SQLite, which caps a compound
+    // `SELECT` at 5 terms (`MAX_ORG_COMEMBER_ARMS_PER_QUERY`, see its
+    // comment in services/recommendations.ts) — so the single-statement
+    // form threw `D1_ERROR: too many terms in compound SELECT` for any
+    // caller in 6 or more organisations. This seeds exactly that caller —
+    // 6 organisations, one arm each — and asserts `suggestConnections`
+    // succeeds. Revert the batching in `services/recommendations.ts` and
+    // this test is the one that goes red.
+    const callerId = "usr_sixorg_caller";
+    const callerAccountId = "acc_sixorg_caller";
+    const ts = new Date();
+    await rawDb.insert(accounts).values({
+      id: callerAccountId,
+      email: "sixorg-caller@example.com",
+      passkeyUserId: crypto.randomUUID(),
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    await rawDb.insert(users).values({
+      id: callerId,
+      accountId: callerAccountId,
+      handle: "sixorg_caller",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    const ORG_COUNT = 6;
+    for (let i = 0; i < ORG_COUNT; i++) {
+      const organisationId = `org_sixorg_${i}`;
+      const memberAccountId = `acc_sixorg_m${i}`;
+      const memberId = `usr_sixorg_m${i}`;
+      // eslint-disable-next-line no-await-in-loop -- sequential, FK-ordered seeding
+      await rawDb.insert(organisations).values({
+        id: organisationId,
+        handle: `sixorg${i}`,
+        name: `Six Org ${i}`,
+        ownerId: callerId,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(organisationMembers).values({
+        id: `orgm_sixorg_caller_${i}`,
+        organisationId,
+        profileId: callerId,
+        role: "admin",
+        createdAt: ts,
+      });
+      // A co-member per organisation, so the fan-out has a real candidate to
+      // surface — not merely a query that returns nothing without throwing.
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(accounts).values({
+        id: memberAccountId,
+        email: `sixorg-m${i}@example.com`,
+        passkeyUserId: crypto.randomUUID(),
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(users).values({
+        id: memberId,
+        accountId: memberAccountId,
+        handle: `sixorgm${i}`,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(organisationMembers).values({
+        id: `orgm_sixorg_m${i}`,
+        organisationId,
+        profileId: memberId,
+        role: "member" as const,
+        createdAt: ts,
+      });
+    }
+
+    const recs = createRecommendationService();
+    const suggestions = await run(recs.suggestConnections(callerId, 50));
+
+    expect(suggestions.length).toBe(ORG_COUNT);
   });
 });
 
