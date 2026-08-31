@@ -137,9 +137,25 @@ primary, and replication lag is what the bookmark protects a session from.
 > Cloudflare's docs are explicit that you "incur the exact same D1 usage billing
 > with or without replicas, based on `rows_read` and `rows_written`" — so
 > replication changes latency, not the row-count ceilings in
-> [[free-tier-limits]]. What those docs do *not* state either way is whether the
-> feature is available on the free plan; confirm that in the dashboard before
-> counting on it.
+> [[free-tier-limits]]. The docs do not state whether the feature needs a paid
+> plan; it does not — the `PUT` above was accepted on this account's free plan
+> and `wrangler d1 info cire-db` reports `read_replication.mode  auto`.
+
+### It really is inert without sessions
+
+`cire-db` was switched to `auto` on 2026-08-31, while the deployed Worker still
+had no session code. Re-running the probe from §The cost being paid gave a
+per-query cost of **36.7 ms** (p10 34.0, p90 40.3, n=29) — the same 35.7 ms as
+before, inside the noise. That is the expected result and worth keeping: a query
+made outside a session goes to the primary whatever the database is configured
+to do, so enabling replication on its own buys nothing and costs nothing. The
+saving only appears once a Worker that opens sessions is deployed.
+
+A second thing that measurement cannot show from here: the client and the
+primary are both in Oceania, so even with sessions live, a Sydney reader has
+almost no distance to save. The win this page is about is for readers in Europe
+and North America, and confirming it needs a probe run from one of those
+regions.
 
 ## Rules
 
@@ -165,4 +181,5 @@ primary, and replication lag is what the bookmark protects a session from.
 | Date | Change |
 |---|---|
 | 2026-08-31 | Measured the per-query cost from Sydney: 35.7 ms against the OC primary. |
+| 2026-08-31 | Read replication switched to `auto` on `cire-db` (free plan). Measured no change, as expected — nothing opened a session yet. |
 | 2026-09-01 | `@cire/api` adopts the Sessions API — `db/d1-session.ts`, one session per `fetch` and per `scheduled` sweep, `first-primary`. Ships inert. |
