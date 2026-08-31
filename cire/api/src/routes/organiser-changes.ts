@@ -503,7 +503,16 @@ export const createOrganiserChangeRoutes = (
                   desired.families as ParsedFamily[],
                   weddingId,
                   {
-                    removeManual: stored.removeManual ?? false,
+                    // Decoded for the same reason as `matchByName` below: this
+                    // is untyped JSON off `row.summary`, and `??` only guards
+                    // nullish, so a stored `"false"`, `1` or `{}` is truthy and
+                    // reaches the removal loop in `diffAgainstDb`. Anything that
+                    // is not a real boolean means the summary is not what this
+                    // code thinks it is, so fall back to the safe `false`.
+                    removeManual: Option.getOrElse(
+                      Schema.decodeUnknownOption(Schema.Boolean)(stored.removeManual),
+                      () => false,
+                    ),
                     scope,
                     // Decoded, not asserted — same rule as `scope` above, and it
                     // matters more here: `??` only guards nullish, so a corrupt

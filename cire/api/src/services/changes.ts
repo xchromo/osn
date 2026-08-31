@@ -42,13 +42,25 @@ import type { SpreadsheetParseError } from "./spreadsheet";
  * refinement below (and, being the last union member, surfaces as the shared
  * 400 rather than a confusing empty-sheet parse error).
  */
+/**
+ * The sheet slots a spreadsheet upload can carry.
+ *
+ * Named once because three separate places have to agree on the list: the
+ * struct's own fields, the "at least one sheet" refinement, and the
+ * {@link ExclusiveFrontDoor} pre-pass that refuses a body carrying both front
+ * doors. The struct still has to spell each field out — Effect Schema needs
+ * literal keys — but the two checks derive from this, so adding a third slot
+ * cannot leave a door quietly unguarded.
+ */
+const CSV_SLOTS = ["eventsCsv", "guestsCsv"] as const;
+
 export const CsvChangeBody = Schema.Struct({
   eventsCsv: Schema.optional(Schema.String),
   guestsCsv: Schema.optional(Schema.String),
   /** Provenance toggle (§6): widen the diff to also remove manually-added rows. */
   removeManual: Schema.optional(Schema.Boolean),
 }).pipe(
-  Schema.filter((body) => body.eventsCsv !== undefined || body.guestsCsv !== undefined, {
+  Schema.filter((body) => CSV_SLOTS.some((slot) => body[slot] !== undefined), {
     message: () => "at least one of eventsCsv / guestsCsv is required",
   }),
 );
@@ -101,7 +113,7 @@ const ExclusiveFrontDoor = Schema.Unknown.pipe(
         typeof raw === "object" &&
         raw !== null &&
         "desiredState" in raw &&
-        ("eventsCsv" in raw || "guestsCsv" in raw)
+        CSV_SLOTS.some((slot) => slot in raw)
       ),
     {
       message: () =>
