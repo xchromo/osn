@@ -476,23 +476,26 @@ const handler: ExportedHandler<Env> = {
   },
 
   // Cron-triggered daily maintenance (C-M2/C-M15 + retention). Configured by the
-  // single `[triggers] crons` entry in wrangler.toml — daily 04:00 UTC. Five
+  // single `[triggers] crons` entry in wrangler.toml — daily 04:00 UTC. Six
   // independent sweeps share the cron:
   //
   //  1. Expired-session sweep — guest logins leave session rows that are never
   //     deleted on the read path, so the table grows unbounded without this. The
   //     sweep deletes rows whose 30-day window has lapsed; `expiresAt` already
   //     encodes when a row becomes dead.
-  //  2. Guest-data retention sweep — enforces the published privacy promise
+  //  2. Expired organiser sessions — same growth problem, and each dead row
+  //     holds a login-time snapshot of an OSN profile, so it is a retention
+  //     question too.
+  //  3. Guest-data retention sweep — enforces the published privacy promise
   //     (cire/invites privacy.astro): guest PII (guests/families/rsvps incl. dietary
   //     + consent, plus imports bookkeeping) is deleted 1 year after a wedding's
   //     final event. Reaps the `cire-sheets` CSVs it orphans (env.SHEETS).
-  //  3. `cire-assets` orphan reconciliation (IB-S-L2) — best-effort deletes
+  //  4. `cire-assets` orphan reconciliation (IB-S-L2) — best-effort deletes
   //     invite-image objects under `assets/` referenced by NO live DB row and
   //     older than a 7-day grace window. Heavily guarded: aborts and deletes
   //     NOTHING if the referenced-key read fails or comes back empty against a
   //     non-empty bucket, and caps deletions per run. See asset-reconcile.ts.
-  //  4. Expired vendor-claim tokens + 5. abandoned `preview` change rows (with
+  //  5. Expired vendor-claim tokens + 6. abandoned `preview` change rows (with
   //     their uploaded-sheet CSVs) — see services/maintenance-sweeps.ts.
   //
   // Each is its own `waitUntil` + `catchAll`, so a failure in one never aborts
@@ -506,101 +509,114 @@ const handler: ExportedHandler<Env> = {
     const db = createD1Db(createSessionRoutedClient(env.DB));
     const dbLayer = Layer.succeed(DbService, db);
 
-    // All six sweeps share one session: `waitUntil` only registers the
-    // promises, and each is created inside this scope, so all six inherit it.
-    runInD1Session(env.DB, () => {
-      ctx.waitUntil(
-        Effect.runPromise(
-          sessionService.sweepExpired().pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled session sweep failed", { reason: err.reason }),
-            ),
-            Effect.provide(dbLayer),
-          ),
-        ),
-      );
+    // One session PER SWEEP, not one shared by all six. `waitUntil` only
+    // registers a promise — what decides which session a query rides is where
+    // the promise was created — so each sweep gets its own `runInD1Session`
+    // wrapping its own `Effect.runPromise`. Sharing one would couple six
+    // unrelated, delete-heavy sweeps to a single bookmark that each of them
+    // keeps advancing, so every read would be forwarded to the primary anyway.
+    //
+    // The sweep to keep in mind here is the `cire-assets` reconciliation at the
+    // bottom: it deletes R2 objects no DB row references, so unlike the others
+    // a stale read there would destroy live data rather than merely skip a row.
+    // What bounds that is RECONCILE_GRACE_MS (7 days, services/asset-reconcile.ts)
+    // plus its two abort guards — orders of magnitude more than any replica lag.
+    // Shortening that window is the change that would make this paragraph matter.
+    const d1 = env.DB;
+    const runSweep = <Result>(body: () => Promise<Result>) =>
+      ctx.waitUntil(runInD1Session(d1, body));
 
-      // Organiser sessions expire but do not delete themselves — `validate` only
-      // reports expiry. Same reasoning as the guest sweep above: without this the
-      // table grows for the life of the product, and every row holds a login-time
-      // snapshot of an OSN profile (email, handle, display name), so keeping dead
-      // ones is a data-retention problem as well as a size one.
-      ctx.waitUntil(
-        Effect.runPromise(
-          organiserSessionService.sweepExpired().pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
-            ),
-            Effect.provide(dbLayer),
+    runSweep(() =>
+      Effect.runPromise(
+        sessionService.sweepExpired().pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled session sweep failed", { reason: err.reason }),
           ),
+          Effect.provide(dbLayer),
         ),
-      );
+      ),
+    );
 
-      // Pass the SHEETS binding so the retention sweep also reclaims the
-      // personal-data objects it orphans (IB-S-L2 / C-H1): the uploaded guest/event
-      // spreadsheets in `cire-sheets` referenced by the `imports` rows it deletes.
-      // D1's ON DELETE cascade never reaches R2, so without this the CSVs (which
-      // carry guest PII) would outlive the deleted DB rows forever. The `cire-assets`
-      // invite images are NOT reaped here — those rows survive (the invite stays
-      // live); see retentionService.sweepExpiredGuestData.
-      ctx.waitUntil(
-        Effect.runPromise(
-          retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled guest-data retention sweep failed", {
-                reason: err.reason,
-              }),
-            ),
-            Effect.provide(dbLayer),
+    // Organiser sessions expire but do not delete themselves — `validate` only
+    // reports expiry. Same reasoning as the guest sweep above: without this the
+    // table grows for the life of the product, and every row holds a login-time
+    // snapshot of an OSN profile (email, handle, display name), so keeping dead
+    // ones is a data-retention problem as well as a size one.
+    runSweep(() =>
+      Effect.runPromise(
+        organiserSessionService.sweepExpired().pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
           ),
+          Effect.provide(dbLayer),
         ),
-      );
+      ),
+    );
 
-      // Expired vendor-claim tokens: 7-day TTL, nothing else ever deleted them.
-      ctx.waitUntil(
-        Effect.runPromise(
-          maintenanceSweeps.sweepExpiredVendorClaims().pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
-            ),
-            Effect.provide(dbLayer),
+    // Pass the SHEETS binding so the retention sweep also reclaims the
+    // personal-data objects it orphans (IB-S-L2 / C-H1): the uploaded guest/event
+    // spreadsheets in `cire-sheets` referenced by the `imports` rows it deletes.
+    // D1's ON DELETE cascade never reaches R2, so without this the CSVs (which
+    // carry guest PII) would outlive the deleted DB rows forever. The `cire-assets`
+    // invite images are NOT reaped here — those rows survive (the invite stays
+    // live); see retentionService.sweepExpiredGuestData.
+    runSweep(() =>
+      Effect.runPromise(
+        retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled guest-data retention sweep failed", {
+              reason: err.reason,
+            }),
           ),
+          Effect.provide(dbLayer),
         ),
-      );
+      ),
+    );
 
-      // Abandoned `preview` change rows + their uploaded-sheet CSVs (guest PII
-      // in `cire-sheets`) — previously only reclaimed when the whole wedding
-      // aged out of retention, a year+ later.
-      ctx.waitUntil(
-        Effect.runPromise(
-          maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
-            ),
-            Effect.provide(dbLayer),
+    // Expired vendor-claim tokens: 7-day TTL, nothing else ever deleted them.
+    runSweep(() =>
+      Effect.runPromise(
+        maintenanceSweeps.sweepExpiredVendorClaims().pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
           ),
+          Effect.provide(dbLayer),
         ),
-      );
+      ),
+    );
 
-      // IB-S-L2: reconcile orphaned `cire-assets` invite images (re-upload/remove
-      // best-effort-delete failures leave objects no DB row references). Pass the
-      // ASSETS binding; absent ⇒ the reconcile is a no-op. The service refuses to
-      // delete anything unless it can positively confirm the live set (abort on a
-      // failed/empty referenced-key read) and only reaps objects past a 7-day
-      // grace window — so a freshly uploaded image whose row write lags is safe.
-      ctx.waitUntil(
-        Effect.runPromise(
-          assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
-            Effect.catchAll((err) =>
-              Effect.logError("scheduled cire-assets reconciliation failed", {
-                reason: err.reason,
-              }),
-            ),
-            Effect.provide(dbLayer),
+    // Abandoned `preview` change rows + their uploaded-sheet CSVs (guest PII
+    // in `cire-sheets`) — previously only reclaimed when the whole wedding
+    // aged out of retention, a year+ later.
+    runSweep(() =>
+      Effect.runPromise(
+        maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
           ),
+          Effect.provide(dbLayer),
         ),
-      );
-    });
+      ),
+    );
+
+    // IB-S-L2: reconcile orphaned `cire-assets` invite images (re-upload/remove
+    // best-effort-delete failures leave objects no DB row references). Pass the
+    // ASSETS binding; absent ⇒ the reconcile is a no-op. The service refuses to
+    // delete anything unless it can positively confirm the live set (abort on a
+    // failed/empty referenced-key read) and only reaps objects past a 7-day
+    // grace window — so a freshly uploaded image whose row write lags is safe.
+    runSweep(() =>
+      Effect.runPromise(
+        assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
+          Effect.catchAll((err) =>
+            Effect.logError("scheduled cire-assets reconciliation failed", {
+              reason: err.reason,
+            }),
+          ),
+          Effect.provide(dbLayer),
+        ),
+      ),
+    );
   },
 };
 
