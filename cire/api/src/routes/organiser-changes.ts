@@ -476,19 +476,27 @@ export const createOrganiserChangeRoutes = (
 
                 // Re-derive the desired state from the row's stored input and
                 // re-diff against LIVE state (TOCTOU defence), honouring the
-                // provenance toggle AND the sheet scope captured at preview. A
-                // row written before partial uploads existed has no `scope`, so
-                // it defaults to `"both"` — the historical behaviour.
+                // provenance toggle AND the scope captured at preview.
                 // Decoded, not asserted: `summary` is JSON off a DB row, so a
-                // legacy/corrupt value must land on the safe default explicitly
-                // rather than flowing into `!==` comparisons that happen to be
-                // safe today. `"both"` is the conservative choice — it manages
-                // both halves, so a partial change degrades to re-parsing an
-                // empty slot and 422ing, never to a silent one-sided delete.
-                const scope = Option.getOrElse(
-                  Schema.decodeUnknownOption(ChangeScope)(stored.scope),
-                  (): ChangeScope => "both",
-                );
+                // legacy or corrupt value must never reach the `!==` tests that
+                // derive `manageEvents`/`manageGuests` from it.
+                //
+                // What an undecodable scope falls back to depends on the row's
+                // kind, because `"both"` is only conservative for a SHEET. An
+                // import row carries both CSV slots, so managing both halves
+                // degrades to re-parsing an empty slot and 422ing. An EDITOR row
+                // does not: the events editor stores `families: []` alongside
+                // `removeManual: true` and `matchByName: false`, so widening its
+                // scope to `"both"` turns every household into a removal and
+                // cascades its guests, RSVPs and live claim codes. There is no
+                // safe value to guess there, so the apply is refused and the
+                // organiser re-previews — a preview row is cheap to remake.
+                const storedScope = Schema.decodeUnknownOption(ChangeScope)(stored.scope);
+                if (row.kind === "editor" && Option.isNone(storedScope)) {
+                  set.status = 409;
+                  return { error: "Change is missing its scope — re-preview" };
+                }
+                const scope = Option.getOrElse(storedScope, (): ChangeScope => "both");
                 const desired = yield* desiredStateFromRow(row, scope, weddingId);
                 const plan = yield* diffAgainstDb(
                   desired.events,

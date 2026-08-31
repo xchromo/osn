@@ -27,7 +27,6 @@ import {
 import { createGuestEventDraft, type DraftEvent } from "../lib/guest-event-draft";
 import { invalidateGuests } from "../lib/guests-store";
 import { haptic } from "../lib/haptics";
-import { invalidateHouseholds } from "../lib/households-store";
 import { describeTimeZone, timeZoneGroups, zoneOffset } from "../lib/timezones";
 import { registerUnsavedGuard } from "../lib/unsaved-guard";
 import ChangePreview, { type ChangePlan } from "./ChangePreview";
@@ -242,8 +241,11 @@ export default function EventsEditor(props: { weddingId: string }) {
         throw new Error(body.error ?? `Apply failed (${res.status})`);
       }
       invalidateEvents(props.weddingId);
+      // Guests too, but NOT households: an `scope: "events"` save can remove an
+      // event, and that cascades the per-guest attendance rows for it. No path
+      // through this editor can touch a household, so invalidating that cache
+      // only costs every open consumer a refetch of rows it already has.
       invalidateGuests(props.weddingId);
-      invalidateHouseholds(props.weddingId);
       setPreview(null);
       setEditingKey(null);
       await loadInto();

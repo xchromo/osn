@@ -78,6 +78,38 @@ export type DesiredStateChangeBody = Schema.Schema.Type<typeof DesiredStateChang
 export const ChangeBody = Schema.Union(DesiredStateChangeBody, CsvChangeBody);
 export type ChangeBody = Schema.Schema.Type<typeof ChangeBody>;
 
+/**
+ * Rejects a body that carries BOTH front doors' fields, before the union above
+ * gets to choose between them.
+ *
+ * A union member that fails falls through to the next one, and the two members
+ * differ in far more than shape: the editor door applies `removeManual: true`
+ * and `matchByName: false`, the spreadsheet door the opposite pair. So a body
+ * holding a `desiredState` AND a CSV slot is decided by whether its
+ * `desiredState` happens to parse — a draft with one bad field silently becomes
+ * a spreadsheet import of whatever CSV rode along, under diff options the
+ * caller never asked for. There is no reading of such a body that is more
+ * likely right than the other, so it is refused rather than guessed at.
+ *
+ * A separate pre-pass rather than a `Schema.filter` on either member, because a
+ * `Schema.Struct` strips the other door's keys before a filter can see them.
+ */
+const ExclusiveFrontDoor = Schema.Unknown.pipe(
+  Schema.filter(
+    (raw) =>
+      !(
+        typeof raw === "object" &&
+        raw !== null &&
+        "desiredState" in raw &&
+        ("eventsCsv" in raw || "guestsCsv" in raw)
+      ),
+    {
+      message: () =>
+        "a change is either an editor draft (desiredState) or a spreadsheet upload (eventsCsv/guestsCsv), never both",
+    },
+  ),
+);
+
 // ── Normalised decode ───────────────────────────────────────────────────────
 
 export interface DecodedChange {
@@ -208,7 +240,9 @@ export function decodeChangeBody(
   weddingId: string,
 ): Effect.Effect<DecodedChange, SpreadsheetParseError | ParseResult.ParseError, DbService> {
   return Effect.gen(function* () {
-    const body = yield* Schema.decodeUnknown(ChangeBody)(raw);
+    const body = yield* Schema.decodeUnknown(ChangeBody)(
+      yield* Schema.decodeUnknown(ExclusiveFrontDoor)(raw),
+    );
 
     if ("desiredState" in body) {
       // Editor front door: the draft is the whole truth (manage all shown rows).

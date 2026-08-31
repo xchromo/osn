@@ -666,6 +666,59 @@ describe("POST /changes/preview + /apply — editor (DesiredState JSON) front do
     expect(db.select().from(guests).all()[0]!.id).toBe(guestBefore.id);
   });
 
+  it("409s an editor row whose stored scope is missing, rather than widening it to 'both'", async () => {
+    const { app, db } = buildApp();
+
+    // Seed a household through the editor, so there is something a widened
+    // scope could destroy.
+    const seed = await ownerPost(app, `${CHANGES_BASE}/preview`, { desiredState });
+    const seedId = ((await seed.json()) as { changeId: string }).changeId;
+    expect((await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId: seedId })).status).toBe(200);
+    expect(db.select().from(families).all()).toHaveLength(1);
+
+    // An events-only save: the events editor carries no households at all.
+    const previewRes = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      desiredState: { events: desiredState.events, families: [] },
+      scope: "events",
+    });
+    expect(previewRes.status).toBe(200);
+    const { changeId } = (await previewRes.json()) as { changeId: string };
+
+    // Reproduce a row previewed before this feature shipped. For a SHEET the
+    // `"both"` fallback is harmless, but an editor row pairs an empty family
+    // list with `removeManual: true` and `matchByName: false`, so managing the
+    // guest half would remove every household and cascade its guests, RSVPs and
+    // claim codes. There is no safe value to guess, so the apply is refused.
+    const [row] = db.select().from(imports).where(eq(imports.id, changeId)).all();
+    const summary = JSON.parse(row!.summary) as Record<string, unknown>;
+    delete summary.scope;
+    db.update(imports)
+      .set({ summary: JSON.stringify(summary) })
+      .where(eq(imports.id, changeId))
+      .run();
+
+    const applyRes = await ownerPost(app, `${CHANGES_BASE}/apply`, { changeId });
+    expect(applyRes.status).toBe(409);
+    // The household is still there, with its claim code intact.
+    expect(db.select().from(families).all()).toHaveLength(1);
+    expect(db.select().from(guests).all()).toHaveLength(1);
+  });
+
+  it("400s a body carrying BOTH front doors' fields", async () => {
+    const { app } = buildApp();
+
+    // A union member that fails falls through to the next, and the two doors
+    // apply opposite diff options (`removeManual`/`matchByName`). So a body
+    // holding both would be decided by whether its `desiredState` happened to
+    // parse — a draft with one bad field silently becoming a spreadsheet import
+    // of whatever CSV rode along. Neither reading is more likely right.
+    const res = await ownerPost(app, `${CHANGES_BASE}/preview`, {
+      desiredState,
+      eventsCsv: EVENTS_CSV,
+    });
+    expect(res.status).toBe(400);
+  });
+
   /**
    * The editor expresses a deletion by ABSENCE — it posts the whole draft and
    * the dropped row simply isn't in it. These walk the two shapes that used to
