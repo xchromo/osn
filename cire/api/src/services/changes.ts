@@ -220,9 +220,9 @@ export function decodeChangeBody(
         matchByName: false,
         uploadedCsv: null,
         kind: "editor",
-        // Defaults to "both" for callers that don't send a draft covering
-        // everything shown (e.g. GuestsEditor); the events editor sends
-        // "events" explicitly since its draft only ever covers the schedule.
+        // A caller whose draft covers everything shown (GuestsEditor) sends no
+        // scope and keeps the "both" default; the events editor sends "events"
+        // explicitly since its draft only ever covers the schedule.
         scope: body.scope ?? "both",
       } satisfies DecodedChange;
     }
