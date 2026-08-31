@@ -127,7 +127,7 @@ The `:handle` route parameter uses TypeBox `HandleParam` with regex + length bou
 1. Read the caller's own edges (**any** status, capped at 1 000 rows), blocks in both directions, and organisation memberships (capped at 50) — concurrently.
 2. Build the exclusion set: self, every counterpart on an existing edge, and everyone blocked either way. Pending edges count, so a request already in flight never resurfaces as a suggestion whose Connect button would fail with "Connection already exists".
 3. Fan out twice, each branch skipped when its seed set is empty:
-   - **Friends-of-friends** — accepted connections of the caller's first 500 accepted connections, capped at **10 000 rows**.
+   - **Friends-of-friends** — accepted connections of the caller's first 500 accepted connections, capped at **10 000 rows**. The query reads that seed set through a correlated `IN (<subquery>)` rather than binding the 500 ids as literals — see **D1's bound-parameter cap**, below, for why.
    - **Organisation co-members** — members of the caller's organisations, capped at **2 000 rows total**, split evenly across the caller's organisations (`MAX_ORG_COMEMBER_ROWS` divided by how many organisations the caller belongs to) so one organisation can no longer absorb the whole budget and starve the rest (osn-tracker#574).
 4. Tally `mutualCount` and shared organisations per candidate in JS with an O(1) `Set` on the caller's direct connections.
 5. Rank by mutual count desc, then shared-organisation count desc, then profile ID (stable ties). Slice to `limit` (bounded `[1, 50]` at the HTTP boundary).
@@ -145,6 +145,14 @@ Current shape prioritises correctness + bounded cost over peak throughput. Next 
 Privacy: the endpoint returns `mutualCount` alongside each suggestion. This leaks graph-inference signal — see `S-L4` in `xchromo/osn-tracker` for the bucketing follow-up.
 
 Rate-limited at 20 req/user/min via `createRedisRecommendationRateLimiters().suggest` — see [[rate-limiting]].
+
+### D1's bound-parameter cap (standing constraint)
+
+D1 caps a query at **100 bound parameters** (developers.cloudflare.com/d1/platform/limits/, applied per statement, including inside a `batch()`). `bun:sqlite` — what the rest of the OSN test suite runs on — enforces no such cap, so a query that binds a caller-controlled list can pass every unit test and still fail in production. This bit the FOF fan-out directly: `inArray(requesterId, myConnectionIds) OR inArray(addresseeId, myConnectionIds)` bound `myConnectionIds` twice, so 51 accepted connections already produced 102 binds, and `GET /recommendations/connections` threw `D1_ERROR: too many SQL variables` for any caller past 50 (osn-tracker#589).
+
+The fix: bind `profileId`, not the list. The FOF query now reads the caller's own accepted edges through a correlated `IN (<subquery>)` — the subquery re-reads them inside the database, so the outer query's bind count is fixed regardless of how many connections the caller has. A correlated `EXISTS` (the more obvious rewrite) was measured and rejected: on real (Miniflare/workerd) D1, `EXPLAIN QUERY PLAN` showed it planning as `SCAN c` with a `CORRELATED SCALAR SUBQUERY` evaluated once per row of the *whole* `connections` table — cost that scales with the size of the table, not with the caller's own graph. The `IN (<subquery>)` shape gets flattened by SQLite into a `LIST SUBQUERY` — one indexed pass to build a Bloom filter, then the same `MULTI-INDEX OR` seek over `connections_requester_idx` / `connections_addressee_idx` the original query got. Measured on a caller with 40 accepted connections: 484 rows read against the two-`inArray` shape's 400, for an identical result set — the cost of materialising the seed set once rather than pasting it in as literals.
+
+Any query in this file — or elsewhere in `@osn/api` — that binds a list whose length comes from user data must either keep that list under 100 items by construction (an HTTP-boundary bound, like `safeLimit`), or avoid binding it at all (a subquery, as above, or genuine batched round-trips under the cap each). The chunk-and-`UNION ALL`-in-one-statement version does **not** work: a `UNION ALL` of several `inArray` arms is still one statement, so D1's cap applies to the combined total, not per arm. Only real, separate round trips (or a subquery that runs inside the database) get around it. New D1-backed coverage of a fix like this belongs in `osn/api/src/d1-integration.test.ts` — it is the only test file in this repo that runs against a real (Miniflare/workerd) D1 rather than `bun:sqlite`, so it is the only place either failure mode (the bind cap, or `rows_read`) is visible at all.
 
 ## Search (autocomplete)
 

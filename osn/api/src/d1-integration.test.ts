@@ -19,7 +19,7 @@ import { Db } from "@osn/db/service";
 import { createSchemaSql } from "@osn/db/testing";
 import { commitBatch, createD1Db } from "@shared/db-utils";
 import { eq } from "drizzle-orm";
-import { Cause, Effect, Layer, Option, Runtime } from "effect";
+import { Effect, Layer } from "effect";
 import { Miniflare } from "miniflare";
 
 import { UNIQUE_CONSTRAINT_ERROR } from "./lib/unique-constraint";
@@ -458,23 +458,31 @@ describe("osn/api recommendations co-member fan-out over real D1 (Miniflare)", (
 });
 
 describe("osn/api recommendations FOF fan-out over real D1 (Miniflare)", () => {
-  it("suggestConnections throws once the caller's accepted-connection count pushes the FOF query past D1's 100-bound-parameter cap", async () => {
-    // The FOF fan-out (services/recommendations.ts) binds `myConnectionIds`
-    // TWICE — once per edge direction, in
-    // `inArray(requesterId, ids) OR inArray(addresseeId, ids)`.
-    // MAX_MY_CONNECTIONS_FOR_FOF allows up to 500 ids (1 000 binds), but D1's
+  it("suggestConnections succeeds well past the caller's accepted-connection count that used to push the FOF query over D1's 100-bound-parameter cap", async () => {
+    // Was: the FOF fan-out (services/recommendations.ts) bound
+    // `myConnectionIds` TWICE — once per edge direction, in
+    // `inArray(requesterId, ids) OR inArray(addresseeId, ids)`. D1's
     // documented cap is 100 bound parameters per query
     // (developers.cloudflare.com/d1/platform/limits/: "Maximum bound
     // parameters per query | 100", applying per statement including within a
-    // batch). 51 accepted connections already produces 102 binds — over the
-    // cap — so `GET /recommendations/connections` already fails in
-    // production for any caller with more than 50 accepted connections.
+    // batch), so 51 accepted connections already produced 102 binds and threw
+    // `D1_ERROR: too many SQL variables` — a real production failure for any
+    // caller past 50 accepted connections (osn-tracker#589).
     //
-    // Confirmed empirically against THIS Miniflare version before writing
-    // this test: it enforces the same 100-parameter cap D1 documents (100
-    // bound params succeeds, 101 throws "too many SQL variables"), so this
-    // is real coverage of the failure, not a false negative that only
-    // production would catch.
+    // Fixed by binding `profileId` instead of the id list: the FOF query now
+    // reads the caller's own accepted edges through a correlated `IN
+    // (<subquery>)` rather than pasting them in as literals, so its bind
+    // count is fixed regardless of how many connections the caller has — see
+    // the query in services/recommendations.ts for the full account,
+    // including why a correlated `EXISTS` (D1's plan showed a full table
+    // scan) was measured and rejected in favour of this shape.
+    //
+    // This test keeps the same 60-accepted-connection fixture the
+    // characterisation test used — well past the old 50-connection cliff,
+    // and confirmed empirically against this Miniflare version to still
+    // enforce D1's 100-bound-parameter cap the old shape blew through — and
+    // now asserts the call succeeds and returns real friend-of-friend
+    // suggestions, over real (Miniflare/workerd) D1.
     const callerId = "usr_bindtest_caller";
     const callerAccountId = "acc_bindtest_caller";
     const ts = new Date();
@@ -493,7 +501,7 @@ describe("osn/api recommendations FOF fan-out over real D1 (Miniflare)", () => {
       updatedAt: ts,
     });
 
-    const FRIEND_COUNT = 60; // 2 x 60 = 120 binds, over D1's 100-bind cap
+    const FRIEND_COUNT = 60; // 2 x 60 = 120 binds under the old shape, over D1's 100-bind cap
     for (let i = 0; i < FRIEND_COUNT; i++) {
       const friendAccountId = `acc_bindtest_f${i}`;
       const friendId = `usr_bindtest_f${i}`;
@@ -524,32 +532,52 @@ describe("osn/api recommendations FOF fan-out over real D1 (Miniflare)", () => {
       });
     }
 
-    const recs = createRecommendationService();
-    let threw = false;
-    let message = "";
-    try {
-      await run(recs.suggestConnections(callerId));
-    } catch (e) {
-      threw = true;
-      // The Effect error channel wraps three deep here: the service's own
-      // `DatabaseError`, wrapping drizzle's `DrizzleQueryError`, wrapping the
-      // real `D1_ERROR: too many SQL variables …` — walk `.cause` down to the
-      // bottom rather than asserting on the generic outer message.
-      // `Effect.runPromise` rejects with a `FiberFailure` wrapping the typed
-      // failure, never the tagged error itself — same unwrap `safe-error.ts`
-      // does for route handlers (Runtime.isFiberFailure → Cause.failureOption).
-      const failure = Runtime.isFiberFailure(e)
-        ? Option.getOrNull(Cause.failureOption(e[Runtime.FiberFailureCauseId]))
-        : e;
-      let cause: unknown = failure;
-      for (let depth = 0; depth < 5; depth++) {
-        const next = (cause as { cause?: unknown } | undefined)?.cause;
-        if (next === undefined || next === null) break;
-        cause = next;
-      }
-      message = cause instanceof Error ? cause.message : String(cause);
+    // A handful of the caller's friends each have one connection of their
+    // own beyond the caller — real friend-of-friend candidates, so this
+    // proves the query returns *correct* suggestions past the old cliff, not
+    // merely that it avoids throwing.
+    const FOF_CANDIDATE_COUNT = 3;
+    for (let i = 0; i < FOF_CANDIDATE_COUNT; i++) {
+      const candidateAccountId = `acc_bindtest_fof${i}`;
+      const candidateId = `usr_bindtest_fof${i}`;
+      // eslint-disable-next-line no-await-in-loop -- sequential, FK-ordered seeding
+      await rawDb.insert(accounts).values({
+        id: candidateAccountId,
+        email: `bindtest-fof${i}@example.com`,
+        passkeyUserId: crypto.randomUUID(),
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(users).values({
+        id: candidateId,
+        accountId: candidateAccountId,
+        handle: `bindtestfof${i}`,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await rawDb.insert(connections).values({
+        id: `conn_bindtest_fof_${i}`,
+        requesterId: `usr_bindtest_f${i}`, // one of the caller's direct friends
+        addresseeId: candidateId,
+        status: "accepted",
+        createdAt: ts,
+        updatedAt: ts,
+      });
     }
-    expect(threw).toBe(true);
-    expect(message).toContain("too many SQL variables");
+
+    const recs = createRecommendationService();
+    const suggestions = await run(recs.suggestConnections(callerId, 50));
+
+    const suggestedHandles = suggestions.map((s) => s.handle);
+    for (let i = 0; i < FOF_CANDIDATE_COUNT; i++) {
+      expect(suggestedHandles).toContain(`bindtestfof${i}`);
+    }
+    // None of the caller's own 60 direct friends should ever come back as a
+    // suggestion — they are already connections, not candidates.
+    for (const s of suggestions) {
+      expect(s.handle.startsWith("bindtestf") && !s.handle.startsWith("bindtestfof")).toBe(false);
+    }
   });
 });

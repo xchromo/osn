@@ -42,6 +42,19 @@ export class DatabaseError extends Data.TaggedError("DatabaseError")<{
  * Prevents a hub user with thousands of connections from producing an
  * unbounded FOF fan-out (P-C1). Tuned for the "enough candidates to produce
  * a good top-N list" sweet spot.
+ *
+ * Bounds two things that must stay in lockstep: the size of `myConnectionIds`
+ * below (which step 3 uses to tell "one of my connections" from "a
+ * candidate") and the seed subquery the FOF query correlates against (see
+ * that query for why it no longer binds `myConnectionIds` itself). Until
+ * osn-tracker#589 this constant also stood in, unintentionally, as the only
+ * thing stopping the FOF query from binding more parameters than D1 allows
+ * — 500 ids bound into two `inArray` calls is 1,000 binds, D1's documented
+ * cap is 100 per query, and nobody had checked the second number against
+ * the first. 51 accepted connections was already over it, so every caller
+ * past that point got a 500 in production. The query now binds `profileId`
+ * once regardless of how large this constant is, so raising it is a
+ * decision about read cost and recall, never one that can reopen that bug.
  */
 const MAX_MY_CONNECTIONS_FOR_FOF = 500;
 
@@ -496,6 +509,18 @@ export function createRecommendationService() {
       // Accepted edges seed the FOF fan-out; *every* edge (pending included)
       // is an exclusion, so someone with a request already in flight is never
       // re-suggested — connecting to them would fail with "already exists".
+      //
+      // This is no longer bound into the FOF query below — see that query
+      // for why — but step 3 still uses it (as `myConnectionIdSet`) to tell
+      // "one of my connections" from "a candidate" on each fan-out row, so
+      // this slice has to describe the same cap the query's own seed
+      // subquery applies. They read the caller's edges independently and
+      // SQLite gives no ordering guarantee over an unindexed `LIMIT`, so for
+      // a caller past MAX_MY_CONNECTIONS_FOR_FOF accepted connections the two
+      // reads can choose slightly different subsets — never a wrong
+      // suggestion (an edge either side fails to recognise is caught by
+      // `excludeIds` instead, built below from the uncapped `myEdgeRows`),
+      // only a rare miss in an already-approximate regime for hub accounts.
       const myConnectionIds = myEdgeRows
         .filter((r) => r.status === "accepted")
         .map(counterpartOf)
@@ -523,8 +548,58 @@ export function createRecommendationService() {
           myConnectionIds.length === 0
             ? Effect.succeed([] as { requesterId: string; addresseeId: string }[])
             : Effect.tryPromise({
-                try: () =>
-                  db
+                try: () => {
+                  // The old shape bound `myConnectionIds` into two `inArray`
+                  // calls — once per edge direction — so the bind count grew
+                  // with the caller's connection count and D1's 100-bound-
+                  // parameter cap turned into a production 500 past 50
+                  // accepted connections (osn-tracker#589). This binds only
+                  // `profileId`, a fixed number of times, however large
+                  // `myConnectionIds` is.
+                  //
+                  // `IN (<subquery>)` rather than `IN (<literal list>)`: the
+                  // subquery re-reads the caller's own accepted edges inside
+                  // the database instead of round-tripping them through this
+                  // process as bound parameters. `.limit()` mirrors the JS
+                  // slice above and for the same reason — see
+                  // MAX_MY_CONNECTIONS_FOR_FOF — not to stay under any bind
+                  // cap, since none applies here.
+                  //
+                  // A correlated `EXISTS` (the shape osn-tracker#589
+                  // proposed) was measured and rejected: on real
+                  // (Miniflare/workerd) D1, `EXPLAIN QUERY PLAN` showed it as
+                  // `SCAN c` with a `CORRELATED SCALAR SUBQUERY` run once per
+                  // row of the outer table — a full scan of every accepted
+                  // connection *in the system*, 1,000 rows read on a fixture
+                  // where this shape reads 484, for the identical result.
+                  // That cost grows with the whole table, not with the
+                  // caller's own graph, which is the wrong axis. This shape
+                  // instead gets flattened by SQLite into a `LIST SUBQUERY` —
+                  // one pass over `connections_requester_idx` /
+                  // `connections_addressee_idx` to build a Bloom filter, then
+                  // the same `MULTI-INDEX OR` seek over those two indexes the
+                  // old query got. 484 rows read against the old query's 400,
+                  // for a caller with 40 accepted connections against the
+                  // identical 240-row result — the cost of materialising the
+                  // seed set once rather than pasting it in as literals, and
+                  // it does not grow with the size of the table.
+                  const myConnectionsSeed = db
+                    .select({
+                      counterpart: sql<string>`(CASE WHEN ${connections.requesterId} = ${profileId} THEN ${connections.addresseeId} ELSE ${connections.requesterId} END)`,
+                    })
+                    .from(connections)
+                    .where(
+                      and(
+                        eq(connections.status, "accepted"),
+                        or(
+                          eq(connections.requesterId, profileId),
+                          eq(connections.addresseeId, profileId),
+                        ),
+                      ),
+                    )
+                    .limit(MAX_MY_CONNECTIONS_FOR_FOF);
+
+                  return db
                     .select({
                       requesterId: connections.requesterId,
                       addresseeId: connections.addresseeId,
@@ -534,12 +609,13 @@ export function createRecommendationService() {
                       and(
                         eq(connections.status, "accepted"),
                         or(
-                          inArray(connections.requesterId, myConnectionIds),
-                          inArray(connections.addresseeId, myConnectionIds),
+                          inArray(connections.requesterId, myConnectionsSeed),
+                          inArray(connections.addresseeId, myConnectionsSeed),
                         ),
                       ),
                     )
-                    .limit(MAX_FOF_FANOUT_ROWS),
+                    .limit(MAX_FOF_FANOUT_ROWS);
+                },
                 catch: (cause) => new DatabaseError({ cause }),
               }),
           myOrgIds.length === 0
