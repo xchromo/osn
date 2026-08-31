@@ -98,6 +98,32 @@ describe("session routing", () => {
     ]);
   });
 
+  it("opens every session with the first-primary constraint", () => {
+    // The constant is a correctness decision, not a tuning knob: `first-primary`
+    // is what makes a request observe every write committed before it started
+    // (see the module docs). Assert both the value and that `runInD1Session`
+    // actually hands it to `withSession` — a session opened unconstrained would
+    // look identical from the outside until a replica served a stale read.
+    const constraints: string[] = [];
+    const log: string[] = [];
+    const session = recordingClient("session", log);
+    const fake = {
+      withSession: (constraint: string) => {
+        constraints.push(constraint);
+        return session;
+      },
+    } as unknown as D1Database;
+
+    const client = createSessionRoutedClient(recordingClient("binding", log));
+    runInD1Session(fake, () => {
+      client.prepare("select 1");
+    });
+
+    expect(D1_SESSION_CONSTRAINT).toBe("first-primary");
+    expect(constraints).toEqual(["first-primary"]);
+    expect(log).toEqual(["session:prepare:select 1"]);
+  });
+
   it("survives the Effect scheduler, which is what every service query runs on", async () => {
     // Services never call the driver directly — every read goes through
     // `dbQuery`, i.e. an `Effect.promise` thunk run by Effect's fiber scheduler,
@@ -201,6 +227,66 @@ describe("against a real D1", () => {
         );
         expect(rows).toEqual([{ id: "p2" }, { id: "p3" }]);
       });
+    },
+    MF_TIMEOUT_MS,
+  );
+
+  it(
+    "advances the session's bookmark as the request queries",
+    async () => {
+      // The bookmark is the whole mechanism: it is what a replica has to have
+      // caught up to before it may serve the session's later reads. Holding the
+      // session (which is why `withD1Session` exists next to `runInD1Session`)
+      // lets the test watch it go from "nothing read yet" to a real position.
+      const session = d1.withSession(D1_SESSION_CONSTRAINT);
+      const db: Db = createD1Db(createSessionRoutedClient(d1));
+
+      expect(session.getBookmark()).toBeNull();
+
+      await withD1Session(session, async () => {
+        await db.all(sql`select label from probe limit 1`);
+      });
+
+      expect(session.getBookmark()).not.toBeNull();
+    },
+    MF_TIMEOUT_MS,
+  );
+
+  it(
+    "needs nothing from its client but prepare and batch",
+    async () => {
+      // `D1QueryClient` is a *reading* of Drizzle's D1 driver — that it calls
+      // `prepare` and `batch` and nothing else — and the whole design collapses
+      // if that stops being true, because a `D1DatabaseSession` has no other
+      // method to offer. `drizzle-orm` is on a caret range, so a minor bump
+      // could add an `exec`/`dump` call path silently. This fails loudly if it
+      // ever does.
+      const touched = new Set<string>();
+      const guarded = new Proxy(d1 as object, {
+        get(target, prop, receiver) {
+          const key = String(prop);
+          touched.add(key);
+          if (key !== "prepare" && key !== "batch") {
+            throw new Error(
+              `Drizzle's D1 driver reached for \`${key}\`, which a D1DatabaseSession does not have`,
+            );
+          }
+          const value = Reflect.get(target, prop, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as unknown as D1QueryClient;
+
+      const db: Db = createD1Db(guarded);
+
+      await db.run(sql`insert into probe (id, label) values ('p5', 'guarded')`);
+      const rows = await db.all<{ label: string }>(sql`select label from probe where id = 'p5'`);
+      expect(rows).toEqual([{ label: "guarded" }]);
+
+      await (db as unknown as { batch: (s: unknown[]) => Promise<unknown[]> }).batch([
+        db.run(sql`insert into probe (id, label) values ('p6', 'guarded batch')`),
+      ]);
+
+      expect([...touched].toSorted()).toEqual(["batch", "prepare"]);
     },
     MF_TIMEOUT_MS,
   );
