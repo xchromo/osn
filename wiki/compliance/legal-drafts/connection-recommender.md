@@ -43,15 +43,22 @@ Source: `recommendations.ts:672-676` —
 
 ## 2. Where candidates come from
 
-Two sources, both capped:
+Two sources, both bounded:
 
 - **Connections of your connections** ("friends of friends") —
-  `recommendations.ts:505-520`, capped at `MAX_FOF_FANOUT_ROWS`
-  (`recommendations.ts:65`, currently 10,000 rows read per request).
+  `recommendations.ts:505-520`.
 - **Co-members of organisations you belong to** —
-  `recommendations.ts:522-620`, capped at `MAX_ORG_COMEMBER_ROWS`
-  (`recommendations.ts:83`, currently 2,000 rows read per request, split
-  evenly across the organisations you belong to).
+  `recommendations.ts:522-620`. Every organisation you belong to
+  contributes; no single one absorbs the whole search.
+
+Both are bounded, so that no one very large organisation and no one
+unusually well-connected person can force an unbounded search. Where a
+source is larger than its bound, the system reads part of it rather than
+all of it — so for a very large organisation, or for someone with an
+unusual number of connections, the candidate set is a sample rather than
+an exhaustive list.
+
+The exact bounds are deliberately not repeated here. See **Scope**.
 
 Nobody outside those two sources — not "people nearby," not "people who
 viewed your profile," not any directory search — is ever a candidate.
@@ -74,14 +81,15 @@ end of this section.
   NULL` (`recommendations.ts:710-712`), so an account mid-deletion under
   Art. 17 never surfaces.
 
-**Caveat.** The exclusion set (blocks, connections, pending requests) is
-built from at most `MAX_MY_EDGE_ROWS` edge rows — 1,000
-(`recommendations.ts:55`, `.limit()` at `:444`). For the overwhelming
-majority of accounts this is every edge they have. For an account with
-more than 1,000 edges, the exclusion set is built from the first 1,000
-read, not a guaranteed-complete list — so "already-connected accounts are
-excluded" is what the system does with the edges it reads, not an absolute
-promise for every caller regardless of how many connections they have.
+**Caveat.** The exclusion set is built from a bounded read of your own
+edges (`recommendations.ts:55`, `.limit()` at `:444`). For the
+overwhelming majority of accounts that is every edge they have. For an
+account with an unusually large number of edges it is a partial read — so
+"already-connected accounts are excluded" describes what the system does
+with the edges it reads, rather than an absolute promise for every account
+regardless of size.
+
+The threshold itself is deliberately not repeated here. See **Scope**.
 
 ## 4. No commercial input
 
@@ -108,6 +116,41 @@ language, where it lives, how it is kept current — is
 `xchromo/osn-tracker#373`, which carries `needs:decision` and is not
 resolved by this page. A ToS author can draw the four points above
 directly into ToS prose; this page is written so they can.
+
+### Why the thresholds are not written out here
+
+An earlier draft gave the literal row bounds and the arithmetic dividing
+the co-member budget between organisations. They came out, because that
+half of the description is more use to someone gaming the recommender
+than to someone trying to understand it:
+
+- The point at which the exclusion read stops being complete is a recipe
+  for getting a blocked or already-requested account to surface as a
+  suggestion to a high-degree recipient. That is a bypass condition, not
+  a ranking parameter.
+- The per-organisation division tells an organisation admin, or a set of
+  coordinated accounts, how many profiles are needed to crowd an
+  organisation's real members out of a given recipient's suggestions.
+
+**This is not a secrecy measure and should not be mistaken for one.**
+`xchromo/osn` is a public repository: every constant named above is
+readable in `recommendations.ts` by anyone who looks. What is being
+decided here is narrower — what a document intended as ToS source
+*commits to publishing as a parameter*, which is a different thing from
+what a reader can derive from the source.
+
+Art. 27 asks for the main parameters in plain and intelligible language,
+and for any options a recipient has to change them. It does not ask for
+threshold values. The qualitative statements above — what ranks, where
+candidates come from, what is suppressed, that nothing commercial is an
+input — are the parameters; the constants are implementation.
+
+That reading is a judgment, not a rule, and it belongs to whoever owns
+`xchromo/osn-tracker#373`. A regulator may read a qualitative range as
+evasive and want figures, which is defensible. Decide it there
+deliberately, rather than inheriting it from a page that happened to be
+written with `file:line` precision because it was verified against the
+source.
 
 See [[dsa]] §Project changes required, item 6 (`C-L8`) for the
 tracker-level entry this page fulfils, and the same item for the other two
