@@ -3,8 +3,8 @@ import { and, asc, eq, or } from "drizzle-orm";
 import { Effect, ParseResult, Schema } from "effect";
 
 import { DbService, dbQuery } from "../db";
-import { DesiredState } from "../schemas/import";
-import type { ChangeScope, ParsedEvent, ParsedFamily } from "../schemas/import";
+import { ChangeScope, DesiredState } from "../schemas/import";
+import type { ParsedEvent, ParsedFamily } from "../schemas/import";
 import { decodePalette, safeHttpUrl } from "./claim";
 import { parseEventsCsv, parseGuestsCsv } from "./spreadsheet";
 import type { SpreadsheetParseError } from "./spreadsheet";
@@ -62,6 +62,11 @@ export type CsvChangeBody = Schema.Schema.Type<typeof CsvChangeBody>;
  */
 export const DesiredStateChangeBody = Schema.Struct({
   desiredState: DesiredState,
+  // Which half of the wedding this save is authoritative over. Omitted by
+  // callers that still send the whole draft (e.g. GuestsEditor), which keeps
+  // the old "both" default; the events editor sends "events" explicitly since
+  // it no longer loads guests/households to populate the draft.
+  scope: Schema.optional(ChangeScope),
 });
 export type DesiredStateChangeBody = Schema.Schema.Type<typeof DesiredStateChangeBody>;
 
@@ -108,11 +113,12 @@ export interface DecodedChange {
   /** `'import'` (spreadsheet) or `'editor'` (draft-save) — the change kind (E3). */
   readonly kind: "import" | "editor";
   /**
-   * Which halves of the wedding this change is authoritative over. `"both"` for
-   * every editor save and for a two-sheet upload; `"events"` / `"guests"` for a
-   * single-sheet upload. Persisted on the change row's summary so apply (which
-   * re-diffs against live state) and revert honour the same scope the preview
-   * was computed under.
+   * Which halves of the wedding this change is authoritative over. Defaults to
+   * `"both"` for an editor save that doesn't send its own scope, and for a
+   * two-sheet upload; a single-sheet upload is `"events"` / `"guests"`, and the
+   * events editor sends `"events"` explicitly. Persisted on the change row's
+   * summary so apply (which re-diffs against live state) and revert honour the
+   * same scope the preview was computed under.
    */
   readonly scope: ChangeScope;
 }
@@ -214,7 +220,10 @@ export function decodeChangeBody(
         matchByName: false,
         uploadedCsv: null,
         kind: "editor",
-        scope: "both",
+        // Defaults to "both" for callers that don't send a draft covering
+        // everything shown (e.g. GuestsEditor); the events editor sends
+        // "events" explicitly since its draft only ever covers the schedule.
+        scope: body.scope ?? "both",
       } satisfies DecodedChange;
     }
 
