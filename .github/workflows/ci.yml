@@ -170,9 +170,11 @@ jobs:
       - name: Test
         run: bun run test
 
-      # The four d1-integration.test.ts files live outside the vitest `include`
-      # glob (`tests/**/*.test.ts`), so `bun run test` never reaches them. They
-      # are the only coverage of the ASYNCHRONOUS D1 driver that dev/staging/prod
+      # The four d1-integration.test.ts files live under `tests/d1/` (cire's under
+      # `tests/db/`) and are EXCLUDED from the vitest configs by that path, so
+      # `bun run test` never reaches them — they import `bun:test` and boot a real
+      # workerd, neither of which the fast tier can load. They are the only
+      # coverage of the ASYNCHRONOUS D1 driver that dev/staging/prod
       # actually run on, and going unrun let zap's rot into a stale fixture that
       # had been failing silently. Serial by necessity — concurrent Miniflare
       # workerd instances contend and fail spuriously (the root script pins
@@ -273,7 +275,7 @@ jobs:
       # every local commit; others build a base and a head commit to drive the
       # pin half. They run on every event, unlike the pin half itself.
       - name: Test the vendored anti-slop guard
-        run: bash scripts/verify-vendored-anti-slop.test.sh
+        run: bash scripts/tests/verify-vendored-anti-slop.test.sh
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -297,7 +299,7 @@ jobs:
       #
       # The `./` in `bun test ./scripts/` is load-bearing. A bare `scripts/` is
       # a SUBSTRING filter on the test path, not a directory, so it also picks
-      # up `cire/api/src/scripts/remint-family-codes.test.ts` — which imports
+      # up `cire/api/tests/scripts/remint-family-codes.test.ts` — which imports
       # drizzle and effect and therefore needs an install this job does not do.
       # `./scripts/` anchors to the directory.
       #
