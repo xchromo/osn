@@ -6,7 +6,7 @@ import { invitePath } from "../../src/lib/invite";
  * The invitation is now linked TO, not only landed on: the gift list has its own
  * page and every way back from it — the sticky rail, the signed-out prompt, the
  * closed-list note — is this string. A slug is organiser input, so it is encoded
- * for the same reason the API encodes one it puts in a URL: unencoded, `../../src/`
+ * for the same reason the API encodes one it puts in a URL: unencoded, `../`
  * climbs out of the wedding and `?`/`#` truncate the path, and the way home
  * silently goes somewhere else.
  */

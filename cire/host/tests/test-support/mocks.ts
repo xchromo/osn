@@ -13,7 +13,7 @@ import { type Mock, vi } from "vitest";
  * hoisted `vi.mock` call hasn't initialised yet:
  *
  *   vi.mock("../../src/lib/api", async () => {
- *     const { organiserApiMock } = await import("./mocks");
+ *     const { organiserApiMock } = await import("../test-support/mocks");
  *     return organiserApiMock();
  *   });
  *

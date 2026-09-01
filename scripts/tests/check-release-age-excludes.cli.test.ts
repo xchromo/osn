@@ -5,7 +5,7 @@
 // against a fixture `bunfig.toml`, the same way `bun run
 // check:release-age-excludes` and the `script-tests` CI job invoke it.
 //
-// The script resolves its target as `../../bunfig.toml` relative to its own
+// The script resolves its target as `../bunfig.toml` relative to its own
 // file (`new URL("../../bunfig.toml", import.meta.url)`), so a copy of the
 // script placed at `<tmp>/scripts/check-release-age-excludes.ts` reads
 // `<tmp>/bunfig.toml` — letting this test point the real, unmodified script

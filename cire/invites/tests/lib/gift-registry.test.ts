@@ -379,7 +379,7 @@ describe("giftRegistryPath", () => {
   });
 
   it("encodes a slug that would otherwise change the URL's shape", () => {
-    // A slug is organiser input. Unencoded, `../../src/` climbs out of the wedding and
+    // A slug is organiser input. Unencoded, `../` climbs out of the wedding and
     // `?`/`#` truncate the path — a link that silently goes somewhere else.
     expect(giftRegistryPath("a b")).toBe("/a%20b/registry");
     expect(giftRegistryPath("../other")).toBe("/..%2Fother/registry");
