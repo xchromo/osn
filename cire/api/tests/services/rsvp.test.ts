@@ -6,9 +6,9 @@ import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import { DIETARY_CONSENT_VERSION } from "../../src/schemas/rsvp";
 import { rsvpService } from "../../src/services/rsvp";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

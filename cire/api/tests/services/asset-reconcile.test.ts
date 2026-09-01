@@ -4,7 +4,6 @@ import { events, registryItems, weddings, weddingInviteCustomisations } from "@c
 import { Effect } from "effect";
 
 import { DbService } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import {
   assetReconcileService,
   ASSETS_PREFIX,
@@ -12,6 +11,7 @@ import {
   RECONCILE_DELETE_CAP,
   type ReconcilableBucket,
 } from "../../src/services/asset-reconcile";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

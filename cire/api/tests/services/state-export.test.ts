@@ -5,11 +5,11 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService, dbQuery } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import type { ParsedFamily } from "../../src/schemas/import";
 import { diffAgainstDb } from "../../src/services/import";
 import { parseEventsCsv, parseGuestsCsv } from "../../src/services/spreadsheet";
 import { stateExportService } from "../../src/services/state-export";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

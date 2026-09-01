@@ -24,7 +24,7 @@ import { describe, expect, it } from "vitest";
  * The route renders nothing, so there is no DOM to assert against and no Astro
  * test harness in this workspace. A source-text guard is the cheapest thing
  * that can actually fail when the contract is reverted — the same approach
- * `src/styles/gold-text-token.test.ts` takes over `.astro` files here.
+ * `tests/styles/gold-text-token.test.ts` takes over `.astro` files here.
  */
 describe("pages/index.astro (bare-domain redirect)", () => {
   const source = readFileSync(join(import.meta.dirname, "../../src/pages/index.astro"), "utf8");

@@ -4,12 +4,12 @@ import { organiserSessions } from "@cire/db";
 import { Effect } from "effect";
 
 import { DbService } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import {
   organiserSessionService,
   OrganiserSessionInvalid,
 } from "../../src/services/organiser-session";
 import type { OrganiserIdentity } from "../../src/services/organiser-session";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

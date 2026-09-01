@@ -37,7 +37,7 @@ cire/api/
     test-helpers.ts                # appRequest() -- Elysia request harness
     test-helpers/osn-token.ts      # makeOsnTestAuth()
     routes/rsvp.test.ts            # HTTP integration tests
-    db/d1-integration.test.ts      # excluded from the fast tier; `test:d1` runs it
+    db/d1-integration.test.ts      # Miniflare tier -- see The D1 integration lane
 cire/host/
   tests/
     test-support/mocks.ts          # shared Solid mocks for the organiser portal
@@ -187,7 +187,14 @@ A suite that genuinely needs a different shape (an extra `useAuth` field, an `im
 
 ## The D1 integration lane
 
-Each API package has a `tests/d1/d1-integration.test.ts` (cire's is `tests/db/d1-integration.test.ts`) that runs against a real workerd-backed D1 via Miniflare. The vitest configs **exclude** `tests/d1/**`, so `bun run test` never reaches them — they import `bun:test` and boot workerd, and they are the only coverage of the **asynchronous** D1 driver that dev/staging/prod actually use, as opposed to the synchronous `bun:sqlite` every other suite runs on.
+Each API package has a `tests/d1/d1-integration.test.ts` (cire's is `tests/db/d1-integration.test.ts`) that runs against a real workerd-backed D1 via Miniflare. They are the only coverage of the **asynchronous** D1 driver that dev/staging/prod actually use, as opposed to the synchronous `bun:sqlite` every other suite runs on.
+
+How the fast tier avoids them differs by runner, and the difference is worth knowing before you read a CI log:
+
+| Package | Fast-tier runner | Does `bun run test` load the D1 file? |
+|---|---|---|
+| `osn/api`, `pulse/api`, `zap/api` | vitest | **No** — the configs `exclude: ["tests/d1/**"]`. Vitest cannot load these files at all: they import `bun:test`. |
+| `cire/api` | bare `bun test` | **Yes.** `bun test` discovers recursively and takes no exclude, so the Miniflare suite runs twice per CI run — once inside `@cire/api#test`, once under `test:d1`. Pre-existing and harmless, but it means a workerd failure reddens cire's fast tier too. |
 
 ```bash
 bun run test:d1            # all four packages, serially

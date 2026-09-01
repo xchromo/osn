@@ -7,9 +7,9 @@ import { Effect } from "effect";
 import { DbService } from "../../src/db";
 import type { Db } from "../../src/db";
 import { createDb, seedDb } from "../../src/db/setup";
-import { TestDbLayer } from "../../src/db/test-layer";
 import { claimService } from "../../src/services/claim";
 import { hostCodeService, HostCodeError } from "../../src/services/host-code";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

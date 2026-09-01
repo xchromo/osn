@@ -1152,7 +1152,7 @@ the pack's 300), or a variable no consumer references any more.
 > style object as computed, and it then applies those declarations via
 > `setProperty` — where happy-dom discards a `var()` value for `font-weight`,
 > `font-style` and `font-size`. Assertions therefore go through
-> `src/test-support/declared-style.ts`, which merges what Solid compiled into
+> `tests/test-support/declared-style.ts`, which merges what Solid compiled into
 > the template attribute with what it set at runtime. It is a test-environment
 > limitation, not a browser one; do not reshape a component to work around it.
 

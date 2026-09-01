@@ -14,9 +14,9 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService, dbQuery } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import type { DeletableBucket } from "../../src/services/r2-cleanup";
 import { retentionService, RETENTION_AFTER_FINAL_EVENT_MS } from "../../src/services/retention";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

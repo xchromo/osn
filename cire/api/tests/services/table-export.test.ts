@@ -5,8 +5,8 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { DbService } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import { tableExportService } from "../../src/services/table-export";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

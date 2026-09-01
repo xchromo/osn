@@ -14,8 +14,8 @@ import { Effect } from "effect";
 
 import type { Db } from "../../src/db";
 import { DbService } from "../../src/db";
-import { TestDbLayer } from "../../src/db/test-layer";
 import { rsvpExportService, toCsv, sanitiseCsvCell } from "../../src/services/rsvp-export";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 const withDb = effWith(TestDbLayer);

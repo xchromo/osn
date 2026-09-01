@@ -8,8 +8,8 @@ import { Effect } from "effect";
 import type { Db } from "../../src/db";
 import { DbService } from "../../src/db";
 import { createDb, seedDb } from "../../src/db/setup";
-import { TestDbLayer } from "../../src/db/test-layer";
 import { claimService, InvalidCredentials } from "../../src/services/claim";
+import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
 
 /** Read a family's `first_opened_at` (epoch-ms or null) by public id. */
