@@ -20,6 +20,12 @@ import { defineConfig, sessionDrivers } from "astro/config";
  * plugin only intercepts `options.ssr` resolutions) still resolves the real
  * package, so both design packs keep animating exactly as before — verify
  * with a client build + `dist/client` inspection after touching this.
+ *
+ * The stub exports only what the `.motion.ts` modules use today: `animate` and
+ * `stagger`. A module reaching for any other `motion` export (`inView`,
+ * `scroll`, `spring`) resolves to a stub that does not have it and breaks the
+ * SSR build. Add the export here rather than deleting this plugin — dropping it
+ * puts 47 KB gzip back into the Worker.
  */
 function stubMotionForSsr() {
   const STUB_ID = "\0cire-invites:motion-stub-ssr";

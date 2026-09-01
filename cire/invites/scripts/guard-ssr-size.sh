@@ -33,7 +33,10 @@ fi
 total=0
 count=0
 while IFS= read -r -d '' f; do
-  size=$(gzip -c "$f" | wc -c)
+  # `-n` keeps the source filename out of the gzip header. Without it the
+  # measured total shifts by tens of bytes whenever a chunk is renamed or its
+  # content hash changes, so the same build measures differently for no reason.
+  size=$(gzip -nc "$f" | wc -c)
   total=$((total + size))
   count=$((count + 1))
 done < <(find dist/server -type f ! -name 'wrangler.json' -print0)
@@ -46,11 +49,14 @@ fi
 echo "cire/invites dist/server gzip total: ${total} bytes across ${count} files"
 
 # Threshold = the measured total after both #287 fixes, plus room for ordinary
-# dependency growth. What it catches is a library-scale mistake: one copy of
-# motion in the client build measures ~21 KB gzip, so a single new library of
-# that size entering the SSR graph trips this. It does NOT catch a few KB of
-# ordinary bump, and it is nowhere near the Workers Free-tier 3 MB cap — this
-# watches the trajectory, it is not a check against the cap.
+# dependency growth. What it catches is a library-scale mistake: motion cost
+# 47657 bytes gzip in THIS bundle (470489 before the stub, 422832 after), so a
+# single new library of that class entering the SSR graph trips this with room
+# to spare. Measure against the SSR figure, not against the same library's size
+# in `dist/client` — the client build is minified and the server build is not,
+# so a library costs roughly twice as much here as it does there. It does NOT
+# catch a few KB of ordinary bump, and it is nowhere near the Workers Free-tier
+# 3 MB cap — this watches the trajectory, it is not a check against the cap.
 threshold=310000
 if [ "$total" -gt "$threshold" ]; then
   echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what is newly reachable from a server-side import() or import, the way motion was."
