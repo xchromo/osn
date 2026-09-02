@@ -170,6 +170,28 @@ jobs:
       - name: Test
         run: bun run test
 
+      # Tracker #287: the cire/invites SSR Worker bundle reached 470 KB gzip
+      # unnoticed — a whole animation library in the server module graph with
+      # nothing there calling it, and three drift-guard tests routed as pages.
+      # `bun run build` above already produced `cire/invites/dist/server`, so
+      # measuring it here costs a few seconds and puts the budget check on the
+      # merge gate. The deploy workflow runs the same script, but only after a
+      # merge to main — which is one merge too late to stop the regression.
+      #
+      # The three tests that were routed have since moved to `tests/pages/`,
+      # out of `src/pages` entirely, so Astro cannot route them at all — but
+      # the guard stays: it is what catches the NEXT library that wanders into
+      # the server graph, which is the half of #287 a file move does nothing
+      # about.
+      #
+      # It reads the `dist/server` the Build step already made and takes
+      # ~0.15s, so it sits after Test deliberately: a size trip fails the
+      # job either way, and running it last means the author still gets the
+      # test result in the same round trip.
+      - name: Guard cire/invites SSR bundle size
+        run: ./scripts/guard-ssr-size.sh
+        working-directory: cire/invites
+
       # The four d1-integration.test.ts files live under `tests/d1/` (cire's
       # under `tests/db/`). The three vitest packages EXCLUDE that path, so the
       # step above never reaches them — they import `bun:test` and boot a real
