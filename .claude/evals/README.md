@@ -199,6 +199,40 @@ scenario pinned *after* the fix, which is the only way to score restraint, and a
 scenario whose ground truth is a process rule rather than a defect, where the
 fixture can plant the exact bait the rule exists to prevent.
 
+## Skeleton-first has not been shown to work
+
+Writing the report skeleton to disk before reading the diff was the answer to
+the suite's most consistent failure, and three runs later the honest reading is
+that it has not moved the number it was aimed at. The shape items, with the
+skill in view, out of 20 points:
+
+| | run 7 (before) | run 9 (after) | run 10 (after) |
+|---|---|---|---|
+| skill | 8.0 | 11.0 | 7.0 |
+| baseline | 2.0 | 1.0 | 1.5 |
+
+Runs 9 and 10 ran **identical skill text** — `plan` confirms the skills hash did
+not move between them — and the skill's own score went 11.0 to 7.0. So run 9's
+gain was the high sample of a noisy series, and the post-change mean of 9.0
+against a pre-change 8.0 is not a result.
+
+What *is* durable is the gap to the baseline: the skill scores four to seven
+times the baseline on report shape in every run. The instruction is doing
+something. It is the *skeleton* specifically that has no demonstrated effect
+over stating the contract twice, which is what run 7 already did.
+
+The judge's own words, on a run that scored zero:
+
+> None of the four required top-level sections appears in the review; instead
+> the agent used individual finding headings (`## P-W1`, `## P-I2`, etc.) plus
+> `## Summary` and `## Filing notes`.
+
+That is not a file that drifted while being filled in. It is a file written from
+scratch at the end, with Step 0 either never executed or overwritten. Whatever
+fixes this is not another sentence in the same place — the next thing worth
+trying is making the skeleton hard to discard, or checking for it mid-run rather
+than only at the end.
+
 ## A run can end `failed` with most of its work intact
 
 Run 9 finished as `status: failed` with 58 of its 60 solves scored. Two died,
@@ -251,8 +285,11 @@ next. Run 7's solve waves began at +0, +55 and +140 minutes, with a retry at
 +231 that held the last hour by itself: 290 minutes of wall clock for 19.4
 agent-hours of work. So the median solve is irrelevant to how long you wait, and
 the longest one is everything. `tessl eval run` exposes no solve timeout and no
-turn cap (checked against `--help`), so there is nothing to set here yet; it is
-worth asking for.
+turn cap of its own, but the platform enforces one: run 10 recorded
+`Task 'solve' timed out after 1800000ms`, so there is a 30-minute ceiling. Run 9
+nevertheless had a solve complete at 73.5 minutes, so the ceiling is not applied
+uniformly. Neither is reachable from the CLI; a settable value is worth asking
+for.
 
 **The biggest lever is not re-solving what has not changed.** An unchanged
 scenario is replayed rather than re-executed — both variants, not just the
