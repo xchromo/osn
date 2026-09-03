@@ -47,9 +47,13 @@ tessl scenario download --last              # run from INSIDE .claude/ so they l
 
 ## The inner loop
 
-A full run is ten scenarios, two variants, three runs each — sixty agent solves
-at about four at a time, which is hours and hundreds of credits. Almost none of
-that work answers the question a skill edit asks. The loop is three steps, and
+A full run is ten scenarios, two variants, three runs each — sixty agent solves,
+which is most of a working day and hundreds of credits. The harness launches a
+whole run index at once (17–20 solves) and waits for the slowest before starting
+the next, so wall clock is the sum of the waves' maxima, not the mean solve:
+run 7 took 290 minutes for 19.4 agent-hours, and one straggler held its last
+hour on its own. Almost none of that work answers the question a skill edit
+asks. The loop is three steps, and
 `.github/workflows/skill-eval.yml` runs all three on a pull request that touches
 `.claude/skills/`:
 
