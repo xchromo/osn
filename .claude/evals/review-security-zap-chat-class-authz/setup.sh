@@ -39,16 +39,20 @@ printf '.claude/\n.agents/\n' >> .git/info/exclude
 git add -A
 git diff --cached --quiet || git commit -qm "fixture: install state"
 
-# `routes/internal.ts` and its test stay on the base on purpose: the ARC-gated
-# c2b reader is the context that makes the missing check a finding, and a
-# reviewer should be able to read it without it being part of the diff.
+# `routes/internal.ts` and its test stay on the base on purpose: the gated
+# reader is the context that makes the missing check a finding, and a reviewer
+# should be able to read it without it being part of the diff.
+#
+# The three service and route tests stay on the base for a different reason.
+# They are 1771 of the 3196 lines these paths hold, and both review skills
+# require every changed file to be read in full and given a Coverage line — so
+# in the diff they are mandated reading that no checklist item scores. On the
+# base they are still there to be read, and the diff is the three files the
+# finding actually lives in.
 CHAT_PATHS=(
   zap/api/src/services/chats.ts
   zap/api/src/services/messages.ts
   zap/api/src/routes/chats.ts
-  zap/api/tests/services/chats.test.ts
-  zap/api/tests/services/messages.test.ts
-  zap/api/tests/routes/chats.test.ts
 )
 
 git checkout -q -B main

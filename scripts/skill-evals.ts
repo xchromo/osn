@@ -3,16 +3,17 @@
  * The inner loop for the agent skills in `.claude/skills/`.
  *
  * A full `tessl eval run` over every scenario, both variants, three runs each,
- * is sixty agent solves at roughly four at a time — hours of wall clock and
- * hundreds of credits. Almost none of that work is needed to answer the
- * question a skill edit actually asks, which is "did this scenario move".
- * These subcommands narrow the run to the skills the diff touched, and keep a
- * committed scoreboard so the next run has something to be compared against.
+ * is sixty agent solves — most of a working day and hundreds of credits.
+ * Almost none of that work is needed to answer the question a skill edit
+ * actually asks, which is "did this scenario move". These subcommands narrow
+ * the run to the skills the diff touched, and keep a committed scoreboard so
+ * the next run has something to be compared against.
  *
  *   changed      --base <ref>              skills whose files the diff touched
  *   subset       --skills a,b --out <dir>  their scenarios, copied for a run
  *   fingerprint  <scenario-dir>            hash of everything but the skill
  *   check-names                            every scenario names a real skill
+ *   plan                                   what a run now would cost, and why
  *   ready        --run <view.json>         has every variant been scored yet
  *   compare      --run <view.json>         markdown table against the scoreboard
  *   record       --run <view.json>         write those scores back
@@ -46,6 +47,12 @@ interface ScoreRow {
   score: number;
   points: string;
   baseline?: number | null;
+  /** Hash of every `SKILL.md` as it stood when this score was recorded. It is
+   * deliberately NOT part of `fingerprint`: a score stays comparable across
+   * skill edits, which is the whole point of the loop. It is here so `plan`
+   * can tell a run that changed only the skills from one that changed the
+   * scenarios too, because the second cannot attribute a movement to either. */
+  skillsHash?: string;
   items: Record<string, string>;
   runId: string;
   recordedAt: string;
@@ -85,6 +92,29 @@ function fixtureHash(scenarioDir: string): string {
     const path = join(scenarioDir, file);
     hash.update(file);
     hash.update(existsSync(path) ? readFileSync(path) : Buffer.from("<absent>"));
+  }
+  return `sha256:${hash.digest("hex").slice(0, 32)}`;
+}
+
+/** Every `SKILL.md` under `.claude/skills`, hashed together. Reference files
+ * beside a skill are deliberately included: a skill that moves detail into
+ * `reference/` has still changed what the agent can read. */
+function skillsHash(): string {
+  const hash = createHash("sha256");
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) =>
+        e.isDirectory()
+          ? walk(join(dir, e.name))
+          : e.name.endsWith(".md")
+            ? [join(dir, e.name)]
+            : [],
+      )
+      .sort();
+  if (!existsSync(SKILLS_DIR)) return "sha256:<absent>";
+  for (const file of walk(SKILLS_DIR)) {
+    hash.update(file);
+    hash.update(readFileSync(file));
   }
   return `sha256:${hash.digest("hex").slice(0, 32)}`;
 }
@@ -287,6 +317,67 @@ function requireScored(run: ReturnType<typeof parseRun>) {
   }
 }
 
+/** What a run right now would cost, and whether it could attribute the result.
+ *
+ * Two facts drive it. A scenario whose fingerprint is unchanged is REPLAYED
+ * rather than re-executed — both variants, not only the baseline — so it is
+ * free. And a run that changes the skills *and* the scenarios in the same step
+ * cannot tell which of them moved a score: the baseline moves too, and there is
+ * no longer a fixed point to measure against.
+ *
+ * Run this before submitting. Thirty of run 9's sixty solves were baselines
+ * that would have replayed for nothing if the rubrics had been left alone that
+ * round. */
+function cmdPlan() {
+  const board = readScoreboard();
+  const skills = listSkills();
+  const now = skillsHash();
+  const scenarios = listScenarios();
+
+  const fresh: string[] = [];
+  const replay: string[] = [];
+  const unseen: string[] = [];
+  for (const name of scenarios) {
+    const before = board.scenarios[name];
+    if (before === undefined) unseen.push(name);
+    else if (before.fixtureHash !== fixtureHash(join(EVALS_DIR, name))) fresh.push(name);
+    else replay.push(name);
+  }
+
+  const recorded = Object.values(board.scenarios)
+    .map((r) => r.skillsHash)
+    .filter((h): h is string => typeof h === "string");
+  const skillsMoved = recorded.length === 0 || recorded.some((h) => h !== now);
+
+  console.log(
+    `Scenarios: ${scenarios.length} (${replay.length} unchanged, ${fresh.length} changed, ${unseen.length} never scored)`,
+  );
+  console.log(
+    `Skills:    ${skills.length}, hash ${now}${skillsMoved ? " — CHANGED since the scoreboard" : " — unchanged since the scoreboard"}`,
+  );
+  console.log("");
+  if (replay.length > 0) {
+    console.log(`Replayed, so free (${replay.length}):`);
+    for (const n of replay) console.log(`  ${n}`);
+  }
+  if (fresh.length + unseen.length > 0) {
+    console.log(`Re-solved, so paid for (${fresh.length + unseen.length}):`);
+    for (const n of [...fresh, ...unseen].sort()) console.log(`  ${n}`);
+    console.log(`  ≈ ${(fresh.length + unseen.length) * 2 * 3} solves at -n 3 over both variants`);
+  }
+
+  if (skillsMoved && fresh.length > 0) {
+    console.log("");
+    console.log(
+      "WARNING: the skills and " + String(fresh.length) + " scenario(s) have both changed since",
+    );
+    console.log("the scoreboard was written. A movement in those scenarios cannot be");
+    console.log("attributed to either — their baselines are being re-judged by a new");
+    console.log("rubric in the same run. Land the rubric edits on their own first, or");
+    console.log("read those rows as new measurements rather than as a comparison.");
+  }
+}
+
 /** The poll predicate for CI. `tessl eval run` returns the moment a run is
  * queued, so something has to wait; `status` is not that something. */
 function cmdReady() {
@@ -394,6 +485,7 @@ function cmdRecord() {
       // rides on improves underneath it, and that is the skill ceasing to earn
       // its place. Null on a `--skip-baseline` run.
       baseline: now.baseline === null ? null : round(now.baseline.score),
+      skillsHash: skills.length > 0 ? skillsHash() : undefined,
       items: now.items,
       runId: run.runId,
       recordedAt: today,
@@ -412,6 +504,7 @@ const commands = {
   subset: cmdSubset,
   fingerprint: cmdFingerprint,
   "check-names": cmdCheckNames,
+  plan: cmdPlan,
   ready: cmdReady,
   compare: cmdCompare,
   record: cmdRecord,

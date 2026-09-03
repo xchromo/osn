@@ -399,3 +399,84 @@ test("an empty runs array is not ready when runCount says three", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// `plan` answers the question that decides whether a run is worth submitting:
+// which scenarios will actually be re-solved, and can the result be attributed
+// to anything. A scenario whose fingerprint is unchanged is replayed for free,
+// so the only paid work is the changed ones — and if the skills moved in the
+// same step, the changed ones cannot be read as a comparison at all.
+
+async function boardFor(
+  dir: string,
+  rows: Record<string, { fixtureHash: string; skillsHash?: string }>,
+): Promise<void> {
+  const scenarios = Object.fromEntries(
+    Object.entries(rows).map(([name, r]) => [
+      name,
+      {
+        skill: name.split("-")[0],
+        fixtureHash: r.fixtureHash,
+        skillsHash: r.skillsHash,
+        fingerprint: null,
+        agent: "claude",
+        model: "m",
+        runs: 3,
+        variant: "usage-spec",
+        score: 0.5,
+        points: "5/10",
+        items: {},
+        runId: "r",
+        recordedAt: "2026-09-03",
+      },
+    ]),
+  );
+  await writeFile(join(dir, ".claude/evals/scores.json"), JSON.stringify({ scenarios }, null, 2));
+}
+
+test("plan calls an unchanged scenario free and a changed one paid for", async () => {
+  const dir = await makeTree(["alpha"], ["alpha-one", "alpha-two"]);
+  const one = (await run(dir, "fingerprint", ".claude/evals/alpha-one")).stdout.trim();
+  await boardFor(dir, {
+    "alpha-one": { fixtureHash: one },
+    "alpha-two": { fixtureHash: "sha256:stale" },
+  });
+
+  const out = await run(dir, "plan");
+  expect(out.exitCode).toBe(0);
+  expect(out.stdout).toContain("1 unchanged, 1 changed");
+  expect(out.stdout).toContain("Replayed, so free (1)");
+  expect(out.stdout).toContain("alpha-two");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("plan warns when the skills and the scenarios both moved", async () => {
+  const dir = await makeTree(["alpha"], ["alpha-one"]);
+  await boardFor(dir, { "alpha-one": { fixtureHash: "sha256:stale", skillsHash: "sha256:old" } });
+
+  const out = await run(dir, "plan");
+  expect(out.stdout).toContain("Skills:");
+  expect(out.stdout).toContain("CHANGED since the scoreboard");
+  expect(out.stdout).toContain("cannot be");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("plan does not warn when only the skills moved", async () => {
+  const dir = await makeTree(["alpha"], ["alpha-one"]);
+  const one = (await run(dir, "fingerprint", ".claude/evals/alpha-one")).stdout.trim();
+  await boardFor(dir, { "alpha-one": { fixtureHash: one, skillsHash: "sha256:old" } });
+
+  const out = await run(dir, "plan");
+  expect(out.stdout).toContain("CHANGED since the scoreboard");
+  expect(out.stdout).not.toContain("WARNING");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("plan counts a scenario the scoreboard has never seen as paid for", async () => {
+  const dir = await makeTree(["alpha"], ["alpha-one"]);
+  await boardFor(dir, {});
+
+  const out = await run(dir, "plan");
+  expect(out.stdout).toContain("1 never scored");
+  expect(out.stdout).toContain("Re-solved, so paid for (1)");
+  await rm(dir, { recursive: true, force: true });
+});

@@ -2,7 +2,7 @@
 
 You are in a checkout of the repository, on the branch `feat/cire-consent-framework`. It adds the site-wide cookie and third-party consent framework to the guest site: the consent record and its cookie transport, the vendor registry, the store, and the banner, gate and preferences components.
 
-Review the branch to whatever standard this repository holds a branch to before it merges.
+Review the branch for security and compliance to whatever standard this repository holds a branch to before it merges. Performance and test coverage are somebody else's pass; what this one has to find is what an attacker or a regulator would.
 
 ## Environment
 

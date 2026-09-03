@@ -41,9 +41,22 @@ printf '.claude/\n.agents/\n' >> .git/info/exclude
 git add -A
 git diff --cached --quiet || git commit -qm "fixture: install state"
 
+# The nine source modules, named one by one rather than by directory, so the
+# five co-located test files stay on the base branch. Those tests are 1117 of
+# the 2544 lines these directories hold, and the review skill requires every
+# changed file to be read in full and given a Coverage line — so in the diff
+# they are mandated reading that no checklist item scores. On the base they are
+# still there to be read.
 CONSENT_PATHS=(
-  cire/invites/src/lib/consent
-  cire/invites/src/components/consent
+  cire/invites/src/lib/consent/categories.ts
+  cire/invites/src/lib/consent/cookie.ts
+  cire/invites/src/lib/consent/record.ts
+  cire/invites/src/lib/consent/store.ts
+  cire/invites/src/lib/consent/testing.ts
+  cire/invites/src/lib/consent/vendors.ts
+  cire/invites/src/components/consent/ConsentBanner.tsx
+  cire/invites/src/components/consent/ConsentGate.tsx
+  cire/invites/src/components/consent/ConsentPreferences.tsx
 )
 
 git checkout -q -B main

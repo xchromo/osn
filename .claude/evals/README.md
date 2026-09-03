@@ -53,7 +53,9 @@ whole run index at once (17–20 solves) and waits for the slowest before starti
 the next, so wall clock is the sum of the waves' maxima, not the mean solve:
 run 7 took 290 minutes for 19.4 agent-hours, and one straggler held its last
 hour on its own. Almost none of that work answers the question a skill edit
-asks. The loop is three steps, and
+asks. See **Making a run shorter** below for what the time is actually made of;
+`bun scripts/skill-evals.ts plan` prints what a run right now would pay for
+before you submit one. The loop is three steps, and
 `.github/workflows/skill-eval.yml` runs all three on a pull request that touches
 `.claude/skills/`:
 
@@ -196,6 +198,82 @@ that pattern alone will not give you, and both are worth building by hand: a
 scenario pinned *after* the fix, which is the only way to score restraint, and a
 scenario whose ground truth is a process rule rather than a defect, where the
 fixture can plant the exact bait the rule exists to prevent.
+
+## Making a run shorter
+
+Measured from `runMetadata[].metrics.jobId`, which carries each job's epoch-ms
+start, and from the per-solve `runs[]` telemetry in `tessl eval view --json`.
+
+**What the time is made of.** Agent seconds correlate with turn count at only
+r = 0.31; with output tokens at r = 0.56 (run 7) and 0.69 (run 9). Generation
+runs at a median 80 tokens/second in both runs, so a solve that emits 64k tokens
+needs about 800 seconds simply to write them. Cost is the other way round: 54–59%
+of it is cache reads, which scale with turns × context. **Output tokens drive
+time; turns drive cost.**
+
+Two consequences. Shortening a `SKILL.md` saves nothing measurable — it is 3–6k
+cached tokens, pennies per solve and no wall clock. And the only edit that makes
+a run faster is one that removes work the agent *performs*.
+
+**Wall clock is the sum of the waves' maxima.** The harness launches a whole run
+index at once — 17 to 20 solves — and waits for the slowest before starting the
+next. Run 7's solve waves began at +0, +55 and +140 minutes, with a retry at
++231 that held the last hour by itself: 290 minutes of wall clock for 19.4
+agent-hours of work. So the median solve is irrelevant to how long you wait, and
+the longest one is everything. `tessl eval run` exposes no solve timeout and no
+turn cap (checked against `--help`), so there is nothing to set here yet; it is
+worth asking for.
+
+**The biggest lever is not re-solving what has not changed.** An unchanged
+scenario is replayed rather than re-executed — both variants, not just the
+baseline. Run 9 paid for all sixty solves because every `criteria.json` had
+changed, when only two `task.md` files had; thirty of those were baselines that
+would otherwise have been free. `bun scripts/skill-evals.ts plan` prints what a
+run now would actually pay for, and warns when the skills and the scenarios have
+both moved since the scoreboard — because then a scenario's baseline is being
+re-judged by a new rubric in the same run, and a movement cannot be attributed
+to either. **Land rubric edits on their own, then edit the skill.**
+
+**Do not cut `-n` on the variant under test.** The obvious saving is to drop
+low-variance scenarios to one sample, and the per-scenario spread from run 7 says
+where that would bite:
+
+| scenario | baseline scores | sd | usage-spec scores | sd |
+|---|---|---|---|---|
+| `consent-hardened-restraint` | 83, 83, 83 | 0.0 | 83, 66, 100 | 13.9 |
+| `pulse-account-cookie-credential` | 50, 50, 50 | 0.0 | 68, 75, 56 | 7.8 |
+| `consent-cookie-rediscovery` | 40, 46, 46 | 2.8 | 0, 66, 93 | 39.1 |
+| `vendor-read-round-trips` | 26, 20, 26 | 2.8 | 40, 20, 20 | 9.4 |
+| `colocated-layout` | 66, 61, 55 | 4.5 | 55, 61, 100 | 19.9 |
+| `entitlement-gate-fold` | 38, 27, 22 | 6.7 | 38, 22, 44 | 9.3 |
+| `zap-chat-class-authz` | 57, 35, 35 | 10.4 | 71, 28, 85 | 24.3 |
+| `access-token-verifier` | 42, 57, 42 | 7.1 | 42, 71, 57 | 11.8 |
+| `prep-pr-finding-routing` | 38, 84, 38 | 21.7 | 53, 76, 61 | 9.5 |
+| `prep-pr-changeset` | 83, 33, 41 | 21.9 | 91, 100, 33 | 29.7 |
+
+The baselines are the stable half; **the `usage-spec` variant is the noisy one
+almost everywhere**, and it is the one being measured. The restraint scenario
+looks like the safest candidate on its baseline alone (sd 0.0) and is one of the
+worst on the variant that matters (83/66/100). So there is no scenario here where
+one sample would be honest. The saving has to come from replay and from fixture
+size, not from `-n`.
+
+**Trim a fixture to what the rubric scores.** Both review skills require every
+changed file to be read in full and given a `## Coverage` line, so a test file in
+the diff is mandated reading that no checklist item scores. Two fixtures now keep
+their tests on the base branch, where they can still be read: the zap scenario
+(three test files, 1771 of 3196 lines) and the consent-rediscovery scenario (five
+test files, 1117 of 2544 lines). The hardened-restraint fixture keeps its tests
+in the diff on purpose — its rubric and its `setup.sh` both target them.
+
+**Ask for what the rubric wants.** A `task.md` that says "review the branch to
+whatever standard this repository holds" invites a security, performance, tests
+and changeset pass, then scores one of them. Narrowing the two performance tasks
+to "performance-review" cut the vendor scenario's `usage-spec` solve from 2743 to
+687 seconds while its baseline did not move. The security and prep-pr tasks are
+narrowed the same way, and the prep-pr fixtures now say the reviews have already
+run — `prep-pr`'s Steps 4 and 6 otherwise dispatch three review subagents whose
+output no prep-pr rubric scores.
 
 ## Keep provenance out of the scenario
 

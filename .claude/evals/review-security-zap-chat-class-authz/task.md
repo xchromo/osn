@@ -2,7 +2,7 @@
 
 You are in a checkout of the repository, on the branch `feat/zap-consumer-chat-service`. It adds the consumer-facing half of the messaging API: the chat service, the message service, and the `/chats` routes that sit on top of them, with their tests.
 
-Review the branch to whatever standard this repository holds a branch to before it merges.
+Review the branch for security and compliance to whatever standard this repository holds a branch to before it merges. Performance and test coverage are somebody else's pass; what this one has to find is what an attacker or a regulator would.
 
 ## Environment
 

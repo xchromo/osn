@@ -73,6 +73,15 @@ run *statically and immediately*, not attempted. Do not retry a command whose
 prerequisite this probe said was absent; do not open, label or comment on an
 issue with no network, and never describe as done anything the probe ruled out.
 
+**A static equivalent is a paragraph, not an expedition.** With no network, the
+issue steps are the issue you *would* file — title, labels, type, four-field
+body — written into the report, and not a hunt through the tracker for one that
+might already exist. If the task also says not to modify files, the docs step is
+the same: name the pages this branch would change and say what would go in them.
+Neither is a reason to go reading the wiki, and neither is a reason to dispatch
+an agent. The cost of getting this wrong is not a wrong answer, it is a run that
+spends its time somewhere the report never goes.
+
 **No step is a stop, and no step is skipped.** A command that fails, a gate that
 cannot execute, or a question with nobody to answer it is not the end of the
 step. Do the step's static equivalent first — read the code the gate would have
@@ -178,6 +187,8 @@ If you were told not to commit, or there is no user to confirm a grouping, leave
 
 Invoke the `review-tests` skill (`.claude/skills/review-tests/SKILL.md`) as an Agent subagent, passing the list of affected workspace paths as arguments.
 
+**Unless the task says the reviews have already run.** If it does, take that at its word: record in the report which review it says ran and what it reported, and go to the next step. Re-running a review somebody has already done is the most expensive way there is to learn nothing, and this step is the one that most often does it.
+
 Wait for it to complete. If the build fails or any tests fail, record the failures in the report and in `## Test plan`, and continue. If the tooling itself is unavailable — no package manager, no dependencies installed — record every gate as **not run**. That is the honest `## Test plan` entry, and it is never a tick.
 
 If coverage gaps are reported, present them to the user and ask whether they want to address them before continuing.
@@ -196,7 +207,9 @@ Proceed when the user confirms the scope is intentional or agrees to split the w
 
 ## Step 6 — Parallel reviews
 
-Run the following two agents **in parallel** using the Agent tool:
+**Unless the task says these reviews have already run** — then record what it says they found, note it under `## Decisions`, and go to Step 7.
+
+Otherwise run the following two agents **in parallel** using the Agent tool:
 
 **Agent 1 — Performance review** (general-purpose agent):
 Invoke the `review-performance` skill (`.claude/skills/review-performance/SKILL.md`) and execute its instructions, passing the list of affected workspaces and the branch name as context.
