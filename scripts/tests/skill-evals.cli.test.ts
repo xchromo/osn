@@ -258,17 +258,21 @@ test("a run with an expected variant still unscored is not ready", async () => {
 // rubric is not a finish line. Run 7 passed the old readiness test 54 minutes in
 // with most solutions on one scored run out of three, and reported that
 // single sample under an n=3 heading.
-test("a run whose solutions are still short of runCount is not ready", async () => {
+test("a run still in flight whose solutions are short of runCount is not ready", async () => {
   const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
   try {
     const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
       data: {
         attributes: {
+          status: string;
           runCount: number;
           scenarios: { solutions: { runs: { status: string; score: number | null }[] }[] }[];
         };
       };
     };
+    // "pending" is what a run in flight reports, and it is the only state in
+    // which a missing score means "not yet" rather than "never".
+    doc.data.attributes.status = "pending";
     doc.data.attributes.runCount = 3;
     doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
       { status: "completed", score: 50 },
@@ -479,4 +483,64 @@ test("plan counts a scenario the scoreboard has never seen as paid for", async (
   expect(out.stdout).toContain("1 never scored");
   expect(out.stdout).toContain("Re-solved, so paid for (1)");
   await rm(dir, { recursive: true, force: true });
+});
+
+// A run can end with casualties. Tessl marks it `failed`, the solves that did
+// finish keep their scores, and the judge averages a solution over the runs
+// that scored — so a thin cell is a thinner measurement, not an absent one.
+// Waiting for the missing score is waiting forever, which is what run 9 did
+// until this case existed.
+test("a failed run is ready on the solves that did score, and says which are thin", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          status: string;
+          runCount: number;
+          scenarios: { solutions: { runs: { status: string; score: number | null }[] }[] }[];
+        };
+      };
+    };
+    doc.data.attributes.status = "failed";
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
+      { status: "completed", score: 50 },
+      { status: "completed", score: 60 },
+      { status: "completed", score: null },
+    ];
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+
+    const out = await run(dir, "ready", "--run", "run.json");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("thin: prep-pr-one [usage-spec]: 2/3");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed run with a solution nothing scored is still not ready", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          status: string;
+          runCount: number;
+          scenarios: { solutions: { runs: { status: string; score: number | null }[] }[] }[];
+        };
+      };
+    };
+    doc.data.attributes.status = "failed";
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
+      { status: "completed", score: null },
+      { status: "completed", score: null },
+      { status: "completed", score: null },
+    ];
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

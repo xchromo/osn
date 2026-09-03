@@ -199,6 +199,36 @@ scenario pinned *after* the fix, which is the only way to score restraint, and a
 scenario whose ground truth is a process rule rather than a defect, where the
 fixture can plant the exact bait the rule exists to prevent.
 
+## A run can end `failed` with most of its work intact
+
+Run 9 finished as `status: failed` with 58 of its 60 solves scored. Two died,
+for two different reasons, and both are worth recognising:
+
+- `Task 'solve' failed after 3 attempts: Agent task 'solve' failed`, with
+  `duration_ms: 0` on the last try. The fixture installed and `setup.sh` ran;
+  the agent process itself never got going. Nothing in the scenario caused it.
+- `Recipe exited with code 1` after a `solve` task that ran **73.5 minutes** and
+  completed. This was attempt 7 of that run index. A solve can therefore burn
+  more than an hour and still be thrown away at the end.
+
+The scores that did land are unaffected, and the judge aggregates a solution
+over the runs that scored — so the two affected cells are `n=2`, a thinner
+measurement rather than an absent one. `ready` treats a terminal `status`
+(`failed` or `completed`) as the end and reports which cells came up short:
+
+```
+scored: 10 scenario(s)
+  thin: review-security-consent-hardened-restraint [baseline]: 2/3
+  thin: review-tests-pulse-account-cookie-credential [usage-spec]: 2/3
+```
+
+Before that, `ready` waited for a score that was never coming: a failed run held
+the poll open for its full timeout, and the numbers sat there unread. The lag in
+`status` only ever runs one way — pending until after scoring finishes, never
+back — so a terminal status is safe to trust even though a pending one means
+nothing. A solution with **no** scored run at all is still not ready, because
+there is nothing to average.
+
 ## Making a run shorter
 
 Measured from `runMetadata[].metrics.jobId`, which carries each job's epoch-ms

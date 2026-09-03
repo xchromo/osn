@@ -222,11 +222,38 @@ function parseRun(viewJson: string) {
   // before the poll began. Absent means "one run, and the rubric is the whole
   // signal"; present means check every entry.
   const wanted = attrs.runCount ?? 0;
+
+  // A run whose top-level status is terminal will never gain another score, so
+  // waiting for its missing ones is waiting forever. `status` lags only in one
+  // direction — pending until after scoring finishes — and never goes back, so
+  // "failed" and "completed" are both safe to treat as the end. Run 9 ended
+  // `failed` with 58 of 60 solves scored: one agent task that failed three
+  // attempts outright, and one that ran 73 minutes and then exited 1. Two
+  // solutions were left on two samples of three, which is a thinner
+  // measurement, not an absent one — the judge averages the runs that scored.
+  const terminal = attrs.status === "failed" || attrs.status === "completed";
+
   const complete = (solution: { runs?: { score?: number | null }[] }) => {
     const runs = solution.runs;
     if (runs === undefined || runs.length === 0) return wanted <= 1;
-    return runs.length >= wanted && runs.every((r) => typeof r.score === "number");
+    const good = runs.filter((r) => typeof r.score === "number").length;
+    if (good === 0) return false;
+    return terminal || (runs.length >= wanted && good === runs.length);
   };
+
+  /** Solutions carrying fewer scored runs than the run asked for. Reported so a
+   * thin cell is visible in the log rather than silently averaged. */
+  const short = (attrs.scenarios ?? []).flatMap((scenario) =>
+    (scenario.solutions ?? [])
+      .filter((s) => {
+        const good = (s.runs ?? []).filter((r) => typeof r.score === "number").length;
+        return (s.runs ?? []).length > 0 && good < wanted;
+      })
+      .map(
+        (s) =>
+          `${scenario.path.split("/").pop() ?? scenario.path} [${s.variant}]: ${(s.runs ?? []).filter((r) => typeof r.score === "number").length}/${wanted}`,
+      ),
+  );
   const scored =
     (attrs.scenarios ?? []).length > 0 &&
     (attrs.scenarios ?? []).every((scenario) =>
@@ -244,6 +271,7 @@ function parseRun(viewJson: string) {
     agent: attrs.agent ?? "unknown",
     model: attrs.model ?? "unknown",
     runs: attrs.runCount ?? 1,
+    short,
     scenarios: rows,
   };
 }
@@ -388,6 +416,7 @@ function cmdReady() {
     process.exit(1);
   }
   console.log(`scored: ${run.scenarios.size} scenario(s)`);
+  for (const line of run.short) console.log(`  thin: ${line}`);
 }
 
 function cmdCompare() {
