@@ -384,15 +384,26 @@ function cmdPlan() {
     `Skills:    ${skills.length}, hash ${now}${skillsMoved ? " — CHANGED since the scoreboard" : " — unchanged since the scoreboard"}`,
   );
   console.log("");
+  // The cache key is the scenario fingerprint AND the injected context, so the
+  // two variants of an unchanged scenario stop behaving alike the moment a
+  // skill is edited: the baseline carries no context and replays, while the
+  // usage-spec variant is a different input and re-solves. Counting an
+  // unchanged scenario as wholly free is how a "half price" run turns out to
+  // cost two thirds.
+  const paid = (replay.length * (skillsMoved ? 1 : 0) + (fresh.length + unseen.length) * 2) * 3;
+
   if (replay.length > 0) {
-    console.log(`Replayed, so free (${replay.length}):`);
+    console.log(
+      `Unchanged (${replay.length})${skillsMoved ? " — baseline replays, usage-spec re-solves" : " — both variants replay"}:`,
+    );
     for (const n of replay) console.log(`  ${n}`);
   }
   if (fresh.length + unseen.length > 0) {
-    console.log(`Re-solved, so paid for (${fresh.length + unseen.length}):`);
+    console.log(`Changed (${fresh.length + unseen.length}) — both variants re-solve:`);
     for (const n of [...fresh, ...unseen].sort()) console.log(`  ${n}`);
-    console.log(`  ≈ ${(fresh.length + unseen.length) * 2 * 3} solves at -n 3 over both variants`);
   }
+  console.log("");
+  console.log(`≈ ${paid} paid solve(s) at -n 3, of ${scenarios.length * 2 * 3} total`);
 
   if (skillsMoved && fresh.length > 0) {
     console.log("");

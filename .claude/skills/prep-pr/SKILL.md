@@ -52,6 +52,19 @@ answer really is nothing. Never add a sixth `##` — notes about gates that coul
 not run go in the report file, and a change-specific title goes in the PR title
 and in `## Summary`, never as a heading of its own.
 
+**From here on this file is only ever edited, never rewritten.** Every later
+step replaces a `None`, or inserts text under a heading that already exists.
+Do not compose the body in your head and write it out whole at Step 8 — a
+single write to `PR-BODY.md` discards the shape this step just established, and
+that is the one way this run fails outright however good the preparation was.
+If you find yourself about to write the whole file, you have lost the skeleton:
+read it back first and edit what is there.
+
+**A decision is a `###`, never a `##`.** The Decisions template below uses one
+`###` heading per decision, inside `## Decisions`. Promoting one to `##` adds a
+top-level section, and a body whose decisions each became a heading fails the
+shape check with five correct sections still sitting in the file.
+
 ## When a step cannot run
 
 The steps below assume a network, `gh`, an installed package manager, and a user
@@ -140,6 +153,17 @@ Map changed files to workspaces using these rules:
 - Files on the changeset **allowlist** — `.claude/`, `.github/`, `scripts/`, `wiki/`, `docs/`, `shared/swift/`, `pulse/ios/`, `osn/ios/`, top-level `*.md`, `.gitignore` — need no changeset at all. `scripts/changeset-required.sh` holds the list and decides. Anything off it, including `bun.lock` and root `turbo.json`/`tsconfig.json`, still requires one.
 
 Report: the list of affected workspaces and whether any CI/infra-only files were changed.
+
+Put that list into `## Workspaces affected` now, replacing its `None`, and check
+the body still has its shape — one command, and it catches a clobbered skeleton
+while there is still a run left to save:
+
+```bash
+grep -c '^## \(Summary\|Workspaces affected\|Issues\|Decisions\|Test plan\)$' PR-BODY.md
+```
+
+It must print `5`. If it prints less, Step 0's skeleton was overwritten rather
+than edited: restore the five headings and edit from then on.
 
 ---
 

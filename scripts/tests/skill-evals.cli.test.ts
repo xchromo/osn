@@ -437,7 +437,7 @@ async function boardFor(
   await writeFile(join(dir, ".claude/evals/scores.json"), JSON.stringify({ scenarios }, null, 2));
 }
 
-test("plan calls an unchanged scenario free and a changed one paid for", async () => {
+test("plan counts an unchanged scenario at one variant when the skills moved", async () => {
   const dir = await makeTree(["alpha"], ["alpha-one", "alpha-two"]);
   const one = (await run(dir, "fingerprint", ".claude/evals/alpha-one")).stdout.trim();
   await boardFor(dir, {
@@ -448,7 +448,11 @@ test("plan calls an unchanged scenario free and a changed one paid for", async (
   const out = await run(dir, "plan");
   expect(out.exitCode).toBe(0);
   expect(out.stdout).toContain("1 unchanged, 1 changed");
-  expect(out.stdout).toContain("Replayed, so free (1)");
+  expect(out.stdout).toContain("Unchanged (1)");
+  // The board rows carry no skillsHash, so the skills read as moved: the
+  // unchanged scenario still pays for its usage-spec variant (1 x 3) and the
+  // changed one pays for both (2 x 3).
+  expect(out.stdout).toContain("≈ 9 paid solve(s)");
   expect(out.stdout).toContain("alpha-two");
   await rm(dir, { recursive: true, force: true });
 });
@@ -481,7 +485,7 @@ test("plan counts a scenario the scoreboard has never seen as paid for", async (
 
   const out = await run(dir, "plan");
   expect(out.stdout).toContain("1 never scored");
-  expect(out.stdout).toContain("Re-solved, so paid for (1)");
+  expect(out.stdout).toContain("Changed (1) — both variants re-solve");
   await rm(dir, { recursive: true, force: true });
 });
 

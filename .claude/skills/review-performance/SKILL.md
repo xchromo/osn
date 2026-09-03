@@ -45,6 +45,21 @@ line`, and none of them is allowed: a summary sentence goes at the top of
 `## Performance findings`, a number you counted goes in `## Measurements`, and
 an environment caveat goes at the end of `## Sections checked`.
 
+**From here on this file is only ever edited, never rewritten.** Every later
+change replaces a `None`, or inserts text under a heading that already exists.
+Do not compose the report in your head and write it out whole at the end — a
+single write to `PERFORMANCE-REVIEW.md` discards the shape this step just
+established, and that is the one way this run fails outright however good the
+analysis is. If you find yourself about to write the whole file, you have lost
+the skeleton: read it back first and edit what is there.
+
+**A finding is a bold label, not a heading.** ``P-W1`` goes on its own line as
+bold text inside `## Performance findings`, exactly as **Finding format** shows below.
+Promoting it to `## P-W1` adds a top-level section, and a run whose findings
+each became a heading fails the shape check with four correct sections still
+sitting in the file. The same goes for `## Summary`, `## Filing notes` and
+anything else the analysis suggests along the way.
+
 What each section holds is under **Report shape** at the end of this file.
 
 ## Step 1 — Route the diff
@@ -82,6 +97,18 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 ## Step 2 — Work the mandatory sections
 
 Read every changed source file in full, then take each mandatory section one bullet at a time. A bullet names a property the code is supposed to have: find the code that would carry that property, and check whether it does. A bullet you cannot tie to any line of the diff is cleared. A bullet whose code you found and whose property is missing is a finding — write it up before moving to the next bullet, or you will lose it.
+
+**Check the shape once, as soon as the first finding is in the file.** Not at the
+end — by then a clobbered skeleton has cost the whole run, and the same two
+counts that catch it later catch it here for one command:
+
+```bash
+grep -c '^## \(Performance findings\|Measurements\|Coverage\|Sections checked\)$' PERFORMANCE-REVIEW.md
+```
+
+It must print `4`. If it prints less, the skeleton from Step 0 was overwritten
+rather than edited: restore the 4 headings, put the finding back under the right
+one, and edit from then on.
 
 **Count before you write, and write the count down first.** A performance
 finding is an argument about cost, so establish the cost before you argue.

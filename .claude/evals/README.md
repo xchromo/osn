@@ -228,10 +228,25 @@ The judge's own words, on a run that scored zero:
 > `## Summary` and `## Filing notes`.
 
 That is not a file that drifted while being filled in. It is a file written from
-scratch at the end, with Step 0 either never executed or overwritten. Whatever
-fixes this is not another sentence in the same place — the next thing worth
-trying is making the skeleton hard to discard, or checking for it mid-run rather
-than only at the end.
+scratch at the end, with Step 0 either never executed or overwritten. Another
+sentence saying "keep the four sections" would be the third in the same file,
+so the next attempt is a different *kind* of instruction, in three parts:
+
+- **A prohibition on the action, not the outcome.** From Step 0 on, the report
+  is only ever edited; a write of the whole file is named as the single way the
+  run fails outright, and "if you find yourself about to write the whole file,
+  you have lost the skeleton".
+- **A prohibition on the specific wrong shape.** The judge saw `## P-W1`, so
+  each skill now says a finding is a bold label inside its section and never a
+  heading of its own — the finding-format block shows `**P-W1**` but an agent
+  can read that as decoration.
+- **A check while the run can still be saved.** The two `grep -c` counts moved
+  from the end of the file to the moment the first finding lands. At the end
+  they diagnose a failure; in the middle they prevent one.
+
+Whether any of that works is an open question, and one run will not settle it:
+the item swung 11.0 to 7.0 on identical text, so a single result in either
+direction is a sample, not an answer.
 
 ## A run can end `failed` with most of its work intact
 

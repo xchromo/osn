@@ -51,6 +51,21 @@ ones that get invented, and none is allowed. A summary sentence goes at the top
 of `## Coverage gaps`; anything the toolchain stopped you doing goes in
 `## Not run`.
 
+**From here on this file is only ever edited, never rewritten.** Every later
+change replaces a `None`, or inserts text under a heading that already exists.
+Do not compose the report in your head and write it out whole at the end — a
+single write to `TEST-REVIEW.md` discards the shape this step just established,
+and that is the one way this run fails outright however good the audit is. If
+you find yourself about to write the whole file, you have lost the skeleton:
+read it back first and edit what is there.
+
+**A gap is a bold label, not a heading.** `T-U1` goes on its own line as bold
+text inside `## Coverage gaps`, exactly as **Finding format** shows below.
+Promoting it to `## T-U1` adds a top-level section, and a run whose gaps each
+became a heading fails the shape check with five correct sections still sitting
+in the file. The same goes for `## Summary`, `## Verdict` and anything else the
+audit suggests along the way.
+
 Every gap carries a `T-` ID in the four-field format. What each section holds is
 under **Report shape** at the end of this file.
 
@@ -112,6 +127,17 @@ For each changed source file, open it and its test file together and check:
 - **A new credential path is tested absent as well as present.** Where the branch teaches a handler to accept a new way of identifying the caller — a cookie, a header, a bearer token, a claim code, a signed link — the test that proves it works is only half of it. The other half is what happens with the credential missing, malformed, expired, or belonging to someone else: the request must be refused, and a test must say so. This is the gap that ships an authorisation bypass, because the positive test passes either way — it passes when the credential is checked and it passes when the handler ignores the credential entirely and serves everyone. A credential accepted with no negative case is `T-E`, and name the specific case in the `Solution`: not "add negative tests" but "assert 401 when the cookie is absent, and 403 when it names a different household".
 - **Boundaries are covered.** Empty arrays, maximum lengths, invalid IDs, a cap at exactly its limit and one over. Missing boundaries are `T-S`.
 - **A test that needs real CSS or layout is in the right project.** Computed classes, layout, and anything reading geometry belong to the Chromium Vitest project, not jsdom — `wiki/conventions/browser-tests.md`. A layout assertion in a jsdom test is `T-S`, and usually a test that cannot fail.
+
+**Check the shape once, as soon as the first gap is in the file.** Not at the
+end — by then a clobbered skeleton has cost the whole run:
+
+```bash
+grep -c '^## \(Build\|Tests\|Coverage gaps\|Files audited\|Not run\)$' TEST-REVIEW.md
+```
+
+It must print `5`. If it prints less, the skeleton from Step 0 was overwritten
+rather than edited: restore the five headings, put the gap back under
+`## Coverage gaps`, and edit from then on.
 
 A test asserting only that a function returns without throwing is not coverage. Say so, as `T-U`, and name what it should assert.
 
