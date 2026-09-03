@@ -199,54 +199,61 @@ scenario pinned *after* the fix, which is the only way to score restraint, and a
 scenario whose ground truth is a process rule rather than a defect, where the
 fixture can plant the exact bait the rule exists to prevent.
 
-## Skeleton-first has not been shown to work
+## The loop cannot resolve a per-scenario change, and here is the number
 
-Writing the report skeleton to disk before reading the diff was the answer to
-the suite's most consistent failure, and three runs later the honest reading is
-that it has not moved the number it was aimed at. The shape items, with the
-skill in view, out of 20 points:
+Four runs, and the honest summary is that **run-to-run variance is larger than
+anything the skill edits have moved.** The skill's aggregate score per scenario,
+across four runs at `-n 3`:
 
-| | run 7 (before) | run 9 (after) | run 10 (after) |
-|---|---|---|---|
-| skill | 8.0 | 11.0 | 7.0 |
-| baseline | 2.0 | 1.0 | 1.5 |
+| scenario | run 7 | run 9 | run 10 | run 11 | sd | range |
+|---|---|---|---|---|---|---|
+| `vendor-read-round-trips` | 27 | 36 | 29 | 60 | 13.1 | 33 |
+| `access-token-verifier` | 57 | 82 | 46 | 56 | 13.2 | 36 |
+| `zap-chat-class-authz` | 62 | 54 | 62 | 33 | 11.6 | 29 |
+| `pulse-account-cookie-credential` | 67 | 63 | 38 | 53 | 11.2 | 29 |
+| `consent-cookie-rediscovery` | 53 | 74 | 79 | 61 | 10.1 | 25 |
+| `entitlement-gate-fold` | 35 | 35 | 20 | 41 | 8.0 | 22 |
+| `prep-pr-finding-routing` | 64 | 70 | 83 | 72 | 7.0 | 19 |
+| `prep-pr-changeset` | 75 | 67 | 76 | 85 | 6.4 | 18 |
+| `colocated-layout` | 72 | 63 | 61 | 71 | 4.9 | 11 |
+| `consent-hardened-restraint` | 83 | 85 | 91 | 79 | 4.3 | 12 |
 
-Runs 9 and 10 ran **identical skill text** — `plan` confirms the skills hash did
-not move between them — and the skill's own score went 11.0 to 7.0. So run 9's
-gain was the high sample of a noisy series, and the post-change mean of 9.0
-against a pre-change 8.0 is not a result.
+Mean per-scenario standard deviation: **9.0 points**, with ranges to 36. Some of
+that is scenario edits between runs, but not most of it — `zap-chat-class-authz`
+scored 62, 54, 62 and then 33 across runs whose rubric barely moved, and run 11
+changed nothing but four sentences about headings while `vendor` went 29 to 60.
 
-What *is* durable is the gap to the baseline: the skill scores four to seven
-times the baseline on report shape in every run. The instruction is doing
-something. It is the *skeleton* specifically that has no demonstrated effect
-over stating the contract twice, which is what run 7 already did.
+**One number does hold still.** The suite-level lift, skill minus baseline:
++10.5, +18.2, +13.5, +18.4 — mean 15.1, sd 3.3. Aggregating ten scenarios buys
+back the power that `-n 3` does not have per scenario.
 
-The judge's own words, on a run that scored zero:
+So: **quote the suite lift; do not quote a per-scenario delta.** A 10-point
+per-scenario movement is one standard deviation and means nothing on its own. To
+attribute a change to a single scenario you would need something closer to
+`-n 10`, which is four times the cost of a full run for one tenth of the suite.
 
-> None of the four required top-level sections appears in the review; instead
-> the agent used individual finding headings (`## P-W1`, `## P-I2`, etc.) plus
-> `## Summary` and `## Filing notes`.
+### What that says about the shape work
 
-That is not a file that drifted while being filled in. It is a file written from
-scratch at the end, with Step 0 either never executed or overwritten. Another
-sentence saying "keep the four sections" would be the third in the same file,
-so the next attempt is a different *kind* of instruction, in three parts:
+Writing the report skeleton to disk before reading the diff, then forbidding
+the whole-file rewrite that discards it, has not moved the shape items:
 
-- **A prohibition on the action, not the outcome.** From Step 0 on, the report
-  is only ever edited; a write of the whole file is named as the single way the
-  run fails outright, and "if you find yourself about to write the whole file,
-  you have lost the skeleton".
-- **A prohibition on the specific wrong shape.** The judge saw `## P-W1`, so
-  each skill now says a finding is a bold label inside its section and never a
-  heading of its own — the finding-format block shows `**P-W1**` but an agent
-  can read that as decoration.
-- **A check while the run can still be saved.** The two `grep -c` counts moved
-  from the end of the file to the moment the first finding lands. At the end
-  they diagnose a failure; in the middle they prevent one.
+| | run 7 (no skeleton) | run 9 | run 10 | run 11 (rewrite forbidden) |
+|---|---|---|---|---|
+| skill | 8.0 | 11.0 | 7.0 | 9.0 |
+| baseline | 2.0 | 1.0 | 1.5 | 1.0 |
 
-Whether any of that works is an open question, and one run will not settle it:
-the item swung 11.0 to 7.0 on identical text, so a single result in either
-direction is a sample, not an answer.
+Every post-change value sits inside the range the pre-change series already
+covered. Runs 9 and 10 shared identical skill text and differed by 4 points, so
+run 11's 9.0 is a sample, not a verdict. What is real, and has been in all four
+runs, is the **gap**: the skill scores five to nine times the baseline on report
+shape. Something in the skill produces the shape. Nothing added since run 7 has
+been shown to add to it.
+
+The lesson is not "stop trying". It is that this loop answers "is the skill
+earning its place" (yes, consistently, +15 points) and cannot answer "did this
+edit help" for an edit worth less than about 20 points. Reach for the
+deterministic gate — `tessl review run quality` — for the second question, and
+change several things at once when you do spend a run.
 
 ## A run can end `failed` with most of its work intact
 
@@ -306,11 +313,14 @@ nevertheless had a solve complete at 73.5 minutes, so the ceiling is not applied
 uniformly. Neither is reachable from the CLI; a settable value is worth asking
 for.
 
-**The biggest lever is not re-solving what has not changed.** An unchanged
-scenario is replayed rather than re-executed — both variants, not just the
-baseline. Run 9 paid for all sixty solves because every `criteria.json` had
-changed, when only two `task.md` files had; thirty of those were baselines that
-would otherwise have been free. `bun scripts/skill-evals.ts plan` prints what a
+**The biggest lever is not re-solving what has not changed, and it works.** Run
+10 changed every scenario and executed all 60 solve jobs. Run 11 changed only
+the skills, and executed **33** — 9 of its 20 solutions came back replayed from
+run 10, which is what `plan` predicted (30). An unchanged scenario replays its
+baseline; its `usage-spec` variant does not, because the injected context is
+part of the cache key. Note that the cost totals in `tessl eval view` sum every
+row including the replayed ones, so a run's reported `costUsd` is not what it
+billed — count executed solve jobs instead. `bun scripts/skill-evals.ts plan` prints what a
 run now would actually pay for, and warns when the skills and the scenarios have
 both moved since the scoreboard — because then a scenario's baseline is being
 re-judged by a new rubric in the same run, and a movement cannot be attributed
