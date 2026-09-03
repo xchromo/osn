@@ -1,0 +1,176 @@
+name: Skill Eval
+
+# The inner loop for `.claude/skills/`. Two gates, and they are different kinds
+# of thing.
+#
+# `quality` is deterministic and cheap: Tessl reviews the SKILL.md files the
+# diff touched and scores their structure. It fails the check.
+#
+# `eval` is neither. It runs the changed skills' scenarios through a real agent
+# and scores what the agent leaves on disk, which costs credits and swings
+# between identical runs — at `-n 1` a scenario's score moves further on noise
+# than most real regressions do. So it never fails the check. It posts a table
+# against the committed scoreboard and leaves the judgement to a person.
+on:
+  pull_request:
+    paths:
+      - ".claude/skills/**"
+      - ".claude/evals/**"
+      # The scoreboard is written BY this workflow. Watching it would make
+      # every run trigger the next one.
+      - "!.claude/evals/scores.json"
+      - "scripts/skill-evals.ts"
+      - ".github/workflows/skill-eval.yml"
+
+# A force-push mid-run otherwise leaves the first run going and starts a
+# second, and both are billed.
+concurrency:
+  group: skill-eval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Skill quality review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Third-party and untagged — both tesslio actions here are pinned to a
+      # commit rather than a moving `@main`, unlike the well-known actions this
+      # repository takes on a version tag.
+      - name: Review changed SKILL.md files
+        uses: tesslio/skill-review@7e7ea574722a6d72752aa5a316bcc813d06b7cd2
+        with:
+          path: .claude/skills
+          comment: "true"
+          fail-threshold: "70"
+          workspace: musubi
+          tessl-token: ${{ secrets.TESSL_TOKEN }}
+
+  eval:
+    name: Scenario eval
+    needs: quality
+    runs-on: ubuntu-latest
+    # The poll below is bounded at 75 minutes; this is the backstop under it.
+    timeout-minutes: 90
+    # A fork's pull request gets no secrets, so the run cannot authenticate.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `changed` diffs against the base, so the base commit has to be here.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Which skills did this branch touch
+        id: skills
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          SKILLS=$(bun run scripts/skill-evals.ts changed --base "$BASE_SHA" | paste -sd, -)
+          echo "Changed skills: ${SKILLS:-<none>}"
+          echo "list=$SKILLS" >> "$GITHUB_OUTPUT"
+
+      - name: Every scenario names a real skill
+        if: steps.skills.outputs.list != ''
+        run: bun run scripts/skill-evals.ts check-names
+
+      - uses: tesslio/setup-tessl@v2
+        if: steps.skills.outputs.list != ''
+        with:
+          token: ${{ secrets.TESSL_TOKEN }}
+
+      - name: Narrow the run to those skills' scenarios
+        if: steps.skills.outputs.list != ''
+        run: bun run scripts/skill-evals.ts subset --skills "${{ steps.skills.outputs.list }}" --out "$RUNNER_TEMP/scenarios"
+
+      # `--skip-baseline` because the baseline cannot move when only a skill
+      # changed, and it is half the solves. `-n 1` because this is the inner
+      # loop; a number worth quoting comes from a deliberate `-n 3` run.
+      #
+      # The model is NOT pinned here. `--model` needs a paid plan, and the
+      # scoreboard records whichever model the run reports — `compare` then
+      # refuses to show a delta across a model change rather than reading one
+      # as a regression.
+      - name: Start the eval run
+        id: run
+        if: steps.skills.outputs.list != ''
+        env:
+          TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
+        working-directory: .claude
+        run: |
+          OUT=$(tessl eval run "$RUNNER_TEMP/scenarios" \
+            --context . \
+            --skip-baseline \
+            -n 1 \
+            --yes \
+            --label "PR #${{ github.event.pull_request.number }} — ${{ steps.skills.outputs.list }}" \
+            --json)
+          echo "$OUT"
+          ID=$(echo "$OUT" | bun -e 'const d=JSON.parse(await Bun.stdin.text()); console.log(d.data?.id ?? d.id ?? "")')
+          if [ -z "$ID" ]; then echo "::error::could not read a run id"; exit 1; fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+      # `tessl eval run` returns as soon as the run is QUEUED, so something has
+      # to wait — but not on `status`. That field has read `pending` for over an
+      # hour after every solution was scored, which would hang this job until
+      # its timeout. `ready` asks the question that matters instead: has every
+      # expected variant of every scenario been scored.
+      - name: Wait for it to be scored
+        if: steps.skills.outputs.list != ''
+        env:
+          TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
+        run: |
+          for _ in $(seq 1 75); do
+            (cd .claude && tessl eval view "${{ steps.run.outputs.id }}" --json) > "$RUNNER_TEMP/run.json" || true
+            if bun run scripts/skill-evals.ts ready --run "$RUNNER_TEMP/run.json"; then exit 0; fi
+            sleep 60
+          done
+          echo "::error::run was not scored inside 75 minutes"
+          exit 1
+
+      - name: Compare against the scoreboard
+        id: compare
+        if: steps.skills.outputs.list != ''
+        run: |
+          bun run scripts/skill-evals.ts compare --run "$RUNNER_TEMP/run.json" > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md"
+
+      - name: Post the table
+        if: steps.skills.outputs.list != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"
+
+      # The scoreboard is what the NEXT run is compared against, so it has to
+      # land with the change that produced it. Committing it to the pull
+      # request's own branch keeps the delta reviewable in the diff; the path
+      # filter above deliberately ignores this file so the push does not
+      # trigger another run.
+      - name: Record the scores
+        if: steps.skills.outputs.list != ''
+        run: |
+          bun run scripts/skill-evals.ts record --run "$RUNNER_TEMP/run.json"
+          if git diff --quiet -- .claude/evals/scores.json; then
+            echo "Scoreboard unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .claude/evals/scores.json
+          git commit -m "chore(evals): record scores for run ${{ steps.run.outputs.id }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"

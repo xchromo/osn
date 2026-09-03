@@ -1,0 +1,401 @@
+// The script is a CLI with no exported functions, and every branch worth
+// testing is a decision about a directory tree — which scenarios belong to a
+// skill, whether a fixture moved, whether two runs are comparable. So these
+// tests build a throwaway tree with its own `.claude/skills` and
+// `.claude/evals`, run the real script inside it, and read what it prints.
+//
+// The script resolves `.claude/...` relative to the process's working
+// directory, so pointing it at a fixture is a matter of `cwd`, with no copy of
+// the script needed.
+
+import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const SCRIPT = new URL("../skill-evals.ts", import.meta.url).pathname;
+
+async function makeTree(skills: readonly string[], scenarios: readonly string[]): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "skill-evals-cli-"));
+  for (const skill of skills) {
+    await mkdir(join(dir, ".claude/skills", skill), { recursive: true });
+    await writeFile(join(dir, ".claude/skills", skill, "SKILL.md"), `---\nname: ${skill}\n---\n`);
+  }
+  for (const scenario of scenarios) {
+    const path = join(dir, ".claude/evals", scenario);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, "scenario.json"), `{"description":"${scenario}"}\n`);
+    await writeFile(join(path, "task.md"), "# task\n");
+    await writeFile(join(path, "criteria.json"), '{"type":"weighted_checklist","checklist":[]}\n');
+    await writeFile(join(path, "setup.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n");
+  }
+  return dir;
+}
+
+async function run(cwd: string, ...args: string[]) {
+  const proc = Bun.spawn(["bun", "run", SCRIPT, ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+test("subset picks only the named skills' scenarios", async () => {
+  const dir = await makeTree(
+    ["prep-pr", "review-security", "review-tests"],
+    ["prep-pr-one", "review-security-two", "review-tests-three"],
+  );
+  try {
+    const out = join(dir, "out");
+    const result = await run(
+      dir,
+      "subset",
+      "--skills",
+      "review-security,review-tests",
+      "--out",
+      out,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim().split("\n").sort()).toEqual([
+      "review-security-two",
+      "review-tests-three",
+    ]);
+    expect(await Bun.file(join(out, "review-security-two/task.md")).exists()).toBe(true);
+    expect(await Bun.file(join(out, "prep-pr-one/task.md")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// `review` would otherwise claim `review-security-two` and the scenario would
+// run under the wrong skill's subset — silently, since both names are real.
+test("a scenario belongs to the longest matching skill name", async () => {
+  const dir = await makeTree(["review", "review-security"], ["review-security-two"]);
+  try {
+    const out = join(dir, "out");
+    const wrong = await run(dir, "subset", "--skills", "review", "--out", out);
+    expect(wrong.exitCode).toBe(1);
+    const right = await run(
+      dir,
+      "subset",
+      "--skills",
+      "review-security",
+      "--out",
+      join(dir, "out2"),
+    );
+    expect(right.stdout.trim()).toBe("review-security-two");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("check-names fails on a scenario no skill owns", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one", "orphaned-case"]);
+  try {
+    const result = await run(dir, "check-names");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("orphaned-case");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("check-names passes when every scenario names a skill", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const result = await run(dir, "check-names");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("1 scenarios");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The hash exists to answer one question: may the previous score be compared
+// with this one. Editing the skill must not move it; editing anything the
+// scenario asks must.
+test("the fixture hash ignores the skill and tracks the scenario", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const before = (await run(dir, "fingerprint", ".claude/evals/prep-pr-one")).stdout.trim();
+
+    await writeFile(
+      join(dir, ".claude/skills/prep-pr/SKILL.md"),
+      "---\nname: prep-pr\n---\nrewritten\n",
+    );
+    expect((await run(dir, "fingerprint", ".claude/evals/prep-pr-one")).stdout.trim()).toBe(before);
+
+    await writeFile(join(dir, ".claude/evals/prep-pr-one/task.md"), "# a different task\n");
+    expect((await run(dir, "fingerprint", ".claude/evals/prep-pr-one")).stdout.trim()).not.toBe(
+      before,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function runJson(
+  scenario: string,
+  items: Record<string, [number, number]>,
+  model = "deepseek-v4-flash",
+) {
+  return JSON.stringify({
+    data: {
+      id: "01a0-test",
+      attributes: {
+        status: "completed",
+        agent: "claude",
+        model,
+        runCount: 1,
+        expectedVariants: ["usage-spec"],
+        scenarios: [
+          {
+            path: `.claude/evals/${scenario}`,
+            fingerprint: "abc",
+            solutions: [
+              {
+                variant: "usage-spec",
+                runs: [{ status: "completed", score: 50 }],
+                assessmentResults: Object.entries(items).map(([name, [score, max]]) => ({
+                  name,
+                  score,
+                  max_score: max,
+                })),
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+}
+
+test("compare reports a delta, and refuses one when the fixture moved", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    await writeFile(join(dir, "run.json"), runJson("prep-pr-one", { a: [1, 2] }));
+    expect((await run(dir, "record", "--run", "run.json")).exitCode).toBe(0);
+
+    await writeFile(join(dir, "run2.json"), runJson("prep-pr-one", { a: [2, 2] }));
+    const improved = await run(dir, "compare", "--run", "run2.json");
+    expect(improved.stdout).toContain("+50 pts");
+
+    // Now the scenario itself asks something different, so the stored score
+    // is not a comparison any more.
+    await writeFile(
+      join(dir, ".claude/evals/prep-pr-one/setup.sh"),
+      "#!/usr/bin/env bash\necho different\n",
+    );
+    const void_ = await run(dir, "compare", "--run", "run2.json");
+    expect(void_.stdout).toContain("history void");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("compare refuses a delta across a model change", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    await writeFile(join(dir, "run.json"), runJson("prep-pr-one", { a: [1, 2] }));
+    await run(dir, "record", "--run", "run.json");
+    await writeFile(
+      join(dir, "run2.json"),
+      runJson("prep-pr-one", { a: [2, 2] }, "claude-sonnet-5"),
+    );
+    const result = await run(dir, "compare", "--run", "run2.json");
+    expect(result.stdout).toContain("not comparable");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Readiness is not `status`. A run whose every solution is scored has sat at
+// `pending` for over an hour, so waiting on the field would hang CI until its
+// timeout; a run with a variant still unscored is the real not-yet.
+test("a scored run is ready even while its status still says pending", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: { attributes: { status: string } };
+    };
+    doc.data.attributes.status = "pending";
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(0);
+    expect((await run(dir, "record", "--run", "run.json")).exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a run with an expected variant still unscored is not ready", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          expectedVariants: string[];
+          scenarios: { solutions: { variant: string; assessmentResults: unknown[] }[] }[];
+        };
+      };
+    };
+    doc.data.attributes.expectedVariants = ["baseline", "usage-spec"];
+    doc.data.attributes.scenarios[0]!.solutions.push({
+      variant: "baseline",
+      assessmentResults: [],
+    });
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(1);
+    expect((await run(dir, "compare", "--run", "run.json")).exitCode).toBe(1);
+    expect((await run(dir, "record", "--run", "run.json")).exitCode).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A solution grows `assessmentResults` the moment its FIRST run is judged, so a
+// rubric is not a finish line. Run 7 passed the old readiness test 54 minutes in
+// with most solutions on one scored run out of three, and reported that
+// single sample under an n=3 heading.
+test("a run whose solutions are still short of runCount is not ready", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          runCount: number;
+          scenarios: { solutions: { runs: { status: string; score: number | null }[] }[] }[];
+        };
+      };
+    };
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
+      { status: "completed", score: 50 },
+      { status: "completed", score: null },
+      { status: "completed", score: null },
+    ];
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(1);
+    expect((await run(dir, "compare", "--run", "run.json")).exitCode).toBe(1);
+    expect((await run(dir, "record", "--run", "run.json")).exitCode).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a run with every run of every solution scored is ready", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          runCount: number;
+          scenarios: { solutions: { runs: { status: string; score: number | null }[] }[] }[];
+        };
+      };
+    };
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
+      { status: "completed", score: 50 },
+      { status: "completed", score: 61 },
+      { status: "completed", score: 0 },
+    ];
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The comparison that is always valid. A stored score survives only while its
+// fixture and its rubric both still ship; the baseline was judged in this run,
+// on this fixture, by today's rubric, so it answers "is the skill earning its
+// place" even on a row whose history is void.
+test("compare reports the skill against this run's own baseline", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [9, 12] })) as {
+      data: {
+        attributes: {
+          expectedVariants: string[];
+          scenarios: {
+            solutions: {
+              variant: string;
+              runs?: { status: string; score: number }[];
+              assessmentResults: { name: string; score: number; max_score: number }[];
+            }[];
+          }[];
+        };
+      };
+    };
+    doc.data.attributes.expectedVariants = ["baseline", "usage-spec"];
+    doc.data.attributes.scenarios[0]!.solutions.push({
+      variant: "baseline",
+      runs: [{ status: "completed", score: 50 }],
+      assessmentResults: [{ name: "a", score: 6, max_score: 12 }],
+    });
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    const out = await run(dir, "compare", "--run", "run.json");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("50% (6/12) · +25 pts");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("compare says the baseline was skipped when the run had none", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    await writeFile(join(dir, "run.json"), runJson("prep-pr-one", { a: [9, 12] }));
+    const out = await run(dir, "compare", "--run", "run.json");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("— (skipped)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// An `-n 1` run — the CI inner loop's shape — carries neither `runCount` nor a
+// `runs` array. Demanding them waits for a field that never arrives: the first
+// `--skip-baseline -n 1` run sat through a 90-minute poll having finished
+// before the poll began.
+test("a single-run payload with no runs array is ready", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          runCount?: number;
+          scenarios: { solutions: { runs?: unknown }[] }[];
+        };
+      };
+    };
+    delete doc.data.attributes.runCount;
+    delete doc.data.attributes.scenarios[0]!.solutions[0]!.runs;
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(0);
+    expect((await run(dir, "record", "--run", "run.json")).exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// But an empty `runs` array on a payload that announces three of them is a run
+// still working, not a one-run payload.
+test("an empty runs array is not ready when runCount says three", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: { runCount: number; scenarios: { solutions: { runs: unknown[] }[] }[] };
+      };
+    };
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [];
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+    expect((await run(dir, "ready", "--run", "run.json")).exitCode).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

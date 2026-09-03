@@ -1,0 +1,426 @@
+#!/usr/bin/env bun
+/**
+ * The inner loop for the agent skills in `.claude/skills/`.
+ *
+ * A full `tessl eval run` over every scenario, both variants, three runs each,
+ * is sixty agent solves at roughly four at a time — hours of wall clock and
+ * hundreds of credits. Almost none of that work is needed to answer the
+ * question a skill edit actually asks, which is "did this scenario move".
+ * These subcommands narrow the run to the skills the diff touched, and keep a
+ * committed scoreboard so the next run has something to be compared against.
+ *
+ *   changed      --base <ref>              skills whose files the diff touched
+ *   subset       --skills a,b --out <dir>  their scenarios, copied for a run
+ *   fingerprint  <scenario-dir>            hash of everything but the skill
+ *   check-names                            every scenario names a real skill
+ *   ready        --run <view.json>         has every variant been scored yet
+ *   compare      --run <view.json>         markdown table against the scoreboard
+ *   record       --run <view.json>         write those scores back
+ *
+ * `compare` is deliberately not a gate. At `-n 1` a scenario's score swings
+ * further between identical runs than most real regressions do, so the table
+ * is for a human to read in the pull request. The gate is `tessl review run
+ * quality`, which is deterministic.
+ */
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const SKILLS_DIR = ".claude/skills";
+const EVALS_DIR = ".claude/evals";
+const SCOREBOARD = join(EVALS_DIR, "scores.json");
+
+/** The files that decide what a scenario asks. The skill under test is not one
+ * of them — that is the whole point: a score is comparable across skill edits
+ * and nothing else. */
+const FIXTURE_FILES = ["scenario.json", "task.md", "criteria.json", "setup.sh"];
+
+interface ScoreRow {
+  skill: string;
+  fixtureHash: string;
+  fingerprint: string | null;
+  agent: string;
+  model: string;
+  runs: number;
+  variant: string;
+  score: number;
+  points: string;
+  baseline?: number | null;
+  items: Record<string, string>;
+  runId: string;
+  recordedAt: string;
+}
+
+type Scoreboard = { scenarios: Record<string, ScoreRow> };
+
+function listSkills(): string[] {
+  if (!existsSync(SKILLS_DIR)) return [];
+  return readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+}
+
+function listScenarios(): string[] {
+  if (!existsSync(EVALS_DIR)) return [];
+  return readdirSync(EVALS_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(EVALS_DIR, e.name, "scenario.json")))
+    .map((e) => e.name)
+    .sort();
+}
+
+/** A scenario belongs to the skill whose name is the longest prefix of its
+ * directory name. Longest wins so `review-security-…` is not claimed by a
+ * hypothetical `review` skill. */
+function skillOf(scenario: string, skills: string[]): string | null {
+  const owners = skills
+    .filter((s) => scenario === s || scenario.startsWith(`${s}-`))
+    .sort((a, b) => b.length - a.length);
+  return owners[0] ?? null;
+}
+
+function fixtureHash(scenarioDir: string): string {
+  const hash = createHash("sha256");
+  for (const file of FIXTURE_FILES) {
+    const path = join(scenarioDir, file);
+    hash.update(file);
+    hash.update(existsSync(path) ? readFileSync(path) : Buffer.from("<absent>"));
+  }
+  return `sha256:${hash.digest("hex").slice(0, 32)}`;
+}
+
+function readScoreboard(): Scoreboard {
+  if (!existsSync(SCOREBOARD)) return { scenarios: {} };
+  return JSON.parse(readFileSync(SCOREBOARD, "utf8")) as Scoreboard;
+}
+
+/** Pull the with-context scores out of `tessl eval view --json`. The baseline
+ * variant is skipped in the inner loop, so a run usually carries one solution
+ * per scenario; when both are present the context variant is the one that
+ * moves with a skill edit. */
+function parseRun(viewJson: string) {
+  const doc = JSON.parse(viewJson) as {
+    data: {
+      id: string;
+      attributes: {
+        status: string;
+        agent?: string;
+        model?: string;
+        runCount?: number;
+        expectedVariants?: string[];
+        scenarios: {
+          path?: string;
+          fingerprint?: string;
+          solutions: {
+            variant: string;
+            assessmentResults?: { name: string; score: number; max_score: number }[];
+            runs?: { status?: string; score?: number | null }[];
+          }[];
+        }[];
+      };
+    };
+  };
+  const attrs = doc.data.attributes;
+  const rows = new Map<
+    string,
+    {
+      fingerprint: string | null;
+      variant: string;
+      items: Record<string, string>;
+      score: number;
+      points: string;
+      baseline: { score: number; points: string } | null;
+    }
+  >();
+
+  for (const scenario of attrs.scenarios ?? []) {
+    // `path` is the scenario directory as the CLI saw it, e.g.
+    // `.claude/evals/<name>/` or `evals/<name>`. Take the last real segment.
+    const name = (scenario.path ?? "").split("/").filter(Boolean).pop();
+    if (!name) continue;
+    const solution =
+      scenario.solutions?.find((s) => s.variant !== "baseline") ?? scenario.solutions?.[0];
+    const results = solution?.assessmentResults ?? [];
+    if (!solution || results.length === 0) continue;
+
+    const scored = results.reduce((sum, r) => sum + r.score, 0);
+    const total = results.reduce((sum, r) => sum + r.max_score, 0);
+
+    // The only comparison that is always valid. A stored score is comparable
+    // to this run only if the fixture AND the rubric that produced it still
+    // ship; the baseline was judged by today's rubric, in this run, on this
+    // fixture, by the same agent — so it answers "is the skill earning its
+    // place" even when history is void. It is absent on a `--skip-baseline`
+    // inner-loop run, which is the point of that flag.
+    const base = scenario.solutions?.find((s) => s.variant === "baseline");
+    const baseResults = base?.assessmentResults ?? [];
+    const baseScored = baseResults.reduce((sum, r) => sum + r.score, 0);
+    const baseTotal = baseResults.reduce((sum, r) => sum + r.max_score, 0);
+
+    rows.set(name, {
+      fingerprint: scenario.fingerprint ?? null,
+      variant: solution.variant,
+      items: Object.fromEntries(results.map((r) => [r.name, `${round(r.score)}/${r.max_score}`])),
+      score: total === 0 ? 0 : scored / total,
+      points: `${round(scored)}/${total}`,
+      baseline:
+        baseResults.length === 0 || baseTotal === 0
+          ? null
+          : { score: baseScored / baseTotal, points: `${round(baseScored)}/${baseTotal}` },
+    });
+  }
+
+  // `status` lags. A run whose every solution carries a scored rubric has
+  // reported `pending` for over an hour here, so waiting on the field alone
+  // would hang a CI job until its timeout. What the caller actually needs to
+  // know is whether every expected variant of every scenario has been scored,
+  // and that is answerable from the payload.
+  //
+  // A solution grows an `assessmentResults` array as soon as its FIRST run is
+  // judged, so "has a rubric" is not "is finished" — run 7 satisfied that test
+  // 54 minutes in with 17 of 20 solutions still on one scored run out of three,
+  // and the numbers it handed back were single-sample noise wearing an n=3
+  // label. Require the full complement: `runCount` entries in `runs`, each
+  // carrying a score. A run that genuinely produced nothing scores 0, not null,
+  // so a null here means still working rather than legitimately empty.
+  const expected = attrs.expectedVariants ?? [];
+
+  // `runs[]` and `runCount` are present only on a multi-run payload. An `-n 1`
+  // run — which is what the CI inner loop submits — carries neither, so a
+  // predicate that demands them waits for a field that never arrives: the first
+  // `--skip-baseline -n 1` run sat through a 90-minute poll having finished
+  // before the poll began. Absent means "one run, and the rubric is the whole
+  // signal"; present means check every entry.
+  const wanted = attrs.runCount ?? 0;
+  const complete = (solution: { runs?: { score?: number | null }[] }) => {
+    const runs = solution.runs;
+    if (runs === undefined || runs.length === 0) return wanted <= 1;
+    return runs.length >= wanted && runs.every((r) => typeof r.score === "number");
+  };
+  const scored =
+    (attrs.scenarios ?? []).length > 0 &&
+    (attrs.scenarios ?? []).every((scenario) =>
+      (expected.length > 0 ? expected : ["usage-spec"]).every((variant) =>
+        (scenario.solutions ?? []).some(
+          (s) => s.variant === variant && (s.assessmentResults ?? []).length > 0 && complete(s),
+        ),
+      ),
+    );
+
+  return {
+    runId: doc.data.id,
+    status: attrs.status,
+    scored,
+    agent: attrs.agent ?? "unknown",
+    model: attrs.model ?? "unknown",
+    runs: attrs.runCount ?? 1,
+    scenarios: rows,
+  };
+}
+
+const round = (n: number) => Math.round(n * 100) / 100;
+const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+function readArg(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? undefined : process.argv[i + 1];
+}
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+function cmdChanged() {
+  const base = readArg("--base") ?? "origin/main";
+  const proc = Bun.spawnSync(["git", "diff", "--name-only", `${base}...HEAD`]);
+  if (proc.exitCode !== 0) fail(`git diff against ${base} failed: ${proc.stderr.toString()}`);
+  const files = proc.stdout.toString().split("\n").filter(Boolean);
+  const skills = listSkills().filter((s) => files.some((f) => f.startsWith(`${SKILLS_DIR}/${s}/`)));
+  for (const skill of skills) console.log(skill);
+}
+
+function cmdSubset() {
+  const out = readArg("--out") ?? fail("subset needs --out <dir>");
+  const wanted = (readArg("--skills") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (wanted.length === 0) fail("subset needs --skills a,b");
+
+  const skills = listSkills();
+  const picked = listScenarios().filter((s) => {
+    const owner = skillOf(s, skills);
+    return owner !== null && wanted.includes(owner);
+  });
+  if (picked.length === 0) fail(`no scenarios for: ${wanted.join(", ")}`);
+
+  mkdirSync(out, { recursive: true });
+  for (const scenario of picked)
+    cpSync(join(EVALS_DIR, scenario), join(out, scenario), { recursive: true });
+  for (const scenario of picked) console.log(scenario);
+}
+
+function cmdFingerprint() {
+  const dir = process.argv[3] ?? fail("fingerprint needs a scenario directory");
+  console.log(fixtureHash(dir));
+}
+
+/** A scenario whose directory does not start with a skill's name is invisible
+ * to `subset`, so it silently stops running the moment CI narrows a run. That
+ * is a failure nobody notices, which is the kind worth a check. */
+function cmdCheckNames() {
+  const skills = listSkills();
+  const orphans = listScenarios().filter((s) => skillOf(s, skills) === null);
+  if (orphans.length > 0) {
+    fail(
+      `Scenario directories must begin with the name of a skill in ${SKILLS_DIR}/.\n` +
+        `Orphaned: ${orphans.join(", ")}\nKnown skills: ${skills.join(", ")}`,
+    );
+  }
+  console.log(`${listScenarios().length} scenarios, all owned by a skill.`);
+}
+
+function requireScored(run: ReturnType<typeof parseRun>) {
+  if (!run.scored) {
+    fail(`run ${run.runId} is not fully scored yet (status: ${run.status})`);
+  }
+}
+
+/** The poll predicate for CI. `tessl eval run` returns the moment a run is
+ * queued, so something has to wait; `status` is not that something. */
+function cmdReady() {
+  const runPath = readArg("--run") ?? fail("ready needs --run <view.json>");
+  const run = parseRun(readFileSync(runPath, "utf8"));
+  if (!run.scored) {
+    console.log(`not ready (status: ${run.status})`);
+    process.exit(1);
+  }
+  console.log(`scored: ${run.scenarios.size} scenario(s)`);
+}
+
+function cmdCompare() {
+  const runPath = readArg("--run") ?? fail("compare needs --run <view.json>");
+  const run = parseRun(readFileSync(runPath, "utf8"));
+  requireScored(run);
+  const board = readScoreboard();
+  const skills = listSkills();
+
+  const lines = [
+    `### Skill eval — \`${run.agent}:${run.model}\`, n=${run.runs}, ${run.scenarios.size} scenario(s)`,
+    "",
+    "| Scenario | Skill | Now | vs baseline | Before | Δ |",
+    "|---|---|---|---|---|---|",
+  ];
+
+  for (const [name, now] of [...run.scenarios].sort()) {
+    const before = board.scenarios[name];
+    const hash = fixtureHash(join(EVALS_DIR, name));
+    const skill = skillOf(name, skills) ?? "—";
+    let previous = "—";
+    let delta = "new scenario";
+
+    if (before) {
+      previous = `${pct(before.score)} (${before.points})`;
+      if (before.fixtureHash !== hash) {
+        // The hash covers `scenario.json`, `task.md`, `criteria.json` and
+        // `setup.sh`, so this fires on a rubric edit as readily as on a new
+        // fixture commit. Either way the stored number was produced by a
+        // different question and cannot be subtracted from this one.
+        delta = "**history void** — the scenario changed";
+      } else if (
+        before.model !== run.model ||
+        before.agent !== run.agent ||
+        before.runs !== run.runs
+      ) {
+        delta = `**not comparable** — was \`${before.agent}:${before.model}\`, n=${before.runs}`;
+      } else {
+        const points = round((now.score - before.score) * 100);
+        delta = points === 0 ? "no change" : `${points > 0 ? "+" : ""}${points} pts`;
+      }
+    }
+    const lift =
+      now.baseline === null
+        ? "— (skipped)"
+        : `${pct(now.baseline.score)} (${now.baseline.points}) · ${
+            round((now.score - now.baseline.score) * 100) >= 0 ? "+" : ""
+          }${round((now.score - now.baseline.score) * 100)} pts`;
+    lines.push(
+      `| \`${name}\` | ${skill} | ${pct(now.score)} (${now.points}) | ${lift} | ${previous} | ${delta} |`,
+    );
+  }
+
+  // Per-item movement, which is where a real regression is legible. A total
+  // that holds still can hide a ground-truth check going to zero while a
+  // formatting check makes the points back.
+  const moved: string[] = [];
+  for (const [name, now] of run.scenarios) {
+    const before = board.scenarios[name];
+    if (!before || before.fixtureHash !== fixtureHash(join(EVALS_DIR, name))) continue;
+    for (const [item, score] of Object.entries(now.items)) {
+      const was = before.items[item];
+      if (was !== undefined && was !== score)
+        moved.push(`- \`${name}\` · \`${item}\`: ${was} → ${score}`);
+    }
+  }
+  if (moved.length > 0)
+    lines.push("", "<details><summary>Items that moved</summary>", "", ...moved, "</details>");
+
+  lines.push("", `[Run ${run.runId}](https://tessl.io/workspaces/musubi/eval-runs/${run.runId})`);
+  console.log(lines.join("\n"));
+}
+
+function cmdRecord() {
+  const runPath = readArg("--run") ?? fail("record needs --run <view.json>");
+  const run = parseRun(readFileSync(runPath, "utf8"));
+  requireScored(run);
+  const board = readScoreboard();
+  const skills = listSkills();
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const [name, now] of run.scenarios) {
+    board.scenarios[name] = {
+      skill: skillOf(name, skills) ?? "unknown",
+      fixtureHash: fixtureHash(join(EVALS_DIR, name)),
+      fingerprint: now.fingerprint,
+      agent: run.agent,
+      model: run.model,
+      runs: run.runs,
+      variant: now.variant,
+      score: round(now.score),
+      points: now.points,
+      // Stored so a later run can see whether the *lift* held, not only whether
+      // the absolute score did. A skill can score the same while the model it
+      // rides on improves underneath it, and that is the skill ceasing to earn
+      // its place. Null on a `--skip-baseline` run.
+      baseline: now.baseline === null ? null : round(now.baseline.score),
+      items: now.items,
+      runId: run.runId,
+      recordedAt: today,
+    };
+  }
+
+  const ordered = Object.fromEntries(
+    Object.entries(board.scenarios).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  writeFileSync(SCOREBOARD, `${JSON.stringify({ scenarios: ordered }, null, 2)}\n`);
+  console.log(`Recorded ${run.scenarios.size} scenario(s) into ${SCOREBOARD}.`);
+}
+
+const commands = {
+  changed: cmdChanged,
+  subset: cmdSubset,
+  fingerprint: cmdFingerprint,
+  "check-names": cmdCheckNames,
+  ready: cmdReady,
+  compare: cmdCompare,
+  record: cmdRecord,
+} satisfies Record<string, () => void>;
+
+const command = process.argv[2];
+// `Object.hasOwn`, never `in` — `in` walks the prototype chain, so `toString`
+// and `constructor` would pass this guard and then be called as a subcommand.
+if (!command || !Object.hasOwn(commands, command)) {
+  fail(`Usage: bun run scripts/skill-evals.ts <${Object.keys(commands).join("|")}> [flags]`);
+}
+commands[command as keyof typeof commands]();
