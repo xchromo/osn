@@ -226,7 +226,7 @@ combine these" has not made the decision the reader needed.
 
 ## Client fetches
 
-- Data fetched again after a full document navigation (`window.location.href = …`) that the previous screen already had. Hand it across the gap deliberately, validate it before trusting it, and fall through to the normal fetch on any failure.
+- **Every full document navigation in the diff: check what it throws away.** Grep for `window.location.href =`, `location.assign(`, `location.replace(` and any `<a>` that leaves the SPA. For each hit, do three things in order: name the value the current screen was holding at that moment — the record a create or claim handler just returned is the usual one; open the destination and find the first thing it fetches; and if those are the same record, that is the finding. A full navigation drops every byte of in-memory state, so the second screen starts from nothing and fetches back what the first screen had in hand. The fix is a deliberate hand-off across the gap — a single-use `sessionStorage` key the destination reads, validates and deletes — with a fall-through to the normal fetch on any failure, so a stale or absent value costs nothing. "Cache the response" is not this fix and does not survive the navigation.
 - A `createResource` that refetches on a signal change that does not affect its result.
 - Waterfalled requests — a fetch that only starts once an unrelated one resolves.
 
