@@ -86,14 +86,31 @@ function skillOf(scenario: string, skills: string[]): string | null {
   return owners[0] ?? null;
 }
 
+/** Memoised for the process. `compare` walks the scenarios twice — once for the
+ * table, once for the moved-items block — and hashed the same four files each
+ * time. Nothing rewrites a scenario mid-run, so one hash per directory holds. */
+const fixtureHashes = new Map<string, string>();
+
 function fixtureHash(scenarioDir: string): string {
+  const memo = fixtureHashes.get(scenarioDir);
+  if (memo !== undefined) return memo;
   const hash = createHash("sha256");
   for (const file of FIXTURE_FILES) {
     const path = join(scenarioDir, file);
     hash.update(file);
-    hash.update(existsSync(path) ? readFileSync(path) : Buffer.from("<absent>"));
+    // Read and catch rather than stat-then-read: the miss is the rare case, and
+    // `existsSync` bought a second syscall per file on every hash.
+    let body: Buffer;
+    try {
+      body = readFileSync(path);
+    } catch {
+      body = Buffer.from("<absent>");
+    }
+    hash.update(body);
   }
-  return `sha256:${hash.digest("hex").slice(0, 32)}`;
+  const digest = `sha256:${hash.digest("hex").slice(0, 32)}`;
+  fixtureHashes.set(scenarioDir, digest);
+  return digest;
 }
 
 /** Every `SKILL.md` under `.claude/skills`, hashed together. Reference files
@@ -333,14 +350,15 @@ function cmdFingerprint() {
  * is a failure nobody notices, which is the kind worth a check. */
 function cmdCheckNames() {
   const skills = listSkills();
-  const orphans = listScenarios().filter((s) => skillOf(s, skills) === null);
+  const scenarios = listScenarios();
+  const orphans = scenarios.filter((s) => skillOf(s, skills) === null);
   if (orphans.length > 0) {
     fail(
       `Scenario directories must begin with the name of a skill in ${SKILLS_DIR}/.\n` +
         `Orphaned: ${orphans.join(", ")}\nKnown skills: ${skills.join(", ")}`,
     );
   }
-  console.log(`${listScenarios().length} scenarios, all owned by a skill.`);
+  console.log(`${scenarios.length} scenarios, all owned by a skill.`);
 }
 
 function requireScored(run: ReturnType<typeof parseRun>) {
@@ -518,6 +536,9 @@ function cmdRecord() {
   const board = readScoreboard();
   const skills = listSkills();
   const today = new Date().toISOString().slice(0, 10);
+  // Hoisted: nothing in the loop below can change it, and inside the loop it
+  // re-walked `.claude/skills` and re-read all nine files once per scenario.
+  const skills_hash = skills.length > 0 ? skillsHash() : undefined;
 
   for (const [name, now] of run.scenarios) {
     board.scenarios[name] = {
@@ -535,7 +556,7 @@ function cmdRecord() {
       // rides on improves underneath it, and that is the skill ceasing to earn
       // its place. Null on a `--skip-baseline` run.
       baseline: now.baseline === null ? null : round(now.baseline.score),
-      skillsHash: skills.length > 0 ? skillsHash() : undefined,
+      skillsHash: skills_hash,
       items: now.items,
       runId: run.runId,
       recordedAt: today,
