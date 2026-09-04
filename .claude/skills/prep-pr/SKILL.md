@@ -385,9 +385,12 @@ the finding is reached. `xchromo/osn-tracker#412 — S-M1` is the whole entry. -
 
 …
 
-**Out of scope** — <what was found and deliberately not fixed here, each with
-the issue number now tracking it. One line each. If there is nothing, the line
-is "**Out of scope** — None." — never a missing subsection.>
+**Out of scope** — <one line per thing found and deliberately not fixed here.
+A line is the issue reference and nothing else: `xchromo/osn-tracker#412 —
+S-M1`. Do not describe the finding, name its file or line, or say how it is
+reached — see the rule under **Section rules**, which this subsection is the
+usual place to break. If there is nothing, the line is "**Out of scope** —
+None." — never a missing subsection.>
 
 ## Test plan
 
@@ -420,13 +423,13 @@ reviewer then has to work out which rows are actually theirs. Mention a
 cross-package audit in one line of prose under **Out of scope** and let the
 tracker hold the results. The plain `Closes` lines under the table are what actually close anything — the template shows where they go. Cross-repo (`Closes xchromo/osn-tracker#<n>`) works with write access to both, but verify it closed after the merge and close it by hand if not.
 
-**A PR on `xchromo/osn` is public.** Reference a tracker issue by number and finding ID only — never paste its title, its file:line, or a word of its body. `xchromo/osn-tracker#412 — S-M1` is the whole entry.
+**A PR on `xchromo/osn` is public.** Reference a tracker issue by number and finding ID only — never paste its title, its `file:line`, or a word of its body. `xchromo/osn-tracker#412 — S-M1` is the whole entry, in the Issues table and in **Out of scope** alike. This holds however the finding reached you: a reviewer's notes file in the working tree is the private tracker's content sitting in front of you, and copying a line out of it into the body publishes it exactly as pasting the issue would.
 
 **Decisions.** One `###` heading per decision, so each gets its own anchor and shows up in GitHub's outline. The heading is a plain-English title; the ID goes after the em dash, in backticks, and is omitted for a decision that has no finding behind it. The four fields are mandatory and always in the same order — a reviewer scanning ten PRs reads them positionally.
 
 What belongs here: every non-trivial design choice, every finding fixed on this branch, and every finding **dismissed** rather than fixed — dismissals carry their reasoning in **Rationale**. What does not: routine lint fixes, formatting, and anything the diff already says plainly.
 
-**Out of scope** is a subsection of Decisions, not a section of its own. It exists so a reviewer never has to ask "did you notice X?" — one line per thing noticed and left, each naming the issue now tracking it.
+**Out of scope** is a subsection of Decisions, not a section of its own. It exists so a reviewer never has to ask "did you notice X?" — one line per thing noticed and left, each naming the issue now tracking it, **and naming nothing else**. This subsection is where the public/private rule above is most often broken, because describing what you found is the natural way to write it: a tracker line is `xchromo/osn-tracker#412 — S-M1`, with no title, no `file:line`, and no summary of the defect. A reviewer who needs the detail has access to the tracker; a scraper does not.
 
 **Test plan.** The table is the gates that ran, with their real results. Never write a gate as passing without running it in this worktree. Anything not covered by an automatic gate goes below the table in prose, including the honest negatives — "the two-app ceremony is not exercised anywhere" belongs in the PR, not in a comment nobody reads.
 

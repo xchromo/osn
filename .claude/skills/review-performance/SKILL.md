@@ -86,7 +86,7 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 | `await db.`, `.get()`, `.all()`, `.select(`, `drizzle`, two `await`s in a row in one function | Database round trips |
 | `for (`, `.map(async`, `forEach`, `await` inside a loop body | Database round trips, Loops and batching |
 | `.where(`, `eq(`, `inArray(`, a new column read in a predicate | Database round trips, Indexes |
-| a route file, `.get(`, `.post(`, `derive(`, `resolve(`, middleware, a role or entitlement gate | Database round trips, Shared middleware |
+| a route file, `.get(`, `.post(`, `derive(`, `resolve(`, middleware, a role or entitlement gate | Database round trips, Shared middleware — and if the diff mounts **two** gates on one route, the first bullet of Shared middleware is mandatory |
 | `Effect.provide`, `runPromise`, `Layer.`, `ManagedRuntime` | Effect runtime |
 | `fetch(`, `createResource`, `createEffect`, `createMemo`, `onMount` | Client fetches, SolidJS reactivity |
 | `import * as`, a new dependency in a `package.json`, a route component | Bundle and loading |
@@ -144,6 +144,13 @@ Almost every finding in this section starts as a pair of sequential statements.
 The pair is one defect with two possible fixes, and picking between them is a
 two-question decision. Answer them in this order — the second question is
 meaningless until the first is settled.
+
+**The pair is not always in one function.** Two middlewares mounted on the same
+route, a gate and the handler behind it, or a service call either side of an
+`await` in a route body are all the same shape — the statements are sequenced by
+the request, not by a line of code you can point at. Sequential gates are the
+common case here and have their own bullet under **Shared middleware**; work
+them with these two questions all the same.
 
 **Question 1 — does the second statement have to wait?** It has to wait only if
 the key it is issued on was *produced* by the first. Trace that key back to
@@ -206,8 +213,9 @@ combine these" has not made the decision the reader needed.
 
 ## Shared middleware
 
+- **Two gates mounted in sequence on the same route parameter.** A role gate resolves the caller against `:weddingId`; an entitlement, quota or feature gate mounts behind it and selects on that same `:weddingId`. **This is the two-`await` case from Database round trips, spread across two files, and it is the shape this section most often misses** — the pair does not look like a pair, because you never see both statements in one function. Work it with the same two questions. The key the second gate is issued on is the *route parameter*, bound before the first gate ran, so it never had to wait. And middleware order forbids running them together: the second gate mounts behind the first and cannot start earlier. **That leaves exactly one fix — the fold.** An optional key on the first gate, adding an `EXISTS (…)` column to the query it already issues, so a gated request drops a statement. A cache, a memo, a request-scoped store and `Effect.all` are each the wrong answer here and are worth naming as rejected in `Rationale`: every one of them still issues both statements, and the second gate cannot start early enough for concurrency to buy anything. Count who else mounts the first gate before you propose it — `grep -rn '<gateName>(' <workspace>/src/routes` — and make the key optional so they pay nothing.
 - A fetch added unconditionally to a gate that a dozen routes mount, where most of them do not need it. That is a repo-wide regression dressed as an optimisation. The fix is an optional parameter: a route that does not ask for the extra data runs exactly the query it always ran.
-- A middleware that resolves the same record every route behind it then resolves again.
+- A middleware that resolves the same record every route behind it then resolves again. **Read this one narrowly**: it is about a *handler* repeating its own gate's work. A second gate duplicating the first is the bullet above, not this one.
 - **This bullet also applies to a fix you propose.** Before writing a `Solution` that adds a column, a join or a fetch to shared code — a gate, a middleware, a helper a dozen files import — count the callers that do not need it (`grep -rn '<gateName>(' <workspace>/src`) and say in `Rationale` what they now pay. If the answer is anything but "nothing", the Solution is not finished: make the extra work an **optional parameter**, and state that a caller passing none runs exactly the query it ran before. A fix that taxes the callers that did not ask for it is a new finding, not a fix.
 
 ## Effect runtime
