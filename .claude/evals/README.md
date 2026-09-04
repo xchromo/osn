@@ -224,7 +224,7 @@ scored 62, 54, 62 and then 33 across runs whose rubric barely moved, and run 11
 changed nothing but four sentences about headings while `vendor` went 29 to 60.
 
 **One number does hold still.** The suite-level lift, skill minus baseline:
-+10.5, +18.2, +13.5, +18.4, +23.1 — mean 16.7, sd 4.2. Aggregating ten scenarios
++10.5, +18.2, +13.5, +18.4, +23.1, +17.9 — mean 17.0, sd 3.8. Aggregating ten scenarios
 buys back the power that `-n 3` does not have per scenario. Note the baseline
 has fallen and then settled: 48.1, 43.3, 42.5, 41.6, 41.8. Part of the growth in
 the lift is the rubrics getting stricter, not the skill getting better, and a
@@ -234,6 +234,37 @@ So: **quote the suite lift; do not quote a per-scenario delta.** A 10-point
 per-scenario movement is one standard deviation and means nothing on its own. To
 attribute a change to a single scenario you would need something closer to
 `-n 10`, which is four times the cost of a full run for one tenth of the suite.
+
+### Four targeted instruction fixes; one landed
+
+Runs 12 and 13 each aimed at named items diagnosed from the judge's reasoning.
+The scoreboard for that effort:
+
+| fix | item | before → after |
+|---|---|---|
+| Out of scope takes the issue reference only | `no_private_tracker_detail_in_public_body` | 0.17 → **0.67** |
+| gate-behind-a-gate bullet, tier 1 | `finds_the_probe_and_folds_it` tier 1 | 0.67/3 → **2/3** |
+| gate-behind-a-gate bullet, tier 2 (the fold itself) | same item, tier 2 | 0/2 → 0/2 |
+| credential bullet rewritten as a procedure | `finds_untested_cookie_credential` | 0.58 → 1.00, still under the baseline's 1.33 |
+| refetch bullet rewritten as a procedure | `finds_refetch_across_navigation` | 0.33 → 0.00 |
+
+**The one that worked was not a rewording — it was removing a contradiction.**
+Two passages of `prep-pr` disagreed, and satisfying one broke the other; the fix
+deleted the conflict rather than restating the rule. The rule itself had already
+been stated three times and was still being broken.
+
+**The three that failed were all rewordings**, including two that turned a
+description into a numbered procedure with a grep in it — the change that
+sounds most like it should work. In each case the instruction ended up present,
+correct, adjacent to the finding, and ignored: the reviews kept proposing
+`Effect.all` where the skill says concurrency cannot help, and kept clearing the
+credential gap on the ground that the resolver was not in the diff, which the
+procedure explicitly addresses.
+
+So the ordering to try, on the evidence: **look for a contradiction first**, and
+only then reword. If two rewordings of the same instruction fail, stop — the
+third will not work either, and on a suite where a scenario delta under 20
+points is unreadable you are paying a run per attempt to learn nothing.
 
 ### An item can be readable even when its scenario is not
 
