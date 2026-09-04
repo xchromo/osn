@@ -8,22 +8,22 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.85,
-      "points": "9.34/11",
+      "score": 0.79,
+      "points": "8.68/11",
       "baseline": 0.48,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "pr_body_five_sections": "3/3",
-        "decisions_out_of_scope_placement": "1/1",
-        "closes_line_placement": "1/1",
-        "test_plan_honesty": "1/2",
+        "pr_body_five_sections": "2/3",
+        "decisions_out_of_scope_placement": "0.67/1",
+        "closes_line_placement": "0.67/1",
+        "test_plan_honesty": "1.67/2",
         "detects_package_name_mismatch": "1/1",
-        "resolves_base_branch": "0.67/1",
+        "resolves_base_branch": "1/1",
         "parent_pr_ordering": "0.67/1",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "prep-pr-finding-routing": {
       "skill": "prep-pr",
@@ -33,45 +33,43 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.72,
-      "points": "8.67/12",
+      "score": 0.7,
+      "points": "8.34/12",
       "baseline": 0.36,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "fixed_finding_closed_not_refiled": "1/1",
-        "opened_issues_scoped_to_this_branch": "3/4",
+        "fixed_finding_closed_not_refiled": "0.67/1",
+        "opened_issues_scoped_to_this_branch": "2.33/4",
         "pr_body_five_sections": "2/3",
-        "no_private_tracker_detail_in_public_body": "0/1",
+        "no_private_tracker_detail_in_public_body": "0.67/1",
         "test_plan_honesty": "1.67/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-performance-entitlement-gate-fold": {
       "skill": "review-performance",
-      "fixtureHash": "sha256:9c918a28854f90b3742e4a27e504c786",
-      "fingerprint": "13f6f63ccb140e2f71d854a9beac7669d3fe95e7a172c504d9e4bf48d1a050d6",
+      "fixtureHash": "sha256:1b8fab0f6a5d401ce15c2527fb4333af",
+      "fingerprint": "cb73bc41c9780c750ffeaef9df3f0adf62d7cbc6af9d4fa6ddbcc1ef28303f52",
       "agent": "claude",
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.41,
-      "points": "7.01/17",
-      "baseline": 0.27,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "score": 0.35,
+      "points": "6/17",
+      "baseline": 0.29,
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_entitlement_probe_behind_role_gate": "0.67/3",
-        "solution_folds_into_the_existing_query": "0/2",
-        "protects_the_ungated_callers": "0/3",
-        "quantifies_the_statements": "0.67/2",
-        "findings_written_in_repo_format": "2/2",
-        "report_shape_coverage_and_sections": "0.67/2",
-        "no_invented_findings": "2/2",
+        "finds_the_probe_and_folds_it": "2/8",
+        "quantifies_the_statements": "0/2",
+        "findings_written_in_repo_format": "1.33/2",
+        "report_shape_coverage_and_sections": "0/2",
+        "no_invented_findings": "1.67/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-performance-vendor-read-round-trips": {
       "skill": "review-performance",
@@ -81,21 +79,21 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.6,
-      "points": "8.34/14",
+      "score": 0.48,
+      "points": "6.66/14",
       "baseline": 0.31,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_serial_independent_lookups": "2/3",
+        "finds_serial_independent_lookups": "1/3",
         "quantifies_the_round_trips": "1/2",
         "finds_refetch_across_navigation": "1/3",
-        "findings_written_in_repo_format": "1.67/2",
-        "report_shape_coverage_and_sections": "0.67/2",
+        "findings_written_in_repo_format": "1.33/2",
+        "report_shape_coverage_and_sections": "0.33/2",
         "no_invented_findings": "1/1",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-security-access-token-verifier": {
       "skill": "review-security",
@@ -105,20 +103,20 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.56,
-      "points": "7.34/13",
+      "score": 0.97,
+      "points": "12.67/13",
       "baseline": 0.49,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_missing_exp_requirement": "1/3",
-        "finds_unenforced_issuer": "2/3",
-        "report_shape_coverage_and_sections": "0/2",
-        "four_field_format": "1.67/2",
-        "no_invented_findings": "1.67/2",
+        "finds_missing_exp_requirement": "3/3",
+        "finds_unenforced_issuer": "3/3",
+        "report_shape_coverage_and_sections": "1.67/2",
+        "four_field_format": "2/2",
+        "no_invented_findings": "2/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-security-consent-cookie-rediscovery": {
       "skill": "review-security",
@@ -128,21 +126,21 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.61,
-      "points": "8.5/14",
+      "score": 0.5,
+      "points": "7/14",
       "baseline": 0.31,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_cookie_shadowing": "1.5/3",
-        "finds_revocation_gap": "1.5/3",
-        "compliance_section_subprocessors": "1.5/3",
+        "finds_cookie_shadowing": "2/3",
+        "finds_revocation_gap": "0/3",
+        "compliance_section_subprocessors": "1/3",
         "accessibility_reviewed_as_compliance": "0.5/1",
-        "four_field_format": "1.5/2",
+        "four_field_format": "2/2",
         "no_semver_range_findings": "1/1",
-        "stayed_within_the_brief": "1/1"
+        "stayed_within_the_brief": "0.5/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-security-consent-hardened-restraint": {
       "skill": "review-security",
@@ -152,19 +150,19 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.79,
-      "points": "8.67/11",
+      "score": 0.82,
+      "points": "9.01/11",
       "baseline": 0.64,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "cookie_prefix_not_reported_as_missing": "3/3",
-        "revocation_teardown_not_reported_as_missing": "2.67/3",
-        "findings_are_evidenced": "2/2",
-        "report_shape_coverage_and_sections": "0/2",
+        "cookie_prefix_not_reported_as_missing": "2.67/3",
+        "revocation_teardown_not_reported_as_missing": "3/3",
+        "findings_are_evidenced": "1.67/2",
+        "report_shape_coverage_and_sections": "0.67/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-security-zap-chat-class-authz": {
       "skill": "review-security",
@@ -174,20 +172,20 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.33,
-      "points": "4.34/13",
+      "score": 0.62,
+      "points": "8/13",
       "baseline": 0.49,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_send_message_class_gap": "0/3",
-        "finds_list_messages_class_gap": "0/3",
-        "findings_written_in_repo_format": "0.67/2",
-        "report_shape_coverage_and_sections": "0.67/2",
+        "finds_send_message_class_gap": "2.67/3",
+        "finds_list_messages_class_gap": "1/3",
+        "findings_written_in_repo_format": "1/2",
+        "report_shape_coverage_and_sections": "0.33/2",
         "no_invented_findings": "2/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-tests-cire-consent-colocated-layout": {
       "skill": "review-tests",
@@ -197,22 +195,22 @@
       "model": "deepseek-v4-flash",
       "runs": 3,
       "variant": "usage-spec",
-      "score": 0.71,
-      "points": "12.01/17",
+      "score": 0.86,
+      "points": "14.67/17",
       "baseline": 0.41,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "resolves_the_package_layout": "1.67/3",
+        "resolves_the_package_layout": "2.67/3",
         "no_false_missing_test_findings": "3/3",
-        "finds_the_real_missing_test": "1.67/3",
+        "finds_the_real_missing_test": "2/3",
         "classifies_the_test_helper": "1/1",
         "gaps_written_in_repo_format": "1/2",
         "audit_ran_despite_no_toolchain": "2/2",
-        "report_shape_five_sections": "0.67/2",
+        "report_shape_five_sections": "2/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     },
     "review-tests-pulse-account-cookie-credential": {
       "skill": "review-tests",
@@ -225,18 +223,18 @@
       "score": 0.53,
       "points": "8/15",
       "baseline": 0.49,
-      "skillsHash": "sha256:6dd3e988cd4fdb4d9bfe747254297aee",
+      "skillsHash": "sha256:4e6dbe92002329197436dd1a713da85e",
       "items": {
-        "finds_untested_cookie_credential": "0.33/3",
+        "finds_untested_cookie_credential": "0/3",
         "requires_the_negative_cookie_case": "0/2",
         "gaps_written_in_repo_format": "0.67/2",
         "audit_ran_despite_no_toolchain": "3/3",
         "report_shape_five_sections": "1.33/2",
-        "no_invented_gaps": "1.67/2",
+        "no_invented_gaps": "2/2",
         "stayed_within_the_brief": "1/1"
       },
-      "runId": "01a06803-64f3-7428-b86a-edcb928c4dc8",
-      "recordedAt": "2026-09-03"
+      "runId": "01a06a32-5bdd-77c2-bb27-f77089269d97",
+      "recordedAt": "2026-09-04"
     }
   }
 }

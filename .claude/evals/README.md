@@ -224,13 +224,45 @@ scored 62, 54, 62 and then 33 across runs whose rubric barely moved, and run 11
 changed nothing but four sentences about headings while `vendor` went 29 to 60.
 
 **One number does hold still.** The suite-level lift, skill minus baseline:
-+10.5, +18.2, +13.5, +18.4 — mean 15.1, sd 3.3. Aggregating ten scenarios buys
-back the power that `-n 3` does not have per scenario.
++10.5, +18.2, +13.5, +18.4, +23.1 — mean 16.7, sd 4.2. Aggregating ten scenarios
+buys back the power that `-n 3` does not have per scenario. Note the baseline
+has fallen and then settled: 48.1, 43.3, 42.5, 41.6, 41.8. Part of the growth in
+the lift is the rubrics getting stricter, not the skill getting better, and a
+lift quoted without that number beside it is misleading.
 
 So: **quote the suite lift; do not quote a per-scenario delta.** A 10-point
 per-scenario movement is one standard deviation and means nothing on its own. To
 attribute a change to a single scenario you would need something closer to
 `-n 10`, which is four times the cost of a full run for one tenth of the suite.
+
+### An item can be readable even when its scenario is not
+
+Run 12 changed two things and one of them landed, which is the first clean
+attribution this loop has produced. Both were found by reading item cells and
+the judge's reasoning rather than scenario totals.
+
+**The `prep-pr` leak: fixed.** `no_private_tracker_detail_in_public_body` went
+0.17 → 0.67 with the skill (baseline 0.25 → 0.33), and the judge's words are the
+wording that was added: "references unfixed findings only by number and finding
+ID (e.g. `xchromo/osn-tracker#601 — S-M1`)". It is a 1-point binary item, so
+three samples have a standard error near 0.3 and a move of half a point is
+signal. The defect was never a missing rule — it was stated three times — but a
+**contradiction**: the Out of scope template asked for "what was found", which is
+a description, while the section rules forbade describing a tracker finding.
+Satisfying one broke the other. Look for that shape before adding a fourth
+statement of a rule that is not being followed.
+
+**The entitlement fold: half-fixed, and the half that failed is informative.**
+The merged item went 1.00/8 (baseline) to 2.00/8 (skill). Tier 1 — naming both
+sites — rose from 0.67/3 to 2/3, so the new gate-behind-a-gate bullet did make
+the pair visible as a pair. Tier 2 stayed at 0/2 across every sample: the
+reviews proposed `Effect.all` concurrency to overlap the two reads, which the
+skill's own bullet now names as wrong *and explains why* (the second gate mounts
+behind the first and cannot start earlier). The instruction is present, correct,
+adjacent to the finding, and still loses to the model's default move of
+parallelising two independent reads. That is worth knowing: **an instruction
+that contradicts a strong prior needs more than a correct explanation**, and
+three attempts at rewording it have now failed.
 
 ### What that says about the shape work
 
