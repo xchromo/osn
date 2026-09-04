@@ -548,3 +548,73 @@ test("a failed run with a solution nothing scored is still not ready", async () 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// `path` is optional on the payload — the API has returned scenarios without
+// one. Every read of it has to guard, and one did not: `ready`, `compare` and
+// `record` all died with `undefined is not an object` because `short` is
+// computed on every parse. Inside CI's poll that reads as "the run was never
+// scored" for a run that was scored, and the job burns its full timeout.
+
+test("a scenario with no path does not crash the readiness parse", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: { attributes: { status: string; runCount: number; scenarios: { path?: string }[] } };
+    };
+    doc.data.attributes.status = "failed";
+    doc.data.attributes.runCount = 3;
+    delete doc.data.attributes.scenarios[0]!.path;
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+
+    const out = await run(dir, "ready", "--run", "run.json");
+    expect(out.stderr).not.toContain("undefined is not an object");
+    expect(out.stderr).not.toContain("TypeError");
+    // Nothing could be identified, so this is not a run worth recording.
+    expect(out.exitCode).toBe(1);
+    expect(out.stderr).toContain("no scenario in it could be identified");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The thin-cell line names the scenario, so it reads the same `path` and has to
+// survive the same absence.
+test("a thin cell with no path is reported rather than crashing", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one", "prep-pr-two"]);
+  try {
+    const doc = JSON.parse(runJson("prep-pr-one", { a: [1, 2] })) as {
+      data: {
+        attributes: {
+          status: string;
+          runCount: number;
+          scenarios: {
+            path?: string;
+            solutions: { runs: { status: string; score: number | null }[] }[];
+          }[];
+        };
+      };
+    };
+    doc.data.attributes.status = "failed";
+    doc.data.attributes.runCount = 3;
+    doc.data.attributes.scenarios[0]!.solutions[0]!.runs = [
+      { status: "completed", score: 50 },
+      { status: "completed", score: 60 },
+      { status: "completed", score: null },
+    ];
+    // A second scenario keeps a path, so a row survives and the run is ready.
+    doc.data.attributes.scenarios.push({
+      ...structuredClone(doc.data.attributes.scenarios[0]!),
+      path: ".claude/evals/prep-pr-two",
+    });
+    delete doc.data.attributes.scenarios[0]!.path;
+    await writeFile(join(dir, "run.json"), JSON.stringify(doc));
+
+    const out = await run(dir, "ready", "--run", "run.json");
+    expect(out.stderr).not.toContain("TypeError");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("thin: ? [usage-spec]: 2/3");
+    expect(out.stdout).toContain("thin: prep-pr-two [usage-spec]: 2/3");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

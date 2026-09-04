@@ -251,7 +251,11 @@ function parseRun(viewJson: string) {
       })
       .map(
         (s) =>
-          `${scenario.path.split("/").pop() ?? scenario.path} [${s.variant}]: ${(s.runs ?? []).filter((r) => typeof r.score === "number").length}/${wanted}`,
+          // `path` is optional on the payload and the loop above already
+          // guards it. It must be guarded here too: a scenario without one
+          // crashed `ready`, `compare` and `record` alike, and inside CI's
+          // poll that reads as "the run was never scored" for a run that was.
+          `${(scenario.path ?? "").split("/").filter(Boolean).pop() ?? "?"} [${s.variant}]: ${(s.runs ?? []).filter((r) => typeof r.score === "number").length}/${wanted}`,
       ),
   );
   const scored =
@@ -422,6 +426,12 @@ function cmdPlan() {
 function cmdReady() {
   const runPath = readArg("--run") ?? fail("ready needs --run <view.json>");
   const run = parseRun(readFileSync(runPath, "utf8"));
+  // A payload can satisfy the scoring predicate and still yield no rows — every
+  // scenario missing its `path`, for one. Reporting "ready" for nothing is
+  // worse than reporting "not ready", because the caller goes on to record it.
+  if (run.scored && run.scenarios.size === 0) {
+    fail(`run ${run.runId} scored, but no scenario in it could be identified`);
+  }
   if (!run.scored) {
     console.log(`not ready (status: ${run.status})`);
     process.exit(1);

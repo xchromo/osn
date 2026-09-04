@@ -330,6 +330,17 @@ jobs:
       # No `bun install` on purpose: the files under scripts/ import nothing
       # but `bun:test`, Bun/Node built-ins, and each other, so an install here
       # would be a minute spent on nothing.
+      # `scripts/` is in no workspace, so `turbo check` never typechecks it and
+      # a type error here ships. One did: `skill-evals.ts` read an optional
+      # `scenario.path` unguarded, which crashed `ready`, `compare` and
+      # `record` on a payload the API really returns — and inside this repo's
+      # own eval poll that reads as "the run was never scored" for a run that
+      # was. `scripts/tsconfig.json` extends the root config; nothing under
+      # scripts/ imports outside bun:test, Bun and Node built-ins, so this
+      # needs no install either.
+      - name: Typecheck the scripts
+        run: bunx --bun tsc -p scripts/tsconfig.json
+
       - name: Test the scripts
         run: bun run test:scripts
 
