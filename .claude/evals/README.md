@@ -228,7 +228,7 @@ scored 62, 54, 62 and then 33 across runs whose rubric barely moved, and run 11
 changed nothing but four sentences about headings while `vendor` went 29 to 60.
 
 **One number does hold still.** The suite-level lift, skill minus baseline:
-+10.5, +18.2, +13.5, +18.4, +23.1, +17.9 — mean 17.0, sd 3.8. Aggregating ten scenarios
++10.5, +18.2, +13.5, +18.4, +23.1, +17.9, +14.2 — mean 16.5, sd 3.6. Aggregating ten scenarios
 buys back the power that `-n 3` does not have per scenario. Note the baseline
 has fallen and then settled: 48.1, 43.3, 42.5, 41.6, 41.8. Part of the growth in
 the lift is the rubrics getting stricter, not the skill getting better, and a
@@ -238,6 +238,26 @@ So: **quote the suite lift; do not quote a per-scenario delta.** A 10-point
 per-scenario movement is one standard deviation and means nothing on its own. To
 attribute a change to a single scenario you would need something closer to
 `-n 10`, which is four times the cost of a full run for one tenth of the suite.
+
+### The shape of a report is unstable within a single run
+
+Run 14 settles an argument the earlier runs could only gesture at. `prep-pr`
+produced, from **one skill text, in one run**:
+
+- `prep-pr-changeset-package-name-mismatch` — 3/3, the judge listing all five
+  sections in the right order;
+- `prep-pr-finding-routing` — 0/3, a free-form body with `## Changes`,
+  `## Ticket`, `## Tests` and `## Notes / follow-ups in the tracker`.
+
+Nothing distinguishes those two scenarios in what the skill tells the agent to
+write. So a shape score is not a property of the instruction: it varies scenario
+to scenario and run to run, and this is the fourth different way that has been
+demonstrated. Do not read a shape item as feedback on a shape instruction — not
+across runs, and now not within one either.
+
+The corollary for reviewing this suite's output: when a scenario moves by tens
+of points, check whether a shape item accounts for it before believing the
+analysis changed. Here it accounts for the whole of a −49.
 
 ### Four targeted instruction fixes; one landed
 
