@@ -84,15 +84,15 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 | Grep the diff for | Sections that become mandatory |
 |---|---|
 | `await db.`, `.get()`, `.all()`, `.select(`, `drizzle`, two `await`s in a row in one function | Database round trips |
-| `for (`, `.map(async`, `forEach`, `await` inside a loop body | Database round trips, Loops and batching (reference) |
-| `.where(`, `eq(`, `inArray(`, a new column read in a predicate | Database round trips, Indexes (reference) |
+| `for (`, `.map(async`, `forEach`, `await` inside a loop body | Database round trips, Loops and batching (references) |
+| `.where(`, `eq(`, `inArray(`, a new column read in a predicate | Database round trips, Indexes (references) |
 | a route file, `.get(`, `.post(`, `derive(`, `resolve(`, middleware, a role or entitlement gate | Database round trips, Shared middleware — and if the diff mounts **two** gates on one route, the first bullet of Shared middleware is mandatory |
-| `Effect.provide`, `runPromise`, `Layer.`, `ManagedRuntime` | Effect runtime (reference) |
-| `fetch(`, `createResource`, `createEffect`, `createMemo`, `onMount` | Client fetches (reference), SolidJS reactivity (reference) |
-| `import * as`, a new dependency in a `package.json`, a route component | Bundle and loading (reference) |
-| `scroll`, `resize`, `oninput`, `onInput`, `ResizeObserver`, `scrollHeight`, `getBoundingClientRect` | Layout and event handlers (reference) |
-| `build`, `astro.config`, `wrangler.toml`, `turbo.json`, a `scripts/` file, a workflow under `.github/` | Build and deploy (reference) |
-| `.changeset/` | Changesets (reference) |
+| `Effect.provide`, `runPromise`, `Layer.`, `ManagedRuntime` | Effect runtime (references) |
+| `fetch(`, `createResource`, `createEffect`, `createMemo`, `onMount` | Client fetches (references), SolidJS reactivity (references) |
+| `import * as`, a new dependency in a `package.json`, a route component | Bundle and loading (references) |
+| `scroll`, `resize`, `oninput`, `onInput`, `ResizeObserver`, `scrollHeight`, `getBoundingClientRect` | Layout and event handlers (references) |
+| `build`, `astro.config`, `wrangler.toml`, `turbo.json`, a `scripts/` file, a workflow under `.github/` | Build and deploy (references) |
+| `.changeset/` | Changesets (references) |
 
 ## Step 2 — Work the mandatory sections
 
@@ -195,7 +195,7 @@ combine these" has not made the decision the reader needed.
 
 ## The rest of the checklist
 
-Eight more sections live in `reference/checklists.md`: **Loops and batching**,
+Eight more sections live in `references/checklists.md`: **Loops and batching**,
 **Indexes**, **Unbounded reads**, **Effect runtime**, **Client fetches**,
 **SolidJS reactivity**, **Bundle and loading**, **Layout and event handlers**,
 **Build and deploy** and **Changesets**. They are there rather than here

@@ -174,7 +174,7 @@ only thing read, and point each checklist item at it.
 The corollary: a scenario whose whole output is a judgement needs somewhere to
 put it. A scenario that changes code does not — the diff is the artefact.
 
-## The ten scenarios
+## The thirteen scenarios
 
 | Scenario | Skill | Ground truth |
 |---|---|---|
@@ -190,6 +190,10 @@ put it. A scenario that changes code does not — the diff is the artefact.
 | `review-performance-entitlement-gate-fold` | `review-performance` | The organiser gates. `weddingEntitlement` issues a point lookup on a wedding the role gate in front of it has already queried. Half the rubric is the fix rather than the finding: here a fold is the right answer and running the pair together is not, because the gates are sequenced by middleware order — and the fold must not tax the many routes that mount a role gate and no entitlement gate, so the key has to be an optional parameter. Paired with the vendor scenario, the two score whether the reviewer can tell the two shapes apart. |
 | `review-tests-pulse-account-cookie-credential` | `review-tests` | The `/account` routes. `resolveCaller` accepts a bearer token or a session cookie; every test sends the bearer. These are the data-subject-request handlers and the browser client has no bearer to send, so the cookie path could break with the suite green. The negative case — a cookie naming no live session — is scored separately, because the positives alone cannot tell a working lookup from one that admits everybody. |
 | `review-tests-cire-consent-colocated-layout` | `review-tests` | The consent framework, in a checkout where the repository has no single test layout: `osn/*`, `pulse/*`, `zap/*` and `shared/*` use `tests/`, while `cire/invites` has no `tests/` directory at all and 69 test files sit beside their source. Four changed modules have a test beside them and `ConsentPreferences.tsx` has none anywhere. A reviewer who applies a convention without looking at disk reports four covered modules as missing and buries the one real gap, so `no_false_missing_test_findings` carries as many points as finding it. |
+
+| `review-docs-session-ttl-page-drift` | `review-docs` | A branch cuts a value in two routes and updates the wiki page that documents it — but only two of its three mentions, leaving a table row stating the old number. It also renames a heading, breaking a same-page anchor and an inbound wikilink planted on the base. Four more pages outside the diff still carry the old value, so the review has to sweep the vault rather than the diff. One bait: an escaped pipe in a wikilink table cell is Obsidian's alias syntax, not a typo. |
+| `review-deps-planted-drift-no-registry` | `review-deps` | Four ranges planted out of step with their workspace siblings, each still admitting the locked version so nothing breaks. The bait is `solid-js` peer ranges, which are a contract rather than drift. The item that carries the most weight is **no invented registry data**: with no network there is nothing to fetch, and a review that writes a latest version or a publish date it could not have read has failed however good the rest is. |
+| `new-feat-tracker-finding-branch` | `new-feat` | A fictional tracker finding handed to the skill as the work to start. The public repo must not gain a duplicate issue, and the branch name, the commits and the plan file must not describe the defect — this repository is public and the tracker is not. Scores the routing rule, not the code. |
 
 The rediscovery scenarios are the pattern worth repeating: **every merged fix PR
 is a free labelled example.** Pin its parent SHA, write one checklist item per
@@ -468,6 +472,9 @@ scenario. It lives here:
 | `review-performance-entitlement-gate-fold` | `6168009c` | parent of #852 |
 | `review-tests-pulse-account-cookie-credential` | `a381059a` | parent of #843 |
 | `review-tests-cire-consent-colocated-layout` | `6168009c` | layout predates #867 |
+| `review-docs-session-ttl-page-drift` | `981ea544` | constructed — reuses the TTL change from the prep-pr fixture, plants the anchor link |
+| `review-deps-planted-drift-no-registry` | `981ea544` | constructed — no commit in history carries real dependency drift |
+| `new-feat-tracker-finding-branch` | `6168009c` | parent of #852, shared with the entitlement scenario; the tracker issue is invented |
 
 ## Write the rubric from the tree, not from the pull request
 

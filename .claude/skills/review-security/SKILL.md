@@ -87,10 +87,10 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 |---|---|
 | `document.cookie`, `Set-Cookie`, `setCookie`, `cookie.set`, `__Host-`, `SameSite`, `max-age` (grep `-i`, the header spells it `Max-Age=` and the option `maxAge`) | Cookies |
 | `consent`, `revoke`, `withdraw`, `optOut`, `denied`, `granted` | Cookies, Compliance → subprocessors |
-| `<script`, `<iframe`, `src="https://`, `googletagmanager`, `maps.googleapis`, `pinterest` | Cookies, Compliance → subprocessors, Configuration (reference) |
-| `randomBytes`, `Math.random`, `crypto.getRandomValues`, `.toString(36)`, `%` (a modulo applied to random bytes biases the output) | Tokens & Sessions, Cryptography (reference) |
-| `` sql` ``, `${`, `Bun.spawn`, `exec(`, `LIKE` | Injection (reference) |
-| `redirect`, `return_url`, `next=`, `location.href =` | Redirects (reference) |
+| `<script`, `<iframe`, `src="https://`, `googletagmanager`, `maps.googleapis`, `pinterest` | Cookies, Compliance → subprocessors, Configuration (references) |
+| `randomBytes`, `Math.random`, `crypto.getRandomValues`, `.toString(36)`, `%` (a modulo applied to random bytes biases the output) | Tokens & Sessions, Cryptography (references) |
+| `` sql` ``, `${`, `Bun.spawn`, `exec(`, `LIKE` | Injection (references) |
+| `redirect`, `return_url`, `next=`, `location.href =` | Redirects (references) |
 | a new `Dialog`, `onClick`, `role=`, `aria-`, `<img` | Compliance → EAA / accessibility |
 | `new Elysia(`, `.derive(`, `onBeforeHandle`, `session`, `jwt`, `verify`, `requireAuth`, `ownership` | Auth & Authorisation, Tokens & Sessions |
 | two or more exported handlers over the same resource in one file — `send`/`list`, `create`/`delete`, `add`/`remove`, or a name and the same name with a suffix (`sendMessage` beside `sendC2bMessage`) | Auth & Authorisation — the sibling-verb comparison below is mandatory |
@@ -184,7 +184,7 @@ checked`: the claim, whether it is **required to be present**, and whether its
 
 ## The rest of the checklist
 
-Nine more sections live in `reference/checklists.md`: **Password & MFA Flows**,
+Nine more sections live in `references/checklists.md`: **Password & MFA Flows**,
 **WebAuthn**, **Injection**, **Cryptography**, **Sensitive Data Exposure**,
 **Redirects**, **Post-Quantum Exposure**, **Dependency & Supply Chain**, and
 **Configuration**. They are there rather than here because no scenario in this
@@ -207,7 +207,7 @@ Effect Schema inside services.
 
 Compliance defects block a merge exactly as security defects do. Use the `C-` prefix (`C-C1`, `C-H1`, `C-M1`, `C-L1`) and report them in their own section after the security findings. See `wiki/compliance/index.md` for the full programme.
 
-The two classes below are checked on every review, because the Step 1 routing sends third-party content and new UI straight to them. GDPR data-mapping, CCPA, COPPA, DSA and SOC 2 live in `reference/compliance.md` — read that file when the diff adds a column, a table, a request body, an endpoint, a moderation action, a ranking surface, or an operator-facing code path.
+The two classes below are checked on every review, because the Step 1 routing sends third-party content and new UI straight to them. GDPR data-mapping, CCPA, COPPA, DSA and SOC 2 live in `references/compliance.md` — read that file when the diff adds a column, a table, a request body, an endpoint, a moderation action, a ranking surface, or an operator-facing code path.
 
 ### Subprocessors / international transfers
 

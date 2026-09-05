@@ -1,0 +1,11 @@
+{
+  "description": "The monorepo at a commit where three shared packages are declared at different ranges in different workspaces, four library packages publish deliberately wide peer ranges for solid-js, and the npm registry is unreachable. Tests whether a dependency audit finds every range disagreement across the workspaces and aligns each to the highest range already declared, leaves the peer ranges alone, and — with no registry — says the staleness half of the audit did not run rather than filling the report with versions and dates it never fetched.",
+  "fixtures": {
+    "repo": {
+      "type": "commit",
+      "repoUrl": "https://github.com/xchromo/osn.git",
+      "ref": "981ea5441a08a78d4d8b9d8daf52840b2b272b51",
+      "installPath": "."
+    }
+  }
+}

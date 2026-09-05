@@ -186,7 +186,7 @@ package, say which.
 
 Run `git status --porcelain`. If anything is uncommitted, group it into logical
 commits rather than staging everything at once, and confirm the grouping with
-the user first — the recipe is in `reference/workflow-steps.md`. With no user,
+the user first — the recipe is in `references/workflow-steps.md`. With no user,
 or if you were told not to commit, leave the tree alone and record the
 uncommitted files in the report. Never run bare `git stash` / `git stash pop`:
 the stash stack is shared with every other worktree of this repo, so a pop can
@@ -211,7 +211,7 @@ If the changed workspaces span clearly unrelated domains — backend packages
 mixed with an unrelated frontend feature, infra bundled with feature work — put
 the concern to the user and let them decide whether to split. With no user,
 record the observation under `## Decisions` and continue. The wording is in
-`reference/workflow-steps.md`.
+`references/workflow-steps.md`.
 
 ## Step 6 — Parallel reviews
 
@@ -242,7 +242,7 @@ Work is tracked in GitHub Issues, not in a markdown checklist. Two repos:
 
 `xchromo/osn` is public. A finding names an unpatched route, so filing one there publishes it. **Route by kind, not by severity** — an `S-`, `P-`, or `C-` ID always goes to the tracker, however minor it looks.
 
-Auditing a defect class — when a finding is an instance of a class, enumerate the *shapes* the defect can take rather than re-grepping the first form you found. Recipe and the D1 bind-cap case study: `reference/auditing-defect-classes.md`.
+Auditing a defect class — when a finding is an instance of a class, enumerate the *shapes* the defect can take rather than re-grepping the first form you found. Recipe and the D1 bind-cap case study: `references/auditing-defect-classes.md`.
 
 ### New findings from Step 6
 
@@ -250,7 +250,7 @@ One issue per finding that this branch does **not** fix. Title leads with the fi
 
 **The issue body must stand on its own.** Someone opening it in six months, with no branch checked out and no wiki open, must be able to see what is wrong, where, and what to do. Name the file and line. State the concrete fix. A body that points at a wiki page instead of saying the thing — "see `wiki/todo/api.md`", "tracked in the TODO" — is not an issue, it is a bookmark, and the page it points at moves or dies. Where a wiki page genuinely adds context, name it by **repo path** (`wiki/systems/rate-limiting.md`) and put the fact in the issue anyway; a `[[wikilink]]` does not resolve on GitHub.
 
-A full worked `gh issue create` — flags, four-field body, closing line — is in `reference/issue-filing-example.md`.
+A full worked `gh issue create` — flags, four-field body, closing line — is in `references/issue-filing-example.md`.
 
 Labels, exactly one of each:
 
@@ -271,7 +271,7 @@ that predates the branch already has an issue — find it by ID, since the ID
 leads the title. Planned work this branch completes goes in the same list, from
 the public repo. **Never delete an issue**; close it.
 
-`reference/workflow-steps.md` carries the rest: the `gh issue list` searches,
+`references/workflow-steps.md` carries the rest: the `gh issue list` searches,
 the Up Next promotion, and the docs pass — what to check in `CLAUDE.md` and the
 wiki, and how to verify the wikilinks you wrote resolve.
 
@@ -419,5 +419,5 @@ With no network or no `gh`, record that the PR was not opened, name the base it
 should target, and leave the body file in place. That is a complete run.
 
 Confirming the base took, and registering a stack when `$BASE` is not `main`,
-are in `reference/workflow-steps.md`. Report the PR number, its base branch,
+are in `references/workflow-steps.md`. Report the PR number, its base branch,
 whether the stack is registered, and the issues it closes.
