@@ -71,7 +71,7 @@ The steps below assume a network, `gh`, an installed package manager, and a user
 to answer questions. Any of those may be absent.
 
 **Find out which, once, before Step 0.** Discovering it by failing costs a turn
-per step and tells you nothing the probe would not have:
+per step:
 
 ```bash
 git remote -v && git ls-remote --exit-code origin HEAD >/dev/null 2>&1 && echo "network: yes" || echo "network: no"
@@ -79,38 +79,32 @@ command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo "gh: yes" || 
 [ -d node_modules ] && echo "deps: installed" || echo "deps: absent"
 ```
 
-Write the three answers into the report file straight away, under a heading of
-its own. They decide, in advance, which steps run for real and which run their
-static equivalent — and a step whose gate you already know is unavailable is
-run *statically and immediately*, not attempted. Do not retry a command whose
-prerequisite this probe said was absent; do not open, label or comment on an
-issue with no network, and never describe as done anything the probe ruled out.
+Write the three answers into the report under a heading of their own. They
+decide in advance which steps run for real and which run their static
+equivalent, and **a step whose gate you already know is unavailable is run
+statically and immediately, not attempted.** Never retry a command whose
+prerequisite the probe ruled out, and never describe as done anything it ruled
+out.
 
-**A static equivalent is a paragraph, not an expedition.** With no network, the
+**No step is a stop, and no step is skipped.** A blocked gate still gets its
+static equivalent — read the code the gate would have exercised and state your
+own verdict — and then a line in the report naming the step, what could not run,
+and what you concluded without it. "Not run" describes the gate, never your
+review: a run that records six "not run" lines and no analysis has failed as
+surely as one that stalled waiting. Those notes go in the report file; none of
+them becomes a section of the PR body. Both artefacts are produced in every
+case, including the one where every gate failed.
+
+**A static equivalent is a paragraph, not an expedition.** With no network the
 issue steps are the issue you *would* file — title, labels, type, four-field
-body — written into the report, and not a hunt through the tracker for one that
-might already exist. If the task also says not to modify files, the docs step is
-the same: name the pages this branch would change and say what would go in them.
-Neither is a reason to go reading the wiki, and neither is a reason to dispatch
-an agent. The cost of getting this wrong is not a wrong answer, it is a run that
-spends its time somewhere the report never goes.
+body — written into the report, not a hunt through the tracker. If the task also
+forbids modifying files, the docs step is the same: name the pages this branch
+would change and say what would go in them. Neither is a reason to read the
+wiki, and neither is a reason to dispatch an agent.
 
-**No step is a stop, and no step is skipped.** A command that fails, a gate that
-cannot execute, or a question with nobody to answer it is not the end of the
-step. Do the step's static equivalent first — read the code the gate would have
-exercised and state your own verdict — then record in the report file the step's
-name, what could not run, and what you concluded without it. "Not run" describes
-the gate, never your review: a run that records six "not run" lines and no
-analysis has failed as surely as one that stalled waiting. Every one of those
-notes goes in the report file; none of them becomes a section of the PR body.
-The two artefacts above are produced in every case, including the one where
-every gate failed. Never claim a gate passed that you did not run in this
-worktree; never claim a remote action succeeded.
-
-Five steps below ask the user something. In a non-interactive run there is no
-user: take the conservative default that step names, record the choice under
-`## Decisions`, and continue. Waiting for an answer that cannot come is a failed
-run.
+Five steps ask the user something. With no user, take the conservative default
+that step names, record the choice under `## Decisions`, and continue. Waiting
+for an answer that cannot come is a failed run.
 
 Run the steps in order.
 
@@ -118,7 +112,8 @@ Run the steps in order.
 
 ## Step 0 — Resolve the base branch
 
-Every later step diffs against the branch this PR will merge **into**, which is not always `main`. On a stacked branch it is the parent branch, and diffing against `main` reports the parent's files as this PR's changes.
+Every later step diffs against the branch this PR merges **into**, which is not
+always `main`.
 
 ```bash
 BASE=$(git config --get branch.$(git branch --show-current).gh-merge-base || echo main)
@@ -126,9 +121,15 @@ git fetch origin "$BASE"
 echo "base: $BASE"
 ```
 
-If `BASE` is not `main`, this branch is stacked, and two things follow. Put both in the report, naming `$BASE`, whether or not you can act on them: this PR targets `$BASE` rather than `main`, and **the parent's own PR has to exist first** — GitHub cannot base a pull request on a branch it does not have, so with no parent PR open the ordering is the parent's, then this one. With no network, that ordering is still the finding; state it.
+If `BASE` is not `main` this branch is stacked, and two things follow — put both
+in the report, naming `$BASE`, whether or not you can act on them. The PR targets
+`$BASE`, not `main`; and **the parent's own PR has to exist first**, because
+GitHub cannot base a pull request on a branch it does not have. With no network
+that ordering is still the finding: state it.
 
-If this branch is stacked but `gh-merge-base` was never set (the config is written at worktree creation — see `[[wiki/conventions/stacked-prs]]`), set it now rather than passing the base by hand:
+If the branch is stacked but `gh-merge-base` was never set — it is written at
+worktree creation, see `wiki/conventions/stacked-prs.md` — set it now rather
+than passing the base by hand:
 
 ```bash
 git config branch.$(git branch --show-current).gh-merge-base <parent-branch>
@@ -140,72 +141,57 @@ Use `$BASE` in every `git diff` below and as `--base` in Step 9.
 
 ## Step 1 — Identify changed workspaces
 
-Run `git diff --name-only "$BASE"...HEAD` to list all changed files.
-
-Map changed files to workspaces using these rules:
-
-- Files under `osn/<name>/` → workspace `osn/<name>`, package `@osn/<name>`
-- Files under `pulse/<name>/` → workspace `pulse/<name>`, package `@pulse/<name>`
-- Files under `shared/<name>/` → workspace `shared/<name>`, package `@shared/<name>`
-- Files under `cire/<name>/` → workspace `cire/<name>`, package `@cire/<name>` — these are **ignored** packages, version-less, so they never share a changeset with a versioned one
-- Files under `zap/<name>/` → workspace `zap/<name>`, package `@zap/<name>`
-- Files under `tools/<name>/` → workspace `tools/<name>`; the package name is whatever that directory's own `package.json` says and is not always derivable from the path — `tools/oxlint/house` is `@tools/oxlint-house`. Read it, never guess it
-- Files on the changeset **allowlist** — `.claude/`, `.github/`, `scripts/`, `wiki/`, `docs/`, `shared/swift/`, `pulse/ios/`, `osn/ios/`, top-level `*.md`, `.gitignore` — need no changeset at all. `scripts/changeset-required.sh` holds the list and decides. Anything off it, including `bun.lock` and root `turbo.json`/`tsconfig.json`, still requires one.
-
-Report: the list of affected workspaces and whether any CI/infra-only files were changed.
-
-Put that list into `## Workspaces affected` now, replacing its `None`, and check
-the body still has its shape — one command, and it catches a clobbered skeleton
-while there is still a run left to save:
-
 ```bash
-grep -c '^## \(Summary\|Workspaces affected\|Issues\|Decisions\|Test plan\)$' PR-BODY.md
+git diff --name-only "$BASE"...HEAD
 ```
 
-It must print `5`. If it prints less, Step 0's skeleton was overwritten rather
-than edited: restore the five headings and edit from then on.
+A file under `<dir>/<name>/` belongs to the workspace `<dir>/<name>`, and its
+package name is whatever that directory's own `package.json` says — read it,
+never guess it, because the path does not always give it (`tools/oxlint/house`
+is `@tools/oxlint-house`). `cire/*` packages are **ignored** by changesets:
+version-less, so they never share a changeset with a versioned package.
 
----
+Files on the changeset **allowlist** need no changeset at all.
+`scripts/changeset-required.sh` holds the list and decides — run it rather than
+reasoning about it. Anything off the list, including `bun.lock` and root
+`turbo.json` / `tsconfig.json`, still requires one.
+
+Report the affected workspaces and whether any CI/infra-only files changed.
 
 ## Step 2 — Check changesets
 
-Run `git diff --name-only "$BASE"...HEAD -- .changeset/` and filter out `config.json` and `README.md` to find new changeset files on this branch.
+```bash
+git diff --name-only "$BASE"...HEAD -- .changeset/   # minus config.json, README.md
+bash scripts/validate-changesets.sh
+```
 
-**If no new changeset files exist:**
+`validate-changesets.sh` is the authority and needs no network and no install —
+shell and `jq`. It fails on exactly the two mistakes CI catches: a package name
+that is in no workspace, and one changeset mixing an ignored (version-less)
+package with a versioned one. Your own reading of the frontmatter is the
+cross-check, not the verdict.
 
-- Summarise the changes (from the step 1 diff) in 1–2 sentences suitable for a changeset summary.
-- Present this summary to the user and ask them to confirm or edit it. With no user to
-  answer, adopt the summary you drafted, note in the report that it was unconfirmed, and
-  continue.
-- If every changed file is on the allowlist from step 1, no changeset is needed — say so and move on. Do not create an empty one.
-- Otherwise, run `bun run changeset` — the interactive CLI will prompt for packages and bump type; guide the user to select the affected packages and an appropriate bump type (patch for fixes, minor for features, major for breaking changes).
+**A name that does not match a `package.json` `name` field fails CI** at
+`changeset version` with "package not in workspace" — `osn-api` where the
+package is `@osn/api`. Verify each with `jq -r .name <workspace>/package.json`.
 
-**If changeset(s) exist:**
-
-- Read each new changeset file and extract the package names listed in its YAML frontmatter (between the `---` fences).
-- **Validate every package name** against the actual `name` field in its `package.json`. Run `jq -r .name <workspace>/package.json` for each. A mismatch (e.g. `osn` instead of `@osn/api`, or `@osn/app` instead of `@osn/api`) will cause `changeset version` to fail in CI with "package not in workspace". Fix any mismatches before continuing.
-- Compare against the affected workspace packages from step 1.
-- Run `scripts/validate-changesets.sh`. It is self-contained — shell and `jq`, no network and no `bun install` — and it fails on exactly the two mistakes CI catches: a package name that is in no workspace, and one changeset mixing an ignored (version-less) package with a versioned one. Its output is the authority; your reading of the frontmatter is the cross-check.
-- If any affected package is missing from all changesets, warn the user and offer to run `bun run changeset` to add coverage.
-
----
+If no changeset exists: run `scripts/changeset-required.sh` first. If it says
+`skip`, none is needed — say so and do not create an empty one. Otherwise draft
+a one- or two-sentence summary, confirm it with the user, and run
+`bun run changeset`. With no user, adopt your draft, note in the report that it
+was unconfirmed, and continue. If a changeset exists but misses an affected
+package, say which.
 
 ## Step 3 — Commit uncommitted changes
 
-Run `git status --porcelain`.
-
-If any uncommitted changes exist, group them into logical commits rather than staging everything at once:
-
-1. Show the full list of changed/untracked files to the user.
-2. Analyse the files and propose a grouping into logical commits — e.g. schema changes together, route changes together, frontend changes together, config/tooling separately. Each group should represent one coherent unit of work.
-3. Present the proposed groupings and commit messages to the user and ask them to confirm, adjust, or add files to a group.
-4. Once confirmed, stage and commit each group in order.
-
-If the user prefers to set the work aside instead, make a WIP commit. Never run bare `git stash`/`git stash pop` — the stash stack is shared with every other worktree of this repo, so a pop can take someone else's work.
-
-If you were told not to commit, or there is no user to confirm a grouping, leave the tree as it is, record the uncommitted files in the report, and continue. Your own report and PR-body files are expected to be uncommitted and are never grouped into a commit.
-
----
+Run `git status --porcelain`. If anything is uncommitted, group it into logical
+commits rather than staging everything at once, and confirm the grouping with
+the user first — the recipe is in `reference/workflow-steps.md`. With no user,
+or if you were told not to commit, leave the tree alone and record the
+uncommitted files in the report. Never run bare `git stash` / `git stash pop`:
+the stash stack is shared with every other worktree of this repo, so a pop can
+take someone else's work. Your own report and PR-body files are expected to be
+uncommitted and are never grouped into a commit.
 
 ## Step 4 — Build, test, and review test surface
 
@@ -221,13 +207,11 @@ If coverage gaps are reported, present them to the user and ask whether they wan
 
 ## Step 5 — Check for unrelated changes
 
-Review the changed workspaces list. If changes span multiple clearly unrelated domains (e.g. backend package changes mixed with an unrelated frontend feature, or infra changes bundled with feature work), present the concern to the user:
-
-"These workspaces appear unrelated: [list]. Would you like to isolate any of them into a separate PR before pushing?"
-
-Proceed when the user confirms the scope is intentional or agrees to split the work.
-
----
+If the changed workspaces span clearly unrelated domains — backend packages
+mixed with an unrelated frontend feature, infra bundled with feature work — put
+the concern to the user and let them decide whether to split. With no user,
+record the observation under `## Decisions` and continue. The wording is in
+`reference/workflow-steps.md`.
 
 ## Step 6 — Parallel reviews
 
@@ -279,46 +263,20 @@ Labels, exactly one of each:
 - **`Bug`** for an `S-*` or `P-*` finding: something behaves wrongly and wants fixing
 - **`Task`** for a `C-*` compliance item, and for any finding filed at `severity:info` — it records an observation and asks for no fix
 
-### Findings fixed on this branch
+### The rest of Step 7
 
-Do not open an issue and close it. Do not edit a checkbox. Put `Closes #N` in the PR body (Step 8) and let the merge close it.
+Findings this branch **fixes** are closed by the merge, not by an issue you open
+and close: put `Closes #N` in the PR body and let it happen. A fixed finding
+that predates the branch already has an issue — find it by ID, since the ID
+leads the title. Planned work this branch completes goes in the same list, from
+the public repo. **Never delete an issue**; close it.
 
-If the finding predates this branch it already has an issue — find it by ID, since the ID leads the title:
+`reference/workflow-steps.md` carries the rest: the `gh issue list` searches,
+the Up Next promotion, and the docs pass — what to check in `CLAUDE.md` and the
+wiki, and how to verify the wikilinks you wrote resolve.
 
-```bash
-gh issue list --repo xchromo/osn-tracker --search "S-M1 in:title" --state open
-```
-
-If a fixed finding turns out to have no issue, open one and close it with a comment naming the PR. **Never delete an issue** — `wiki/conventions/review-findings.md` keeps the history.
-
-### Planned work completed by this branch
-
-Find its issue in the public repo and add it to the `Closes #N` list in Step 8. Same rule: no checkbox edits, no deletions.
-
-```bash
-gh issue list --repo xchromo/osn --search "<keywords>" --state open
-```
-
-### Up Next
-
-No longer a file to prune. Move the issue's **Status** field in the **OSN Platform** project — `Done` is set by the merge, so the only manual move here is promoting what this branch unblocked. Surface 2–3 candidates to the user and let them decide; do not move anything unasked.
-
-### Docs
-
-**Invoke `obsidian:obsidian-markdown` before writing any page under `wiki/`.** It is the syntax authority for this vault — wikilinks, callouts, embeds, properties, block IDs. Two constraints on top of it, both in the "Writing to the wiki" section of `CLAUDE.md`: edit with **Edit/Write in this worktree** (the Obsidian MCP and the `obsidian` CLI both write to `main`'s tree, so they search and nothing more), and keep anything a GitHub reader needs in tables and mermaid, which render on both surfaces.
-
-Two things to check, both in the same PR as the code:
-
-- **`CLAUDE.md`** — only if this branch adds a pattern, package, convention or architectural decision a future session needs. Reusable context, not noise.
-- **The wiki page for every system this branch changes.** A modified system means an updated page; a new one means a new page, linked from at least two existing pages plus the CLAUDE.md navigation table and `wiki/index.md`. `CLAUDE.md` §Wiki maintenance rules holds the frontmatter and linking requirements — follow them there rather than repeating them here.
-
-**Then check the links you just wrote resolve.** `mcp__obsidian-wiki__find_broken_links` indexes `main` and cannot see this branch, so check locally — the `comm -23` recipe is in `reference/wikilink-check.md`.
-
-Commit any doc updates with the message: `docs: update wiki for <branch-summary>`.
-
-Report the issues opened and the issue numbers this branch closes — Step 8 needs both.
-
----
+Report the issues opened and the issue numbers this branch closes — Step 8 needs
+both.
 
 ## Step 8 — Write the PR body
 
@@ -415,23 +373,24 @@ failure in this document a reviewer cannot detect.
 ### Section rules
 
 **Issues.** One row per issue. **"Opened" means issues raised *against this
-branch* — findings from its own review, or work this branch deliberately split
-out.** An issue found while auditing something else, in another package, or in
-a file this branch never touches does not belong in the table however it was
-discovered: listing it implies a relationship the PR does not have, and a
-reviewer then has to work out which rows are actually theirs. Mention a
-cross-package audit in one line of prose under **Out of scope** and let the
-tracker hold the results. The plain `Closes` lines under the table are what actually close anything — the template shows where they go. Cross-repo (`Closes xchromo/osn-tracker#<n>`) works with write access to both, but verify it closed after the merge and close it by hand if not.
+branch*** — findings from its own review, or work it deliberately split out. An
+issue found while auditing another package does not belong in the table however
+it was discovered: listing it implies a relationship the PR does not have.
+Mention a cross-package audit in one line under **Out of scope**. The plain
+`Closes` lines under the table are what actually close anything;
+`Closes owner/repo#n` works cross-repo with write access to both, but verify it
+closed after the merge.
 
-**A PR on `xchromo/osn` is public.** Reference a tracker issue by number and finding ID only — never paste its title, its `file:line`, or a word of its body. `xchromo/osn-tracker#412 — S-M1` is the whole entry, in the Issues table and in **Out of scope** alike. This holds however the finding reached you: a reviewer's notes file in the working tree is the private tracker's content sitting in front of you, and copying a line out of it into the body publishes it exactly as pasting the issue would.
+**Decisions.** One `###` per decision, so each gets an anchor. The heading is
+plain English, the ID goes after the em dash in backticks and is omitted where
+there is no finding behind it, and the four fields are mandatory and always in
+that order. What belongs: every non-trivial design choice, every finding fixed
+here, and every finding **dismissed** rather than fixed, with the reasoning in
+**Rationale**. What does not: lint fixes, formatting, anything the diff already
+says.
 
-**Decisions.** One `###` heading per decision, so each gets its own anchor and shows up in GitHub's outline. The heading is a plain-English title; the ID goes after the em dash, in backticks, and is omitted for a decision that has no finding behind it. The four fields are mandatory and always in the same order — a reviewer scanning ten PRs reads them positionally.
-
-What belongs here: every non-trivial design choice, every finding fixed on this branch, and every finding **dismissed** rather than fixed — dismissals carry their reasoning in **Rationale**. What does not: routine lint fixes, formatting, and anything the diff already says plainly.
-
-**Out of scope** is a subsection of Decisions, not a section of its own. It exists so a reviewer never has to ask "did you notice X?" — one line per thing noticed and left, each naming the issue now tracking it, **and naming nothing else**. This subsection is where the public/private rule above is most often broken, because describing what you found is the natural way to write it: a tracker line is `xchromo/osn-tracker#412 — S-M1`, with no title, no `file:line`, and no summary of the defect. A reviewer who needs the detail has access to the tracker; a scraper does not.
-
-**Test plan.** The table is the gates that ran, with their real results. Never write a gate as passing without running it in this worktree. Anything not covered by an automatic gate goes below the table in prose, including the honest negatives — "the two-app ceremony is not exercised anywhere" belongs in the PR, not in a comment nobody reads.
+**Test plan.** The gates that ran, with their real results, and below the table
+anything a reviewer must exercise by hand — including the honest negatives.
 
 ### Check the body before you finish
 
@@ -446,37 +405,19 @@ Both must print `5`. A first count under 5 means a section is missing, renamed, 
 
 ## Step 9 — Push and open the PR
 
-Run `git push -u origin HEAD`, then open the PR **against `$BASE` from Step 0**, not against `main`:
-
 ```bash
+git push -u origin HEAD
 gh pr create --base "$BASE" --title "<title>" --body-file <path>
 ```
 
-`gh pr create` also reads `branch.<current>.gh-merge-base` on its own, so `--base` is belt and braces — pass it anyway, because a branch created without that config silently targets `main`.
+Pass `--body-file`, never `--body`: a heredoc inside `--body` mangles backticks
+and `$` in the prose. Pass `--base` even though `gh` reads
+`branch.<current>.gh-merge-base` itself, because a branch created without that
+config silently targets `main`.
 
-Pass `--body-file`, never `--body`: a heredoc inside `--body` mangles backticks and `$` in the prose.
+With no network or no `gh`, record that the PR was not opened, name the base it
+should target, and leave the body file in place. That is a complete run.
 
-With no network or no `gh`, record that the PR was not opened, name the base it should target, and leave the body file in place. That is a complete run.
-
-### After opening
-
-Confirm the base actually took:
-
-```bash
-gh pr list --repo xchromo/osn --state open --json number,headRefName,baseRefName
-```
-
-A stacked PR showing `main` in `baseRefName` is not stacked — fix it with `gh pr edit <n> --base <parent-branch>` rather than in the web UI.
-
-### Register the stack
-
-Only when `$BASE` is not `main`. A correct base gives a correct diff; it does not make GitHub render a stack, which is a separate object.
-
-```bash
-gh stack link <bottom-pr> [<middle-pr> …] <this-pr>   # bottom to top
-gh stack checkout <stack-number>                       # confirm
-```
-
-Why `checkout` and not `view` confirms it, and what to do with no network: `reference/registering-a-stack.md`.
-
-Report the PR number, its base branch, whether the stack is registered, and the issues it closes.
+Confirming the base took, and registering a stack when `$BASE` is not `main`,
+are in `reference/workflow-steps.md`. Report the PR number, its base branch,
+whether the stack is registered, and the issues it closes.

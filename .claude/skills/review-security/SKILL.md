@@ -75,9 +75,9 @@ git diff --name-only "$BASE"...HEAD
 
 Keep that file list. Every file on it gets a verdict in the report, including the ones you clear.
 
-Now grep the diff for the strings below. **A hit makes the named section mandatory**: you work every bullet in that section against **the whole changed file the hit landed in**, not against the matched line, and you record the verdict under `## Sections checked`. A section nothing matched is optional.
+Now grep the diff for the strings below. **A hit makes the named section mandatory**: work every bullet in it against the whole changed file the hit landed in, not the matched line, and record the verdict under `## Sections checked`. A section nothing matched is optional.
 
-Routing widens attention; it never narrows it. **A grep hit is a reason to open a section, never a reason to stop reading.** Some of these patterns fire on ordinary code — `${` on any template literal, `%` on a modulo in a test assertion, `consent` on this repo's social-graph consent gate, which has nothing to do with cookies. When every hit in a section is that kind, write one line under `## Sections checked` naming what matched and why the section does not apply, then move on. Never satisfy a bullet with code that is not in the diff — a CORS setting the branch did not touch is not this review's finding.
+Routing widens attention; it never narrows it. **A grep hit is a reason to open a section, never a reason to stop reading.** Some patterns fire on ordinary code — `${` on any template literal, `consent` on this repo's social-graph gate. When every hit in a section is that kind, write one line under `## Sections checked` naming what matched and why it does not apply. Never satisfy a bullet with code the branch did not touch.
 
 ```bash
 git diff "$BASE"...HEAD | grep -nE '<pattern>'
@@ -87,10 +87,10 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 |---|---|
 | `document.cookie`, `Set-Cookie`, `setCookie`, `cookie.set`, `__Host-`, `SameSite`, `max-age` (grep `-i`, the header spells it `Max-Age=` and the option `maxAge`) | Cookies |
 | `consent`, `revoke`, `withdraw`, `optOut`, `denied`, `granted` | Cookies, Compliance → subprocessors |
-| `<script`, `<iframe`, `src="https://`, `googletagmanager`, `maps.googleapis`, `pinterest` | Cookies, Compliance → subprocessors, Configuration |
-| `randomBytes`, `Math.random`, `crypto.getRandomValues`, `.toString(36)`, `%` (a modulo applied to random bytes biases the output) | Tokens & Sessions, Cryptography |
-| `` sql` ``, `${`, `Bun.spawn`, `exec(`, `LIKE` | Injection |
-| `redirect`, `return_url`, `next=`, `location.href =` | Redirects |
+| `<script`, `<iframe`, `src="https://`, `googletagmanager`, `maps.googleapis`, `pinterest` | Cookies, Compliance → subprocessors, Configuration (reference) |
+| `randomBytes`, `Math.random`, `crypto.getRandomValues`, `.toString(36)`, `%` (a modulo applied to random bytes biases the output) | Tokens & Sessions, Cryptography (reference) |
+| `` sql` ``, `${`, `Bun.spawn`, `exec(`, `LIKE` | Injection (reference) |
+| `redirect`, `return_url`, `next=`, `location.href =` | Redirects (reference) |
 | a new `Dialog`, `onClick`, `role=`, `aria-`, `<img` | Compliance → EAA / accessibility |
 | `new Elysia(`, `.derive(`, `onBeforeHandle`, `session`, `jwt`, `verify`, `requireAuth`, `ownership` | Auth & Authorisation, Tokens & Sessions |
 | two or more exported handlers over the same resource in one file — `send`/`list`, `create`/`delete`, `add`/`remove`, or a name and the same name with a suffix (`sendMessage` beside `sendC2bMessage`) | Auth & Authorisation — the sibling-verb comparison below is mandatory |
@@ -182,58 +182,24 @@ checked`: the claim, whether it is **required to be present**, and whether its
 - Missing `SameSite`, `Secure`, or `HttpOnly` on a cookie that carries authentication or a stored decision
 - **Every grant the diff honours: find its teardown.** For each place a granted category causes something to load — an embed, a script tag, an iframe, an observer, a listener — find the code that runs when that grant is withdrawn. Search `revoke`, `withdraw`, `denied`, `onCleanup`, and the falsy branch of the same condition that mounted it. Code that only prevents *further* loading is not teardown: whatever an earlier grant already mounted keeps its network access and its cookies until the next reload, so the withdrawal does not take effect. No unmount path is a finding
 
-## Password & MFA Flows
+## The rest of the checklist
 
-- Passwords stored with fast hashes (MD5, SHA-1, SHA-256, etc.) rather than Argon2id / Scrypt / Bcrypt
-- Hash or token equality checks using `===` / `==` / string equality instead of constant-time comparison
-- Login, register, password-change, or MFA-verify endpoints missing rate limiting (password hashing is a DoS vector as well as a brute-force target)
-- Auth error messages that distinguish "user not found" from "wrong password", or registration/password-reset responses that reveal whether an email is registered, unless this is an intentional product decision
-- TOTP/OTP verify endpoints lacking their own throttle (lockout after N failed attempts), independent of IP-based rate limiting
+Nine more sections live in `reference/checklists.md`: **Password & MFA Flows**,
+**WebAuthn**, **Injection**, **Cryptography**, **Sensitive Data Exposure**,
+**Redirects**, **Post-Quantum Exposure**, **Dependency & Supply Chain**, and
+**Configuration**. They are there rather than here because no scenario in this
+repository's eval suite exercises them, not because they matter less — open the
+file whenever Step 1 routes to one of them, and work it exactly as you would a
+section on this page.
 
-## WebAuthn
-
-- Challenges that are not single-use and server-bound (accepted more than once, or not tied to server state)
-- Verification code that skips checking the RP ID hash, the user-present flag, or the user-verified flag when user verification is required
-- Registration flows that don't pass `excludeCredentials`, allowing the same authenticator to be registered twice
-
-## Injection (OWASP A03)
-
-- Raw SQL string construction outside of Drizzle ORM parameterisation
-- Unsanitised user input passed to `Bun.spawn`, `exec`, or any shell-equivalent
-- Template literals used to build queries or dynamic `eval`-style constructs
-
-## Cryptography (OWASP A02)
-
-- Use of weak algorithms: MD5, SHA-1, DES — anywhere in `@shared/crypto` or elsewhere
-- SHA-256 is acceptable for hashing long random server-side tokens, but NOT for passwords — passwords must use Argon2id / Scrypt / Bcrypt
-- Hardcoded secrets, API keys, or credentials committed to source files (not `.env`)
-- `Math.random()` used for security-sensitive purposes (tokens, nonces, IDs)
-- Modulo bias when deriving a bounded integer from random bytes (e.g. `bytes[i] % N` in verification-code or token generators) without rejection sampling or a sufficiently large source
-- Message payloads that should be E2E encrypted per project spec but are stored or transmitted in plaintext
-
-## Sensitive Data Exposure (OWASP A04)
-
-- API responses that leak internal fields (password hashes, full user records, internal IDs beyond what the caller needs)
-- A request body that reaches a service or a Drizzle call without passing a boundary schema. This repo validates twice and never mixes the two: Elysia TypeBox at the HTTP boundary, Effect Schema inside services (`wiki/architecture/schema-layers.md`). A route handler that hands `body` straight to the database is the finding
-- Personally identifiable information written to logs
-
-## Redirects
-
-- User-controlled redirect parameters (`redirect_to`, `next`, `return_url`, etc.) reflected verbatim rather than validated against an allowlist of internal paths or known origins
-
-## Post-Quantum Exposure
-
-- New code that encrypts data with long-term relevance (E2E message payloads, encrypted backups, archived key material, sealed long-lived credentials) using a classical-only KEM or key agreement (X25519, ECDH, plain RSA-OAEP) without a post-quantum hybrid (e.g. ML-KEM-768 + X25519). Harvest-now-decrypt-later makes durable ciphertext the one place this matters — short-lived primitives (JWTs with minute-scale TTLs, TLS session keys, WebAuthn challenges) are explicitly out of scope
-
-## Dependency & Supply Chain (OWASP A06)
-
-- Dependencies that appear unusual or out of place for this codebase (flag for manual review)
-- **DO NOT flag caret (`^`) or tilde (`~`) version ranges** — this project uses caret ranges for normal dependencies and tilde ranges for dependencies that don't follow semver or are known to be unstable. The lockfile pins exact versions. This is an intentional convention, not a security concern.
-
-## Configuration
-
-- CORS policy changes that widen allowed origins beyond what is necessary
-- Secrets or API keys present in any non-`.env` file
+Two of those bullets are worth carrying in your head, because they are the ones
+most often got wrong in this repo. **Do not report a caret (`^`) or tilde (`~`)
+version range as a finding** — the lockfile pins exact versions and
+`minimumReleaseAge` in `bunfig.toml` is the real control against a hostile
+publish; the ranges are convention. And **a request body reaching a service or
+a Drizzle call without passing a boundary schema is a finding**: this repo
+validates twice and never mixes the two, Elysia TypeBox at the HTTP boundary and
+Effect Schema inside services.
 
 ---
 
@@ -254,21 +220,18 @@ The two classes below are checked on every review, because the Step 1 routing se
 
 ### EAA / accessibility
 
-- New interactive UI without keyboard reachability (no `tabIndex` story, custom `<div onClick>` instead of `<button>`, missing focus visibility).
-- Form inputs without programmatic labels (placeholder-only, missing `<label htmlFor>` or `aria-label`).
-- Colour as the only state cue — Pulse event status, Zap unread badge, error vs warning copy.
-- Missing alt text on images (event covers, avatars, attachment thumbnails).
-- New media (video, audio, voice note) without caption / transcript track.
-- Custom ARIA where a Kobalte primitive would do — Kobalte is the accessible default; bespoke ARIA usually means we have invented an inaccessible widget.
+Every piece of new interactive UI in the diff gets three checks and a line in
+the report saying which it passed: **a keyboard path** (reachable and visibly
+focused, not a `<div onClick>` where a `<button>` belongs), **a programmatic
+label** (`<label htmlFor>` or `aria-label`, never placeholder-only), and **a
+state cue that is not colour alone**. Images need alt text, media needs
+captions, and a bespoke ARIA widget where a Kobalte primitive exists is usually
+an inaccessible widget we invented. File gaps as `C-`.
 
-### Pre-merge compliance gates
-
-When the diff introduces any of these, the check must be explicit in the report — a gate nobody mentions reads as a gate nobody ran:
-
-- [ ] New third-party processor (SDK, embed, script tag, hosted font, image proxy, geocoder, analytics tag) → `wiki/compliance/subprocessors.md` row present, and its DPA and transfer-basis cells resolved rather than `TODO`
-- [ ] New outbound `fetch` or `<script src>` to a non-OSN origin → vendor row + lawful basis confirmed
-- [ ] New personal-data field → `wiki/compliance/data-map.md` row added, and `wiki/compliance/retention.md` if it is retention-relevant
-- [ ] New interactive UI → keyboard path, programmatic label, and a non-colour state cue confirmed
+Whichever of those applies, **say so explicitly in the report**: a gate nobody
+mentions reads as a gate nobody ran. A new personal-data field also wants a row
+in `wiki/compliance/data-map.md`, and in `wiki/compliance/retention.md` if it is
+retention-relevant.
 
 ---
 
@@ -286,11 +249,9 @@ Each finding must use this exact structure:
 **Rationale:** Why this solution correctly addresses the risk.
 ```
 
-Tier definitions:
-- **Critical (S-C)** — exploitable vulnerability; must be fixed before merging
-- **High (S-H)** — significant risk; requires a fix or an explicit documented exception
-- **Medium (S-M)** — notable concern; should be addressed soon
-- **Low (S-L)** — minor issue or hardening suggestion
+Tiers: **S-C** exploitable now and blocks the merge, **S-H** significant risk
+wanting a fix or a documented exception, **S-M** notable, **S-L** minor or
+hardening.
 
 If no concerns are found, state that explicitly: "No security concerns found."
 
@@ -307,25 +268,21 @@ Keep that. This section says what goes in each one.
 format above, `S-` IDs in the first and `C-` IDs in the second, most severe
 first.
 
-`## Coverage` lists **every file** from the Step 1 diff, one line each, with a verdict — a finding ID, or `clear`, or `not source` (lockfiles, generated output, fixtures). A file you did not open is not clear; say you did not open it and why.
+`## Coverage` lists **every file** from the Step 1 diff, one line each, with a verdict — a finding ID, `clear`, or `not source` (lockfiles, generated output, fixtures). A file you did not open is not clear; say so and why.
 
-`## Sections checked` lists each section Step 1 made mandatory, and under it each bullet in that section, the code you looked at, and the verdict. This is the part that catches a skim: a bullet with no file and no line beside it was not checked.
+`## Sections checked` lists each mandatory section and, under it, each bullet with the code you looked at and the verdict. This is what catches a skim: a bullet with no file and line beside it was not checked.
 
 ### Check the file before you finish
 
-Run these two counts on the file you just wrote:
+The same two counts as Step 2's mid-run check, run once more on the finished
+file:
 
 ```bash
 grep -c '^## \(Security findings\|Compliance findings\|Coverage\|Sections checked\)$' <report-file>
 grep -c '^## ' <report-file>
 ```
 
-Both must print `4`. A first count under 4 means a section was renamed,
-demoted to `###`, or overwritten while you were filling it in. A second count above 4 means you added a
-top-level section of your own — the usual ones are `## Summary`, `## Verified
-strengths`, `## Scope and method`, `## Verdict` and `## Bottom line`. None of
-those is allowed as a `##`. A summary sentence goes at the top of `## Security
-findings`; a control you checked and found sound goes on its line in `##
-Coverage` or `## Sections checked`; an environment caveat goes at the end of
-`## Sections checked`.
-
+Both must print `4`. Under 4 means a heading was renamed or demoted; over 4
+means a section of your own crept in — a summary sentence belongs at the top of
+`## Security findings`, a sound control on its line in `## Coverage`, an
+environment caveat at the end of `## Sections checked`.

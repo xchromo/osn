@@ -84,15 +84,15 @@ git diff "$BASE"...HEAD | grep -nE '<pattern>'
 | Grep the diff for | Sections that become mandatory |
 |---|---|
 | `await db.`, `.get()`, `.all()`, `.select(`, `drizzle`, two `await`s in a row in one function | Database round trips |
-| `for (`, `.map(async`, `forEach`, `await` inside a loop body | Database round trips, Loops and batching |
-| `.where(`, `eq(`, `inArray(`, a new column read in a predicate | Database round trips, Indexes |
+| `for (`, `.map(async`, `forEach`, `await` inside a loop body | Database round trips, Loops and batching (reference) |
+| `.where(`, `eq(`, `inArray(`, a new column read in a predicate | Database round trips, Indexes (reference) |
 | a route file, `.get(`, `.post(`, `derive(`, `resolve(`, middleware, a role or entitlement gate | Database round trips, Shared middleware — and if the diff mounts **two** gates on one route, the first bullet of Shared middleware is mandatory |
-| `Effect.provide`, `runPromise`, `Layer.`, `ManagedRuntime` | Effect runtime |
-| `fetch(`, `createResource`, `createEffect`, `createMemo`, `onMount` | Client fetches, SolidJS reactivity |
-| `import * as`, a new dependency in a `package.json`, a route component | Bundle and loading |
-| `scroll`, `resize`, `oninput`, `onInput`, `ResizeObserver`, `scrollHeight`, `getBoundingClientRect` | Layout and event handlers |
-| `build`, `astro.config`, `wrangler.toml`, `turbo.json`, a `scripts/` file, a workflow under `.github/` | Build and deploy |
-| `.changeset/` | Changesets |
+| `Effect.provide`, `runPromise`, `Layer.`, `ManagedRuntime` | Effect runtime (reference) |
+| `fetch(`, `createResource`, `createEffect`, `createMemo`, `onMount` | Client fetches (reference), SolidJS reactivity (reference) |
+| `import * as`, a new dependency in a `package.json`, a route component | Bundle and loading (reference) |
+| `scroll`, `resize`, `oninput`, `onInput`, `ResizeObserver`, `scrollHeight`, `getBoundingClientRect` | Layout and event handlers (reference) |
+| `build`, `astro.config`, `wrangler.toml`, `turbo.json`, a `scripts/` file, a workflow under `.github/` | Build and deploy (reference) |
+| `.changeset/` | Changesets (reference) |
 
 ## Step 2 — Work the mandatory sections
 
@@ -193,23 +193,22 @@ combine these" has not made the decision the reader needed.
 - **Rows read whose value cannot change the outcome.** A cap check that fetches every row when the input is already under the floor; a ceiling derived from every row when only two of them can raise it.
 - **A result the caller already holds, fetched again.** A create or claim handler returns the record it wrote, and the next screen fetches it by ID.
 
-## Loops and batching
+## The rest of the checklist
 
-- **N+1** — a DB call inside an iteration. Batch with `inArray`, a join, or a single `IN` statement.
-- **Sequential awaits over an array** — `for (const x of xs) await f(x)` where the calls are independent. `Promise.all`/`Effect.all`.
-- **Work repeated per iteration that is constant across it** — a config read, a key parse, a regex compile hoisted out of the loop.
+Eight more sections live in `reference/checklists.md`: **Loops and batching**,
+**Indexes**, **Unbounded reads**, **Effect runtime**, **Client fetches**,
+**SolidJS reactivity**, **Bundle and loading**, **Layout and event handlers**,
+**Build and deploy** and **Changesets**. They are there rather than here
+because no scenario in this repository's eval suite exercises them, not because
+they matter less — open the file whenever Step 1 routes to one of them, and work
+it exactly as you would a section on this page.
 
-## Indexes
-
-- A column used in a `WHERE`, `JOIN` or `ORDER BY` with no matching index in the schema package.
-- A composite predicate whose index exists but in the wrong column order to serve it.
-- A uniqueness or existence probe that a partial unique index would serve — say so, and say which index.
-
-## Unbounded reads
-
-- A list endpoint with no `LIMIT` and no pagination.
-- A count over a table that grows without bound where an indexed existence probe would do.
-- A response that serialises nested data no caller reads.
+Two are worth carrying in your head. **A build step that fails and still exits
+`0` ships a broken artefact**, and the layers that swallow it are a provider
+built with `throwOnError: false`, a retry that logs and continues, and a warning
+where a throw belongs. And **an empty changeset is correct** when the branch
+touches only the allowlisted paths in `scripts/changeset-required.sh`; do not
+flag it.
 
 ## Shared middleware
 
@@ -217,49 +216,6 @@ combine these" has not made the decision the reader needed.
 - A fetch added unconditionally to a gate that a dozen routes mount, where most of them do not need it. That is a repo-wide regression dressed as an optimisation. The fix is an optional parameter: a route that does not ask for the extra data runs exactly the query it always ran.
 - A middleware that resolves the same record every route behind it then resolves again. **Read this one narrowly**: it is about a *handler* repeating its own gate's work. A second gate duplicating the first is the bullet above, not this one.
 - **This bullet also applies to a fix you propose.** Before writing a `Solution` that adds a column, a join or a fetch to shared code — a gate, a middleware, a helper a dozen files import — count the callers that do not need it (`grep -rn '<gateName>(' <workspace>/src`) and say in `Rationale` what they now pay. If the answer is anything but "nothing", the Solution is not finished: make the extra work an **optional parameter**, and state that a caller passing none runs exactly the query it ran before. A fix that taxes the callers that did not ask for it is a new finding, not a fix.
-
-## Effect runtime
-
-- `Effect.provide(SomeLive)` inside a per-request `runPromise`. That rebuilds the layer graph on every call — a new DB connection and an OpenTelemetry SDK restart per request. The layer graph is built once at boot and threaded through route factories. See `wiki/architecture/backend-patterns.md`.
-- A `yield*` chain of independent effects that `Effect.all` would run together.
-- CPU-heavy synchronous work inside an effect without `Effect.sync`.
-
-## Client fetches
-
-- **Every full document navigation in the diff: check what it throws away.** Grep for `window.location.href =`, `location.assign(`, `location.replace(` and any `<a>` that leaves the SPA. For each hit, do three things in order: name the value the current screen was holding at that moment — the record a create or claim handler just returned is the usual one; open the destination and find the first thing it fetches; and if those are the same record, that is the finding. A full navigation drops every byte of in-memory state, so the second screen starts from nothing and fetches back what the first screen had in hand. The fix is a deliberate hand-off across the gap — a single-use `sessionStorage` key the destination reads, validates and deletes — with a fall-through to the normal fetch on any failure, so a stale or absent value costs nothing. "Cache the response" is not this fix and does not survive the navigation.
-- A `createResource` that refetches on a signal change that does not affect its result.
-- Waterfalled requests — a fetch that only starts once an unrelated one resolves.
-
-## SolidJS reactivity
-
-- A signal read outside JSX or a tracked scope, which defeats fine-grained reactivity and re-runs the whole component.
-- A `createEffect` whose dependencies are broader than what it uses.
-- A derived value recomputed on every read where `createMemo` would compute it once.
-
-## Bundle and loading
-
-- `import * as x` from a library where named imports would tree-shake.
-- A route component not wrapped in `lazy()`.
-- A heavy dependency pulled into a path that rarely needs it, where a dynamic `import()` would defer it.
-- First-party static assets — fonts, images, generated CSS — served with no cache headers.
-
-## Layout and event handlers
-
-- `scroll`, `resize` or rapid input handlers with no throttle or debounce.
-- A read of `scrollHeight`, `offsetHeight` or `getBoundingClientRect` interleaved with a style write in the same frame — that forces synchronous layout every time. Batch the reads before the writes.
-- An observer registered per item where one on the container would do.
-
-## Build and deploy
-
-- **A build step that fails and still exits 0.** Check every layer that could swallow the error: a provider constructed with `throwOnError: false`, a retry that logs and continues, a warning where a throw belongs. If the deploy step runs straight after the build with no gate between them, a swallowed failure ships.
-- A build guard that lives only in CI, where it cannot fire locally or on a by-hand deploy. It belongs at the end of the package's own `build` script.
-- `turbo.json` tasks with `outputs` globs broader than the real output, or missing `inputs`, causing cache misses.
-- A task that repeats work a dependency already did.
-
-## Changesets
-
-- An **empty changeset** is correct when the branch touches only the allowlisted paths in `scripts/changeset-required.sh` (`.claude/`, `.github/`, `scripts/`, `wiki/`, `docs/`, top-level prose). Do not flag it.
-- A changeset is only a finding here when workspace source changed and none names the changed package. Anything more than that belongs to `prep-pr`, not this review.
 
 ---
 
@@ -301,18 +257,15 @@ first, with a summary sentence at the top if you want one.
 
 ### Check the file before you finish
 
-Run these two counts on the file you just wrote:
+The same two counts as Step 2's mid-run check, run once more on the finished
+file:
 
 ```bash
 grep -c '^## \(Performance findings\|Measurements\|Coverage\|Sections checked\)$' <report-file>
 grep -c '^## ' <report-file>
 ```
 
-Both must print `4`. A first count under 4 means a section was renamed,
-demoted to `###`, or overwritten while you were filling it in. A second count above 4 means you added a
-top-level section of your own — the usual ones are `## Summary`, `## Verified
-strengths`, `## Scope and method`, `## Verdict` and `## Bottom line`. None of
-those is allowed as a `##`. A summary sentence goes at the top of `## Performance
-findings`; a number you counted goes in `## Measurements`; an environment caveat
-goes at the end of `## Sections checked`.
-
+Both must print `4`. Under 4 means a heading was renamed or demoted; over 4
+means a section of your own crept in — a summary sentence belongs at the top of
+`## Performance findings`, a number you counted in `## Measurements`, an
+environment caveat at the end of `## Sections checked`.
