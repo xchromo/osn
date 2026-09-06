@@ -232,8 +232,15 @@ jobs:
       # scoreboard records whichever model the run reports — `compare` then
       # refuses to show a delta across a model change rather than reading one
       # as a regression.
+      # This job's contract, stated at the top of the file, is that it never
+      # fails the check: the result is advisory and swings between identical
+      # runs. Submission failing is the same kind of thing — a Tessl-side
+      # problem is not a reason to redden a pull request that has passed every
+      # gate that means something. It warns, and the collector finds nothing to
+      # collect.
       - name: Start the eval run
         id: run
+        continue-on-error: true
         if: steps.skills.outputs.list != ''
         env:
           TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
@@ -250,7 +257,7 @@ jobs:
             --json)
           echo "$OUT"
           ID=$(echo "$OUT" | bun -e 'const d=JSON.parse(await Bun.stdin.text()); console.log(d.data?.id ?? d.id ?? "")')
-          if [ -z "$ID" ]; then echo "::error::could not read a run id"; exit 1; fi
+          if [ -z "$ID" ]; then echo "::warning::could not read a run id; no eval was submitted"; exit 1; fi
           echo "id=$ID" >> "$GITHUB_OUTPUT"
 
       # This job stops here. Waiting for the run would hold a runner for the
@@ -259,7 +266,7 @@ jobs:
       # goes into a sticky comment, and `skill-eval-collect.yml` picks it up on
       # its next sweep and edits the table in.
       - name: Leave the run id for the collector
-        if: steps.skills.outputs.list != ''
+        if: steps.skills.outputs.list != '' && steps.run.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
