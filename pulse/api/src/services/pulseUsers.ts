@@ -135,7 +135,7 @@ export const updateSettings = (
   data: unknown,
 ): Effect.Effect<PulseProfile, ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
-    const validated = yield* Schema.decodeUnknown(UpdateSettingsSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(UpdateSettingsSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 

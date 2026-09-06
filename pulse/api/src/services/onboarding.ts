@@ -57,10 +57,10 @@ export type InterestCategory = (typeof INTEREST_CATEGORIES)[number];
 const PermOutcomeSchema = Schema.Literals(["granted", "denied", "prompt", "unsupported"]);
 export type PermOutcome = Schema.Schema.Type<typeof PermOutcomeSchema>;
 
-const InterestSchema = Schema.Literal(...INTEREST_CATEGORIES);
+const InterestSchema = Schema.Literals(INTEREST_CATEGORIES);
 
 const CompleteOnboardingSchema = Schema.Struct({
-  interests: Schema.Array(InterestSchema).pipe(Schema.maxItems(8)),
+  interests: Schema.Array(InterestSchema).check(Schema.isMaxLength(8)),
   notificationsOptIn: Schema.Boolean,
   eventRemindersOptIn: Schema.Boolean,
   notificationsPerm: PermOutcomeSchema,
@@ -223,7 +223,7 @@ export const completeOnboarding = (
   Db
 > =>
   Effect.gen(function* () {
-    const validated = yield* Schema.decodeUnknown(CompleteOnboardingSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(CompleteOnboardingSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 
