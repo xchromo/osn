@@ -1,6 +1,6 @@
 import { DbLive } from "@osn/db/service";
 import { initObservability, PrettyLoggerLive } from "@shared/observability";
-import { Effect, Layer, Logger } from "effect";
+import { Effect, Layer } from "effect";
 
 import { createApp, type App } from "./app";
 import { buildAppDeps, type BuiltDeps, SERVICE_NAME } from "./build-deps";

@@ -24,14 +24,14 @@ const manualParse = { parse: () => ({}) };
 
 /** POST /enquiries — open a thread. */
 const OpenBody = Schema.Struct({
-  directoryVendorId: Schema.String.pipe(Schema.minLength(1)),
-  category: Schema.String.pipe(Schema.minLength(1)),
-  message: Schema.String.pipe(Schema.minLength(1)),
+  directoryVendorId: Schema.String.check(Schema.isMinLength(1)),
+  category: Schema.String.check(Schema.isMinLength(1)),
+  message: Schema.String.check(Schema.isMinLength(1)),
 });
 
 /** POST /enquiries/:id/messages — reply. */
 const ReplyBody = Schema.Struct({
-  message: Schema.String.pipe(Schema.minLength(1)),
+  message: Schema.String.check(Schema.isMinLength(1)),
 });
 
 export interface EnquiryRoutesDeps {
@@ -165,7 +165,7 @@ export const createOrganiserEnquiriesRoutes = (
               const raw: unknown = await request.json().catch(() => null);
               return runCire(
                 Effect.gen(function* () {
-                  const body = yield* Schema.decodeUnknown(OpenBody)(raw);
+                  const body = yield* Schema.decodeUnknownEffect(OpenBody)(raw);
                   // Single read of the listing — the union of what the claim
                   // gate, enquiry-open, and the email fields each need. The row
                   // is passed down; the claim-mint gate (ownerOrgId !== null)
@@ -216,7 +216,7 @@ export const createOrganiserEnquiriesRoutes = (
                   return { enquiry };
                 }).pipe(
                   Effect.provideService(DbService, db),
-                  Effect.catchTag("ParseError", () =>
+                  Effect.catchTag("SchemaError", () =>
                     Effect.sync(() => {
                       set.status = 400;
                       return { error: "Missing or invalid fields" };
@@ -248,7 +248,7 @@ export const createOrganiserEnquiriesRoutes = (
               const raw: unknown = await request.json().catch(() => null);
               return runCire(
                 Effect.gen(function* () {
-                  const body = yield* Schema.decodeUnknown(ReplyBody)(raw);
+                  const body = yield* Schema.decodeUnknownEffect(ReplyBody)(raw);
                   const enquiry = yield* loadEnquiryInWedding(weddingId, params.id);
                   if (!enquiry) return yield* notFound(set);
                   const message = yield* enquiryService.reply({
@@ -266,7 +266,7 @@ export const createOrganiserEnquiriesRoutes = (
                   return { message };
                 }).pipe(
                   Effect.provideService(DbService, db),
-                  Effect.catchTag("ParseError", () =>
+                  Effect.catchTag("SchemaError", () =>
                     Effect.sync(() => {
                       set.status = 400;
                       return { error: "Missing or invalid fields" };

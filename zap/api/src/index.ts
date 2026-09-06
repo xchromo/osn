@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { PrettyLoggerLive } from "@shared/observability";
 import { makeDbD1Live } from "@zap/db/service";
-import { Effect, Logger } from "effect";
+import { Effect } from "effect";
 
 import { createApp, SERVICE_NAME, type App } from "./app";
 import { assertCorsOriginsConfigured, isNonLocalEnv, resolveCorsOrigins } from "./lib/cors-config";

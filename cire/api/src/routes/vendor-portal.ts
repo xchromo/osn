@@ -123,7 +123,7 @@ export function createVendorPortalRoutes(
 
           return runCire(
             Effect.gen(function* () {
-              const body = yield* Schema.decodeUnknown(ConsumeClaimBody)(raw);
+              const body = yield* Schema.decodeUnknownEffect(ConsumeClaimBody)(raw);
               const { orgId } = body;
 
               // Org-member gate (inline: orgId from body, not URL)
@@ -144,7 +144,7 @@ export function createVendorPortalRoutes(
               return { listing };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("ParseError", () => badRequest(set)),
+              Effect.catchTag("SchemaError", () => badRequest(set)),
               Effect.catchTag("ClaimInvalid", () => claimInvalid(set)),
               Effect.catchDefect(() => internal(set)),
             ),
@@ -191,7 +191,7 @@ export function createVendorPortalRoutes(
 
           return runCire(
             Effect.gen(function* () {
-              const body = yield* Schema.decodeUnknown(UpsertListingBody)(raw);
+              const body = yield* Schema.decodeUnknownEffect(UpsertListingBody)(raw);
               const listing = yield* directoryService.upsertListingForOrg(params.orgId, {
                 name: body.name,
                 description: body.description ?? null,
@@ -208,7 +208,7 @@ export function createVendorPortalRoutes(
               return { listing };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("ParseError", () => badRequest(set)),
+              Effect.catchTag("SchemaError", () => badRequest(set)),
               Effect.catchDefect(() => internal(set)),
             ),
           );

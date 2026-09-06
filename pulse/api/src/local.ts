@@ -1,7 +1,7 @@
 import { DbLive } from "@pulse/db/service";
 import { initObservability, PrettyLoggerLive } from "@shared/observability";
 import type { ClientIpOptions } from "@shared/rate-limit";
-import { Effect, Logger } from "effect";
+import { Effect } from "effect";
 
 import { createApp, SERVICE_NAME, type AppOptions } from "./app";
 import { assertCorsOriginsConfigured, resolveCorsOrigins } from "./lib/cors-config";

@@ -497,7 +497,7 @@ export const createOrganiserWeddingCreateRoute = (
 
         return runCire(
           Effect.gen(function* () {
-            const body = yield* Schema.decodeUnknown(CreateWeddingBody)(raw);
+            const body = yield* Schema.decodeUnknownEffect(CreateWeddingBody)(raw);
             const wedding = yield* weddingsService.createForOwner(
               osnProfileId,
               body.displayName,
@@ -507,7 +507,7 @@ export const createOrganiserWeddingCreateRoute = (
             return { wedding };
           }).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchTag("ParseError", () =>
+            Effect.catchTag("SchemaError", () =>
               Effect.sync(() => {
                 set.status = 400;
                 return { error: "Missing or invalid fields" };
@@ -612,12 +612,12 @@ export const createOrganiserRemintRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(RemintBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(RemintBody)(raw);
                 return yield* remintCodesService.remint(weddingId, body.codeStyle);
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.map((r) => ({ codeStyle: r.codeStyle, reminted: r.reminted })),
-                Effect.catchTag("ParseError", () =>
+                Effect.catchTag("SchemaError", () =>
                   Effect.sync(() => {
                     set.status = 400;
                     return { error: "Missing or invalid fields" };

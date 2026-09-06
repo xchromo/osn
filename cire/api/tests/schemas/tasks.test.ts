@@ -5,8 +5,8 @@ import { Effect, Schema } from "effect";
 import { isTimeframeBucket, TIMEFRAME_BUCKET_KEYS } from "../../src/lib/checklist-buckets";
 import { CreateTaskBody, ReorderTasksBody, UpdateTaskBody } from "../../src/schemas/tasks";
 
-const decode = <A, I>(s: Schema.Schema<A, I>, v: unknown) =>
-  Effect.runSync(Effect.result(Schema.decodeUnknown(s)(v)));
+const decode = <A, I>(s: Schema.Codec<A, I>, v: unknown) =>
+  Effect.runSync(Effect.result(Schema.decodeUnknownEffect(s)(v)));
 
 describe("checklist buckets", () => {
   it("has the eight ordered lead-time keys", () => {

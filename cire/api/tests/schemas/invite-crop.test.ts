@@ -8,8 +8,8 @@ import { cropAspect, decodeCrop, ImageCropBody, isValidCrop } from "../../src/sc
 // the ParseError so a test can assert acceptance/rejection.
 function decodeBody(raw: unknown) {
   return Effect.runSync(
-    Schema.decodeUnknown(ImageCropBody)(raw).pipe(
-      Effect.catchTag("ParseError", () => Effect.fail("reject" as const)),
+    Schema.decodeUnknownEffect(ImageCropBody)(raw).pipe(
+      Effect.catchTag("SchemaError", () => Effect.fail("reject" as const)),
       Effect.result,
     ),
   );

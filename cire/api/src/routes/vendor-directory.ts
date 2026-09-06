@@ -116,7 +116,7 @@ export const createVendorDirectoryWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(AddFromDirectoryBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(AddFromDirectoryBody)(raw);
                 const listing = yield* directoryService.getLiveListingById(
                   params.directoryVendorId,
                 );
@@ -143,7 +143,7 @@ export const createVendorDirectoryWriteRoutes = (
                 return { vendor };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchDefect((d) => (isUniqueViolation(d) ? conflict(set) : internal(set))),
               ),
             );

@@ -77,7 +77,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           const raw: unknown = await request.json().catch(() => null);
           return runCire(
             Effect.gen(function* () {
-              const patch = yield* Schema.decodeUnknown(UpdateSettingsBody)(raw);
+              const patch = yield* Schema.decodeUnknownEffect(UpdateSettingsBody)(raw);
               // Shape first, then privilege: a malformed body is a 400 whoever
               // sent it, so a co-host debugging a typo isn't told "forbidden".
               const ownerOnly = weddingIsOwner ? [] : ownerOnlySettingsIn(patch);
@@ -101,7 +101,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
             }).pipe(
               Effect.provideService(DbService, db),
               Effect.catchTags({
-                ParseError: () =>
+                SchemaError: () =>
                   Effect.sync(() => {
                     set.status = 400;
                     return { error: "Missing or invalid fields" };

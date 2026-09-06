@@ -120,12 +120,12 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(CreateBudgetItemBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(CreateBudgetItemBody)(raw);
                 const item = yield* budgetService.createItem({ weddingId, ...body });
                 return { item };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
             );
@@ -139,12 +139,12 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(ReorderBudgetItemsBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(ReorderBudgetItemsBody)(raw);
                 yield* budgetService.reorderItems(weddingId, body.category, body.orderedIds);
                 return { ok: true as const };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
             );
@@ -158,7 +158,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(UpdateBudgetItemBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(UpdateBudgetItemBody)(raw);
                 const item = yield* budgetService.updateItem({
                   weddingId,
                   itemId: params.itemId,
@@ -167,7 +167,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 return { item };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
@@ -193,7 +193,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(CreatePaymentBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(CreatePaymentBody)(raw);
                 const payment = yield* budgetService.addPayment({
                   weddingId,
                   itemId: params.itemId,
@@ -204,7 +204,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 return { payment };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
@@ -219,7 +219,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(UpdatePaymentBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(UpdatePaymentBody)(raw);
                 const payment = yield* budgetService.updatePayment({
                   weddingId,
                   itemId: params.itemId,
@@ -229,7 +229,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 return { payment };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
                 Effect.catchTag("PaymentNotInItem", () => paymentNotFound(set)),
                 Effect.catchDefect(() => internal(set)),
@@ -267,7 +267,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
           const raw: unknown = await request.json().catch(() => null);
           return runCire(
             Effect.gen(function* () {
-              const body = yield* Schema.decodeUnknown(SetBudgetTotalBody)(raw);
+              const body = yield* Schema.decodeUnknownEffect(SetBudgetTotalBody)(raw);
               const settings = yield* weddingSettingsService.update(
                 weddingId,
                 { budgetTotalMinor: body.budgetTotalMinor },
@@ -276,7 +276,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               return { budgetTotalMinor: settings.budgetTotalMinor };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("ParseError", () => badRequest(set)),
+              Effect.catchTag("SchemaError", () => badRequest(set)),
               Effect.catchTag("WeddingNotFound", () => weddingNotFound(set)),
               Effect.catchTag("SettingsWriteError", () => internal(set)),
               // Unreachable: this patch never names the deadline. Handled so

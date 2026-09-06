@@ -1,5 +1,5 @@
 import { initObservability, PrettyLoggerLive } from "@shared/observability";
-import { Effect, Logger } from "effect";
+import { Effect } from "effect";
 
 import { createApp, SERVICE_NAME } from "./app";
 import { assertCorsOriginsConfigured, isNonLocalEnv, resolveCorsOrigins } from "./lib/cors-config";

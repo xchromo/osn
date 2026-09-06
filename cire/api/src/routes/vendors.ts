@@ -118,7 +118,7 @@ export const createVendorWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(CreateVendorBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(CreateVendorBody)(raw);
                 const vendor = yield* vendorsService.create({
                   weddingId,
                   name: body.name,
@@ -133,7 +133,7 @@ export const createVendorWriteRoutes = (
                 return { vendor };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
             );
@@ -148,12 +148,12 @@ export const createVendorWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(ReorderVendorsBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(ReorderVendorsBody)(raw);
                 yield* vendorsService.reorder(weddingId, body.status, body.orderedIds);
                 return { ok: true as const };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
             );
@@ -167,7 +167,7 @@ export const createVendorWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(UpdateVendorBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(UpdateVendorBody)(raw);
                 const vendor = yield* vendorsService.update(weddingId, params.vendorId, {
                   name: body.name,
                   category: body.category,
@@ -181,7 +181,7 @@ export const createVendorWriteRoutes = (
                 return { vendor };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchTag("VendorNotInWedding", () => vendorNotFound(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
@@ -207,7 +207,7 @@ export const createVendorWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(SeedListingBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(SeedListingBody)(raw);
                 const result = yield* directoryService.seedFromCrm(weddingId, params.vendorId, {
                   name: body.name,
                   email: body.email,
@@ -234,7 +234,7 @@ export const createVendorWriteRoutes = (
                 };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
                 Effect.catchTag("VendorNotInWedding", () => vendorNotFound(set)),
                 Effect.catchDefect(() => internal(set)),
               ),
