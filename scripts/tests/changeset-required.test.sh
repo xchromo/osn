@@ -66,12 +66,12 @@ cire/api/src/index.ts'
 # `.agents/skills/`, `.claude/skills/<name>` is a symlink to it, and
 # `skills-lock.json` pins both. All three are agent instructions.
 run_case "installed third-party skills only" skip \
-  '.agents/skills/effect-v3-to-v4/SKILL.md
-.claude/skills/effect-v3-to-v4
+  '.agents/skills/some-vendor-skill/SKILL.md
+.claude/skills/some-vendor-skill
 skills-lock.json'
 
 run_case "installed third-party skills plus one source file" required \
-  '.agents/skills/effect-ts/SKILL.md
+  '.agents/skills/some-vendor-skill/SKILL.md
 osn/api/src/index.ts'
 
 run_case "source file in a versioned package" required \

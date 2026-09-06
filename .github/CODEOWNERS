@@ -51,6 +51,10 @@ wrangler.jsonc       @chav-aniket
 # told to do in this repo. `.claude/skills/<name>` is a symlink into
 # `.agents/skills/`, so both paths are owned. Our own skills under
 # `.claude/skills/` are covered by the same pattern.
+#
+# None are installed right now (the two Effect ones went with the v4
+# migration). These stay so the NEXT install is owned from its first commit
+# rather than from whenever someone remembers to add the rule.
 /.agents/**          @chav-aniket
 /.claude/**          @chav-aniket
 /skills-lock.json    @chav-aniket
