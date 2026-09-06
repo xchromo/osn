@@ -618,3 +618,119 @@ test("a thin cell with no path is reported rather than crashing", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// The quality gate is the one deterministic signal in this loop: the same
+// SKILL.md scores the same twice. That is what makes it safe to file an issue
+// against automatically, where an eval delta is not.
+
+test("quality-check passes an unchanged score and flags a real drop", async () => {
+  const dir = await makeTree(["alpha", "beta"], []);
+  try {
+    await mkdir(join(dir, ".claude/evals"), { recursive: true });
+    await writeFile(
+      join(dir, ".claude/evals/quality.json"),
+      JSON.stringify({ skills: { alpha: { score: 90, recordedAt: "2026-09-01" } } }),
+    );
+
+    const same = await run(dir, "quality-check", "--scores", '{"alpha":90}');
+    expect(same.exitCode).toBe(0);
+    expect(same.stdout).toContain("| `alpha` | 90% | 90% | 0 |");
+
+    const drop = await run(dir, "quality-check", "--scores", '{"alpha":84}');
+    expect(drop.exitCode).toBe(1);
+    expect(drop.stdout).toContain("REGRESSION: `alpha` fell 6 points, 90% to 84%.");
+
+    // Four points is inside what a reword can move without meaning anything.
+    const small = await run(dir, "quality-check", "--scores", '{"alpha":86}');
+    expect(small.exitCode).toBe(0);
+    expect(small.stdout).not.toContain("REGRESSION");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("quality-check fails anything under the threshold, however it got there", async () => {
+  const dir = await makeTree(["alpha"], []);
+  try {
+    await mkdir(join(dir, ".claude/evals"), { recursive: true });
+    // No history at all: a new skill under the floor still has to fail.
+    await writeFile(join(dir, ".claude/evals/quality.json"), JSON.stringify({ skills: {} }));
+    const out = await run(dir, "quality-check", "--scores", '{"alpha":68}');
+    expect(out.exitCode).toBe(1);
+    expect(out.stdout).toContain("under the 70% threshold");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("quality-check refuses a --scores argument it cannot trust", async () => {
+  const dir = await makeTree(["alpha"], []);
+  try {
+    expect((await run(dir, "quality-check", "--scores", "not json")).exitCode).toBe(1);
+    expect((await run(dir, "quality-check", "--scores", "[90]")).exitCode).toBe(1);
+    const bad = await run(dir, "quality-check", "--scores", '{"alpha":"91%"}');
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("is not a number");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("quality-record round-trips into a comparison", async () => {
+  const dir = await makeTree(["alpha"], []);
+  try {
+    await mkdir(join(dir, ".claude/evals"), { recursive: true });
+    await run(dir, "quality-record", "--scores", '{"alpha":93}');
+    const out = await run(dir, "quality-check", "--scores", '{"alpha":93}');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("| `alpha` | 93% | 93% | 0 |");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A large eval drop labels the pull request; it never files and never fails.
+// The marker goes to stderr so it cannot land in the comment a human reads.
+
+test("compare marks a scenario that fell past the threshold, on stderr only", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    const hash = (await run(dir, "fingerprint", ".claude/evals/prep-pr-one")).stdout.trim();
+    await boardFor(dir, { "prep-pr-one": { fixtureHash: hash } });
+    // The board says 0.5; runJson's fixture scores 6/12 = 0.5 by default, so
+    // give the board a much higher score to make this run read as a fall.
+    const board = JSON.parse(await Bun.file(join(dir, ".claude/evals/scores.json")).text()) as {
+      scenarios: Record<string, { score: number }>;
+    };
+    board.scenarios["prep-pr-one"]!.score = 0.9;
+    await writeFile(join(dir, ".claude/evals/scores.json"), JSON.stringify(board));
+
+    await writeFile(join(dir, "run.json"), runJson("prep-pr-one", { a: [6, 12] }));
+    const out = await run(dir, "compare", "--run", "run.json");
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).toContain("NEEDS-DECISION: prep-pr-one");
+    expect(out.stdout).toContain("fell 25 points or more");
+    expect(out.stdout).not.toContain("NEEDS-DECISION");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("compare stays quiet when the fixture moved, however far the score fell", async () => {
+  const dir = await makeTree(["prep-pr"], ["prep-pr-one"]);
+  try {
+    await boardFor(dir, { "prep-pr-one": { fixtureHash: "sha256:stale" } });
+    const board = JSON.parse(await Bun.file(join(dir, ".claude/evals/scores.json")).text()) as {
+      scenarios: Record<string, { score: number }>;
+    };
+    board.scenarios["prep-pr-one"]!.score = 0.9;
+    await writeFile(join(dir, ".claude/evals/scores.json"), JSON.stringify(board));
+
+    await writeFile(join(dir, "run.json"), runJson("prep-pr-one", { a: [6, 12] }));
+    const out = await run(dir, "compare", "--run", "run.json");
+    expect(out.stderr).not.toContain("NEEDS-DECISION");
+    expect(out.stdout).toContain("history void");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

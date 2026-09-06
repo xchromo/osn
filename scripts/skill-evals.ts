@@ -30,6 +30,22 @@ import { join } from "node:path";
 const SKILLS_DIR = ".claude/skills";
 const EVALS_DIR = ".claude/evals";
 const SCOREBOARD = join(EVALS_DIR, "scores.json");
+const QUALITY = join(EVALS_DIR, "quality.json");
+
+/** How far a scenario has to fall against the scoreboard before a human is
+ * asked to look. Per-scenario aggregates have a mean standard deviation of 9
+ * points across runs at `-n 3`, with observed ranges to 36, and CI runs at
+ * `-n 1`, which is noisier still. One run of `prep-pr` scored 3/3 on one
+ * scenario and 0/3 on another with identical skill text. So this is set where
+ * a drop is worth a person's attention rather than where it is significant —
+ * there is no threshold at `-n 1` that means "significant". */
+const EVAL_DROP_PTS = 25;
+
+/** The quality gate is deterministic: the same SKILL.md scores the same twice.
+ * A drop of this size is therefore real, and unlike an eval delta it can be
+ * acted on without a second opinion. */
+const QUALITY_DROP_PTS = 5;
+const QUALITY_FLOOR = 70;
 
 /** The files that decide what a scenario asks. The skill under test is not one
  * of them — that is the whole point: a score is comparable across skill edits
@@ -439,6 +455,90 @@ function cmdPlan() {
   }
 }
 
+type QualityBoard = { skills: Record<string, { score: number; recordedAt: string }> };
+
+/** Skill name to percentage, as `tessl review run quality` prints it. Named
+ * rather than inline so the shape has one owner: the workflow builds it, both
+ * quality subcommands read it, and the board stores it. */
+type QualityScores = Record<string, number>;
+
+function readQuality(): QualityBoard {
+  if (!existsSync(QUALITY)) return { skills: {} };
+  return JSON.parse(readFileSync(QUALITY, "utf8")) as QualityBoard;
+}
+
+/** `--scores '{"review-tests":91,...}'`, as printed by `tessl review run
+ * quality`. Kept as an argument rather than shelling out to `tessl` so the
+ * comparison is testable without a network or a credit. */
+function parseScoresArg() {
+  const raw = readArg("--scores") ?? fail("needs --scores '<json>'");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fail(`--scores is not JSON: ${raw}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return fail("--scores must be a JSON object of skill name to score");
+  }
+  const out: QualityScores = {};
+  for (const [name, score] of Object.entries(parsed)) {
+    if (typeof score !== "number" || !Number.isFinite(score)) {
+      fail(`score for ${name} is not a number: ${JSON.stringify(score)}`);
+    }
+    out[name] = score;
+  }
+  return out;
+}
+
+/** Compare fresh quality scores against the committed ones. Exits non-zero on a
+ * regression, so CI can open an issue — this is the one signal in the loop
+ * deterministic enough to file against without a human first. */
+function cmdQualityCheck() {
+  const now = parseScoresArg();
+  const board = readQuality();
+  const regressions: string[] = [];
+  const lines = ["| Skill | Before | Now | Δ |", "|---|---|---|---|"];
+
+  for (const [name, score] of Object.entries(now).sort()) {
+    const before = board.skills[name];
+    const delta = before === undefined ? null : round(score - before.score);
+    lines.push(
+      `| \`${name}\` | ${before === undefined ? "—" : `${before.score}%`} | ${score}% | ${
+        delta === null ? "new" : delta > 0 ? `+${delta}` : String(delta)
+      } |`,
+    );
+    if (score < QUALITY_FLOOR) {
+      regressions.push(`\`${name}\` scored ${score}%, under the ${QUALITY_FLOOR}% threshold.`);
+    } else if (delta !== null && delta <= -QUALITY_DROP_PTS) {
+      regressions.push(
+        `\`${name}\` fell ${Math.abs(delta)} points, ${before?.score}% to ${score}%.`,
+      );
+    }
+  }
+
+  console.log(lines.join("\n"));
+  if (regressions.length > 0) {
+    console.log("");
+    for (const r of regressions) console.log(`REGRESSION: ${r}`);
+    process.exit(1);
+  }
+}
+
+/** Write the fresh scores back, so the next run has something to compare to. */
+function cmdQualityRecord() {
+  const now = parseScoresArg();
+  const board = readQuality();
+  const today = new Date().toISOString().slice(0, 10);
+  for (const [name, score] of Object.entries(now))
+    board.skills[name] = { score, recordedAt: today };
+  const ordered = Object.fromEntries(
+    Object.entries(board.skills).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  writeFileSync(QUALITY, `${JSON.stringify({ skills: ordered }, null, 2)}\n`);
+  console.log(`Recorded ${Object.keys(now).length} quality score(s) into ${QUALITY}.`);
+}
+
 /** The poll predicate for CI. `tessl eval run` returns the moment a run is
  * queued, so something has to wait; `status` is not that something. */
 function cmdReady() {
@@ -525,8 +625,40 @@ function cmdCompare() {
   if (moved.length > 0)
     lines.push("", "<details><summary>Items that moved</summary>", "", ...moved, "</details>");
 
+  // A scenario far enough down to be worth a person's attention. This is NOT a
+  // significance test — at `-n 1` there is no threshold that means significant,
+  // and the same skill text has scored 3/3 and 0/3 on two scenarios of one run.
+  // It is a prompt to look, which is why it labels the pull request rather than
+  // filing anything. Only scenarios whose fixture is unchanged qualify: a moved
+  // fixture makes the stored score answer a different question.
+  const drops: string[] = [];
+  for (const [name, now] of run.scenarios) {
+    const before = board.scenarios[name];
+    if (!before || before.fixtureHash !== fixtureHash(join(EVALS_DIR, name))) continue;
+    const delta = round((now.score - before.score) * 100);
+    if (delta <= -EVAL_DROP_PTS) {
+      drops.push(
+        `${name}: ${pct(before.score)} → ${pct(now.score)} (${delta} pts, threshold ${-EVAL_DROP_PTS})`,
+      );
+    }
+  }
+  if (drops.length > 0) {
+    lines.push(
+      "",
+      `> **${drops.length} scenario(s) fell ${EVAL_DROP_PTS} points or more.** That is a prompt to`,
+      "> look, not a verdict: at `-n 1` a scenario moves further on noise than most real",
+      "> regressions do. Read the moved items above and the judge's reasoning before",
+      "> concluding anything.",
+      "",
+      ...drops.map((d) => `> - ${d}`),
+    );
+  }
+
   lines.push("", `[Run ${run.runId}](https://tessl.io/workspaces/musubi/eval-runs/${run.runId})`);
   console.log(lines.join("\n"));
+  // On stderr so it never lands in the pull-request comment: the workflow greps
+  // for it to decide whether to label, and the comment is for a human.
+  for (const d of drops) console.error(`NEEDS-DECISION: ${d}`);
 }
 
 function cmdRecord() {
@@ -576,6 +708,8 @@ const commands = {
   fingerprint: cmdFingerprint,
   "check-names": cmdCheckNames,
   plan: cmdPlan,
+  "quality-check": cmdQualityCheck,
+  "quality-record": cmdQualityRecord,
   ready: cmdReady,
   compare: cmdCompare,
   record: cmdRecord,

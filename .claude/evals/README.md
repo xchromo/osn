@@ -53,7 +53,26 @@ whole run index at once (17–20 solves) and waits for the slowest before starti
 the next, so wall clock is the sum of the waves' maxima, not the mean solve:
 run 7 took 290 minutes for 19.4 agent-hours, and one straggler held its last
 hour on its own. Almost none of that work answers the question a skill edit
-asks. See **Making a run shorter** below for what the time is actually made of;
+asks.
+
+**Nothing in CI waits for it.** `skill-eval.yml` narrows the run to the skills
+the diff touched, submits it, leaves the run id in a pull-request comment and
+exits in a couple of minutes. `skill-eval-collect.yml` sweeps every 30 minutes,
+finds comments whose run has scored, and edits the table in. Holding a runner
+for the hour a run takes, to produce a number nothing is gated on, is the wrong
+trade — and an hour-long job is also the one a force-push cancels and bills
+twice.
+
+Two signals come out of it, and they are deliberately different in kind:
+
+- **The quality score files an issue.** It is deterministic — the same
+  `SKILL.md` scores the same twice — so a five-point fall, or anything under
+  70, is real and can be acted on without a second run. One open issue is
+  reused rather than one filed per commit.
+- **A large eval fall labels the pull request `needs:decision` and files
+  nothing.** At `-n 1` there is no threshold that means significant: the same
+  skill text scored 3/3 and 0/3 on two scenarios of a single run. The label
+  asks a person to look, which is what the label is for. See **Making a run shorter** below for what the time is actually made of;
 `bun scripts/skill-evals.ts plan` prints what a run right now would pay for
 before you submit one. The loop is three steps, and
 `.github/workflows/skill-eval.yml` runs all three on a pull request that touches
