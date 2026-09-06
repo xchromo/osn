@@ -3,7 +3,7 @@ import { toast } from "@shared/toast";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 
-import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
+import { allAuthFirst, apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import {
   ensureEventsLoaded,
   type EventRow,
@@ -74,7 +74,7 @@ export default function GuestsEditor(props: { weddingId: string }) {
    *  The `!fresh` checks below throw instead, so the load error is surfaced
    *  rather than seeding an empty draft. */
   async function loadInto() {
-    const [events, guests, households] = await Promise.all([
+    const [events, guests, households] = await allAuthFirst([
       ensureEventsLoaded(props.weddingId, async () => {
         const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/events`));
         if (res.status === 401) {

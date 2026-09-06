@@ -15,7 +15,7 @@ import { toast } from "@shared/toast";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 
-import { apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
+import { allAuthFirst, apiUrl, isAuthExpired, redirectToLogin } from "../lib/api";
 import { type DateTimeParts, joinIso, splitIso } from "../lib/event-datetime";
 import { formatEventWhen } from "../lib/event-display";
 import {
@@ -138,7 +138,7 @@ export default function EventsEditor(props: { weddingId: string }) {
    *  rather than falling back to `?? []` and seeding the same empty-slice
    *  deletion from the other direction. */
   async function loadInto() {
-    const [events, guests, households] = await Promise.all([
+    const [events, guests, households] = await allAuthFirst([
       ensureEventsLoaded(props.weddingId, async () => {
         const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/events`));
         if (res.status === 401) {
