@@ -217,7 +217,7 @@ run_guard() {
       # allowlist cannot see bytes that never reach that directory. Measured
       # on osn/landing: 5 inline style blocks + 4 inline script blocks in
       # `dist/index.html` alone, ~3116 bytes gzip-equivalent — real budget
-      # this guard is blind to. An open tracker issue holds the two ways to
+      # this guard is blind to. Tracker #636 holds the two ways to
       # close it (parse the HTML too, or force `inlineStylesheets: "never"`);
       # this script deliberately does neither on its own.
       while IFS= read -r -d '' f; do
