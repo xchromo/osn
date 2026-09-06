@@ -135,3 +135,4 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[event-visibility-bug]] — private event leaks, loadVisibleEvent
 - [[s2s-migration]] — historical record (HTTP+ARC migration is complete)
 - [[bun-1.4-migration]] — what Bun 1.4 is worth using here: adopted (`$` shell, `Bun.TOML` guard, bun-types), impossible (`Bun.Image` in the seed), and what is left
+- [[effect-v4-migration]] — what an Effect 3.22 → 4.0 bump costs here: the GA gate, the measured breaking surface (`Context.Tag`, `Logger`, and 1105 `Schema` sites), and the phase order
