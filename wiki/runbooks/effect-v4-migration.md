@@ -457,7 +457,8 @@ does not, and this is why.
 > type-checking". **The spike disproved the premise.** Effect's types cross every
 > workspace boundary here, so the tree is red from the first version bump until
 > the last call site is migrated. Phases are still the right *review* unit; they
-> are not independently mergeable.
+> are not independently mergeable — which is why the whole migration runs on the
+> `effect-v4` integration branch. See [[#Merge strategy: the `effect-v4` integration branch]].
 
 Tracked as [#895](https://github.com/xchromo/osn/issues/895).
 
@@ -480,20 +481,50 @@ they land together.
 The tree is red from the start of phase 1 until phase 5 completes. That is a
 property of the migration, not a mistake in the sequencing.
 
-### How to merge a stack that is red in the middle
+### Merge strategy: the `effect-v4` integration branch
 
-`main` requires a PR and CI, and phases 1–4 cannot pass CI. Three ways to run
-it; the repo owner picks:
+`main` requires a PR and CI, and phases 1–4 cannot pass CI. **Decided
+2026-09-06: a long-lived integration branch.** It is the only option that keeps
+both a reviewable, phase-sized diff and an always-green `main`. The two
+alternatives considered — one PR reviewed commit-by-commit, and waiving the CI
+gate on a stack merging straight to `main` — were rejected for giving up one or
+the other.
 
-| Approach | Trade-off |
-| --- | --- |
-| **A long-lived integration branch.** Each phase is a PR into `effect-v4`, not `main`; the stack merges to `main` once as a single green PR | Review stays phase-sized. One large merge to `main`; the branch needs rebasing against `main` while it lives |
-| **One PR, reviewed commit by commit.** Each phase is a commit; CI runs once, at the end | No branch to maintain. A ~1300-site diff in one PR, and GitHub review-per-commit is weaker than review-per-PR |
-| **Relax the CI gate for the stack.** Stacked PRs to `main` per [[stacked-prs]], with the type-check gate waived until the top | Keeps the existing flow. Puts red commits on `main`'s history and makes bisecting the range useless |
+**`effect-v4` exists**, cut from `main` at `851df71`.
 
-**A is the recommendation** — it is the only one that keeps both a reviewable
-diff and an always-green `main`. It is also a change to how this repo merges,
-which is why it is the owner's call rather than an implementation detail.
+```
+main ──────────────────────────────────────────────► (one green PR at the end)
+  └── effect-v4 ◄── phase 1 ◄── phase 2 ◄── … ◄── phase 6
+```
+
+- **Every phase PR bases on `effect-v4`**, never on `main`:
+  `gh pr create --base effect-v4`. Follow [[stacked-prs]] for the rest —
+  `git config branch.<name>.gh-merge-base effect-v4` at worktree creation is
+  what fixes the diff GitHub shows.
+- **Phases 1–4 will show red CI on their PRs, by design.** `ci.yml` runs on
+  every `pull_request` regardless of base, and the tree does not type-check
+  until phase 5. Merge them into `effect-v4` anyway, with the red understood —
+  and never by enabling auto-merge, which would be waiting on a check that
+  cannot go green. Phase 5 is the first PR whose CI can pass.
+- **Rebase `effect-v4` onto `main` regularly**, at minimum whenever `main`
+  takes a change to a package the migration touches. The longer the branch
+  lives the worse a deferred rebase gets, and every Effect-typed package is in
+  scope, so "does this conflict?" is rarely no.
+- **The final merge to `main` is one PR from `effect-v4`**, green, with the
+  full suite, both D1 tiers and the dev-tier smoke behind it (#903).
+
+Three things this branch deliberately does **not** trigger, all verified
+against the workflows on 2026-09-06:
+
+| Workflow | Trigger | Effect on `effect-v4` |
+| --- | --- | --- |
+| `deploy.yml` | `push` to `main` only | **No deploy.** Nothing reaches the dev tier until the final merge |
+| `release.yml` | `push` to `main` only | **No version bump.** Changesets accumulate on the branch and are consumed once, when it lands |
+| `changeset-check.yml` | `pull_request`, no branch filter | Runs on every phase PR, as intended — the filter was already removed for stacked PRs |
+| `ci.yml` | `push` to `main`, plus every `pull_request` | Runs on every phase PR. Red until phase 5 |
+
+So each phase still carries its own changeset, and the whole migration's
+version bump happens in a single release when `effect-v4` merges.
 
 ### Rules for the execution
 
@@ -513,7 +544,11 @@ which is why it is the owner's call rather than an implementation detail.
   again, per the Workers-debugging rule in `CLAUDE.md`.
 - **Hold the production approval until the final phase.** A merge to `main`
   auto-deploys dev; production waits on a human. See [[dev-environment]].
+- **Base every phase PR on `effect-v4`, never `main`.** `gh pr create --base effect-v4`.
 - **One changeset per phase.** `@cire/*` is version-less and must not share a
-  changeset with versioned packages.
+  changeset with versioned packages. They accumulate on the branch and are
+  consumed in a single release when it merges.
+- **Rebase `effect-v4` onto `main` regularly** — every Effect-typed package is
+  in scope, so conflicts are the norm, not the exception.
 - **Pin exact versions while v4 is pre-GA**, so no install moves the target
   mid-stack.
