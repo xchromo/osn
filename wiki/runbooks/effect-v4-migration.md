@@ -216,16 +216,26 @@ Each phase is a PR, stacked on the one before it per [[stacked-prs]]. The
 ordering is bottom-up through the dependency graph, so every phase leaves the
 tree type-checking.
 
-| # | Phase | Scope | Gate |
-| ---: | --- | --- | --- |
-| 0 | Spike | One throwaway branch. Bump `shared/crypto` (3 src files, 2 tests) alone and make it green. Confirms the toolchain — TypeScript ^6.0.3, `moduleResolution: bundler`, workerd bundling — before committing to the rest | Not merged. Findings amend this page |
-| 1 | Ecosystem | Bump `effect`, `@effect/vitest`, `@effect/opentelemetry` in all 13 `package.json` files. Delete the dead `@effect/platform` line from `shared/observability` | Install resolves; nothing else expected to pass |
-| 2 | Service keys | The 13 `Context.Tag` declarations → `Context.Service` | `bun run check` on `*/db` + `shared/*` |
-| 3 | Mechanical renames | The rename table + the removed-API table, across all packages | `bun run check`, `bun run lint` |
-| 4 | Logging | `shared/observability/src/logger/layer.ts` first, then the three `local.ts` files, `zap/api/src/index.ts`, and the six test files | `bun run --cwd shared/observability test:run` |
-| 5 | Schema — shared and small | `osn/client`, `cire/theme`, `zap/api`, `osn/api`, `pulse/api` (20 files) | Each package's `test:run` |
-| 6 | Schema — cire-api | The remaining 38 files. Split further if the diff outgrows review | `bun run --cwd cire/api test:run`, then `test:d1` |
-| 7 | Full sweep | Whole-suite run, both test tiers, `bun run build`, deploy to the dev tier and smoke it | Green CI + dev tier healthy |
+Tracked as [#895](https://github.com/xchromo/osn/issues/895) with one sub-issue
+per phase: [#896](https://github.com/xchromo/osn/issues/896) spike,
+[#897](https://github.com/xchromo/osn/issues/897) ecosystem,
+[#898](https://github.com/xchromo/osn/issues/898) service keys,
+[#899](https://github.com/xchromo/osn/issues/899) renames,
+[#900](https://github.com/xchromo/osn/issues/900) logging,
+[#901](https://github.com/xchromo/osn/issues/901) schema (small),
+[#902](https://github.com/xchromo/osn/issues/902) schema (cire-api),
+[#903](https://github.com/xchromo/osn/issues/903) sweep.
+
+| # | Phase | Issue | Scope | Gate |
+| ---: | --- | --- | --- | --- |
+| 0 | Spike | #896 | One throwaway branch. Bump `shared/crypto` (3 src files, 2 tests) alone and make it green. Confirms the toolchain — TypeScript ^6.0.3, `moduleResolution: bundler`, workerd bundling — before committing to the rest | Not merged. Findings amend this page |
+| 1 | Ecosystem | #897 | Bump `effect`, `@effect/vitest`, `@effect/opentelemetry` in all 13 `package.json` files. Delete the dead `@effect/platform` line from `shared/observability` | Install resolves; nothing else expected to pass |
+| 2 | Service keys | #898 | The 13 `Context.Tag` declarations → `Context.Service` | `bun run check` on `*/db` + `shared/*` |
+| 3 | Mechanical renames | #899 | The rename table + the removed-API table, across all packages | `bun run check`, `bun run lint` |
+| 4 | Logging | #900 | `shared/observability/src/logger/layer.ts` first, then the three `local.ts` files, `zap/api/src/index.ts`, and the six test files | `bun run --cwd shared/observability test:run` |
+| 5 | Schema — shared and small | #901 | `osn/client`, `cire/theme`, `zap/api`, `osn/api`, `pulse/api` (20 files) | Each package's `test:run` |
+| 6 | Schema — cire-api | #902 | The remaining 38 files. Split further if the diff outgrows review | `bun run --cwd cire/api test:run`, then `test:d1` |
+| 7 | Full sweep | #903 | Whole-suite run, both test tiers, `bun run build`, deploy to the dev tier and smoke it | Green CI + dev tier healthy |
 
 Phases 5 and 6 are where the estimate lives; 1 through 4 are a day's work
 between them.
