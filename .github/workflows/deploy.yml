@@ -406,7 +406,7 @@ jobs:
       # every PR (`ci.yml`), so a regression is caught on the merge gate rather
       # than after it lands on main.
       - name: Guard cire/invites SSR bundle size
-        run: ./scripts/guard-bundle-size.sh cire/invites worker 175000
+        run: ./scripts/guard-bundle-size.sh cire/invites
 
       # Two edits to the adapter's generated config, in one pass:
       #
@@ -509,7 +509,7 @@ jobs:
       # every PR (`ci.yml`), so a regression is caught on the merge gate rather
       # than after it lands on main.
       - name: Guard cire/invites SSR bundle size
-        run: ./scripts/guard-bundle-size.sh cire/invites worker 175000
+        run: ./scripts/guard-bundle-size.sh cire/invites
 
       # `@astrojs/cloudflare` writes a top-level `"legacy_env": true` into the
       # generated `dist/server/wrangler.json`. Wrangler 4.111+ REMOVED support for
@@ -612,7 +612,7 @@ jobs:
       # Turborepo replays a cached `build` and the chained invocation never
       # runs.
       - name: Guard cire/host bundle size
-        run: ./scripts/guard-bundle-size.sh cire/host static 224515
+        run: ./scripts/guard-bundle-size.sh cire/host
 
       # Idempotent: creates the project on first run, no-ops after. The custom
       # domain (host.dev.cireweddings.com) is a dashboard step — wrangler cannot
@@ -695,7 +695,7 @@ jobs:
 
       # See the dev job above for why this runs even though `build` chains it.
       - name: Guard cire/host bundle size
-        run: ./scripts/guard-bundle-size.sh cire/host static 224515
+        run: ./scripts/guard-bundle-size.sh cire/host
 
       - name: Deploy cire/host to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-host
@@ -767,7 +767,7 @@ jobs:
       # Turborepo replays a cached `build` and the chained invocation never
       # runs.
       - name: Guard cire/vendor bundle size
-        run: ./scripts/guard-bundle-size.sh cire/vendor static 81644
+        run: ./scripts/guard-bundle-size.sh cire/vendor
 
       - name: Ensure the cire-vendor-dev Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" cire-vendor-dev main
@@ -840,7 +840,7 @@ jobs:
 
       # See the dev job above for why this runs even though `build` chains it.
       - name: Guard cire/vendor bundle size
-        run: ./scripts/guard-bundle-size.sh cire/vendor static 81644
+        run: ./scripts/guard-bundle-size.sh cire/vendor
 
       - name: Deploy cire/vendor to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-vendor
@@ -914,7 +914,7 @@ jobs:
       # Turborepo replays a cached `build` and the chained invocation never
       # runs.
       - name: Guard cire/landing bundle size
-        run: ./scripts/guard-bundle-size.sh cire/landing static 189324
+        run: ./scripts/guard-bundle-size.sh cire/landing
 
       - name: Ensure the cire-landing-dev Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" cire-landing-dev main
@@ -993,7 +993,7 @@ jobs:
 
       # See the dev job above for why this runs even though `build` chains it.
       - name: Guard cire/landing bundle size
-        run: ./scripts/guard-bundle-size.sh cire/landing static 189324
+        run: ./scripts/guard-bundle-size.sh cire/landing
 
       - name: Deploy cire/landing to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-landing

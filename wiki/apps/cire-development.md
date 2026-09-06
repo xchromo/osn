@@ -170,13 +170,13 @@ file's own gzip size is what actually crosses the wire). It also fails if any
 Assets — see the source-map warning below.
 
 `cire/invites/package.json`'s `build` script chains it on
-(`… && ../../scripts/guard-bundle-size.sh . worker 175000`), so it fires
-wherever the build actually executes: the by-hand deploy above, and any local
-build. `ci.yml` and both `deploy.yml` jobs also invoke it as their own step
-([[bundle-size-guards]] has the reason — a Turborepo cache replay of `build`
-never runs the chained script). To re-baseline after an intentional bundle
-change, build, read the printed total, and set the threshold — in all three
-places — to that total plus **about 11.7 KB** of ordinary-growth headroom.
+(`… && ../../scripts/guard-bundle-size.sh .`), so it fires wherever the build
+actually executes: the by-hand deploy above, and any local build. `ci.yml` and
+both `deploy.yml` jobs also invoke it as their own step ([[bundle-size-guards]]
+has the reason — a Turborepo cache replay of `build` never runs the chained
+script). The mode and threshold are no longer arguments anywhere — every
+caller looks its app up by name in `scripts/bundle-size-budgets.txt`, the one
+place a re-baseline touches. See that file's own comment for the exact steps.
 
 The headroom is deliberately smaller than the mistake the guard exists to
 catch, and that is the part worth getting right. `motion` costs **21261 bytes

@@ -24,14 +24,31 @@ Two separate scripts, because the two mistakes are different shapes.
 ## `scripts/guard-bundle-size.sh` — the size guard
 
 ```
-scripts/guard-bundle-size.sh <package-dir> <worker|static> <threshold>
+scripts/guard-bundle-size.sh <package-dir>   # one app, e.g. from a build script
+scripts/guard-bundle-size.sh --all           # every app, what ci.yml calls
 ```
 
-`<package-dir>` is `cd`'d into and also supplies the label in its messages (the
-last two path segments of the *resolved* directory — `.` and `cire/host` both
-label themselves "cire/host"). The full reasoning for the two modes, the
-exclusion vs. allowlist logic, and the threshold arithmetic lives in the
-script's own comment — read that before touching a threshold. In short:
+Mode and threshold are not arguments — **`scripts/bundle-size-budgets.txt` is
+the single source of truth**, and this page's table below is a mirror of it
+for a human reading the wiki. If the two ever disagree, the `.txt` file is
+right and this page is stale; re-read it rather than trusting the table below.
+That split used to not exist: the threshold was a third command-line argument,
+copied by hand into six `package.json` build scripts, one `ci.yml` step and
+eight `deploy.yml` steps — eight-plus copies of the same number, silently
+divergeable by missing one on a re-baseline. There is now exactly one place to
+edit.
+
+`<package-dir>` is `cd`'d into and also supplies the label the budgets file is
+looked up by (the last two path segments of the *resolved* directory — `.` and
+`cire/host` both label themselves "cire/host", and both match the same row).
+`--all` resolves every row against the repo root instead, since a row's
+package-dir is a repo-relative path by definition. A `<package-dir>` with no
+row in the budgets file is an error, not a skip — the guard refuses to run
+silently-successfully for an app nobody added a budget for.
+
+The full reasoning for the two modes, the exclusion vs. allowlist logic, and
+the threshold arithmetic lives in the script's own comment — read that before
+touching a threshold. In short:
 
 - **`worker`** — cire/invites, the only `output: "server"` app. Measures
   `dist/server` (every file except the adapter's generated `wrangler.json` and
@@ -53,10 +70,12 @@ script's own comment — read that before touching a threshold. In short:
 ### Where it runs, and why twice
 
 Every app's own `build` script chains the guard on with `&&` (`astro build &&
-… guard-bundle-size.sh . <mode> <threshold>`) — that is what runs it on a local
-build and the by-hand cire/invites deploy. It ALSO runs as its own step in
-`ci.yml`'s `build-test` job and in both `deploy.yml` jobs (dev and production)
-that build a guarded app. That is not a redundant belt-and-suspenders: a
+… guard-bundle-size.sh .`) — that is what runs it on a local build and the
+by-hand cire/invites deploy. It ALSO runs as its own step in `ci.yml`'s
+`build-test` job (one `--all` step covering every app) and in both
+`deploy.yml` jobs (dev and production) that build a guarded app (one
+`guard-bundle-size.sh <app>` step each — `deploy.yml` builds one app per job,
+so there is no `--all` there). That is not a redundant belt-and-suspenders: a
 Turborepo cache replay of `build` replays its logged output without executing
 the script, so the chained invocation never runs on a cache hit — the explicit
 workflow step is what still checks the artifact that IS on disk in that case.
@@ -67,15 +86,20 @@ Both invocations matter; neither one alone covers both paths.
 `bun run --cwd <dir> build`) — that already runs each app's own chained `build`
 script, so the guard applies there too with no separate step needed.
 
-### Per-app thresholds (2026-09-06 baseline)
+### Per-app thresholds — mirrors `scripts/bundle-size-budgets.txt`
 
-Built once, from a clean `bun run build` at the worktree root with no
-`PUBLIC_*` vars set (CI's own build has none either; the deploy jobs inline
-real URLs and sitekeys, and the headroom absorbs the difference). Headroom is
-fixed at the same **~11.7 KB** cire/invites' own guard uses, deliberately
-smaller than a motion-class dependency (21261 bytes gzip, minified — see the
-script comment) so a mistake of that class always trips the guard regardless
-of how large or small the app's own baseline is:
+**This table is documentation, not enforcement.** `scripts/bundle-size-budgets.txt`
+is what every caller actually reads; this table exists so a human can see every
+app's number without opening it. If they disagree, trust the `.txt` file and
+fix this page.
+
+Built once (2026-09-06 baseline), from a clean `bun run build` at the worktree
+root with no `PUBLIC_*` vars set (CI's own build has none either; the deploy
+jobs inline real URLs and sitekeys, and the headroom absorbs the difference).
+Headroom is fixed at the same **~11.7 KB** cire/invites' own guard uses,
+deliberately smaller than a motion-class dependency (21261 bytes gzip,
+minified — see the script comment) so a mistake of that class always trips
+the guard regardless of how large or small the app's own baseline is:
 
 | App | Mode | Measured | Threshold |
 |---|---|---:|---:|
@@ -92,10 +116,11 @@ each app gets its own baseline rather than a shared number.
 
 **Re-baselining** after an intentional change: build (clean, alone — two builds
 running at once in one checkout interleave their chunks and the guard then
-reads a number that is not real), read the printed total, and set `threshold`
-to that total plus ~11.7 KB. Update the number in three places: the app's own
-`package.json` `build` script, its step in `ci.yml`, and its step(s) in
-`deploy.yml`.
+reads a number that is not real), read the printed total, and edit **only**
+`scripts/bundle-size-budgets.txt`'s row for that app, to that total plus
+~11.7 KB. Nothing else names a threshold — not the app's `package.json`, not
+`ci.yml`, not `deploy.yml` — so there is nowhere else to update. Mirror the new
+number into the table above so this page stays honest.
 
 ## `scripts/check-astro-test-routes.ts` — the `src/pages` check
 

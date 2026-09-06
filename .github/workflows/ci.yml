@@ -211,24 +211,18 @@ jobs:
       # `output: "static"` (Cloudflare Pages, `dist/_astro/*.js` +
       # `dist/_astro/*.css` only — see scripts/guard-bundle-size.sh's own
       # comment for why static measures an allowlist rather than a directory).
-      # Thresholds are each app's own measured baseline plus headroom smaller
-      # than a motion-class dependency (~21.3 KB gzip) — see that script's
-      # comment for the full reasoning, and wiki/conventions/bundle-size-guards.md
-      # for every app's reading.
+      # Every app's mode and threshold is a row in
+      # scripts/bundle-size-budgets.txt, not an argument here — that file is
+      # the single source of truth, and `--all` walks every row in it. See
+      # that file's own comment for the re-baselining steps, and
+      # wiki/conventions/bundle-size-guards.md for every app's reading.
       #
       # This reads the `dist/` each build step already made and takes well
       # under a second per app, so it sits after Test deliberately: a size
       # trip fails the job either way, and running it last means the author
       # still gets the test result in the same round trip.
       - name: Guard Astro app bundle sizes
-        run: |
-          set -e
-          ./scripts/guard-bundle-size.sh cire/invites worker 175000
-          ./scripts/guard-bundle-size.sh cire/host static 224515
-          ./scripts/guard-bundle-size.sh cire/vendor static 81644
-          ./scripts/guard-bundle-size.sh cire/landing static 189324
-          ./scripts/guard-bundle-size.sh osn/landing static 26865
-          ./scripts/guard-bundle-size.sh pulse/landing static 28366
+        run: ./scripts/guard-bundle-size.sh --all
 
       # The four d1-integration.test.ts files live under `tests/d1/` (cire's
       # under `tests/db/`). The three vitest packages EXCLUDE that path, so the
