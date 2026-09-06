@@ -509,6 +509,47 @@ Effect surface was the service key went green immediately — `@shared/db-utils`
 `@osn/db`, `@pulse/db`, `@zap/db`, `@cire/db` — with 296 tests passing across the
 four that have suites.
 
+## What phase 2 found
+
+Landed 2026-09-06 as [#908](https://github.com/xchromo/osn/pull/908), closing #899.
+
+**A package with zero Effect imports can still be broken by this migration, and
+the plan had no way to see it.** The sizing here counts files that *import*
+`Schema`: 58 of them, in six packages. It never counted packages that merely
+*depend* on those and blow up at module load.
+
+`@osn/ui` and `@osn/social` import Effect nowhere. Both depend on `@osn/client`,
+whose `src/tokens.ts:87` calls `Schema.Record({ key, value })` — v4 takes them
+as two positional arguments, so the call throws while the module is still being
+evaluated:
+
+```
+TypeError: undefined is not an object (evaluating 'value.ast')
+  at effect/src/Schema.ts:3965
+  at osn/client/src/tokens.ts:87
+```
+
+Their test suites cannot run at all until that one line is fixed. In `@osn/social`
+it takes down 10 of 19 test files; in `@osn/ui`, one.
+
+Two consequences worth carrying into the Schema phases:
+
+- **`osn/client/src/tokens.ts` is the highest-leverage file in the whole
+  migration.** One signature fix unblocks three test suites, two of which are
+  not otherwise part of this work. Do it first in [[#Phase order|phase 4]].
+- **A package's Effect surface is not the measure of its exposure.** Anything
+  downstream of a package mid-migration is exposed too, and only at runtime —
+  a type-check of `@osn/ui` says nothing about it.
+
+**CI's own test run is the honest inventory**, not a local one. `bun run build`
+fails locally in a sandbox on `fonts.google.com` (`@cire/landing`), which stops
+turbo before the tests; CI has network and gets through. On #908's head CI ran
+**1223 passing tests** with nine packages failing — `@cire/api`, `@osn/api`,
+`@osn/client`, `@osn/social`, `@osn/ui`, `@pulse/api`, `@shared/email`,
+`@shared/observability`, `@zap/api` — every one traceable to a `Schema.*` or
+`Logger.*` call evaluated at import time. A local `bun run test` reproduces the
+same nine once the build is out of the way.
+
 ## Phase order
 
 > [!warning] Rewritten after the spike — there is no green intermediate state
