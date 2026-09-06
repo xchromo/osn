@@ -17,7 +17,8 @@ last-reviewed: 2026-09-06
 
 Effect is the functional core of every backend here — `@osn/api`, `@pulse/api`,
 `@zap/api`, `@cire/api`, five `@shared/*` packages and four `*/db` packages.
-361 files import it; 793 tests run through `it.effect`.
+361 files import it; 793 tests run through `it.effect`. Fourteen packages declare
+`effect`, eleven declare `@effect/vitest`.
 
 The migration is **driven by the official `effect-v3-to-v4` skill**, not by this
 page. The skill and upstream's generated rename reference are the authority on
@@ -123,8 +124,8 @@ wanted.**
 
 | Package | Declared here | v4 | Note |
 | --- | --- | --- | --- |
-| `effect` | `^3.22.1` (13 packages) | yes | |
-| `@effect/vitest` | `^0.30.0` (10 packages) | yes | Peer is `vitest >=4.1.0 <5.0.0`; every workspace already declares `^4.1.11` |
+| `effect` | `^3.22.1` (**14** packages) | yes | |
+| `@effect/vitest` | `^0.30.0` (**11** packages) | yes | Peer is `vitest >=4.1.0 <5.0.0`; every workspace already declares `^4.1.11` |
 | `@effect/opentelemetry` | `^0.64.0` (`shared/observability`) | yes | Stays a separate package, but its modules were renamed — see below |
 | `@effect/platform` | `^0.97.1` (`shared/observability`) | **merged into core** | Nothing here imports it. Delete the line |
 
@@ -450,6 +451,43 @@ does not, and this is why.
 - `Result` tag strings are `"Success"` / `"Failure"`. Any `_tag` compared as a
   string literal is invisible to the compiler — grep for them before phase 3.
 
+## What phase 1 found
+
+Landed 2026-09-06 as [#906](https://github.com/xchromo/osn/pull/906) into
+`effect-v4`, closing #897 and #898 together.
+
+**The red tree reaches the git hooks, not just CI.** `lefthook` runs oxlint on
+staged files pre-commit and the type-check pre-push. Three of the files phase 1
+had to touch for their `Context.Service` change also contain `Effect.catchAll`
+and `Effect.either` — phase 2's work — so no staged set containing them can pass
+the hook. **Phases 1 through 4 need `--no-verify` on both commit and push.**
+
+Run `bun run fmt:check` separately and keep it passing, so only the lint half is
+ever bypassed and only for errors the phase is not meant to fix. This is the
+cost of the strategy the plan reasoned about at the CI level and missed at the
+hook level.
+
+**Two counts in this page were wrong**, corrected above: **14** packages declare
+`effect` (not 13) and **11** declare `@effect/vitest` (not 10).
+
+**The docs branch has to land before phase 2.** `effect-v4` was cut from `main`,
+so it carries none of this: not the installed skills, not the `.gitignore` entry
+for `.repos/`, not the CODEOWNERS entries, not the changeset allowlist, not this
+page. The missing `.gitignore` bit first — phase 1 staged two embedded git repos
+by accident and had to duplicate the entry. That branch is green and docs-only,
+so it can merge to `main` on its own; `effect-v4` then rebases and picks all of
+it up, and the duplicated hunk resolves itself.
+
+**Phase 1's own change verified clean.** 1112 errors remained afterwards and
+**zero** involved `Context.Service` or `Context.Key`. Every one mapped to a later
+phase, with counts matching this page's sizing tables: `catchAllDefect` 94,
+`decodeUnknown` 75, `either` 70, `maxLength` 45, `catchAll` 39, `filter` 25,
+`optionalWith` 22, `minLength` 19, `between` 18, `Logger.pretty` 11,
+`Logger.replace` 11, one `ParseResult` import. The five packages whose only
+Effect surface was the service key went green immediately — `@shared/db-utils`,
+`@osn/db`, `@pulse/db`, `@zap/db`, `@cire/db` — with 296 tests passing across the
+four that have suites.
+
 ## Phase order
 
 > [!warning] Rewritten after the spike — there is no green intermediate state
@@ -465,7 +503,7 @@ Tracked as [#895](https://github.com/xchromo/osn/issues/895).
 | # | Phase | Issue | Green on its own? |
 | ---: | --- | --- | --- |
 | 0 | Spike on `shared/crypto` | #896 | Done — findings above |
-| 1 | Every `effect` version bump + all 13 `Context.Tag` → `Context.Service`, in one commit | #897 + #898, merged | No |
+| 1 | Every `effect` version bump + all 13 `Context.Tag` → `Context.Service`, in one commit | #897 + #898 → [#906](https://github.com/xchromo/osn/pull/906) | ✅ merged red, as designed |
 | 2 | Renames, removals, `ManagedRuntime`, `Runtime` | #899 | No |
 | 3 | Logging + `@effect/opentelemetry` renames | #900 | No |
 | 4 | `Schema` — the 20 files outside cire-api | #901 | No |
@@ -545,6 +583,10 @@ version bump happens in a single release when `effect-v4` merges.
 - **Hold the production approval until the final phase.** A merge to `main`
   auto-deploys dev; production waits on a human. See [[dev-environment]].
 - **Base every phase PR on `effect-v4`, never `main`.** `gh pr create --base effect-v4`.
+- **Phases 1–4 need `--no-verify` on commit and push.** The lefthook pre-commit
+  lint and pre-push type-check cannot pass on a half-migrated tree. Run
+  `bun run fmt:check` by hand and keep it green, so only the lint half is
+  bypassed and only for errors the phase is not meant to fix.
 - **One changeset per phase.** `@cire/*` is version-less and must not share a
   changeset with versioned packages. They accumulate on the branch and are
   consumed in a single release when it merges.
