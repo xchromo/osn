@@ -3,9 +3,9 @@ import { describe, it, expect } from "bun:test";
 import { BOOTSTRAP_WEDDING_ID } from "@cire/db";
 import { Effect, Either } from "effect";
 
+import { decodeChangeBody } from "../../src/services/changes";
 import { TestDbLayer } from "../db/test-layer";
 import { effWith } from "../test-helpers";
-import { decodeChangeBody } from "./changes";
 
 const withDb = effWith(TestDbLayer);
 
