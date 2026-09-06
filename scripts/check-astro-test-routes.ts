@@ -100,6 +100,21 @@ async function pagesDirIsMissing(pagesDir: string): Promise<boolean> {
 }
 
 if (import.meta.main) {
+  // ASTRO_TEST_ROUTE_APPS is `?? DEFAULT_ASTRO_APPS`, which only falls back on
+  // undefined/null — set to "" (or anything `.filter(Boolean)` reduces to
+  // nothing), ASTRO_APPS becomes `[]`, the loop below never runs, `failed`
+  // stays false, and the success banner prints having checked zero apps. That
+  // is the same vacuous-pass failure `pagesDirIsMissing` above exists to
+  // close, just reachable through the app LIST instead of one app's path.
+  // Production (ci.yml) never sets the env var, so DEFAULT_ASTRO_APPS (6
+  // apps) always applies there; this only guards the test-only override.
+  if (ASTRO_APPS.length === 0) {
+    console.error(
+      "::error::check-astro-test-routes: ASTRO_APPS resolved to an empty list — checking zero apps and printing success would be a vacuous pass, not a clean run.",
+    );
+    process.exit(1);
+  }
+
   let failed = false;
 
   for (const app of ASTRO_APPS) {

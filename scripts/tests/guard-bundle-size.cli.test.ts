@@ -31,6 +31,8 @@
 //  10. a malformed row (wrong field count / bad mode / non-numeric threshold)
 //      -> exit 1, naming the file and line
 //  11. blank lines and comment-only lines in the budgets file are ignored
+//  12. --all with a row whose package directory does not exist -> exit 1,
+//      naming the directory, and still runs the other rows
 //
 // No `bun install`: this only imports `bun:test` and Node built-ins, matching
 // every other file under scripts/ (the `script-tests` CI job runs with none).
@@ -356,6 +358,37 @@ test("--all exits non-zero on a budgets file containing only comments and blank 
     const { exitCode, stderr } = await runCli(budgetsFile, root, "--all");
     expect(stderr).toContain("has no records");
     expect(stderr).toContain(budgetsFile);
+    expect(exitCode).not.toBe(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// lookup_and_run's single-package path checks the directory exists (via
+// resolve_label) before ever consulting the budgets file, and emits a
+// polished ::error:: naming it (see the T-U1 test above). run_all() built its
+// pkg_dir straight from BUDGETS_ROOT/REC_PKG and handed it to run_guard with
+// no such check, so a stale or typo'd row surfaced as a raw, unprefixed
+// `cd: no such file or directory` from the subshell instead. This asserts
+// --all fails closed the same way lookup_and_run does, and — since run_all
+// keeps going after a failing row — that a real sibling row still runs.
+test("--all exits non-zero, naming the directory, when a row's package directory does not exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guard-bundle-size-cli-"));
+  try {
+    const appBDir = join(root, "fixture-b", "pkg");
+    await mkdir(join(appBDir, "dist/_astro"), { recursive: true });
+    await writeFile(join(appBDir, "dist/_astro/client.js"), "console.log(1);\n");
+
+    const budgetsFile = join(root, "budgets.txt");
+    await writeFile(
+      budgetsFile,
+      "fixture-a/pkg worker 999999999\nfixture-b/pkg static 999999999\n",
+    );
+
+    const { exitCode, stdout, stderr } = await runCli(budgetsFile, root, "--all");
+    expect(stderr).toContain("does not exist");
+    expect(stderr).toContain(join(root, "fixture-a/pkg"));
+    expect(stdout).toContain("fixture-b/pkg dist/_astro gzip total");
     expect(exitCode).not.toBe(0);
   } finally {
     await rm(root, { recursive: true, force: true });

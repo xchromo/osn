@@ -293,7 +293,7 @@ lookup_and_run() {
 # record even after one fails, so a CI run reports every app over budget in
 # one pass instead of stopping at the first.
 run_all() {
-  local line any_fail=0 any_record=0
+  local line any_fail=0 any_record=0 pkg_dir
 
   while IFS= read -r line || [ -n "$line" ]; do
     local stripped="${line%%#*}"
@@ -301,7 +301,13 @@ run_all() {
     parse_record "$line"
     [ -z "$REC_PKG" ] && continue
     any_record=1
-    if ! run_guard "$REC_PKG" "$BUDGETS_ROOT/$REC_PKG" "$REC_MODE" "$REC_THRESHOLD"; then
+    pkg_dir="$BUDGETS_ROOT/$REC_PKG"
+    if [ ! -d "$pkg_dir" ]; then
+      echo "::error::guard-bundle-size.sh: package directory '${pkg_dir}' does not exist." >&2
+      any_fail=1
+      continue
+    fi
+    if ! run_guard "$REC_PKG" "$pkg_dir" "$REC_MODE" "$REC_THRESHOLD"; then
       any_fail=1
     fi
   done < "$BUDGETS_FILE"

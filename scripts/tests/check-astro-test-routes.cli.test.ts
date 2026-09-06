@@ -187,6 +187,19 @@ test("the real CLI exits non-zero, naming the path, when a configured app's src/
   expect(exitCode).not.toBe(0);
 });
 
+// ASTRO_TEST_ROUTE_APPS uses `?? DEFAULT_ASTRO_APPS`, which only falls back on
+// undefined/null — set to "", `.split(",").filter(Boolean)` reduces it to
+// `[]`, and without the guard added for this finding the for loop below would
+// just never run, `failed` would stay false, and the success banner would
+// print having checked zero apps. `runCli([])` joins to the empty string, the
+// same value the CLI test harness itself could produce by accident.
+test("the real CLI exits non-zero when the app override list is empty", async () => {
+  const { exitCode, stdout, stderr } = await runCli([]);
+  expect(stderr).toContain("empty list");
+  expect(stdout).not.toContain("no *.test.*/*.spec.* files routed");
+  expect(exitCode).not.toBe(0);
+});
+
 // Pins the DEFAULT (unset ASTRO_TEST_ROUTE_APPS) relative-join resolution
 // against the real repo, rather than a fixture — every other test above
 // overrides ASTRO_TEST_ROUTE_APPS, so none of them exercise
