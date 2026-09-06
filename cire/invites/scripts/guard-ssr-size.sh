@@ -33,6 +33,24 @@ if [ ! -d dist/server ]; then
   exit 1
 fi
 
+# Source maps belong in `dist/server` and NOWHERE ELSE. `dist/client` is this
+# Worker's Static Assets directory (the adapter writes
+# `"assets": { "directory": "../client" }` into the generated wrangler config)
+# and Cloudflare serves every file there verbatim, so a `.map` that lands in it
+# publishes the guest site's unminified source at `/_astro/<chunk>.js.map` to
+# anyone who asks. That is exactly what a plain `vite: { build: { sourcemap:
+# true } }` does, because the client environment reads the top-level value at
+# `astro/dist/core/build/vite-build-config.js:135` — which is why
+# `astro.config.mjs` sets `sourcemap` inside the `astro:build:setup` hook
+# instead. This check is the tripwire for that mistake coming back.
+if [ -d dist/client ]; then
+  client_maps=$(find dist/client -type f -name '*.map' | wc -l | tr -d ' ')
+  if [ "$client_maps" -ne 0 ]; then
+    echo "::error::cire/invites dist/client holds ${client_maps} source map(s). dist/client is served publicly as Static Assets, so these would publish the guest site's unminified source. Scope \`sourcemap\` to the server build (see the minifySsrBuild() comment in astro.config.mjs)."
+    exit 1
+  fi
+fi
+
 total=0
 count=0
 while IFS= read -r -d '' f; do
@@ -51,22 +69,28 @@ fi
 
 echo "cire/invites dist/server gzip total: ${total} bytes across ${count} files"
 
-# Threshold = the measured total after #287, #618, #616 and #617, plus room
-# for ordinary dependency growth. What it catches is a library-scale mistake:
-# motion cost 47657 bytes gzip in the (then-unminified) SSR bundle, so a
-# single new library of that class entering the SSR graph still trips this
-# with room to spare. 163446 (measured total, this bundle, after sessions off
-# + SSR minify + source maps) + 47657 (motion-class headroom) = 211103.
+# Threshold = the measured total plus headroom for ordinary dependency growth.
+# 163317 (measured total, this bundle, after sessions off + SSR minify +
+# server-only source maps) + 11683 = 175000.
 #
-# The SSR build is now minified (tracker #616 — an inline `astro:build:setup`
-# integration in `astro.config.mjs`, since the plain `vite.build.minify` config
-# form is a no-op for the SSR environment), so this no longer needs the old
-# "server build isn't minified, client is" caveat: both builds are minified
-# now, and a library costs roughly what it costs in `dist/client`, gzip for
-# gzip. It does NOT catch a few KB of ordinary bump, and it is nowhere near
-# the Workers Free-tier 3 MB cap — this watches the trajectory, it is not a
-# check against the cap.
-threshold=211103
+# The headroom is deliberately SMALLER than the mistake this guard exists to
+# catch, which is the half the pre-minification threshold got wrong. `motion`
+# costs 21261 bytes gzip in the MINIFIED build — measured, not assumed: that is
+# the size of its own already-minified client vendor chunk
+# (`dist/client/_astro/animate.*.js`), and rebuilding with `stubMotionForSsr()`
+# removed moves the server total by the same ~21.4 KB. The old threshold budgeted
+# 47657 bytes, motion's cost back when this build was UNMINIFIED, so a fresh
+# library of exactly that class would have landed under the line and shipped
+# silently. At 11683 bytes of headroom a motion-class mistake overshoots by
+# roughly 9.6 KB and fails the build, while ordinary dependency bumps have real
+# room to move.
+#
+# Re-baselining after an intentional change: take the new reading, add the same
+# ~11.7 KB, and re-check that the gap to a current library of motion's class is
+# still comfortably positive. It does NOT catch a few hundred bytes of ordinary
+# bump, and it is nowhere near the Workers Free-tier 3 MB cap — this watches the
+# trajectory, it is not a check against the cap.
+threshold=175000
 if [ "$total" -gt "$threshold" ]; then
   echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what is newly reachable from a server-side import() or import, the way motion was."
   exit 1

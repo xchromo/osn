@@ -29,13 +29,30 @@ import { defineConfig } from "astro/config";
  *
  * The minifier under this Astro/Vite (7.2.10 → Vite 8 / rolldown-vite) is OXC,
  * not esbuild — `minify: true` selects it; do not pass `"esbuild"`.
+ *
+ * `sourcemap` goes through the SAME hook, and it has to. Minified server output
+ * means a production Worker exception no longer names a real source line, so
+ * the maps are what make `wrangler.jsonc`'s `upload_source_maps` worth setting.
+ * But `sourcemap` is NOT overridden the way `minify` is: written as a plain
+ * `vite: { build: { sourcemap: true } }` it rides the `...viteConfig.build`
+ * spread at `:36` into the top level AND is read by the client environment at
+ * `:135` (`userClient?.build?.sourcemap ?? viteConfig.build?.sourcemap ?? false`)
+ * — so it emits `dist/client/_astro/*.js.map` too. `dist/client` is this
+ * Worker's Static Assets directory (the adapter writes
+ * `"assets": { "directory": "../client" }` into the generated wrangler config),
+ * and Cloudflare serves any file there verbatim, so those maps would publish
+ * the guest site's unminified source at `/_astro/<chunk>.js.map` to anyone
+ * asking. Setting it here instead lands it on the top-level `build` AFTER `:135`
+ * has already baked the client's own `sourcemap: false`, so only the server and
+ * prerender builds emit maps. If you ever move this back to plain `vite.build`,
+ * check `dist/client` for `.map` files before you deploy.
  */
 function minifySsrBuild() {
   return {
     name: "cire-invites:minify-ssr-build",
     hooks: {
       "astro:build:setup"({ updateConfig }) {
-        updateConfig({ build: { minify: true } });
+        updateConfig({ build: { minify: true, sourcemap: true } });
       },
     },
   };
@@ -168,15 +185,5 @@ export default defineConfig({
   integrations: [solidJs(), minifySsrBuild()],
   vite: {
     plugins: [tailwindcss(), stubMotionForSsr()],
-    // Minifying the SSR build (above) renames identifiers and collapses lines,
-    // so a production Worker exception no longer names a real source line.
-    // Unlike `minify`, `build.sourcemap` rides the `...viteConfig.build` spread
-    // at `vite-build-config.js:36` untouched — nothing after it overrides
-    // `sourcemap` the way line 100 overrides `minify` — so this plain config
-    // form is enough; no `astro:build:setup` hook needed. Maps are uploaded to
-    // Cloudflare for symbolication (`wrangler.jsonc`'s `upload_source_maps`)
-    // and excluded from the size guard (`scripts/guard-ssr-size.sh`) — they
-    // are not part of the script the Worker runs.
-    build: { sourcemap: true },
   },
 });
