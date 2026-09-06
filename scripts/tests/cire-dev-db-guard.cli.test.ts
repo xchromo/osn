@@ -3,16 +3,22 @@
 // block that the two destructive callers actually invoke:
 // `bun scripts/cire-dev-db-guard.ts <path>`. That block is where "the
 // underlying command fails" lives now that there is no grep left to fail on —
-// a missing path argument, an unreadable file, or a file `Bun.TOML.parse`
-// cannot parse. A guard that passes on any of those, because a caller mistook
-// an empty or thrown read for "nothing to refuse", is the exact failure mode
-// this script exists to rule out. These tests run the real script as a
-// subprocess, the same way cire-db-reset.sh and cire-db-seed.sh do, and prove
-// each of those cases exits non-zero — not just the config-is-wrong cases
-// already covered by the pure-function tests.
+// a missing path argument, a path that names no file, a file the process
+// cannot read, a file `Bun.TOML.parse` cannot parse, and a file that parses to
+// nothing. A guard that passes on any of those, because a caller mistook an
+// empty or thrown read for "nothing to refuse", is the exact failure mode this
+// script exists to rule out. These tests run the real script as a subprocess,
+// the same way cire-db-reset.sh and cire-db-seed.sh do, and prove each of
+// those cases exits non-zero — not just the config-is-wrong cases already
+// covered by the pure-function tests.
+//
+// "Names no file" and "cannot be read" are two different branches and each has
+// its own case below: `Bun.file(path).exists()` is false for the first and
+// TRUE for the second, so only the first reaches the guard's own `cannot read`
+// message. The second is caught one line later by `file.text()` throwing.
 
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +61,43 @@ test("the real CLI exits non-zero when the file does not exist", async () => {
   expect(stdout).toBe("");
   expect(stderr).toContain("cannot read");
   expect(exitCode).not.toBe(0);
+});
+
+// A file that exists but the process may not read. `Bun.file(path).exists()`
+// is true here, so the guard's own `cannot read` check passes it through and
+// `file.text()` throws EACCES a line later — uncaught, so what reaches stderr
+// is Bun's crash output rather than the guard's message. Non-zero either way,
+// which is the direction that matters, and that is all this asserts: the exact
+// stderr is Bun's to change, and pinning it would make this test a liability.
+// Skipped under root, which ignores the mode bits and would read the file.
+const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
+test.skipIf(runningAsRoot)("the real CLI exits non-zero when the file cannot be read", async () => {
+  await withFixture("", async (path) => {
+    await chmod(path, 0o000);
+    try {
+      const { exitCode, stdout } = await runCli(path);
+      expect(stdout).toBe("");
+      expect(exitCode).not.toBe(0);
+    } finally {
+      // Restore before the fixture's rm, which cannot remove what it cannot stat.
+      await chmod(path, 0o600);
+    }
+  });
+});
+
+// The other half of the "nothing to refuse" failure mode. An empty file is not
+// a read failure — it parses cleanly to `{}` — so nothing throws and every
+// lookup yields `undefined`. That is exactly the shape a swallowed read error
+// would produce, and the guard has to refuse it for a stated reason rather
+// than fall through. Without this case, the empty read and the thrown read are
+// indistinguishable from outside.
+test("the real CLI exits non-zero on a file that parses to nothing", async () => {
+  await withFixture("", async (path) => {
+    const { exitCode, stdout, stderr } = await runCli(path);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("names D1 '<none>'");
+    expect(exitCode).not.toBe(0);
+  });
 });
 
 // The file exists and is readable, but is not valid TOML — `Bun.TOML.parse`
