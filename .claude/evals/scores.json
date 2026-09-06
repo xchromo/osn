@@ -71,30 +71,6 @@
       "runId": "01a071a8-8db6-749f-a682-1b27ce60ac00",
       "recordedAt": "2026-09-05"
     },
-    "review-deps-planted-drift-no-registry": {
-      "skill": "review-deps",
-      "fixtureHash": "sha256:4584afc83f7832ae4d0839d095f23dc6",
-      "fingerprint": "35a5ab6da0d787a7a6463063c85cec92bf5dafee637f1b660374473ad11379b8",
-      "agent": "claude",
-      "model": "deepseek-v4-flash",
-      "runs": 3,
-      "variant": "usage-spec",
-      "score": 0.62,
-      "points": "8.67/14",
-      "baseline": 0.62,
-      "skillsHash": "sha256:5785b83dfb7d6d1d45f3c4026a1bc946",
-      "items": {
-        "finds_every_range_disagreement": "3/3",
-        "aligns_to_the_highest_range_already_declared": "2/2",
-        "peer_ranges_left_alone": "1.67/2",
-        "no_invented_registry_data": "0/3",
-        "changes_table_is_exactly_the_four_rows": "1/2",
-        "report_shape_four_sections": "1/1",
-        "stayed_within_the_brief": "0/1"
-      },
-      "runId": "01a071a8-8db6-749f-a682-1b27ce60ac00",
-      "recordedAt": "2026-09-05"
-    },
     "review-docs-session-ttl-page-drift": {
       "skill": "review-docs",
       "fixtureHash": "sha256:70c1ee36892945678a2b08c8085adad9",

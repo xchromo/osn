@@ -174,7 +174,7 @@ only thing read, and point each checklist item at it.
 The corollary: a scenario whose whole output is a judgement needs somewhere to
 put it. A scenario that changes code does not — the diff is the artefact.
 
-## The thirteen scenarios
+## The twelve scenarios
 
 | Scenario | Skill | Ground truth |
 |---|---|---|
@@ -192,7 +192,6 @@ put it. A scenario that changes code does not — the diff is the artefact.
 | `review-tests-cire-consent-colocated-layout` | `review-tests` | The consent framework, in a checkout where the repository has no single test layout: `osn/*`, `pulse/*`, `zap/*` and `shared/*` use `tests/`, while `cire/invites` has no `tests/` directory at all and 69 test files sit beside their source. Four changed modules have a test beside them and `ConsentPreferences.tsx` has none anywhere. A reviewer who applies a convention without looking at disk reports four covered modules as missing and buries the one real gap, so `no_false_missing_test_findings` carries as many points as finding it. |
 
 | `review-docs-session-ttl-page-drift` | `review-docs` | A branch cuts a value in two routes and updates the wiki page that documents it — but only two of its three mentions, leaving a table row stating the old number. It also renames a heading, breaking a same-page anchor and an inbound wikilink planted on the base. Four more pages outside the diff still carry the old value, so the review has to sweep the vault rather than the diff. One bait: an escaped pipe in a wikilink table cell is Obsidian's alias syntax, not a typo. |
-| `review-deps-planted-drift-no-registry` | `review-deps` | Four ranges planted out of step with their workspace siblings, each still admitting the locked version so nothing breaks. The bait is `solid-js` peer ranges, which are a contract rather than drift. The item that carries the most weight is **no invented registry data**: with no network there is nothing to fetch, and a review that writes a latest version or a publish date it could not have read has failed however good the rest is. |
 | `new-feat-tracker-finding-branch` | `new-feat` | A fictional tracker finding handed to the skill as the work to start. The public repo must not gain a duplicate issue, and the branch name, the commits and the plan file must not describe the defect — this repository is public and the tracker is not. Scores the routing rule, not the code. |
 
 The rediscovery scenarios are the pattern worth repeating: **every merged fix PR
@@ -454,6 +453,40 @@ narrowed the same way, and the prep-pr fixtures now say the reviews have already
 run — `prep-pr`'s Steps 4 and 6 otherwise dispatch three review subagents whose
 output no prep-pr rubric scores.
 
+## When to retire a scenario
+
+`review-deps-planted-drift-no-registry` was written, run once, and removed. It
+is worth recording why, because the test generalises.
+
+Its rubric asserted "there is no network, so no latest version or publish date
+could have been obtained", and both variants returned a report claiming the
+registry **was** reachable, with dated version data for about fifty packages.
+Either the agents fabricated all of it, or the sandbox has egress and the task's
+own premise — which the task only *asserts*, it does not enforce — is false. From
+outside the sandbox those two cannot be told apart, and the scenario's largest
+item hangs on which is true.
+
+**A scenario has to be verifiable from the fixture tree.** Every other one here
+is: the defect is in a file at a commit, and the rubric can be checked by
+reading it. This one's ground truth was a claim about the runtime environment,
+and its correctness depended on a fact nobody in the loop can observe. That is
+the disqualifying property, not the low lift.
+
+Two other signals pointed the same way, and both are worth checking on any
+scenario that is not discriminating:
+
+- **Its baseline was wilder than its skill.** Baseline samples 92, 50, 42
+  against 57, 64, 64 for the skill. A no-skill variant swinging fifty points is
+  a scenario measuring its own noise.
+- **Two of its seven items were free.** `finds_every_range_disagreement` (3 pts)
+  and `aligns_to_the_highest_range_already_declared` (2 pts) were full marks for
+  both variants: comparing four version ranges across `package.json` files is
+  not something a skill has to teach.
+
+`review-deps` keeps its skill and its deterministic quality gate. Not every
+skill needs a scenario, and one whose whole job is asking a registry what is
+published is a poor fit for a sandbox that may or may not have a registry.
+
 ## Keep provenance out of the scenario
 
 A scenario should carry the least it needs, and a pull-request number is never
@@ -493,7 +526,6 @@ scenario. It lives here:
 | `review-tests-pulse-account-cookie-credential` | `a381059a` | parent of #843 |
 | `review-tests-cire-consent-colocated-layout` | `6168009c` | layout predates #867 |
 | `review-docs-session-ttl-page-drift` | `981ea544` | constructed — reuses the TTL change from the prep-pr fixture, plants the anchor link |
-| `review-deps-planted-drift-no-registry` | `981ea544` | constructed — no commit in history carries real dependency drift |
 | `new-feat-tracker-finding-branch` | `6168009c` | parent of #852, shared with the entitlement scenario; the tracker issue is invented |
 
 ## Write the rubric from the tree, not from the pull request
