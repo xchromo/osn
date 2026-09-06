@@ -18,7 +18,7 @@ export interface RedisService {
   readonly client: RedisClient;
 }
 
-export class Redis extends Context.Tag("@shared/redis/Redis")<Redis, RedisService>() {}
+export class Redis extends Context.Service<Redis, RedisService>()("@shared/redis/Redis") {}
 
 /** Redact credentials from Redis URLs in error messages (S-M3). */
 function sanitizeCause(cause: unknown): string {

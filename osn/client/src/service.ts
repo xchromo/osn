@@ -172,7 +172,7 @@ export interface OsnAuthService {
   ) => Effect.Effect<Response, AuthExpiredError | StorageError>;
 }
 
-export class OsnAuth extends Context.Tag("@osn/client/OsnAuth")<OsnAuth, OsnAuthService>() {}
+export class OsnAuth extends Context.Service<OsnAuth, OsnAuthService>()("@osn/client/OsnAuth") {}
 
 export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, never, Storage> {
   return Layer.effect(
