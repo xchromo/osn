@@ -24,7 +24,10 @@ cd "$pkg_dir"
 # the gzip of the directory as a whole. Everything except `wrangler.json` is
 # uploaded, so measure exactly that set: matching on `*.mjs` would coincide with
 # it today and stop matching the moment the adapter emitted a `.js` chunk, which
-# its own generated `rules` already declare as an ES module.
+# its own generated `rules` already declare as an ES module. `.map` files are
+# excluded too: they're uploaded to Cloudflare for symbolication
+# (`upload_source_maps` in `wrangler.jsonc`), not part of the script the
+# Worker runs, and roughly double the reading if left in.
 if [ ! -d dist/server ]; then
   echo "::error::cire/invites dist/server is missing — run \`astro build\` before this guard."
   exit 1
@@ -39,7 +42,7 @@ while IFS= read -r -d '' f; do
   size=$(gzip -nc "$f" | wc -c)
   total=$((total + size))
   count=$((count + 1))
-done < <(find dist/server -type f ! -name 'wrangler.json' -print0)
+done < <(find dist/server -type f ! -name 'wrangler.json' ! -name '*.map' -print0)
 
 if [ "$count" -eq 0 ]; then
   echo "::error::cire/invites dist/server holds no deployable files — the guard measured nothing, which is a broken build, not a pass."
@@ -48,16 +51,22 @@ fi
 
 echo "cire/invites dist/server gzip total: ${total} bytes across ${count} files"
 
-# Threshold = the measured total after both #287 fixes, plus room for ordinary
-# dependency growth. What it catches is a library-scale mistake: motion cost
-# 47657 bytes gzip in THIS bundle (470489 before the stub, 422832 after), so a
-# single new library of that class entering the SSR graph trips this with room
-# to spare. Measure against the SSR figure, not against the same library's size
-# in `dist/client` — the client build is minified and the server build is not,
-# so a library costs roughly twice as much here as it does there. It does NOT
-# catch a few KB of ordinary bump, and it is nowhere near the Workers Free-tier
-# 3 MB cap — this watches the trajectory, it is not a check against the cap.
-threshold=310000
+# Threshold = the measured total after #287, #618, #616 and #617, plus room
+# for ordinary dependency growth. What it catches is a library-scale mistake:
+# motion cost 47657 bytes gzip in the (then-unminified) SSR bundle, so a
+# single new library of that class entering the SSR graph still trips this
+# with room to spare. 163446 (measured total, this bundle, after sessions off
+# + SSR minify + source maps) + 47657 (motion-class headroom) = 211103.
+#
+# The SSR build is now minified (tracker #616 — an inline `astro:build:setup`
+# integration in `astro.config.mjs`, since the plain `vite.build.minify` config
+# form is a no-op for the SSR environment), so this no longer needs the old
+# "server build isn't minified, client is" caveat: both builds are minified
+# now, and a library costs roughly what it costs in `dist/client`, gzip for
+# gzip. It does NOT catch a few KB of ordinary bump, and it is nowhere near
+# the Workers Free-tier 3 MB cap — this watches the trajectory, it is not a
+# check against the cap.
+threshold=211103
 if [ "$total" -gt "$threshold" ]; then
   echo "::error::cire/invites dist/server gzip total ${total} bytes exceeds the ${threshold} byte guard (tracker #287). Something is likely pulling a new dependency into the SSR module graph that never runs server-side — check what is newly reachable from a server-side import() or import, the way motion was."
   exit 1
