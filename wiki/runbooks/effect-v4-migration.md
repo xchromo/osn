@@ -550,6 +550,71 @@ turbo before the tests; CI has network and gets through. On #908's head CI ran
 `Logger.*` call evaluated at import time. A local `bun run test` reproduces the
 same nine once the build is out of the way.
 
+## What phase 3 hit before it started
+
+Scoping the Logger work turned up something that makes phase 3 **a redesign of a
+security control, not a rename pass.** Recorded before any code changed.
+
+**v4 moved log annotations off the logger's `Options` and onto the fiber.** v3's
+`Logger.Options` carried `annotations: HashMap<string, unknown>`; v4's carries
+only `message`, `logLevel`, `cause`, `fiber` and `date`. Annotations are read
+downstream via `fiber.getRef(CurrentLogAnnotations)`, as a plain `Record`.
+
+`shared/observability/src/logger/layer.ts` redacts on the way through:
+
+```ts
+const makeRedactingLogger = (base) =>
+  Logger.make((options) => base.log({
+    ...options,
+    message: redact(options.message),
+    annotations: HashMap.map(options.annotations, redact),   // ← gone in v4
+  }))
+```
+
+That interception point no longer exists. **Deleting the annotations line
+compiles**, and every secret passed through `Effect.annotateLogs` then reaches
+Workers Logs and Grafana unredacted. There is no type error and, as below, no
+test that would fail.
+
+The replacement is to redact at the **output** stage rather than the input:
+build on `Logger.formatStructured`, whose output object already contains
+`message` and a resolved `annotations` record, redact that, then format and
+write. `Logger.formatJson` is exactly `map(formatStructured, Formatter.formatJson)`
+and `Logger.consoleJson` is `withConsoleLog(formatJson)`, so the pipeline is
+available to rebuild from parts. It is arguably more robust than the v3 shape —
+it redacts whatever the formatter resolved, wherever it came from.
+
+### The guard test for this does not exist, despite appearances
+
+`shared/observability/tests/layer.test.ts` has a case named *"end-to-end:
+`Effect.logInfo` with secret annotations emits a redacted entry"*. It does not
+test that. It builds `makeLoggerLayer(config)` into an unused `_loggerLayer`,
+provides a **raw** capture logger with no redaction in the chain, and asserts
+`profileId` comes through as `"u_123"` — unredacted. Its own comment is honest
+about this (*"the capture logger above is raw — NOT wrapped in the redaction
+layer"*); only the name is wrong.
+
+So redaction is covered by `redact.test.ts` at the pure-function level and by
+nothing at the layer level. **Phase 3 must add the real end-to-end test** — the
+redesign above cannot be verified otherwise, and this is precisely the shape of
+failure the gate on this page exists to catch.
+
+The sibling `makeLoggerLayer output format` block *is* a real guard and should
+survive the rewrite: it runs the actual layer per tier, captures `console.log`,
+and treats an empty string as failure — the "deployed tier goes silent" bug the
+source file documents.
+
+### Two smaller exactness notes
+
+- v4's `LogLevel` is `"All" | "Fatal" | "Error" | "Warn" | "Info" | "Debug" |
+  "Trace" | "None"`. It is **`"Warn"`, not `"Warning"`** — v3 had
+  `LogLevel.Warning`.
+- `Logger.layer(loggers, { mergeWithExisting })` takes an option, but
+  `mergeWithExisting: true` is **not** the v3 equivalent: it adds to the active
+  set, so the default logger keeps running alongside and every line is logged
+  twice. v3's `Logger.replace(defaultLogger, x)` swaps one logger and leaves
+  `tracerLogger` in place, which in v4 is `Logger.layer([x, Logger.tracerLogger])`.
+
 ## Phase order
 
 > [!warning] Rewritten after the spike — there is no green intermediate state
