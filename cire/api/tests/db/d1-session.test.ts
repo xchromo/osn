@@ -10,9 +10,9 @@ import {
   runInD1Session,
   withD1Session,
   type D1QueryClient,
-} from "./d1-session";
-import { createD1Db } from "./index";
-import type { Db } from "./index";
+} from "../../src/db/d1-session";
+import { createD1Db } from "../../src/db/index";
+import type { Db } from "../../src/db/index";
 
 // Two halves. The routing tests use recording stand-ins, because what matters
 // there is WHICH client each query reached, which a real D1 will not tell you.
