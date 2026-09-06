@@ -470,6 +470,27 @@ hook level.
 **Two counts in this page were wrong**, corrected above: **14** packages declare
 `effect` (not 13) and **11** declare `@effect/vitest` (not 10).
 
+**`OpenAPI Freshness` is a runtime consumer, and the plan did not account for
+it.** That CI job runs `openapi:generate` in `pulse/api` and `osn/api`, and
+those generators *execute* the application code to produce the document. So it
+does not merely fail to type-check — it crashes:
+
+```
+TypeError: Layer.scoped is not a function.
+    at shared/redis/src/service.ts:36:58
+```
+
+Two consequences. First, it stays red until every **runtime-breaking** call is
+gone — `Layer.scoped`, `Effect.catchAll` / `either`, the `Logger.*` set and the
+`Schema.*` property accesses — so clearing type errors alone will not fix it.
+Second, and the reason it is not a hidden regression: both generators crash
+before writing, `git status shared/openapi/` stays clean, and **no committed
+spec has drifted.** The check is failing on a crash, not on a diff.
+
+The same reasoning applies to anything else that executes app code mid-stack.
+There is nothing else in CI that does, but a new job that did would behave the
+same way.
+
 **The docs branch has to land before phase 2.** `effect-v4` was cut from `main`,
 so it carries none of this: not the installed skills, not the `.gitignore` entry
 for `.repos/`, not the CODEOWNERS entries, not the changeset allowlist, not this
@@ -575,6 +596,8 @@ version bump happens in a single release when `effect-v4` merges.
   [[#The type-check passed and the test caught it]]. The tests are what catch
   them, which is why they gate here even though the skill does not gate on them.
 - **Phases 1–4 cannot be verified by CI**, because the tree is red until phase 5.
+  Five checks go red and stay red: `Type Check`, `Lint & Format`, `Build & Test`,
+  `OpenAPI Freshness`, and the `CI` rollup that aggregates them.
   Verify each one by the error count falling and by the packages that *are*
   fully migrated passing their own tests — not by a green suite that cannot
   exist yet.
