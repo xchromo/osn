@@ -49,13 +49,30 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      # Same guard as the submitting workflow: with no token there is nothing to
+      # collect, and a scheduled job going red every 30 minutes because a secret
+      # is missing is noise nobody will keep reading.
+      - name: Is there a Tessl token
+        id: token
+        env:
+          TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
+        run: |
+          if [ -n "$TESSL_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TESSL_TOKEN is not set; nothing to collect."
+          fi
+
       - uses: tesslio/setup-tessl@25ec223fc0da33b41b8044ff5ab2b85235f4f91e # v2
+        if: steps.token.outputs.present == 'true'
         with:
           token: ${{ secrets.TESSL_TOKEN }}
 
       # One pull request at a time, in a loop, so a single stuck run cannot stop
       # the others being collected.
       - name: Sweep open pull requests for submitted runs
+        if: steps.token.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}

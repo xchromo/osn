@@ -37,11 +37,29 @@ jobs:
     name: Skill quality review
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      has_token: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+
+      # Every step below needs a Tessl account. Without the secret the whole
+      # workflow is inert rather than failing: it reviews nobody's skills, and
+      # a red check that only means "a secret is missing" trains people to
+      # ignore the check. The notice says what to do about it.
+      - name: Is there a Tessl token
+        id: token
+        env:
+          TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
+        run: |
+          if [ -n "$TESSL_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TESSL_TOKEN is not set, so the skill quality gate did not run. Add it under Settings → Secrets → Actions to turn this on."
+          fi
 
       # Third-party, so both tesslio actions here are pinned to a commit rather
       # than a moving tag, unlike the well-known actions this repository takes
@@ -49,9 +67,13 @@ jobs:
       # `secrets.TESSL_TOKEN`, and a moving tag means whoever can move it can
       # read that secret.
       - name: Review changed SKILL.md files
+        if: steps.token.outputs.present == 'true'
         uses: tesslio/skill-review@7e7ea574722a6d72752aa5a316bcc813d06b7cd2
         with:
-          path: .claude/skills
+          # Repo root, not `.claude/skills`: the action joins this with a path
+          # that is already repository-relative, and the narrower value made it
+          # look for `.claude/skills/.claude/skills/<name>/SKILL.md`.
+          path: .
           comment: "true"
           fail-threshold: "70"
           workspace: musubi
@@ -68,11 +90,13 @@ jobs:
           bun-version-file: .bun-version
 
       - uses: tesslio/setup-tessl@25ec223fc0da33b41b8044ff5ab2b85235f4f91e # v2
+        if: steps.token.outputs.present == 'true'
         with:
           token: ${{ secrets.TESSL_TOKEN }}
 
       - name: Score every skill
         id: quality
+        if: steps.token.outputs.present == 'true'
         env:
           TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
           PAIRS: ${{ runner.temp }}/pairs.txt
@@ -105,6 +129,7 @@ jobs:
       # — the action above already decides whether this check passes.
       - name: Compare against the quality board
         id: trend
+        if: steps.token.outputs.present == 'true'
         continue-on-error: true
         run: |
           SCORES=$(cat "$RUNNER_TEMP/scores.json")
@@ -135,7 +160,7 @@ jobs:
       # Only once the comparison has been made, so a regression is reported
       # against the score it regressed from rather than against itself.
       - name: Record the scores
-        if: github.event_name == 'pull_request'
+        if: steps.token.outputs.present == 'true' && github.event_name == 'pull_request'
         run: bun run scripts/skill-evals.ts quality-record --scores "$(cat "$RUNNER_TEMP/scores.json")"
 
   eval:
@@ -145,7 +170,9 @@ jobs:
     # Submit and leave. Nothing here waits on the run.
     timeout-minutes: 15
     # A fork's pull request gets no secrets, so the run cannot authenticate.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && needs.quality.outputs.has_token == 'true'
     permissions:
       contents: read
       pull-requests: write
