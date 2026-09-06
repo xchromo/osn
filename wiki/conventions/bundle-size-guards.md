@@ -67,6 +67,18 @@ touching a threshold. In short:
   ordinary content). Neither belongs in a guard whose job is catching a library
   that shouldn't have shipped.
 
+> [!warning] Known blind spot: inline `<style>`/`<script>` in the HTML
+> `build.inlineStylesheets: "auto"` is Astro's default and is unset in all
+> five static apps, which writes some generated CSS/JS inline into each
+> page's HTML instead of into `dist/_astro`. `static` mode's allowlist cannot
+> see bytes that never land in the directory it reads. Measured on
+> osn/landing: 5 inline style blocks + 4 inline script blocks in
+> `dist/index.html` alone, about 3116 bytes gzip-equivalent — real budget the
+> guard cannot see. An open tracker issue holds the two ways to close this
+> (parse the HTML too, or force `inlineStylesheets: "never"` so everything
+> lands in `dist/_astro` where the guard already looks); this is a product
+> decision, not something fixed in this script.
+
 ### Where it runs, and why twice
 
 Every app's own `build` script chains the guard on with `&&` (`astro build &&

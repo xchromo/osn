@@ -179,3 +179,32 @@ test("findTestRoutes returns [] against a src/pages directory that does not exis
   );
   expect(violations).toEqual([]);
 });
+
+test("the real CLI exits non-zero, naming the path, when a configured app's src/pages does not exist", async () => {
+  const { exitCode, stderr } = await runCli(["definitely/does-not-exist"]);
+  expect(stderr).toContain("definitely/does-not-exist's src/pages does not exist");
+  expect(stderr).toContain("src/pages");
+  expect(exitCode).not.toBe(0);
+});
+
+// Pins the DEFAULT (unset ASTRO_TEST_ROUTE_APPS) relative-join resolution
+// against the real repo, rather than a fixture — every other test above
+// overrides ASTRO_TEST_ROUTE_APPS, so none of them exercise
+// `resolvePagesDir`'s `new URL("../${app}/src/pages", import.meta.url)`
+// branch, the one a future scripts/ reorganisation could silently break. If
+// that join ever stops landing on cire/invites' real `src/pages`, the new
+// pagesDirIsMissing() check added for this same finding turns this red
+// instead of the old silent-success behavior.
+test("the real CLI resolves the default apps' real src/pages with no override set", async () => {
+  const env = { ...Bun.env };
+  delete env.ASTRO_TEST_ROUTE_APPS;
+  const proc = Bun.spawn(["bun", "run", SCRIPT], { stdout: "pipe", stderr: "pipe", env });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  expect(stderr).not.toContain("does not exist");
+  expect(stdout).toContain("check-astro-test-routes");
+  expect(exitCode).toBe(0);
+});

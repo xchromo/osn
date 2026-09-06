@@ -315,3 +315,49 @@ test("blank lines and comment-only lines in the budgets file are ignored", async
     },
   );
 });
+
+// T-U1: every other "package directory" case above mkdirs the fixture path
+// first — even the ones asserting a DIFFERENT failure (missing dist/server,
+// no matching row) always start from a package directory that exists. This
+// is the sibling branch: the package directory argument itself was never
+// created, so resolve_label()'s own `cd` fails before a budgets lookup ever
+// happens.
+test("exits non-zero when the package directory itself was never created", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guard-bundle-size-cli-"));
+  try {
+    // Deliberately no mkdir — the fixture root exists, the package directory
+    // under it (unlike every withFixture-based case above) never does.
+    const pkgDir = join(root, "fixture-app", "pkg");
+    const budgetsFile = join(root, "budgets.txt");
+    await writeFile(budgetsFile, "fixture-app/pkg worker 999999999\n");
+
+    const { exitCode, stderr } = await runCli(budgetsFile, root, pkgDir);
+    expect(stderr).toContain("does not exist");
+    expect(stderr).toContain(pkgDir);
+    expect(exitCode).not.toBe(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// T-U2: the one existing blank/comment-lines test above always includes a
+// real record alongside the blank/comment lines, so `any_record` in run_all()
+// never actually reaches 0 through that case. This is the vacuous-pass guard
+// itself: a budgets file that is ALL comments/blank lines still passes
+// validate_budgets_file (nothing malformed to reject) and must still be
+// caught before reporting success — the scenario is someone commenting out
+// every row to debug and forgetting to restore it.
+test("--all exits non-zero on a budgets file containing only comments and blank lines", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guard-bundle-size-cli-"));
+  try {
+    const budgetsFile = join(root, "budgets.txt");
+    await writeFile(budgetsFile, "# nothing but comments\n\n   \n# still nothing\n");
+
+    const { exitCode, stderr } = await runCli(budgetsFile, root, "--all");
+    expect(stderr).toContain("has no records");
+    expect(stderr).toContain(budgetsFile);
+    expect(exitCode).not.toBe(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -19,7 +19,7 @@
  * slower job for it.
  */
 
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 
 const TEST_ROUTE = /\.(?:test|spec)\./;
@@ -80,11 +80,39 @@ function resolvePagesDir(app: string): string {
     : new URL(`../${app}/src/pages`, import.meta.url).pathname;
 }
 
+// `findTestRoutes` itself treats an unreadable/missing `pagesDir` as nothing
+// to check (see its own comment) — deliberately, since that keeps it simple
+// for a caller that already knows a directory might legitimately not exist.
+// But every app named in ASTRO_APPS is a real, committed Astro app, and all
+// six have a `src/pages` today: a missing one here is never a legitimate
+// state, only a bug — a wrong path in this file, a moved app, or (the case
+// the reviewer reproduced) a `scripts/` reorganisation that breaks
+// `resolvePagesDir`'s relative join. Silently finding zero routes and
+// printing the success line is exactly the vacuous-pass failure mode this
+// whole guard exists to prevent, so this is checked explicitly and fails
+// closed — a `src/pages` that exists and is merely empty still passes.
+async function pagesDirIsMissing(pagesDir: string): Promise<boolean> {
+  try {
+    return !(await stat(pagesDir)).isDirectory();
+  } catch {
+    return true;
+  }
+}
+
 if (import.meta.main) {
   let failed = false;
 
   for (const app of ASTRO_APPS) {
     const pagesDir = resolvePagesDir(app);
+
+    if (await pagesDirIsMissing(pagesDir)) {
+      failed = true;
+      console.error(
+        `::error::check-astro-test-routes: ${app}'s src/pages does not exist at ${pagesDir} — every configured Astro app must have one. If ${app} was renamed, removed, or scripts/ itself moved, fix ASTRO_APPS in scripts/check-astro-test-routes.ts rather than let this pass silently.`,
+      );
+      continue;
+    }
+
     const violations = await findTestRoutes(pagesDir);
 
     for (const violation of violations) {

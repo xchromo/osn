@@ -69,13 +69,18 @@ if [ ! -f "$BUDGETS_FILE" ]; then
 fi
 
 # Populated by parse_record: REC_PKG, REC_MODE, REC_THRESHOLD.
+# `read` splits on IFS and does NOT glob. An unquoted array assignment
+# (`local fields=($stripped)`) would: bash pathname-expands it against the
+# caller's working directory, so a row containing a `*` would silently become
+# whatever files happen to sit beside the caller — a guard measuring the wrong
+# directory and passing. Fail-closed matters more here than anywhere, because
+# a bundle-size guard that passes vacuously is worse than no guard at all.
 parse_record() {
   local stripped="${1%%#*}"
-  # shellcheck disable=SC2206
-  local fields=($stripped)
-  REC_PKG="${fields[0]:-}"
-  REC_MODE="${fields[1]:-}"
-  REC_THRESHOLD="${fields[2]:-}"
+  REC_PKG=""
+  REC_MODE=""
+  REC_THRESHOLD=""
+  read -r REC_PKG REC_MODE REC_THRESHOLD _ <<<"$stripped" || true
 }
 
 # Fails closed on a malformed row rather than silently mis-parsing it (too few
@@ -89,14 +94,15 @@ validate_budgets_file() {
     lineno=$((lineno + 1))
     stripped="${line%%#*}"
     [[ "$stripped" =~ ^[[:space:]]*$ ]] && continue
-    # shellcheck disable=SC2206
-    local fields=($stripped)
-    if [ "${#fields[@]}" -ne 3 ]; then
+    # `read`, not an unquoted array assignment — see parse_record above for why.
+    # `extra` catches a fourth field, which the three-name `read` would
+    # otherwise fold into the third.
+    local pkg="" extra=""
+    read -r pkg mode threshold extra <<<"$stripped" || true
+    if [ -z "$pkg" ] || [ -z "$mode" ] || [ -z "$threshold" ] || [ -n "$extra" ]; then
       echo "::error::guard-bundle-size.sh: ${BUDGETS_FILE}:${lineno}: expected '<package-dir> <worker|static> <threshold>', got '${stripped}'" >&2
       return 1
     fi
-    mode="${fields[1]}"
-    threshold="${fields[2]}"
     if [ "$mode" != "worker" ] && [ "$mode" != "static" ]; then
       echo "::error::guard-bundle-size.sh: ${BUDGETS_FILE}:${lineno}: mode must be 'worker' or 'static', got '${mode}'" >&2
       return 1
@@ -126,6 +132,12 @@ run_guard() {
     set -euo pipefail
     cd "$pkg_dir"
 
+    # validate_budgets_file already rejects any mode but worker/static before
+    # either dispatch path (lookup_and_run, run_all) ever calls run_guard, so
+    # this arm cannot fire through the script's own two call sites today.
+    # Left in as defence in depth against a future third caller of run_guard
+    # that skips validation — the alternative is `measure_dir` staying unset
+    # and the next line dying to `set -u` with an unrelated-looking error.
     case "$mode" in
       worker) measure_dir="dist/server" ;;
       static) measure_dir="dist/_astro" ;;
@@ -198,6 +210,16 @@ run_guard() {
       # regresses when a library wanders in, which is what this guard is
       # for — so this is an ALLOWLIST, not an exclusion, and deliberately
       # does not recurse into `dist/_astro/fonts/`.
+      #
+      # Known blind spot: `build.inlineStylesheets: "auto"` (Astro's default,
+      # unset in all five static apps) writes some `<style>`/`<script>` output
+      # inline into each page's HTML instead of into `dist/_astro`, and this
+      # allowlist cannot see bytes that never reach that directory. Measured
+      # on osn/landing: 5 inline style blocks + 4 inline script blocks in
+      # `dist/index.html` alone, ~3116 bytes gzip-equivalent — real budget
+      # this guard is blind to. An open tracker issue holds the two ways to
+      # close it (parse the HTML too, or force `inlineStylesheets: "never"`);
+      # this script deliberately does neither on its own.
       while IFS= read -r -d '' f; do
         size=$(gzip -nc "$f" | wc -c)
         total=$((total + size))
