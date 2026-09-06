@@ -248,7 +248,7 @@ export default function EventsEditor(props: { weddingId: string }) {
         throw new Error(body.error ?? `Apply failed (${res.status})`);
       }
       invalidateEvents(props.weddingId);
-      // Guests too, but NOT households: an `scope: "events"` save can remove an
+      // Guests too, but NOT households: a `scope: "events"` save can remove an
       // event, and that cascades the per-guest attendance rows for it. No path
       // through this editor can touch a household, so invalidating that cache
       // only costs every open consumer a refetch of rows it already has.

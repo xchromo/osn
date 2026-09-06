@@ -25,6 +25,28 @@ vi.mock("../../src/lib/api", async () => {
   return organiserApiMock();
 });
 
+const invalidateEventsMock = vi.hoisted(() => vi.fn());
+const invalidateGuestsMock = vi.hoisted(() => vi.fn());
+const invalidateHouseholdsMock = vi.hoisted(() => vi.fn());
+
+// Spied, not stubbed wholesale — same pattern as ImportPanel.test.tsx — so a
+// successful apply can be checked against BOTH halves of a deliberate split:
+// events + guests are invalidated (the source comment: an events-scope save
+// can remove an event, cascading that event's guest_events rows), households
+// is not (no path through this editor can touch one).
+vi.mock("../../src/lib/events-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateEvents: invalidateEventsMock,
+}));
+vi.mock("../../src/lib/guests-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateGuests: invalidateGuestsMock,
+}));
+vi.mock("../../src/lib/households-store", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invalidateHouseholds: invalidateHouseholdsMock,
+}));
+
 import EventsEditor from "../../src/components/EventsEditor";
 import { __resetEventsCache } from "../../src/lib/events-store";
 import { __resetGuestsCache } from "../../src/lib/guests-store";
@@ -131,6 +153,9 @@ describe("EventsEditor", () => {
     __resetGuestsCache();
     __resetHouseholdsCache();
     __resetEventsCache();
+    invalidateEventsMock.mockReset();
+    invalidateGuestsMock.mockReset();
+    invalidateHouseholdsMock.mockReset();
   });
 
   it("renders the events in schedule order", async () => {
@@ -623,6 +648,66 @@ describe("EventsEditor", () => {
       String(c[0]).endsWith("/changes/apply"),
     )!;
     expect(JSON.parse(String((applyCall[1] as RequestInit).body)).changeId).toBe("chg_1");
+  });
+
+  it("apply invalidates events and guests, but NOT households (T-S2)", async () => {
+    primeLoad();
+    render(() => <EventsEditor weddingId="wed_a" />);
+    await waitFor(() => expect(screen.getByText("Ceremony")).toBeTruthy());
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Edit$/i })[0]!);
+    await waitFor(() => expect(screen.getByLabelText("Event name")).toBeTruthy());
+    fireEvent.input(screen.getByLabelText("Event name"), { target: { value: "Wedding Ceremony" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Save changes/i })).toBeTruthy());
+
+    authFetchMock.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.endsWith("/changes/preview")) {
+        return Promise.resolve(
+          json({
+            changeId: "chg_1",
+            baseRevision: "genesis",
+            warnings: ["1 event will be updated."],
+            plan: {
+              eventCreates: [],
+              eventUpdates: [{}],
+              eventRemoves: [],
+              familyCreates: [],
+              familyRemoves: [],
+              guestCreates: [],
+              guestUpdates: [],
+              guestRemoves: [],
+              eventLinkCreates: [],
+              eventLinkRemoves: [],
+              warnings: ["1 event will be updated."],
+            },
+          }),
+        );
+      }
+      if (u.endsWith("/changes/apply"))
+        return Promise.resolve(json({ summary: { importId: "chg_1" } }));
+      if (u.endsWith("/events"))
+        return Promise.resolve(json([{ ...EVENTS[0], name: "Wedding Ceremony" }, EVENTS[1]]));
+      if (u.endsWith("/guests")) return Promise.resolve(json(GUESTS));
+      if (u.endsWith("/households")) return Promise.resolve(json(HOUSEHOLDS));
+      return Promise.resolve(json({}));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: /Review changes before applying/i })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Confirm & save/i }));
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+
+    // The source comment on the apply handler names exactly this split: an
+    // events-scope save can remove an event, which cascades that event's
+    // per-guest attendance rows (invalidate guests too), but no path through
+    // this editor can touch a household (invalidate households NOT once).
+    expect(invalidateEventsMock).toHaveBeenCalledWith("wed_a");
+    expect(invalidateGuestsMock).toHaveBeenCalledWith("wed_a");
+    expect(invalidateHouseholdsMock).not.toHaveBeenCalled();
   });
 
   /**
