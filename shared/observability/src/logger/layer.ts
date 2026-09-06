@@ -1,62 +1,84 @@
-import { HashMap, Layer, Logger, LogLevel } from "effect";
+import { Formatter, Layer, LogLevel, Logger, References } from "effect";
 
 import type { LogLevel as ConfigLogLevel, ObservabilityConfig } from "../config";
 import { redact } from "./redact";
 
+/**
+ * v4 log levels are string literals, not branded constructors. Note `"Warn"`,
+ * not v3's `"Warning"` — the two majors spell that one differently.
+ */
 const LOG_LEVEL_MAP = {
-  trace: LogLevel.Trace,
-  debug: LogLevel.Debug,
-  info: LogLevel.Info,
-  warn: LogLevel.Warning,
-  error: LogLevel.Error,
-  fatal: LogLevel.Fatal,
-} satisfies Record<ConfigLogLevel, LogLevel.LogLevel>;
+  trace: "Trace",
+  debug: "Debug",
+  info: "Info",
+  warn: "Warn",
+  error: "Error",
+  fatal: "Fatal",
+} satisfies { readonly [K in ConfigLogLevel]: LogLevel.LogLevel };
 
 /**
- * Wrap a base logger so every emitted entry has its `message` and
- * `annotations` passed through the redaction deny-list before serialization.
+ * A logger that resolves an entry to its structured form, scrubs the
+ * deny-listed values out of it, and hands the result to `format`.
  *
- * `base` must be a logger that *writes* (`Logger.Logger<unknown, void>`), not
- * one that formats — see the note on `makeLoggerLayer` about `jsonLogger`.
+ * Redaction happens on the **output** side, and it has to. In v3 the redacting
+ * logger sat on the input: `Logger.Options` carried `annotations`, so a wrapper
+ * could rewrite them before delegating. v4 moved annotations onto the fiber —
+ * `Options` is now just `message`, `logLevel`, `cause`, `fiber`, `date`, and
+ * each logger reads `References.CurrentLogAnnotations` for itself. There is no
+ * longer an input to intercept, and dropping the annotation pass silently
+ * type-checks while every `Effect.annotateLogs` value reaches the sink in
+ * clear.
+ *
+ * `Logger.formatStructured` is the seam that replaces it: its output object
+ * already holds the resolved `message` and an `annotations` record, so
+ * scrubbing that covers whatever the fiber carried, wherever it came from.
  */
-const makeRedactingLogger = (base: Logger.Logger<unknown, void>): Logger.Logger<unknown, void> =>
-  Logger.make<unknown, void>((options) =>
-    base.log({
-      ...options,
-      message: redact(options.message),
-      annotations: HashMap.map(options.annotations, (value) => redact(value)),
-    }),
+const makeRedactingLogger = (format: (entry: unknown) => string): Logger.Logger<unknown, void> =>
+  Logger.withConsoleLog(
+    Logger.map(Logger.formatStructured, (entry) => ({
+      ...entry,
+      message: redact(entry.message),
+      // The whole record, not a per-value map. `redact` enforces the deny-list
+      // against an object's KEYS (see redact.ts §Matching rules), so handing it
+      // one annotation value at a time shows it a bare scalar and it passes
+      // everything through. v3 mapped per value and therefore never redacted a
+      // top-level annotation key at all — `Effect.annotateLogs({ accessToken })`
+      // reached the sink in clear. Passing the record fixes that.
+      annotations: redact(entry.annotations),
+    })).pipe(Logger.map(format)),
   );
 
 /**
  * Returns a Layer that:
- * - Replaces Effect's default logger with a redacting logger — pretty only on
- *   a developer's own terminal, JSON everywhere a machine reads the output
+ * - Replaces Effect's logger set with a redacting logger — indented and
+ *   readable on a developer's own terminal, JSON everywhere a machine reads it
+ * - Keeps `Logger.tracerLogger` alongside it, so log lines stay attached to
+ *   their span
  * - Applies the configured minimum log level
  *
- * `dev` gets JSON, not pretty. It reads like a developer tier but it is a
- * deployed one: its logs land in Workers Logs alongside production's, where
- * pretty output is multi-line ANSI that costs several ingested events per
- * entry and cannot be queried by field. `local` is the only tier with a human
- * watching stdout.
+ * `dev` gets JSON, not the readable form. It reads like a developer tier but it
+ * is a deployed one: its logs land in Workers Logs alongside production's,
+ * where multi-line output costs several ingested events per entry and cannot be
+ * queried by field. `local` is the only tier with a human watching stdout.
  *
- * `Logger.jsonLogger` is wrapped in `Logger.withConsoleLog` because on its own
- * it does not write anywhere: its type is `Logger<unknown, string>` — it
- * *returns* the JSON line and leaves emitting to the caller. TypeScript accepts
- * it where a `Logger<unknown, void>` is wanted (any return type is assignable
- * to `void`), so the mistake type-checks, and every deployed tier goes silent
- * with no error. `Logger.prettyLogger()` writes for itself, which is why local
- * kept working and hid this.
+ * **`Logger.layer` replaces the whole active set**, where v3's `Logger.replace`
+ * swapped a single logger and left the rest standing. `Logger.tracerLogger` is
+ * therefore listed explicitly: omit it and log-to-span correlation disappears
+ * with no error and no failing type-check. `{ mergeWithExisting: true }` is not
+ * the v3 equivalent either — it *adds* to the set, leaving the default logger
+ * running alongside so every line is emitted twice.
  *
  * Provide this once at the top of the application (via `ObservabilityLive`
  * in `../index.ts`).
  */
 export const makeLoggerLayer = (config: ObservabilityConfig): Layer.Layer<never> => {
-  const baseLogger =
-    config.env === "local" ? Logger.prettyLogger() : Logger.withConsoleLog(Logger.jsonLogger);
-  const redacting = makeRedactingLogger(baseLogger);
+  const format =
+    config.env === "local"
+      ? (entry: unknown) => Formatter.format(entry, { space: 2 })
+      : (entry: unknown) => Formatter.formatJson(entry);
+
   return Layer.mergeAll(
-    Logger.replace(Logger.defaultLogger, redacting),
-    Logger.minimumLogLevel(LOG_LEVEL_MAP[config.logLevel]),
+    Logger.layer([makeRedactingLogger(format), Logger.tracerLogger]),
+    Layer.succeed(References.MinimumLogLevel, LOG_LEVEL_MAP[config.logLevel]),
   );
 };
