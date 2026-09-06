@@ -16,7 +16,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRIPT = new URL("./cire-dev-db-guard.ts", import.meta.url).pathname;
+const SCRIPT = new URL("../cire-dev-db-guard.ts", import.meta.url).pathname;
 const DEV_ID = "bf0510eb-6998-4ee3-b5a0-833c646ef855";
 const PROD_ID = "6e835474-e0a7-4db9-8883-3247c3c891cd";
 
@@ -109,7 +109,7 @@ database_id = "${PROD_ID}"
 });
 
 test("the real CLI exits 0 against the committed cire/api/wrangler.toml", async () => {
-  const repoRoot = new URL("../", import.meta.url).pathname;
+  const repoRoot = new URL("../../", import.meta.url).pathname;
   const { exitCode, stderr } = await runCli(join(repoRoot, "cire/api/wrangler.toml"));
   expect(stderr).toBe("");
   expect(exitCode).toBe(0);
