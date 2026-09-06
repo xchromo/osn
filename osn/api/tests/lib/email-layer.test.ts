@@ -62,13 +62,13 @@ describe("selectEmailLayer", () => {
 
   it("creds absent + non-local + opt-in set → emits a loud degraded-mode startup warning (no PII)", () => {
     const lines: string[] = [];
-    const captureLayer = Logger.replace(
-      Logger.defaultLogger,
+    const captureLayer = Logger.layer([
+      // v4 log levels are string literals, so there is no `.label` to read.
       Logger.make(({ message, logLevel }) => {
         const msg = Array.isArray(message) ? message.join(" ") : String(message);
-        lines.push(`[${logLevel.label}] ${msg}`);
+        lines.push(`[${logLevel}] ${msg}`);
       }),
-    );
+    ]);
 
     // Selection emits the loud warning synchronously through the supplied
     // observability layer.

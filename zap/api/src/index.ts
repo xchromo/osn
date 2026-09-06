@@ -1,4 +1,5 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { PrettyLoggerLive } from "@shared/observability";
 import { makeDbD1Live } from "@zap/db/service";
 import { Effect, Logger } from "effect";
 
@@ -101,7 +102,7 @@ function ensureRegistered(): Promise<void> {
         Effect.logWarning(
           "zap-api: ARC key registration skipped — INTERNAL_SERVICE_SECRET is unset. " +
             "Social-graph consent checks will fail closed (chats reject members) until it is set.",
-        ).pipe(Effect.annotateLogs({ service: SERVICE_NAME }), Effect.provide(Logger.pretty)),
+        ).pipe(Effect.annotateLogs({ service: SERVICE_NAME }), Effect.provide(PrettyLoggerLive)),
       ).catch(() => undefined);
     })
     .catch((err: unknown) => {
@@ -111,7 +112,7 @@ function ensureRegistered(): Promise<void> {
       return Effect.runPromise(
         Effect.logError("zap-api: failed to register ARC key with osn/api", err).pipe(
           Effect.annotateLogs({ service: SERVICE_NAME }),
-          Effect.provide(Logger.pretty),
+          Effect.provide(PrettyLoggerLive),
         ),
       ).catch(() => undefined);
     });

@@ -13,7 +13,13 @@ import { makeTracingLayer } from "./tracing/layer";
 export { loadConfig, type ObservabilityConfig, type ConfigOverrides } from "./config";
 
 // Logger
-export { makeLoggerLayer, redact, REDACT_KEYS, REDACTION_PLACEHOLDER } from "./logger";
+export {
+  makeLoggerLayer,
+  PrettyLoggerLive,
+  redact,
+  REDACT_KEYS,
+  REDACTION_PLACEHOLDER,
+} from "./logger";
 
 // Metrics — re-export the full public surface.
 export {

@@ -82,3 +82,23 @@ export const makeLoggerLayer = (config: ObservabilityConfig): Layer.Layer<never>
     Layer.succeed(References.MinimumLogLevel, LOG_LEVEL_MAP[config.logLevel]),
   );
 };
+
+/**
+ * The dev-server logger: readable output plus the tracer logger, and nothing
+ * else. Replaces v3's `Logger.pretty`, which was a Layer the `local.ts`
+ * entrypoints provided directly.
+ *
+ * It lives here rather than being spelled out at each call site because
+ * `Logger.layer` replaces the **whole** active set. Written inline in eleven
+ * places, `Logger.tracerLogger` is one careless edit away from being dropped
+ * from one of them — and dropping it costs log-to-span correlation with no
+ * error and no failing type-check. One definition, one place to get it right.
+ *
+ * Deliberately unredacted: this is the dev-server path, where the value is a
+ * human reading their own local data on their own terminal. Every deployed
+ * tier goes through {@link makeLoggerLayer}, which redacts.
+ */
+export const PrettyLoggerLive: Layer.Layer<never> = Logger.layer([
+  Logger.consolePretty(),
+  Logger.tracerLogger,
+]);

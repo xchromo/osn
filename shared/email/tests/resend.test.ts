@@ -179,12 +179,11 @@ describe("ResendEmailLive", () => {
     // Capture everything the transport logs/emits across both a success and a
     // failure path, then assert the secret never appears anywhere observable.
     const lines: string[] = [];
-    const captureLogger = Logger.replace(
-      Logger.defaultLogger,
+    const captureLogger = Logger.layer([
       Logger.make(({ message }) => {
         lines.push(Array.isArray(message) ? message.join(" ") : String(message));
       }),
-    );
+    ]);
 
     // Success path.
     await Effect.runPromise(
