@@ -53,11 +53,17 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
   readonly id: string;
 }> {}
 
-const StatusEnum = Schema.Literal("upcoming", "ongoing", "maybe_finished", "finished", "cancelled");
-const VisibilityEnum = Schema.Literal("public", "private");
-const GuestListVisibilityEnum = Schema.Literal("public", "connections", "private");
-const JoinPolicyEnum = Schema.Literal("open", "guest_list");
-const CommsChannelSchema = Schema.Literal("sms", "email");
+const StatusEnum = Schema.Literals([
+  "upcoming",
+  "ongoing",
+  "maybe_finished",
+  "finished",
+  "cancelled",
+]);
+const VisibilityEnum = Schema.Literals(["public", "private"]);
+const GuestListVisibilityEnum = Schema.Literals(["public", "connections", "private"]);
+const JoinPolicyEnum = Schema.Literals(["open", "guest_list"]);
+const CommsChannelSchema = Schema.Literals(["sms", "email"]);
 const CommsChannelsSchema = Schema.Array(CommsChannelSchema).pipe(
   Schema.minItems(1),
   Schema.filter((channels) => new Set(channels).size === channels.length, {

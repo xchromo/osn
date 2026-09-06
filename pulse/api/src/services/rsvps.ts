@@ -53,7 +53,7 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
  * Wire-level statuses accepted from clients. "invited" is reserved for the
  * organiser invite flow and is rejected on upsertRsvp.
  */
-const RsvpStatusSchema = Schema.Literal("going", "maybe", "not_going");
+const RsvpStatusSchema = Schema.Literals(["going", "maybe", "not_going"]);
 export type RsvpStatus = Schema.Schema.Type<typeof RsvpStatusSchema>;
 
 const UpsertRsvpSchema = Schema.Struct({

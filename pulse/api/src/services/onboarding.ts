@@ -54,7 +54,7 @@ export const INTEREST_CATEGORIES = [
 
 export type InterestCategory = (typeof INTEREST_CATEGORIES)[number];
 
-const PermOutcomeSchema = Schema.Literal("granted", "denied", "prompt", "unsupported");
+const PermOutcomeSchema = Schema.Literals(["granted", "denied", "prompt", "unsupported"]);
 export type PermOutcome = Schema.Schema.Type<typeof PermOutcomeSchema>;
 
 const InterestSchema = Schema.Literal(...INTEREST_CATEGORIES);

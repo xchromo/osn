@@ -22,7 +22,7 @@ export class NotEventOwner extends Data.TaggedError("NotEventOwner")<{
 // Schemas
 // ---------------------------------------------------------------------------
 
-export const CommsChannelSchema = Schema.Literal("sms", "email");
+export const CommsChannelSchema = Schema.Literals(["sms", "email"]);
 export type CommsChannel = Schema.Schema.Type<typeof CommsChannelSchema>;
 
 export const CommsChannelsSchema = Schema.Array(CommsChannelSchema).pipe(
