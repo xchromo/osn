@@ -1,4 +1,4 @@
-import { Effect, Logger } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { DeploymentEnvironment } from "../src/config";
