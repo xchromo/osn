@@ -3,7 +3,7 @@ title: Effect v4 migration
 description: How the Effect 3.22 → 4.0 bump gets done here — driven by the official effect-v3-to-v4 skill and upstream's generated rename reference, with the measured local surface and the phase order.
 tags: [runbook, effect, tooling, migration, dependencies]
 severity: medium
-status: planned
+status: in-progress
 related:
   - "[[backend-patterns]]"
   - "[[schema-layers]]"
@@ -354,25 +354,146 @@ reaches across it to make an error go away.
 `assertExitFailure`. This repo uses neither helper (zero occurrences), so
 nothing here is exposed — worth knowing before anyone adds one mid-migration.
 
+## What the phase-0 spike found
+
+Run 2026-09-06 on `shared/crypto`, against `effect@4.0.0-rc.112`, using this
+skill. It answered the question it existed to ask, and the answer **changes the
+phase plan** — see [[#Phase order]] below, which has been rewritten around it.
+
+### Effect cannot be bumped one package at a time
+
+Bun resolves two Effect majors side by side without complaint —
+`effect@3.22.1` and `effect@4.0.0-rc.112` both land in the store and each
+workspace links the one it declares. **Install-level isolation works. Type-level
+isolation does not.**
+
+`shared/crypto` alone on v4 produced **24 type errors**. Only 12 were real v4
+migration work. The other 12 were one thing: `YieldWrap<Tag<Db, DbService>>` is
+not a v4 `Effect`. `@osn/db` exports `Db` as a v3 `Context.Tag`, `shared/crypto`
+yields it inside a v4 `Effect.gen`, and no edit inside `shared/crypto` can fix
+that.
+
+The bump had to walk the dependency chain to make it go away:
+
+```
+shared/crypto  →  @osn/db  →  @shared/db-utils
+```
+
+`@osn/db` passes its `Db` tag to `makeDbLive` / `makeD1DbLive` in
+`@shared/db-utils`, whose signatures take `Context.Tag<any, A>`. With all three
+on v4 — two `Context.Key` parameter types, one `Context.Service` declaration,
+six `Effect.result` call sites — **`shared/crypto` type-checked clean and all 84
+tests passed.**
+
+But moving those two shared packages broke every other dependent, with the same
+error class and for the same reason:
+
+| Package | Errors |
+| --- | ---: |
+| `osn/api` | 192 |
+| `pulse/api` | 29 |
+| `zap/api` | 7 |
+| `cire/api` | 7 |
+| `pulse/db` | 5 |
+| `zap/db` | 3 |
+| `cire/host` | 0 — no Effect type surface |
+| **Total** | **243** |
+
+Every one is a v3 `Context.Tag` meeting a v4 `Layer` or `Effect`. There is no
+subset of this repo that can sit on v4 while the rest sits on v3.
+
+### The type-check passed and the test caught it
+
+The most useful thing the spike produced is a worked example of the gate
+argument on this page.
+
+v3's `Effect.either` returns an `Either`, whose variants are tagged `"Right"`
+and `"Left"`. v4's `Effect.result` returns a `Result`, tagged `"Success"` and
+`"Failure"`. The ARC cache tests assert on the tag as a **string**:
+
+```ts
+expect(resA._tag).toBe("Right")   // v3
+expect(resA._tag).toBe("Success") // v4
+```
+
+`toBe` takes `any`. Rename `Effect.either` → `Effect.result` and stop there, and
+**the package type-checks clean while six assertions silently compare a v4 tag
+against a v3 string** — every one of them now false. The compiler has nothing to
+say. The test run fails immediately.
+
+The skill's done condition would have called that migration finished. Our gate
+does not, and this is why.
+
+### Toolchain: no problems found
+
+- **TypeScript 6.0.3**, `moduleResolution: "bundler"`, `strict: true` — v4's
+  `.d.ts` resolve and check cleanly. v4 did **not** demand
+  `exactOptionalPropertyTypes`.
+- **`@effect/vitest@4.0.0-rc.112` on `vitest@4.1.11`** — peer satisfied, `it.effect`
+  unchanged, 84/84 pass.
+- **workerd bundling** — the Worker-safe `@shared/crypto/jwk` subpath plus
+  `effect` v4 bundles under `--conditions=workerd,worker,browser` to 224 KB with
+  **zero `node:` builtins**. No deploy-time module-eval hazard surfaced.
+- **Soak rule** — rc.112 was 12 days old, well past `minimumReleaseAge`. No
+  exclude needed, as predicted.
+
+### Corrections to this page
+
+- `Context.Tag` as a **type position** (a parameter annotation, not a
+  declaration) maps to `Context.Key<I, S>`, per the reference's
+  `Context.ReadonlyTag` → `Context.Key<Identifier, Shape>` entry. The page
+  previously named only the declaration form.
+- The class-syntax argument order flips: v3
+  `Context.Tag(id)<Self, Shape>()` becomes v4
+  `Context.Service<Self, Shape>()(id)`. Getting this backwards is the first
+  thing to check when a service declaration will not compile.
+- `Result` tag strings are `"Success"` / `"Failure"`. Any `_tag` compared as a
+  string literal is invisible to the compiler — grep for them before phase 3.
+
 ## Phase order
 
-Tracked as [#895](https://github.com/xchromo/osn/issues/895), one sub-issue per
-phase. Each is a PR stacked on the one before it per [[stacked-prs]], ordered
-bottom-up through the dependency graph so every phase leaves the tree
-type-checking.
+> [!warning] Rewritten after the spike — there is no green intermediate state
+> The original plan had eight phases, each a stacked PR that "leaves the tree
+> type-checking". **The spike disproved the premise.** Effect's types cross every
+> workspace boundary here, so the tree is red from the first version bump until
+> the last call site is migrated. Phases are still the right *review* unit; they
+> are not independently mergeable.
 
-| # | Phase | Issue | Gate |
+Tracked as [#895](https://github.com/xchromo/osn/issues/895).
+
+| # | Phase | Issue | Green on its own? |
 | ---: | --- | --- | --- |
-| 0 | Spike on `shared/crypto` alone | #896 | Not merged — findings amend this page |
-| 1 | Version bumps, delete `@effect/platform` | #897 | Install resolves |
-| 2 | `Context.Tag` → `Context.Service` (13 sites) | #898 | `check` + `test:run` on `*/db` and `shared/*` |
-| 3 | Renames, removals, `ManagedRuntime`, `Runtime` | #899 | `check`, `lint`, full suite |
-| 4 | Logging + `@effect/opentelemetry` renames | #900 | `shared/observability` tests; Grafana queries updated |
-| 5 | `Schema` — the 20 files outside cire-api | #901 | Each package's `test:run` |
-| 6 | `Schema` — cire-api's 38 files | #902 | `test:run` + `test:d1` |
-| 7 | Full sweep, dev-tier smoke, docs | #903 | Green CI + dev tier healthy |
+| 0 | Spike on `shared/crypto` | #896 | Done — findings above |
+| 1 | Every `effect` version bump + all 13 `Context.Tag` → `Context.Service`, in one commit | #897 + #898, merged | No |
+| 2 | Renames, removals, `ManagedRuntime`, `Runtime` | #899 | No |
+| 3 | Logging + `@effect/opentelemetry` renames | #900 | No |
+| 4 | `Schema` — the 20 files outside cire-api | #901 | No |
+| 5 | `Schema` — cire-api's 38 files | #902 | **Yes — first green point** |
+| 6 | Full sweep, dev-tier smoke, docs | #903 | Yes |
 
-Phases 5 and 6 hold the estimate; 1 through 4 are about a day between them.
+**Phases 1 and 2 of the old plan are now one phase.** They cannot be separated:
+a version bump with the tags left on `Context.Tag` does not type-check anywhere,
+and converting the tags without the version bump does not either. #897 and #898
+stay as separate issues because they are separate bodies of work to review, but
+they land together.
+
+The tree is red from the start of phase 1 until phase 5 completes. That is a
+property of the migration, not a mistake in the sequencing.
+
+### How to merge a stack that is red in the middle
+
+`main` requires a PR and CI, and phases 1–4 cannot pass CI. Three ways to run
+it; the repo owner picks:
+
+| Approach | Trade-off |
+| --- | --- |
+| **A long-lived integration branch.** Each phase is a PR into `effect-v4`, not `main`; the stack merges to `main` once as a single green PR | Review stays phase-sized. One large merge to `main`; the branch needs rebasing against `main` while it lives |
+| **One PR, reviewed commit by commit.** Each phase is a commit; CI runs once, at the end | No branch to maintain. A ~1300-site diff in one PR, and GitHub review-per-commit is weaker than review-per-PR |
+| **Relax the CI gate for the stack.** Stacked PRs to `main` per [[stacked-prs]], with the type-check gate waived until the top | Keeps the existing flow. Puts red commits on `main`'s history and makes bisecting the range useless |
+
+**A is the recommendation** — it is the only one that keeps both a reviewable
+diff and an always-green `main`. It is also a change to how this repo merges,
+which is why it is the owner's call rather than an implementation detail.
 
 ### Rules for the execution
 
@@ -380,12 +501,17 @@ Phases 5 and 6 hold the estimate; 1 through 4 are about a day between them.
   reach it. The tables above are sizing, not authority.
 - **A clean `bun run check` is the floor, never the gate.** Effect's types are
   structural: a `Layer` that dropped its finalizer, a logger set that lost
-  `tracerLogger`, a filter that lost its bound — all type-check. The tests are
-  what catch those, which is why they gate every phase here even though the
-  skill does not gate on them.
-- **`shared/*` changes run the full monorepo suite**, per the
-  Workers-debugging rule in `CLAUDE.md`.
-- **Hold the production approval until phase 7.** A merge to `main`
+  `tracerLogger`, a filter that lost its bound, a `_tag` compared against a v3
+  string — all type-check. The spike hit the last of those for real; see
+  [[#The type-check passed and the test caught it]]. The tests are what catch
+  them, which is why they gate here even though the skill does not gate on them.
+- **Phases 1–4 cannot be verified by CI**, because the tree is red until phase 5.
+  Verify each one by the error count falling and by the packages that *are*
+  fully migrated passing their own tests — not by a green suite that cannot
+  exist yet.
+- **`shared/*` changes run the full monorepo suite** once the tree is green
+  again, per the Workers-debugging rule in `CLAUDE.md`.
+- **Hold the production approval until the final phase.** A merge to `main`
   auto-deploys dev; production waits on a human. See [[dev-environment]].
 - **One changeset per phase.** `@cire/*` is version-less and must not share a
   changeset with versioned packages.
