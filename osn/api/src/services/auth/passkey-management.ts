@@ -90,7 +90,7 @@ export function createPasskeyManagementModule(
   ): Effect.Effect<void, AuthError | ValidationError | DatabaseError, Db> =>
     Effect.gen(function* () {
       const trimmed = label.trim();
-      yield* Schema.decodeUnknown(PasskeyLabelSchema)(trimmed).pipe(
+      yield* Schema.decodeUnknownEffect(PasskeyLabelSchema)(trimmed).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
       if (!/^pk_[a-f0-9]{12}$/.test(passkeyId)) {
