@@ -162,7 +162,9 @@ fails if any `.map` file turns up under `dist/client`, which is served publicly
 as Static Assets — see the source-map warning below.
 
 It runs from the package's own `build` script, so it fires wherever the build
-does: every pull request, both deploy jobs, and the by-hand deploy above. To
+actually executes: the by-hand deploy above, and any local build. `ci.yml` and
+both `deploy.yml` jobs also invoke it as their own step, which is what covers the
+case where Turborepo replays a cached `build` and the script never runs. To
 re-baseline after an intentional bundle change, build, read the printed total,
 and set `threshold` to that total plus **about 11.7 KB** of ordinary-growth
 headroom.
