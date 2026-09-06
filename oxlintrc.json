@@ -241,10 +241,6 @@
     "*.gen.ts",
     "*.astro",
     // Vendored upstream source — linted by its own repo, not ours.
-    "tools/oxlint/anti-slop",
-    // Reference checkouts of the Effect repo, cloned by the effect-v3-to-v4
-    // skill and gitignored. Not our source, ~16k files, and linting them buries
-    // real findings in warnings from someone else's codebase.
-    ".repos"
+    "tools/oxlint/anti-slop"
   ]
 }
