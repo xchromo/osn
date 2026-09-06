@@ -91,7 +91,7 @@ export const createVendorDirectoryReadRoutes = (
               })
               .pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
           );
         }),
@@ -144,9 +144,7 @@ export const createVendorDirectoryWriteRoutes = (
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect((d) =>
-                  isUniqueViolation(d) ? conflict(set) : internal(set),
-                ),
+                Effect.catchDefect((d) => (isUniqueViolation(d) ? conflict(set) : internal(set))),
               ),
             );
           },

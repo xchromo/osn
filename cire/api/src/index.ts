@@ -529,7 +529,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         sessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled session sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -545,7 +545,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         organiserSessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -563,7 +563,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         retentionService.sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled guest-data retention sweep failed", {
               reason: err.reason,
             }),
@@ -577,7 +577,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         maintenanceSweeps.sweepExpiredVendorClaims().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -591,7 +591,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -608,7 +608,7 @@ const handler: ExportedHandler<Env> = {
     runSweep(() =>
       Effect.runPromise(
         assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled cire-assets reconciliation failed", {
               reason: err.reason,
             }),

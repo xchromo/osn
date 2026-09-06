@@ -121,7 +121,7 @@ export const createOrganiserEnquiriesRoutes = (
               enquiryService.list(weddingId).pipe(
                 Effect.provideService(DbService, db),
                 Effect.map((enquiries) => ({ enquiries })),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           })
@@ -146,7 +146,7 @@ export const createOrganiserEnquiriesRoutes = (
                   EnquiryNotFound: () => notFound(set),
                   EnquiryAwaitingVendor: () => notFound(set),
                 }),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           }),
@@ -235,7 +235,7 @@ export const createOrganiserEnquiriesRoutes = (
                         return { error: "vendor_chat_unavailable" };
                       }),
                   }),
-                  Effect.catchAllDefect(() => internal(set)),
+                  Effect.catchDefect(() => internal(set)),
                 ),
               );
             },
@@ -285,7 +285,7 @@ export const createOrganiserEnquiriesRoutes = (
                         return { error: "vendor_chat_unavailable" };
                       }),
                   }),
-                  Effect.catchAllDefect(() => internal(set)),
+                  Effect.catchDefect(() => internal(set)),
                 ),
               );
             },
@@ -330,7 +330,7 @@ export const createOrganiserEnquiriesRoutes = (
                       return { error: "vendor_chat_unavailable" };
                     }),
                 }),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           }),

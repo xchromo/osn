@@ -124,7 +124,7 @@ export const createOrganiserHostsReadRoutes = (
                 };
               }),
             ),
-            Effect.catchAllDefect(() =>
+            Effect.catchDefect(() =>
               Effect.sync(() => {
                 set.status = 500;
                 return { error: "Internal error" };
@@ -274,7 +274,7 @@ export const createOrganiserHostsWriteRoutes = (
                       return { error: "Could not add host" };
                     }),
                 }),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.sync(() => {
                     set.status = 500;
                     return { error: "Internal error" };
@@ -346,7 +346,7 @@ export const createOrganiserHostsWriteRoutes = (
                       return { error: "Could not change role" };
                     }),
                 }),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.sync(() => {
                     set.status = 500;
                     return { error: "Internal error" };
@@ -376,7 +376,7 @@ export const createOrganiserHostsWriteRoutes = (
                   return { error: "Could not remove host" };
                 }),
               ),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;
                   return { error: "Internal error" };

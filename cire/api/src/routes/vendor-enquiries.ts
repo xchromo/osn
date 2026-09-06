@@ -211,7 +211,7 @@ export function createVendorEnquiriesRoutes(
             return { enquiries };
           }).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -228,7 +228,7 @@ export function createVendorEnquiriesRoutes(
           }).pipe(
             Effect.provideService(DbService, db),
             Effect.catchTags(catchEnquiryTags(set)),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -262,7 +262,7 @@ export function createVendorEnquiriesRoutes(
               Effect.provideService(DbService, db),
               Effect.catchTag("ParseError", () => badRequest(set)),
               Effect.catchTags(catchEnquiryTags(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },
@@ -323,7 +323,7 @@ export function createVendorEnquiriesRoutes(
               Effect.provideService(DbService, db),
               Effect.catchTag("ParseError", () => badRequest(set)),
               Effect.catchTags(catchEnquiryTags(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },

@@ -76,7 +76,7 @@ export const createBudgetReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =
         return runCire(
           budgetService.get(weddingId).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       }),
@@ -126,7 +126,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -145,7 +145,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -169,7 +169,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -182,7 +182,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               Effect.map(() => ({ ok: true as const })),
               Effect.provideService(DbService, db),
               Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         })
@@ -206,7 +206,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -232,7 +232,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
                 Effect.catchTag("PaymentNotInItem", () => paymentNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -252,7 +252,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
                 Effect.provideService(DbService, db),
                 Effect.catchTag("BudgetItemNotInWedding", () => itemNotFound(set)),
                 Effect.catchTag("PaymentNotInItem", () => paymentNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
           );
         }),
@@ -282,7 +282,7 @@ export const createBudgetWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) 
               // Unreachable: this patch never names the deadline. Handled so
               // the union stays total rather than falling to the defect arm.
               Effect.catchTag("RsvpDeadlineInPast", () => internal(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },

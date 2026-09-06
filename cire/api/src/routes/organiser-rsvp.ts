@@ -99,7 +99,7 @@ export const createOrganiserRsvpRoutes = (db: Db, osnAuthOptions: OsnAuthOptions
                     return { error: "guest_not_invited_to_event" };
                   }),
               }),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;
                   return { error: "Internal error" };

@@ -16,8 +16,6 @@
  * server already knows the difference; this is the predicate that keeps it.
  */
 
-import { Cause, Option, Runtime } from "effect";
-
 /**
  * A service failure carrying an Effect `Data.TaggedError` discriminator — the
  * only shape this predicate can read an answer from.
@@ -31,17 +29,24 @@ function isTaggedServiceError(value: unknown): value is TaggedServiceError {
 }
 
 /**
- * Unwrap a `FiberFailure` to its typed failure — or take the value as thrown —
- * and narrow it to a tagged service error. Route handlers run effects through
- * `ManagedRuntime.runPromise`, which rejects with a `FiberFailure` wrapping the
- * failure, never the tagged error itself. `null` for a defect or any other
+ * Narrow a rejected value to a tagged service error. `null` for any other
  * value, which the caller reads as "no evidence".
+ *
+ * Effect v4 removed `FiberFailure`. `ManagedRuntime.runPromise` now rejects
+ * with `Cause.squash(cause)`, which yields the first `Fail` error directly, so
+ * there is no wrapper left to unwrap.
+ *
+ * Note the one behaviour change, because this function feeds a security
+ * decision rather than a message. `Cause.squash` returns a *defect* when the
+ * cause carries no `Fail`, where v3's `Cause.failureOption` returned `None` and
+ * this answered `null`. A defect that is an `Error` tagged `DatabaseError`
+ * would now read as "status unknown" and keep the marker standing, where before
+ * it retracted. That direction is the conservative one for this particular
+ * caller — a kept marker costs a pointless grant, a wrongly-retracted one costs
+ * a sign-in — but it is a change, not a no-op.
  */
 function taggedFailure(e: unknown): TaggedServiceError | null {
-  const failure = Runtime.isFiberFailure(e)
-    ? Option.getOrNull(Cause.failureOption(e[Runtime.FiberFailureCauseId]))
-    : e;
-  return isTaggedServiceError(failure) ? failure : null;
+  return isTaggedServiceError(e) ? e : null;
 }
 
 /**

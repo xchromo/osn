@@ -56,7 +56,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                 return { error: "wedding_not_found" };
               }),
             ),
-            Effect.catchAllDefect(() =>
+            Effect.catchDefect(() =>
               Effect.sync(() => {
                 set.status = 500;
                 return { error: "Internal error" };
@@ -127,7 +127,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                     return { error: "Could not save settings" };
                   }),
               }),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;
                   return { error: "Internal error" };

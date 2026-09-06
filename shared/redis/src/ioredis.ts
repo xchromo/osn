@@ -133,11 +133,11 @@ export function createClientFromUrl(url: string): ConnectableRedisClient {
 const STARTUP_PING_TIMEOUT_MS = 5_000;
 
 /**
- * Live layer — connects to `REDIS_URL`. `Layer.scoped` ensures `quit()` on
- * shutdown. Fails with `RedisError` if `REDIS_URL` is unset or the connection
- * cannot be verified via PING.
+ * Live layer — connects to `REDIS_URL`. `Layer.effect` supplies the layer Scope,
+ * so the `Effect.addFinalizer` below still runs `quit()` on shutdown. Fails with
+ * `RedisError` if `REDIS_URL` is unset or the connection cannot be verified via PING.
  */
-export const RedisLive: Layer.Layer<Redis, RedisError> = Layer.scoped(
+export const RedisLive: Layer.Layer<Redis, RedisError> = Layer.effect(
   Redis,
   Effect.gen(function* () {
     const url = process.env.REDIS_URL;

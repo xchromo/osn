@@ -233,10 +233,10 @@ export function createPasskeyManagementModule(
       }
 
       // M-PK1b: fire-and-forget email notification (codes never included).
-      yield* Effect.forkDaemon(
+      yield* Effect.forkDetach(
         notifyPasskeyDeletedByAccountId(accountId).pipe(
           Effect.timeout("10 seconds"),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
 

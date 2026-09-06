@@ -113,7 +113,7 @@ export const createRegistryGuestListRoutes = (db: Db) =>
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });
@@ -187,7 +187,7 @@ export const createRegistryGuestImageRoutes = (
           // row outlived its object (or never had one).
           Effect.catchTag("AssetR2Error", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     },
@@ -214,7 +214,7 @@ export const createRegistryGuestMineRoutes = (db: Db) =>
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });
@@ -317,7 +317,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
               }),
             ),
             Effect.tapDefect(logDefect),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       },
@@ -339,7 +339,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
           Effect.catchTag("FamilyNotInWedding", () => notVisible(set)),
           Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });

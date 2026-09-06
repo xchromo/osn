@@ -79,7 +79,7 @@ export const createInvitePublicRoutes = (
               return { error: "Not found" };
             }),
           ),
-          Effect.catchAllDefect(() =>
+          Effect.catchDefect(() =>
             Effect.sync(() => {
               set.status = 500;
               return { error: "Internal error" };
@@ -199,7 +199,7 @@ export const createInvitePublicRoutes = (
               return { error: "Not found" };
             }),
           ),
-          Effect.catchAllDefect(() =>
+          Effect.catchDefect(() =>
             Effect.sync(() => {
               set.status = 500;
               return { error: "Internal error" };
@@ -256,7 +256,7 @@ export const createInvitePublicRoutes = (
               return { error: "Not found" };
             }),
           ),
-          Effect.catchAllDefect(() =>
+          Effect.catchDefect(() =>
             Effect.sync(() => {
               set.status = 500;
               return { error: "Internal error" };
@@ -319,7 +319,7 @@ export const createInviteOrganiserRoutes = (
                 return { error: "Not found" };
               }),
             ),
-            Effect.catchAllDefect(() =>
+            Effect.catchDefect(() =>
               Effect.sync(() => {
                 set.status = 500;
                 return { error: "Internal error" };
@@ -361,7 +361,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Not found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("invite text save failed", { weddingId });
                     set.status = 500;
@@ -402,7 +402,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Not found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("invite theme save failed", { weddingId });
                     set.status = 500;
@@ -458,7 +458,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Not found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("invite design save failed", { weddingId });
                     set.status = 500;
@@ -542,7 +542,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Storage error" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("invite image upload failed", { weddingId });
                     set.status = 500;
@@ -577,7 +577,7 @@ export const createInviteOrganiserRoutes = (
                   return { error: "Not found" };
                 }),
               ),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.gen(function* () {
                   yield* Effect.logError("invite image remove failed", { weddingId });
                   set.status = 500;
@@ -634,7 +634,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Not found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("invite image crop save failed", { weddingId });
                     set.status = 500;
@@ -726,7 +726,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Storage error" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("event image upload failed", { weddingId });
                     set.status = 500;
@@ -757,7 +757,7 @@ export const createInviteOrganiserRoutes = (
                   return { error: "Not found" };
                 }),
               ),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.gen(function* () {
                   yield* Effect.logError("event image remove failed", { weddingId });
                   set.status = 500;
@@ -806,7 +806,7 @@ export const createInviteOrganiserRoutes = (
                     return { error: "Not found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.gen(function* () {
                     yield* Effect.logError("event image crop save failed", { weddingId });
                     set.status = 500;

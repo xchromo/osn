@@ -306,7 +306,7 @@ export const handler: OsnWorkerHandler = {
         );
         await Effect.runPromise(
           accountErasure.runFanOutRetrySweep(fanoutUrls).pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.logError("scheduled fan-out retry sweep failed", { reason: String(err) }),
             ),
             Effect.provide(dbLayer),
@@ -319,7 +319,7 @@ export const handler: OsnWorkerHandler = {
     ctx.waitUntil(
       Effect.runPromise(
         accountErasure.runHardDeleteSweep().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled hard-delete sweep failed", { reason: String(err) }),
           ),
           Effect.provide(dbLayer),
@@ -334,7 +334,7 @@ export const handler: OsnWorkerHandler = {
     ctx.waitUntil(
       Effect.runPromise(
         runExpiredAuthCodeSweep().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled OIDC code sweep failed", { reason: String(err) }),
           ),
           Effect.provide(dbLayer),

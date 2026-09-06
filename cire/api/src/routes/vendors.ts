@@ -73,7 +73,7 @@ export const createVendorReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =
             vendorsService.list(weddingId).pipe(
               Effect.map((vendors) => ({ vendors })),
               Effect.provideService(DbService, db),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         }),
@@ -134,7 +134,7 @@ export const createVendorWriteRoutes = (
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -154,7 +154,7 @@ export const createVendorWriteRoutes = (
               }).pipe(
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -183,7 +183,7 @@ export const createVendorWriteRoutes = (
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("VendorNotInWedding", () => vendorNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -196,7 +196,7 @@ export const createVendorWriteRoutes = (
               Effect.map(() => ({ ok: true as const })),
               Effect.provideService(DbService, db),
               Effect.catchTag("VendorNotInWedding", () => vendorNotFound(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         })
@@ -236,7 +236,7 @@ export const createVendorWriteRoutes = (
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("VendorNotInWedding", () => vendorNotFound(set)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },

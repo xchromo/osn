@@ -106,7 +106,7 @@ export function createVendorPortalRoutes(
               }
               return { listing: preview };
             }),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -146,7 +146,7 @@ export function createVendorPortalRoutes(
               Effect.provideService(DbService, db),
               Effect.catchTag("ParseError", () => badRequest(set)),
               Effect.catchTag("ClaimInvalid", () => claimInvalid(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },
@@ -174,7 +174,7 @@ export function createVendorPortalRoutes(
           directoryService.getListingByOrg(params.orgId).pipe(
             Effect.provideService(DbService, db),
             Effect.map((listing) => ({ listing })),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -209,7 +209,7 @@ export function createVendorPortalRoutes(
             }).pipe(
               Effect.provideService(DbService, db),
               Effect.catchTag("ParseError", () => badRequest(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },

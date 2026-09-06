@@ -320,11 +320,11 @@ export const completeOnboarding = (
     // first wiring; see [[s2s-patterns]].
     yield* notifyAppJoined(accountId).pipe(
       Effect.tap(() => Effect.sync(() => metricOnboardingEnrollmentNotify("ok"))),
-      Effect.catchAll(() => {
+      Effect.catch(() => {
         metricOnboardingEnrollmentNotify("error");
         return Effect.void;
       }),
-      Effect.forkDaemon,
+      Effect.forkDetach,
     );
 
     return finalStatus;

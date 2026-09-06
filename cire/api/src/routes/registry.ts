@@ -171,7 +171,7 @@ export const createRegistryReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions)
             registryService.get(weddingId, { giftsOffset }).pipe(
               Effect.provideService(DbService, db),
               Effect.tapDefect(logDefect(weddingId)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         }),
@@ -236,7 +236,7 @@ export const createRegistryWriteRoutes = (
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("StripeNotReady", () => conflict(set, "stripe_not_ready")),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -264,7 +264,7 @@ export const createRegistryWriteRoutes = (
                   conflict(set, "registry_item_limit_reached"),
                 ),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -284,7 +284,7 @@ export const createRegistryWriteRoutes = (
                 Effect.provideService(DbService, db),
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -314,7 +314,7 @@ export const createRegistryWriteRoutes = (
                 ),
                 Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -342,7 +342,7 @@ export const createRegistryWriteRoutes = (
               Effect.provideService(DbService, db),
               Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
               Effect.tapDefect(logDefect(weddingId)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         })
@@ -374,7 +374,7 @@ export const createRegistryWriteRoutes = (
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("GiftNotInWedding", () => giftNotFound(set)),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -455,12 +455,12 @@ export const createRegistryLinkPreviewRoutes = (
                 Effect.catchTag("ParseError", () => badRequest(set)),
                 Effect.catchTag("LinkPreviewBlocked", () =>
                   Effect.sync(() => metricRegistryLinkPreview("blocked")).pipe(
-                    Effect.zipRight(badRequestCode(set, "blocked_url")),
+                    Effect.andThen(badRequestCode(set, "blocked_url")),
                   ),
                 ),
                 Effect.catchTag("LinkPreviewFetchFailed", () =>
                   Effect.sync(() => metricRegistryLinkPreview("fetch_failed")).pipe(
-                    Effect.zipRight(
+                    Effect.andThen(
                       Effect.sync(() => {
                         set.status = 502;
                         return { error: "preview_fetch_failed" };
@@ -470,7 +470,7 @@ export const createRegistryLinkPreviewRoutes = (
                 ),
                 Effect.catchTag("LinkPreviewUnusableContent", () =>
                   Effect.sync(() => metricRegistryLinkPreview("unusable_content")).pipe(
-                    Effect.zipRight(
+                    Effect.andThen(
                       Effect.sync(() => {
                         set.status = 415;
                         return { error: "unsupported_content_type" };
@@ -480,7 +480,7 @@ export const createRegistryLinkPreviewRoutes = (
                 ),
                 Effect.catchTag("LinkPreviewNoImages", () =>
                   Effect.sync(() => metricRegistryLinkPreview("no_images")).pipe(
-                    Effect.zipRight(
+                    Effect.andThen(
                       Effect.sync(() => {
                         set.status = 422;
                         return { error: "no_images_found" };
@@ -489,7 +489,7 @@ export const createRegistryLinkPreviewRoutes = (
                   ),
                 ),
                 Effect.tapDefect(logDefect(weddingId)),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
             );
           },
@@ -643,7 +643,7 @@ function registryImageErrors(set: { status?: number | string }, weddingId: strin
       // only turns it into the one status that IS our fault.
       Effect.catchTag("AssetR2Error", () => internal(set)),
       Effect.tapDefect(logDefect(weddingId)),
-      Effect.catchAllDefect(() => internal(set)),
+      Effect.catchDefect(() => internal(set)),
     );
 }
 
@@ -727,7 +727,7 @@ export const createRegistryImageServeRoutes = (
                 }),
               ),
               Effect.tapDefect(logDefect(weddingId)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         }),

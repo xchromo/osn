@@ -38,7 +38,7 @@ export const createTaskReadRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =>
           tasksService.list(weddingId).pipe(
             Effect.map((list) => ({ tasks: list })),
             Effect.provideService(DbService, db),
-            Effect.catchAllDefect(() =>
+            Effect.catchDefect(() =>
               Effect.sync(() => {
                 set.status = 500;
                 return { error: "Internal error" };
@@ -96,7 +96,7 @@ export const createTaskWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =>
                     return { error: "Missing or invalid fields" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.sync(() => {
                     set.status = 500;
                     return { error: "Internal error" };
@@ -128,7 +128,7 @@ export const createTaskWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =>
                     return { error: "Missing or invalid fields" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.sync(() => {
                     set.status = 500;
                     return { error: "Internal error" };
@@ -170,7 +170,7 @@ export const createTaskWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =>
                     return { error: "task_not_found" };
                   }),
                 ),
-                Effect.catchAllDefect(() =>
+                Effect.catchDefect(() =>
                   Effect.sync(() => {
                     set.status = 500;
                     return { error: "Internal error" };
@@ -196,7 +196,7 @@ export const createTaskWriteRoutes = (db: Db, osnAuthOptions: OsnAuthOptions) =>
                   return { error: "task_not_found" };
                 }),
               ),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;
                   return { error: "Internal error" };
