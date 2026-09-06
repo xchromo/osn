@@ -1,9 +1,9 @@
 ---
 title: Effect v4 migration
-description: What an Effect 3.22 → 4.0 bump costs in this monorepo — the ecosystem gate, the exact breaking surface measured against 4.0.0-rc.112, and the phase order to land it.
+description: How the Effect 3.22 → 4.0 bump gets done here — driven by the official effect-v3-to-v4 skill and upstream's generated rename reference, with the measured local surface and the phase order.
 tags: [runbook, effect, tooling, migration, dependencies]
 severity: medium
-status: blocked
+status: planned
 related:
   - "[[backend-patterns]]"
   - "[[schema-layers]]"
@@ -16,163 +16,295 @@ last-reviewed: 2026-09-06
 # Effect v4 migration
 
 Effect is the functional core of every backend here — `@osn/api`, `@pulse/api`,
-`@zap/api`, `@cire/api`, five `@shared/*` packages and three `*/db` packages.
-361 files import it; 793 tests run through `it.effect`. A major bump is not a
-dependency refresh, it is a cross-cutting rewrite, so this page measures it
-before anyone starts.
+`@zap/api`, `@cire/api`, five `@shared/*` packages and four `*/db` packages.
+361 files import it; 793 tests run through `it.effect`.
 
-Every number below was taken from the working tree at `851df71` and checked
-against the **actual `4.0.0-rc.112` tarball**, not release notes — the module
-lists come from importing each `dist/*.js` and reading its exports.
+The migration is **driven by the official `effect-v3-to-v4` skill**, not by this
+page. The skill and upstream's generated rename reference are the authority on
+every API mapping. This page exists for what upstream cannot know: how much of
+this repo each change touches, which of our own conventions the bump
+invalidates, and the order the phases land in.
 
-> [!warning] This is blocked, deliberately
-> Effect v4 has not shipped stable. See [[#The gate]]. The plan is written now
-> so the work is ready the day it does; nothing here should be executed against
-> a release candidate.
+> [!important] Read the skill first, not this page's tables
+> `.claude/skills/effect-v3-to-v4/SKILL.md` (installed from `Effect-TS/skills`)
+> is the procedure. The tables below are a sizing estimate that was checked
+> against upstream on 2026-09-06 — useful for planning, **not** a substitute for
+> looking each symbol up as you reach it. Where they disagree, upstream wins.
 
-## The gate
+## The official skills
 
-npm `dist-tags` for `effect`, as of 2026-09-06:
+Two skills are installed, from the `Effect-TS/skills` repository:
 
-| Tag | Version | Published |
-| --- | --- | --- |
-| `latest` | `3.22.1` | — |
-| `beta` | `4.0.0-beta.107` | — |
-| `rc` | `4.0.0-rc.112` | 2026-08-25 |
+| Skill | What it is |
+| --- | --- |
+| `effect-ts` | Points the agent at `node_modules/effect/AGENTS.md` — the guidance the installed Effect version ships with, so it never drifts from the version in the tree |
+| `effect-v3-to-v4` | The migration procedure. Not model-invoked; call it explicitly |
 
-**`latest` is still 3.x.** v4 is a release candidate, twelve days old at time of
-writing, with no GA date announced. The deployed surface is `id.musubi.social`
-and the cire stack serving live weddings, and `CLAUDE.md` still files Effect
-itself under *trial*. Adopting an RC across ~1300 edit sites on that stack buys
-nothing a GA bump would not buy later, more safely.
+Installed with `npx skills add Effect-TS/skills`, which writes
+`.agents/skills/<name>/`, symlinks `.claude/skills/<name>` at it, and records
+the source and a content hash per skill in `skills-lock.json`. `npx skills
+update` moves the pin. Both trees are under a human owner in
+`.github/CODEOWNERS`.
 
-The soak rule is **not** the blocker, for the record. `bunfig.toml` sets
-`minimumReleaseAge = 259200` (3 days) and rc.112 cleared that on 2026-08-28, so
-the bump needs no `minimumReleaseAgeExcludes` entry and no
-`# DROP AFTER` marker. The blocker is GA, nothing else.
+### What the skill does
 
-**Trigger to start:** `npm view effect dist-tags` reports `latest` as `4.0.0` or
-later. Re-verify the tables below at that point — they were measured against
-rc.112 and the RC line is still moving.
+It refuses to guess. Every rename, removal and signature change is resolved
+from **upstream's generated reference**, obtained by shallow-cloning the Effect
+repo into `.repos/` (gitignored):
 
-## Ecosystem readiness
+```sh
+git clone --depth 1 --single-branch https://github.com/Effect-TS/effect .repos/effect
+git clone --depth 1 --single-branch --branch v3 https://github.com/Effect-TS/effect .repos/effect-v3
+```
 
-| Package | Declared here | v4 available | Verdict |
+- `.repos/effect/MIGRATION.md` — background and the index of topic guides.
+- `.repos/effect/migration/v3-to-v4.md` — **the generated reference, ~16,600
+  lines.** Never read whole; `rg` it one symbol at a time. Reading it in one
+  pass costs ~350k tokens and takes the migration with it.
+- `.repos/effect/migration/*.md` — fourteen topic guides for changes that are
+  rewrites rather than renames. The ones this repo needs: `services.md`,
+  `error-handling.md`, `schema.md`, `runtime.md`, `layer-memoization.md`,
+  `scope.md`, `cause.md`, `forking.md`.
+- v4 source under `.repos/effect/packages/*/src/`, to confirm a replacement's
+  real signature before writing against it.
+
+Lookup recipes, per the skill:
+
+```sh
+rg -n 'Effect\.catchAllDefect' .repos/effect/migration/v3-to-v4.md
+rg -n -A 40 '^### `effect/Schema`' .repos/effect/migration/v3-to-v4.md
+```
+
+Its hard prohibitions, which hold for every phase here:
+
+- **No `v3-compat.ts`.** A shim that re-exports old names makes the type errors
+  vanish and freezes the codebase between versions permanently.
+- **No `any`, no `as`** to silence a post-migration error. Such an error is
+  usually evidence the replacement has a different shape, and a cast deletes
+  that information.
+- **No invented APIs.** Every replacement traces to the reference, a topic
+  guide, or v4 source.
+
+It also delegates per-file work to sub-agents, one file or module each, so the
+main session keeps the error inventory rather than the file contents.
+
+### Where we deliberately diverge from the skill
+
+The skill's done condition is **a clean type-check**, and it says explicitly
+that running the test suite is recommended but *not* a gate — sensible for a
+generic repo mid-migration, where tests often cannot run for unrelated reasons.
+
+**Here, tests and the dev tier are the gate.** That is the decision this
+migration rests on: 793 `it.effect` tests plus two D1 tiers plus a full dev-tier
+smoke are what stands between a wrong mapping and a live wedding. A type-check
+alone does not catch a `Layer` whose finalizer stopped running or a log field
+that quietly changed name — both of which are real risks below.
+
+So: use the skill's procedure and its prohibitions verbatim, and treat its
+done condition as the *floor*. Every phase in this page names test gates on
+top, and phase 7 adds the dev-tier smoke.
+
+## Versions and the ecosystem
+
+As of 2026-09-06, npm `dist-tags` for `effect`: `latest` is `3.22.1`, `beta` is
+`4.0.0-beta.107`, `rc` is `4.0.0-rc.112` (published 2026-08-25). Upstream's own
+`MIGRATION.md` still opens with *"Effect v4 is currently in beta. APIs may
+change between beta releases."*
+
+That is a fact to plan around, not a blocker: the safety net is the test suite
+and the dev tier, and the phase order below keeps every step verifiable. **Pin
+an exact version rather than a range** while v4 is pre-GA, so a `bun install`
+cannot move the target mid-migration.
+
+The soak rule is satisfied either way — `bunfig.toml` sets `minimumReleaseAge
+= 259200` (3 days) and rc.112 cleared that on 2026-08-28. **No
+`minimumReleaseAgeExcludes` entry, and no `# DROP AFTER` marker, is needed or
+wanted.**
+
+| Package | Declared here | v4 | Note |
 | --- | --- | --- | --- |
-| `effect` | `^3.22.1` (13 packages) | `4.0.0-rc.112` | RC only — the gate |
-| `@effect/vitest` | `^0.30.0` (10 packages) | `4.0.0-rc.112` | Ready. Peer is `vitest >=4.1.0 <5.0.0`; every workspace is already on `^4.1.11` |
-| `@effect/opentelemetry` | `^0.64.0` (`shared/observability`) | `4.0.0-rc.112` | Ready. Still ships `NodeSdk` and `WebSdk`. Its otel peers (`api >=1.9`, `sdk-trace-base >=2.0`, `sdk-logs >=0.203`) are all satisfied by the versions already declared |
-| `@effect/platform` | `^0.97.1` (`shared/observability`) | **none** | Dead dependency — nothing in the repo imports it. v4 folded platform into `effect/unstable/*`. Delete the line |
+| `effect` | `^3.22.1` (13 packages) | yes | |
+| `@effect/vitest` | `^0.30.0` (10 packages) | yes | Peer is `vitest >=4.1.0 <5.0.0`; every workspace already declares `^4.1.11` |
+| `@effect/opentelemetry` | `^0.64.0` (`shared/observability`) | yes | Stays a separate package, but its modules were renamed — see below |
+| `@effect/platform` | `^0.97.1` (`shared/observability`) | **merged into core** | Nothing here imports it. Delete the line |
 
-There is **no codemod**. `@effect/codemod` last published `0.0.16` in July 2024
-and covers v2 → v3 only. Every edit below is ours to make, by script or by hand.
+v4 gives the whole ecosystem **one shared version number**, so `effect`,
+`@effect/vitest` and `@effect/opentelemetry` must all sit on the same version.
+`@effect/platform`, `@effect/rpc` and `@effect/cluster` merged into core; what
+stays separate is platform-, provider- and technology-specific
+(`@effect/platform-*`, `@effect/sql-*`, `@effect/ai-*`, `@effect/opentelemetry`,
+`@effect/vitest`).
 
-## What does not break
+Some functionality now lives under `effect/unstable/*` (http, sql, rpc,
+observability, …), which may break in minor releases. Nothing here imports any
+of it today.
 
-The overwhelming majority of the call surface survives. Measured counts of the
-top APIs, all present in rc.112:
+There is **no codemod**. `@effect/codemod` last published in July 2024 and
+covers v2 → v3 only.
 
-`Effect.gen` (1606) · `Effect.provide` (972) · `Effect.runPromise` (461) ·
-`Effect.tryPromise` (451) · `Effect.sync` (373) · `Effect.fail` (346) ·
-`Effect.flip` (325) · `Effect.promise` (294) · `Effect.withSpan` (248) ·
-`Effect.catchTag` (228) · `Effect.provideService` (182) · `Data.TaggedError`
-(165) · `Effect.succeed` (142) · `Effect.logError` (109) · `Effect.tapError`
-(100) · `Effect.all` · `Effect.runPromiseExit` · `Effect.annotateLogs` ·
-`Effect.tapDefect` · `Effect.void` · `Effect.try` · `Layer.effect` ·
-`Layer.succeed` · `Layer.merge` · `Layer.provide` · `Option.*` · `Exit.*` ·
-`ManagedRuntime.make` · `it.effect` and `it.layer`.
+## What does not change
 
-`Data.TaggedError` surviving matters more than any other single line here: it is
-the repo's error vocabulary, 165 sites, and it needs no edit at all.
+Most of the call surface. Verified present in v4: `Effect.gen` (1606 sites),
+`Effect.provide` (972), `Effect.runPromise` (461), `Effect.tryPromise` (451),
+`Effect.sync` (373), `Effect.fail` (346), `Effect.flip` (325), `Effect.promise`
+(294), `Effect.withSpan` (248), `Effect.catchTag` (228), `Effect.provideService`
+(182), `Effect.succeed` (142), `Effect.logError` (109), `Effect.tapError` (100),
+`Effect.all`, `Effect.runPromiseExit`, `Effect.annotateLogs`,
+`Effect.tapDefect`, `Effect.void`, `Effect.try`, `Layer.effect`/`succeed`/
+`merge`/`provide`, `Option.*`, `Exit.*`, `it.effect`, `it.layer`.
 
-## What breaks
+**`Data.TaggedError` has no entry in the migration reference at all** — it is
+unchanged. That is 165 sites and the repo's entire error vocabulary, needing
+zero edits, and it is the single most load-bearing piece of good news here.
 
-### Mechanical renames
+Two notes on style rather than breakage. v4's shipped `AGENTS.md` prefers
+`Effect.fn("name")` over functions that return an `Effect.gen`, and uses
+`Schema.TaggedError` in its examples where we use `Data.TaggedError`. Neither is
+forced. **Do not fold either into this migration** — a style sweep across 165
+error classes buried inside a version bump is unreviewable. File it separately
+if it is wanted.
 
-Every row is a find-and-replace, safe to script, verifiable by type-check.
+## What changes
+
+Sizes are this repo's, measured at `851df71`. Mappings were checked against
+`migration/v3-to-v4.md` on 2026-09-06.
+
+### Renames
 
 | v3 | v4 | Sites | Files |
 | --- | --- | ---: | ---: |
-| `Effect.catchAllDefect` | `Effect.catchDefect` | 94 | 20 |
-| `Effect.either` | `Effect.result` | 71 | 13 |
 | `Effect.catchAll` | `Effect.catch` | 42 | 24 |
-| `Effect.forkDaemon` | `Effect.forkDetach` | 7 | 5 |
+| `Effect.catchAllDefect` | `Effect.catchDefect` | 94 | 20 |
 | `Effect.catchAllCause` | `Effect.catchCause` | 1 | 1 |
-| `Either` module | `Result` module | — | 4 |
+| `Effect.either` | `Effect.result` | 71 | 13 |
+| `Effect.forkDaemon` | `Effect.forkDetach` | 7 | 5 |
+| `Effect.zipRight` | `Effect.andThen` | 7 | 3 |
+| `Effect.dieMessage` | `Effect.die(new Error(…))` | 2 | 2 |
+| `Layer.scoped` | `Layer.effect` — scoped acquisition merged in; it supplies and excludes the layer `Scope` | 6 | 4 |
+| `Cause.failureOption` | `Cause.findErrorOption` | 4 | 4 |
+| `Either` module | `Result` — `isLeft`→`isFailure`, `isRight`→`isSuccess`, `left`→`fail`, `right`→`succeed` | — | 4 |
 
-`Either` is gone as a module; v4 ships `Result` (`Result.isFailure` in place of
-`Either.isLeft`). The affected files are all tests:
-`cire/api/tests/services/changes.test.ts`,
-`shared/email/tests/cloudflare.test.ts`, `shared/email/tests/resend.test.ts`,
-`zap/api/tests/services/messages.test.ts`.
+`Effect.catchAll` → `Effect.catch` needs a word-boundary match, or it also
+rewrites `catchAllDefect` and `catchAllCause`. Do those two first.
 
-### Removed with no direct replacement
-
-| v3 | Sites | Files | Replacement |
-| --- | ---: | ---: | --- |
-| `Effect.zipRight` | 7 | 3 | `Effect.andThen`, or a `gen` block |
-| `Effect.dieMessage` | 2 | 2 | `Effect.die(new Error(msg))` |
-| `Layer.scoped` | 6 | 4 | `Layer.effect` with an explicit `Scope` |
-| `Runtime.isFiberFailure` / `Runtime.FiberFailureCauseId` | 4 | 2 | Inspect the `Exit` / `Cause` directly |
-| `Cause.failureOption` | 4 | 4 | `Cause` filter combinators |
-
-`Layer.scoped` sites: `shared/redis/src/service.ts`,
+`Layer.scoped` sites are `shared/redis/src/service.ts`,
 `shared/redis/src/ioredis.ts`, `cire/api/tests/services/import.test.ts`,
-`cire/api/tests/db/test-layer.ts`.
-
-The `Runtime` / `Cause` sites are the two error-shaping helpers in osn-api —
-`osn/api/src/lib/safe-error.ts` and `osn/api/src/lib/grant-failure.ts` — plus
-two cire tests. Small, but they sit on the error path every route returns
-through, so they get their own careful pass rather than a script.
+`cire/api/tests/db/test-layer.ts`. The two `shared/redis` ones manage a real
+connection lifecycle, so the finalizer has to survive the rewrite — a
+`Layer.effect` that drops the scope leaks Redis connections, and the limiters
+fail closed ([[rate-limiting]]), so the symptom is rejected requests rather
+than an obvious crash. A type-check will not catch this; the tests must.
 
 ### `Context.Tag` → `Context.Service`
 
-13 sites, 11 files. `Context.Tag` no longer exists; v4 has `Context.Key` and the
-class-style `Context.Service<Self, Shape>()("Key")`. A `Key` still extends
-`Effect`, so every `yield* DbService` call site is unaffected — only the 13
-declarations change.
+13 declarations, 11 files. A structural change, not a symbol swap — read
+`migration/services.md`. A v4 service key still extends `Effect`, so **every
+`yield* DbService` call site is unaffected**; only the declarations change. That
+makes this the highest-leverage phase: small, central, and it unblocks
+type-checking for whole packages at once.
 
-This is the highest-leverage edit in the migration: small, central, and it
-unblocks type-checking for whole packages at once. The declarations are the
-`DbService` / `Db` tags in `osn/db`, `pulse/db`, `zap/db` and `cire/api/src/db`,
-`Redis` in `shared/redis`, `EmailService` in `shared/email`, `OsnAuth` and
-`Storage` in `osn/client`, the two R2 services in `cire/api`, and the two
-generic `Context.Tag<any, …>` parameters in `shared/db-utils/src/index.ts`.
+| File | Declaration |
+| --- | --- |
+| `osn/db/src/service.ts:27` | `Db` (`@osn/db/Db`) |
+| `pulse/db/src/service.ts:18` | `Db` (`@pulse/db/Db`) |
+| `zap/db/src/service.ts:16` | `Db` (`@zap/db/Db`) |
+| `cire/api/src/db/index.ts:24` | `DbService` |
+| `cire/api/src/services/invite-assets.ts:57` | `AssetsR2Service` |
+| `cire/api/src/services/r2-imports.ts:32` | `R2Service` |
+| `shared/redis/src/service.ts:21` | `Redis` |
+| `shared/email/src/service.ts:45` | `EmailService` |
+| `osn/client/src/service.ts:175` | `OsnAuth` |
+| `osn/client/src/storage.ts:11` | `Storage` |
+| `shared/db-utils/src/index.ts:77,113` | two `Context.Tag<any, …>` **parameter types** |
 
-Nothing uses `Effect.Service` today, so there is no second service idiom to
-reconcile.
+Do `shared/db-utils` first. Those two are type positions on generic helpers
+imported by every service that touches a database, so a wrong signature there
+produces errors everywhere and buries the real ones. `Context.Tag.Service<T>`
+becomes `Context.Service.Shape<T>`; `Context.TagClass` becomes
+`Context.ServiceClass`.
+
+Preserve every identifier string exactly (`"@osn/db/Db"`,
+`"@shared/email/EmailService"`, …). They are the runtime lookup keys — a typo is
+a service-not-found at request time, not a compile error.
+
+Nothing here uses `Effect.Service`, so `Context.Service` becomes the single
+form.
+
+### Runtime and layers — the part CLAUDE.md gets wrong under v4
+
+Two upstream changes land on a documented convention of ours.
+
+**`ManagedRuntime` no longer extends `Effect`.** `runtimeEffect` / `runtime`
+became `contextEffect` / `context`, `ManagedRuntime.Context` became
+`ManagedRuntime.Services<T>`, and `make` takes `{ memoMap }`. The repo threads
+one `ManagedRuntime` through route factories via `makeAppRunner` —
+`osn/api/src/lib/route-runtime.ts` (where `AppRuntime` is declared),
+`osn/api/src/build-deps.ts:404`, `osn/api/src/app.ts`, plus `safe-error.ts` and
+`grant-failure.ts`. Read `migration/runtime.md`; `Runtime<R>` itself is gone
+and `Context<R>` replaces it.
+
+**Layer memoization is now global.** In v3 each `Effect.provide` call had its
+own memo scope, so two calls with overlapping layers built them twice. In v4 the
+`MemoMap` is shared across `Effect.provide` calls unless `{ local: true }`.
+Read `migration/layer-memoization.md`.
+
+That second one makes the *stated rationale* in `CLAUDE.md`'s **Effect runtime**
+row inaccurate under v4 — it warns that a per-request `Effect.provide` "rebuilds
+the layer (restarts the OTel SDK + opens a new DB conn) every call", which
+global memoization largely stops. The shared-`ManagedRuntime` pattern is still
+right, for boot cost and lifecycle ownership; the reason given for it is not.
+**Phase 7 rewrites that row.** Do not quietly start using per-request
+`Effect.provide` on the strength of this — the pattern stands, only the
+explanation changes.
 
 ### Logging
 
-`Logger` is rewritten and `LogLevel` is no longer a set of constructors. 28
-sites across 12 files.
+28 sites, 12 files, and the two entries most likely to break something silently.
 
 | v3 | v4 |
 | --- | --- |
-| `Logger.pretty` (11) | `Logger.consolePretty` |
-| `Logger.replace` (7) | `Logger.layer` |
-| `Logger.jsonLogger` (4) | `Logger.consoleJson` |
-| `Logger.prettyLogger` (2) | `Logger.consolePretty` |
-| `Logger.withMinimumLogLevel` (3), `Logger.minimumLogLevel` (1) | `References.MinimumLogLevel` |
-| `LogLevel.Debug` / `Info` / `Warning` / `Error` / `Fatal` / `Trace` / `All` (10) | String literals |
+| `Logger.pretty` | `Logger.layer([Logger.consolePretty(), Logger.tracerLogger])` |
+| `Logger.prettyLogger` | `Logger.consolePretty` |
+| `Logger.replace` | `Logger.layer([…desiredLoggers])` — v4 replaces the **whole** active set |
+| `Logger.jsonLogger` | `Logger.formatJson` |
+| `Logger.withMinimumLogLevel` | `Effect.provideService(effect, References.MinimumLogLevel, level)` |
+| `Logger.minimumLogLevel` | `Layer.succeed(References.MinimumLogLevel, level)` |
+| `LogLevel.Debug` and siblings | The string literals `"Debug"`, `"Info"`, … — v4 levels are literals, not branded objects |
 
-Concentrated in the three `src/local.ts` dev entrypoints (`osn/api`,
-`pulse/api`, `zap/api`), `zap/api/src/index.ts`,
-`shared/observability/src/logger/layer.ts`, and six test files. Because
-`shared/observability` owns the logger layer, that one file decides the shape
-for every service — do it first and the rest follow.
+> [!warning] Two silent regressions to watch
+> **`Logger.tracerLogger` must be listed explicitly.** `Logger.layer` replaces
+> the entire active logger set, so a migration that writes
+> `Logger.layer([Logger.consolePretty()])` drops log-to-span correlation with no
+> error and no failing type-check. Every log line still appears; it just stops
+> being attached to a trace.
+>
+> **v4's JSON log output uses `level`, not `logLevel`.** Any Grafana query,
+> alert or dashboard filtering on `logLevel` silently matches nothing after the
+> bump. Inventory those before phase 4 and update them with it.
 
-Check the three observability rules in [[observability/overview]] still hold
-after the rewrite: no `console.*`, no raw OTel constructors, no unbounded
-metric attributes. `Logger.consolePretty` and friends are Effect-owned, so the
-first rule is not violated by using them.
+`shared/observability/src/logger/layer.ts` owns the logger layer for every
+service, so its shape decides the rest. The other sites are the three
+`src/local.ts` dev entrypoints (`osn/api`, `pulse/api`, `zap/api`),
+`zap/api/src/index.ts`, and six test files.
 
-### `Schema` — the real work
+`@effect/opentelemetry` renamed its modules too: `Logger` → `OtelLogger`
+(`layerLoggerAdd`/`layerLoggerReplace` collapse into
+`OtelLogger.layer({ mergeWithExisting })`), `Metrics` → `OtelMetrics`, `Tracer`
+→ `OtelTracer`. `NodeSdk` and `WebSdk` keep their names.
 
-**1105 sites across 58 files (49 source, 9 test).** Effect v4 rewrote Schema
-end to end. This is not a rename pass; it is the migration.
+The three rules in [[observability/overview]] still hold — no `console.*`, no
+raw OTel constructors, no unbounded metric attributes. `Logger.consolePretty`
+is Effect-owned, so it does not violate the first.
 
-The concentration is the one piece of good news:
+**Do not regress the workerd carve-out.** `osn/api/src/observability.ts`
+deliberately avoids `@effect/opentelemetry/NodeSdk`'s import graph, which does
+not run on workerd. `osn/api/tests/observability.test.ts` asserts this and is
+the guard.
+
+### `Schema`
+
+1105 sites, 58 files (49 source, 9 test) — the largest item. Read
+`migration/schema.md`. Two thirds is one package:
 
 | Package | Schema files |
 | --- | ---: |
@@ -183,88 +315,79 @@ The concentration is the one piece of good news:
 | `cire/theme` | 3 |
 | `osn/client` | 1 |
 
-Two thirds of it is cire-api. The mapping:
+| v3 | v4 |
+| --- | --- |
+| `Schema.decodeUnknown` | `Schema.decodeUnknownEffect` — a straight rename |
+| `Schema.decodeUnknownEither` | `Schema.decodeUnknownExit` |
+| `Schema.maxLength` / `minLength` / `int` / `between` / `pattern` / `maxItems` / `minItems` / `greaterThan*` / `lessThan*` | `Schema.isMaxLength` and siblings, applied with `Schema.check(…)` or a schema's `.check` method |
+| `Schema.optionalWith` | `Schema.optional` / `Schema.optionalKey` / `Schema.withDecodingDefaultType`, chosen by which v3 options were passed |
+| `Schema.transform` | `schema.pipe(Schema.decodeTo(target, SchemaTransformation.transform({ decode, encode })))` |
+| `Schema.DateFromSelf` | `Schema.Date` |
+| `Schema.parseJson` | `Schema.UnknownFromJsonString`, or `Schema.fromJsonString(schema)` with an inner schema |
 
-| v3 | v4 | Sites |
-| --- | --- | ---: |
-| `Schema.decodeUnknown(S)` | `Schema.decodeUnknownEffect(S)` — or `…Result` / `…Sync` / `…Promise` / `…Option` / `…Exit` by call site | 75 |
-| `Schema.maxLength` / `minLength` / `int` / `between` / `pattern` / `maxItems` / `minItems` / `greaterThan` / `greaterThanOrEqualTo` / `lessThanOrEqualTo` | `Schema.check(Schema.isMaxLength(n))` and siblings — filters became `is*` predicates applied through `check` | ~120 |
-| `Schema.optionalWith` | `Schema.optional` / `Schema.optionalKey` (+ explicit defaults) | 22 |
-| `Schema.transform` | `Schema.decodeTo` / `Schema.encodeTo` with `SchemaTransformation` | 9 |
-| `Schema.decodeUnknownEither` | `Schema.decodeUnknownResult` | 1 |
-| `Schema.DateFromSelf` | `Schema.Date` | 3 |
-| `Schema.parseJson` | `Schema.fromJsonString` / `Schema.UnknownFromJsonString` | 1 |
-| `ParseResult` module | `SchemaIssue` / `SchemaParser` / `ErrorReporter` | 1 file |
+`Schema.Array`, `Struct`, `Record`, `Union`, `Literal` and `Tuple` survive by
+name.
 
-`Schema.Array`, `Struct`, `Record`, `Union`, `Literal` and `Tuple` all survive
-by name. The `ParseResult` site is `cire/api/src/services/changes.ts`, whose
-`DecodedChange` return type names `ParseResult.ParseError` in its error channel
-— an exported signature, so it ripples to callers.
+**The filter rewrite is where validation can silently loosen.** `maxLength(n)`
+→ `check(isMaxLength(n))` is a shape change on every constrained field, and
+these schemas guard guest-supplied input on a public site. Diff the effective
+constraints; do not eyeball the shape.
 
-The `decodeUnknown` split is the one place a script cannot decide for you: v3's
-single `decodeUnknown` returned an Effect, and v4 asks which of six result
-shapes you want. Every one of the 75 sites needs reading, not replacing.
+> [!warning] `ParseResult.ParseError` has no upstream mapping yet
+> The generated reference lists it as **"TODO: needs guidance"**. Our one site
+> is `cire/api/src/services/changes.ts` — line 3 imports the module, line 253
+> names `ParseResult.ParseError` in the error channel of an **exported**
+> signature, so it ripples to callers. Resolve it from v4 source
+> (`SchemaIssue` / `SchemaParser` / `ErrorReporter`) and, per the skill, report
+> the gap rather than bridging it with a cast. Re-check the reference before
+> starting — upstream may have filled it in.
 
-[[schema-layers]] is the rule this migration must not quietly break: Elysia
-TypeBox at the HTTP boundary, Effect Schema in services, never mixed. Nothing
-in the v4 rewrite touches TypeBox, so the boundary is unchanged — but a
-half-migrated service is exactly where someone reaches across it.
+[[schema-layers]] is the rule this must not break: Elysia TypeBox at the HTTP
+boundary, Effect Schema in services, never mixed. v4 does not touch TypeBox, so
+the boundary is unchanged — but a half-migrated service is exactly where someone
+reaches across it to make an error go away.
+
+### Tests
+
+`@effect/vitest`'s `assertFailure` **changed meaning**: in v3 it asserted on an
+`Exit`, in v4 it asserts a `Result.Failure`, and the v3 behaviour moved to
+`assertExitFailure`. This repo uses neither helper (zero occurrences), so
+nothing here is exposed — worth knowing before anyone adds one mid-migration.
 
 ## Phase order
 
-Each phase is a PR, stacked on the one before it per [[stacked-prs]]. The
-ordering is bottom-up through the dependency graph, so every phase leaves the
-tree type-checking.
+Tracked as [#895](https://github.com/xchromo/osn/issues/895), one sub-issue per
+phase. Each is a PR stacked on the one before it per [[stacked-prs]], ordered
+bottom-up through the dependency graph so every phase leaves the tree
+type-checking.
 
-Tracked as [#895](https://github.com/xchromo/osn/issues/895) with one sub-issue
-per phase: [#896](https://github.com/xchromo/osn/issues/896) spike,
-[#897](https://github.com/xchromo/osn/issues/897) ecosystem,
-[#898](https://github.com/xchromo/osn/issues/898) service keys,
-[#899](https://github.com/xchromo/osn/issues/899) renames,
-[#900](https://github.com/xchromo/osn/issues/900) logging,
-[#901](https://github.com/xchromo/osn/issues/901) schema (small),
-[#902](https://github.com/xchromo/osn/issues/902) schema (cire-api),
-[#903](https://github.com/xchromo/osn/issues/903) sweep.
+| # | Phase | Issue | Gate |
+| ---: | --- | --- | --- |
+| 0 | Spike on `shared/crypto` alone | #896 | Not merged — findings amend this page |
+| 1 | Version bumps, delete `@effect/platform` | #897 | Install resolves |
+| 2 | `Context.Tag` → `Context.Service` (13 sites) | #898 | `check` + `test:run` on `*/db` and `shared/*` |
+| 3 | Renames, removals, `ManagedRuntime`, `Runtime` | #899 | `check`, `lint`, full suite |
+| 4 | Logging + `@effect/opentelemetry` renames | #900 | `shared/observability` tests; Grafana queries updated |
+| 5 | `Schema` — the 20 files outside cire-api | #901 | Each package's `test:run` |
+| 6 | `Schema` — cire-api's 38 files | #902 | `test:run` + `test:d1` |
+| 7 | Full sweep, dev-tier smoke, docs | #903 | Green CI + dev tier healthy |
 
-| # | Phase | Issue | Scope | Gate |
-| ---: | --- | --- | --- | --- |
-| 0 | Spike | #896 | One throwaway branch. Bump `shared/crypto` (3 src files, 2 tests) alone and make it green. Confirms the toolchain — TypeScript ^6.0.3, `moduleResolution: bundler`, workerd bundling — before committing to the rest | Not merged. Findings amend this page |
-| 1 | Ecosystem | #897 | Bump `effect`, `@effect/vitest`, `@effect/opentelemetry` in all 13 `package.json` files. Delete the dead `@effect/platform` line from `shared/observability` | Install resolves; nothing else expected to pass |
-| 2 | Service keys | #898 | The 13 `Context.Tag` declarations → `Context.Service` | `bun run check` on `*/db` + `shared/*` |
-| 3 | Mechanical renames | #899 | The rename table + the removed-API table, across all packages | `bun run check`, `bun run lint` |
-| 4 | Logging | #900 | `shared/observability/src/logger/layer.ts` first, then the three `local.ts` files, `zap/api/src/index.ts`, and the six test files | `bun run --cwd shared/observability test:run` |
-| 5 | Schema — shared and small | #901 | `osn/client`, `cire/theme`, `zap/api`, `osn/api`, `pulse/api` (20 files) | Each package's `test:run` |
-| 6 | Schema — cire-api | #902 | The remaining 38 files. Split further if the diff outgrows review | `bun run --cwd cire/api test:run`, then `test:d1` |
-| 7 | Full sweep | #903 | Whole-suite run, both test tiers, `bun run build`, deploy to the dev tier and smoke it | Green CI + dev tier healthy |
-
-Phases 5 and 6 are where the estimate lives; 1 through 4 are a day's work
-between them.
+Phases 5 and 6 hold the estimate; 1 through 4 are about a day between them.
 
 ### Rules for the execution
 
-- **Never `bun run check` alone as the gate.** Effect's types are structural and
-  a wrong `Layer` shape can type-check and fail at runtime. Every phase runs the
-  affected packages' tests too.
-- **`shared/*` changes run the full monorepo suite**, per the Workers-debugging
-  rule in `CLAUDE.md` — a shared package's schema change is exactly the case
-  that rule exists for.
-- **Do not deploy production mid-stack.** The two-tier gate means a merge to
-  `main` auto-deploys dev; production waits on a human. Hold that approval until
-  phase 7 is green. See [[dev-environment]].
-- **One changeset per phase**, naming the workspace packages the phase touches.
-  `@cire/*` is version-less and must not share a changeset with versioned
-  packages — see the Changesets row in `CLAUDE.md`.
-
-## Open questions
-
-- **Does the Effect trial survive the bump?** `CLAUDE.md` still calls Effect a
-  trial and the decision is unmade. A v4 migration of this size is a poor thing
-  to spend before deciding to keep the library. The decision should land first.
-- **`shared/observability` and workerd.** The v4 `@effect/opentelemetry` ships
-  `NodeSdk` and `WebSdk` as before, but `osn/api/src/observability.ts` already
-  deliberately avoids the `NodeSdk` import graph on workerd. Phase 4 must not
-  regress that; `osn/api/tests/observability.test.ts` asserts it and is the
-  guard.
-- **`effect/unstable/*`.** v4 moved http, sql, rpc and observability into
-  `unstable` subpaths of core. Nothing here imports them today and nothing needs
-  to — but they are where `@effect/platform` went, so a future need lands there.
+- **Run the skill, every phase.** Look each symbol up in the reference as you
+  reach it. The tables above are sizing, not authority.
+- **A clean `bun run check` is the floor, never the gate.** Effect's types are
+  structural: a `Layer` that dropped its finalizer, a logger set that lost
+  `tracerLogger`, a filter that lost its bound — all type-check. The tests are
+  what catch those, which is why they gate every phase here even though the
+  skill does not gate on them.
+- **`shared/*` changes run the full monorepo suite**, per the
+  Workers-debugging rule in `CLAUDE.md`.
+- **Hold the production approval until phase 7.** A merge to `main`
+  auto-deploys dev; production waits on a human. See [[dev-environment]].
+- **One changeset per phase.** `@cire/*` is version-less and must not share a
+  changeset with versioned packages.
+- **Pin exact versions while v4 is pre-GA**, so no install moves the target
+  mid-stack.
