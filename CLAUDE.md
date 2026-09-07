@@ -307,13 +307,15 @@ The shell is **fish** on the local machine and **bash** in Claude Code's remote
 environments, so a command that works in one can fail to parse in the other.
 Two that bite. An unquoted glob argument (`grep --include=*.ts`) is expanded by
 fish, which errors when nothing matches; quote it (`--include='*.ts'`). And a
-heredoc is parsed by fish before the command runs unless it is sealed inside
-single quotes: `bash -c 'cat <<EOF … EOF'` is safe, because fish never looks
-inside single quotes, while `bash -c "$(cat <<'EOF' … EOF)"` fails at the bare
-`<<` with `Expected a string, but found a redirection` — and command
-substitution is the shape a long commit message reaches for. Both forms are
-fine under bash. Where a heredoc has to work in either place, write it to a
-file and run the file.
+heredoc fails whenever its `<<` reaches fish's own tokenizer, which fish reads
+as a redirection: `fish: Expected a string, but found a redirection`. Quoting
+style is not what decides that — `bash -c 'cat <<EOF … EOF'` and
+`bash -c "cat <<EOF … EOF"` both run, because fish passes a quoted argument
+through as text and bash does the parsing. What breaks it is a `$(…)` command
+substitution, whose body fish parses itself: `bash -c "$(cat <<EOF … EOF)"`
+errors before bash is ever reached, with or without a quoted delimiter. That
+is the shape a long commit message reaches for, so write those to a file and
+pass the file (`git commit -F <file>`). All of it is fine under bash.
 
 ### Local URLs
 
