@@ -24,7 +24,7 @@
 
 import { Schema } from "effect";
 import { FastCheck } from "effect/testing";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { escapeLike, handlePrefixRange, tokeniseQuery } from "../src/search";
 
@@ -90,13 +90,14 @@ describe("handlePrefixRange — range membership is exactly prefix matching", ()
         const range = handlePrefixRange(query);
         // Every query here is drawn from the handle charset, so a range is
         // always returned; a null would itself be the bug.
-        if (range === null) return false;
+        expect(range).not.toBeNull();
+        if (range === null) return;
         const inRange = handle >= range.lower && handle < range.upper;
         // `startsWith` is the honest oracle for `handle LIKE 'q%'` here:
         // handles are stored lowercase and `normaliseHandleQuery` lowercases
         // the query, so SQLite's case-insensitive LIKE has no case to differ
         // on, and there are no wildcards left in a charset-constrained query.
-        return inRange === handle.startsWith(query);
+        expect(inRange).toBe(handle.startsWith(query));
       }),
       RUNS,
     );
@@ -106,7 +107,7 @@ describe("handlePrefixRange — range membership is exactly prefix matching", ()
     FastCheck.assert(
       FastCheck.property(FastCheck.string({ maxLength: 12 }), (query) => {
         const canPrefixAHandle = /^[a-z0-9_]+$/.test(query);
-        return (handlePrefixRange(query) !== null) === canPrefixAHandle;
+        expect(handlePrefixRange(query) !== null).toBe(canPrefixAHandle);
       }),
       RUNS,
     );
@@ -131,17 +132,18 @@ const unescapeLike = (value: string) => value.replace(/\\([\s\S])/g, "$1");
 describe("escapeLike — escaping is lossless and total", () => {
   it("round-trips: unescaping an escaped string returns the original", () => {
     FastCheck.assert(
-      FastCheck.property(metaHeavyArb, (value) => unescapeLike(escapeLike(value)) === value),
+      FastCheck.property(metaHeavyArb, (value) => {
+        expect(unescapeLike(escapeLike(value))).toBe(value);
+      }),
       RUNS,
     );
   });
 
   it("round-trips over arbitrary text too, not just the metacharacter alphabet", () => {
     FastCheck.assert(
-      FastCheck.property(
-        FastCheck.string({ maxLength: 40 }),
-        (value) => unescapeLike(escapeLike(value)) === value,
-      ),
+      FastCheck.property(FastCheck.string({ maxLength: 40 }), (value) => {
+        expect(unescapeLike(escapeLike(value))).toBe(value);
+      }),
       RUNS,
     );
   });
@@ -155,7 +157,7 @@ describe("escapeLike — escaping is lossless and total", () => {
     FastCheck.assert(
       FastCheck.property(metaHeavyArb, (value) => {
         const literalRemainder = escapeLike(value).replace(/\\[\s\S]/g, "");
-        return !/[\\%_]/.test(literalRemainder);
+        expect(literalRemainder).not.toMatch(/[\\%_]/);
       }),
       RUNS,
     );
@@ -202,9 +204,9 @@ describe("tokeniseQuery — the LIKE metacharacters survive tokenisation", () =>
     FastCheck.assert(
       FastCheck.property(queryArb, (query) => {
         const joined = tokeniseQuery(query).join("");
-        return (["%", "_", "\\"] as const).every(
-          (meta) => countOf(joined, meta) === countOf(query, meta),
-        );
+        for (const meta of ["%", "_", "\\"] as const) {
+          expect(countOf(joined, meta)).toBe(countOf(query, meta));
+        }
       }),
       RUNS,
     );
@@ -216,12 +218,11 @@ describe("tokeniseQuery — the LIKE metacharacters survive tokenisation", () =>
         // Every token must appear in the query, in order, without overlap.
         let cursor = 0;
         for (const token of tokeniseQuery(query)) {
-          if (token.length === 0) return false;
+          expect(token.length).toBeGreaterThan(0);
           const at = query.indexOf(token, cursor);
-          if (at < 0) return false;
+          expect(at).toBeGreaterThanOrEqual(0);
           cursor = at + token.length;
         }
-        return true;
       }),
       RUNS,
     );
