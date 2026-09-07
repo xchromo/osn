@@ -70,5 +70,9 @@ export function Chart(props: ChartProps) {
     onCleanup(() => node.remove());
   });
 
-  return <div ref={host} class="w-full" />;
+  // `min-w-0` lets the host shrink inside a flex/grid parent, so the observed
+  // width is the real one and the figure is drawn to fit rather than overflow.
+  // `overflow-x-auto` is the repo's rule for anything wide: it scrolls in its
+  // own box, never the page.
+  return <div ref={host} class="w-full min-w-0 overflow-x-auto" />;
 }

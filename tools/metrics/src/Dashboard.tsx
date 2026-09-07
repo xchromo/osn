@@ -4,7 +4,7 @@ import { For, Show, type JSX } from "solid-js";
 
 import { compactTokens } from "../../pr-metrics/index.ts";
 import { cards } from "./cards.ts";
-import { Chart } from "./Chart.tsx";
+import { Chart, type ChartTheme } from "./Chart.tsx";
 import {
   complexity,
   correctionRate,
@@ -25,6 +25,15 @@ import {
 // charts. Everything else a plot paints comes from the page tokens via
 // `ChartTheme`, so this is the only colour the dashboard names itself.
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"];
+
+/**
+ * Plot's `tip` mark draws its own box, and its default is a white card with a
+ * `currentColor` border whatever the figure's background — the one light
+ * surface left on the page once the figure itself is dark. Every mark with a
+ * tip passes this instead of `tip: true`. Text stays `currentColor`, which is
+ * the figure's ink.
+ */
+const tipStyle = (theme: ChartTheme) => ({ fill: theme.surface, stroke: theme.border });
 
 const usd = (value: number): string => `$${value.toFixed(2)}`;
 const pct = (value: number): string => `${(value * 100).toFixed(0)}%`;
@@ -80,7 +89,7 @@ function MonthlyChart(props: MonthlyChartProps) {
               stroke: theme.surface,
               strokeWidth: 1,
               title: (d) => `${prLabel(d.pr, d.branch)}\n${props.format(d.value)}`,
-              tip: true,
+              tip: tipStyle(theme),
             }),
           ),
           // Pinned to the top of the facet, not to the median's height, so it
@@ -133,42 +142,44 @@ function MixChart(props: MixChartProps) {
               strokeWidth: 2,
               rx: 2,
               title: (d) => `${d.key}\n${pct(d.share)} · ${d.messages} messages`,
-              tip: true,
+              tip: tipStyle(theme),
             }),
           ],
         })}
       />
-      <table class="text-meta text-muted-foreground mt-3 w-full">
-        <thead>
-          <tr class="text-subtle text-left">
-            <th class="pr-3 font-normal">key</th>
-            <For each={months()}>{(month) => <th class="pr-3 font-normal">{month}</th>}</For>
-          </tr>
-        </thead>
-        <tbody>
-          <For each={props.mix.keys}>
-            {(key, i) => (
-              <tr>
-                <td class="pr-3">
-                  <span
-                    class="mr-1.5 inline-block size-2.5 rounded-sm align-middle"
-                    style={{ background: SERIES[i()] }}
-                  />
-                  {key}
-                </td>
-                <For each={months()}>
-                  {(month) => {
-                    const cell = props.mix.shares.find(
-                      (share) => share.month === month && share.key === key,
-                    );
-                    return <td class="pr-3">{cell ? pct(cell.share) : "—"}</td>;
-                  }}
-                </For>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
+      <div class="mt-3 overflow-x-auto">
+        <table class="text-meta text-muted-foreground w-full">
+          <thead>
+            <tr class="text-subtle text-left">
+              <th class="pr-3 font-normal">key</th>
+              <For each={months()}>{(month) => <th class="pr-3 font-normal">{month}</th>}</For>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={props.mix.keys}>
+              {(key, i) => (
+                <tr>
+                  <td class="pr-3">
+                    <span
+                      class="mr-1.5 inline-block size-2.5 rounded-sm align-middle"
+                      style={{ background: SERIES[i()] }}
+                    />
+                    {key}
+                  </td>
+                  <For each={months()}>
+                    {(month) => {
+                      const cell = props.mix.shares.find(
+                        (share) => share.month === month && share.key === key,
+                      );
+                      return <td class="pr-3">{cell ? pct(cell.share) : "—"}</td>;
+                    }}
+                  </For>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
@@ -375,7 +386,7 @@ export function Dashboard() {
                     stroke: theme.surface,
                     title: (d) =>
                       `${prLabel(d.pr, d.branch)}\n${usd(d.usd)} · ${d.sourceLoc} source LOC`,
-                    tip: true,
+                    tip: tipStyle(theme),
                   }),
                 ],
               })}
@@ -416,7 +427,7 @@ export function Dashboard() {
                     stroke: theme.surface,
                     title: (d) =>
                       `${prLabel(d.pr, d.branch)}\n${usd(d.usd)} · ${d.sessions} sessions`,
-                    tip: true,
+                    tip: tipStyle(theme),
                   }),
                   // The median line is ink, not a second hue: it is a summary
                   // of the dots, not another series.
