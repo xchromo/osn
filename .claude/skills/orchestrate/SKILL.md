@@ -24,7 +24,9 @@ Anywhere else — the remote environment, a container, or inside a worktree — 
 
 ## The blackboard
 
-Write `ORCHESTRATE.md` at the root of the bare repo and rewrite it at every step
+Write `ORCHESTRATE.md` at the root of the bare repo — outside every worktree, so
+no `.gitignore` governs it and no worktree can stage it, which is the point: one
+file for a run that spans several branches. Rewrite it at every step
 boundary — a task dispatched, a gate run, a commit made, a PR opened. A long run
 gets compacted, and what survives a compaction is what was written down, not what
 you were holding in context. Read it first after any compaction, before touching a
@@ -59,9 +61,8 @@ Classify the input before ordering anything.
 
 1. `superpowers:brainstorming` turns the idea into an approved spec at `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`. It has a hard gate — no worktree, no plan, no implementation until the user approves — and a feature spanning independent subsystems comes out as sub-project specs, which become your phases.
 2. `superpowers:writing-plans` turns each approved spec into a task-by-task plan at `docs/superpowers/plans/YYYY-MM-DD-<name>.md`, one per phase. Note each plan's **Global Constraints**; they go into every dispatch.
-4. The ordered phases are the tasks Step 0 orders — one phase, one branch, one PR. Inside a phase, the plan's tasks are the subagent's work, not yours.
-
 3. Run the `stress-plan` skill on each phase's plan before dispatching that phase. A wrong assumption in a plan is copied faithfully by a good implementer and comes back as a clean diff doing the wrong thing; no downstream review catches it, because every downstream review checks the work against the plan rather than the plan against the repo. Every finding is closed — fixed in the plan or rejected in writing — before Step 2 cuts the worktree.
+4. The ordered phases are the tasks Step 0 orders — one phase, one branch, one PR. Inside a phase, the plan's tasks are the subagent's work, not yours.
 
 Point every dispatch and every reviewer at the phase's **plan file path** and its Global Constraints. The plan is the single source of requirements; do not paste task detail into a dispatch.
 

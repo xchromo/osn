@@ -245,12 +245,22 @@ DerivedData/
 .repos/
 
 # Scratch written by the agent skills and read back after a compaction, never
-# committed: `new-feat` writes the branch's plan and gate state, `orchestrate`
-# writes the run's, `stress-plan` writes the attack on the plan, and `prep-pr`
-# writes the PR body and its report. They are per-branch working notes, not
-# repository documentation — what belongs to the repo goes in the wiki or the PR.
+# committed: `new-feat` writes the branch's plan and gate state, `stress-plan`
+# the attack on that plan, `prep-pr` the PR body and its report, and each
+# `review-*` skill its own report — `prep-pr` dispatches three of those on every
+# run, so they land at the checkout root where a careless `git add -A` would take
+# them. They are per-branch working notes, not repository documentation; what
+# belongs to the repo goes in the wiki or the PR body.
+#
+# `orchestrate`'s own `ORCHESTRATE.md` is deliberately absent: it is written at
+# the bare repo's root, outside every worktree, so nothing here governs it and no
+# worktree can stage it.
 NEW-FEAT.md
-ORCHESTRATE.md
 PLAN-REVIEW.md
 PR-BODY.md
 PREP-PR-REPORT.md
+DOCS-REVIEW.md
+TEST-REVIEW.md
+PERFORMANCE-REVIEW.md
+SECURITY-REVIEW.md
+DEPS-REVIEW.md
