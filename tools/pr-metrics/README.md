@@ -43,6 +43,23 @@ blended from diff size cannot separate a wasteful PR from a hard debug that
 ended in a one-line fix, and folding the two together makes the metric punish
 the hardest legitimate work in the repository.
 
+## Two rules the metrics depend on
+
+**An edit is not only an `Edit` call.** Agents here are told to change files
+with `sed`, heredocs and short scripts, so `isFileWritingCommand` counts shell
+writes too — conservatively, because a false positive moves the first-edit
+boundary too early and under-reports exploration.
+
+**An unobserved boundary is `null`.** A session that never shows an edit banks
+nothing and every ranking drops it. Reporting 100% instead once made
+`cire/host` look like the worst-mapped package in the repository at 62%; it
+reads 5% correctly. "We did not see the boundary" and "all of it was
+exploration" are different claims.
+
+And in the reports: **median, never mean.** These distributions are severely
+right-skewed — median 3.6M tokens against a mean of 15.4M and a maximum of
+92.7M across the first 34 cards.
+
 ## Layout
 
 | Path                           | What                                                                                          |

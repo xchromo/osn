@@ -152,7 +152,8 @@ warning below.
 | `diff.packages` | Workspace directories touched |
 | `interaction.user_turns` | Real human instructions |
 | `interaction.corrective_turns` | Human turns arriving *after* the agent started work |
-| `interaction.tokens_before_first_edit` | Exploration cost, summed per session |
+| `interaction.tokens_before_first_edit` | Exploration cost, summed per session. **`null` when no edit was observed** — see below |
+| `interaction.sessions_with_observed_edit` | How many sessions contributed to that figure, so a partial reading reads as partial |
 | `interaction.edit_churn` | `files_edited_3plus`, `max_edits_one_file` |
 | `interaction.skills`, `interaction.subagents`, `interaction.tool_calls` | Histograms |
 
@@ -230,10 +231,25 @@ Most of the card describes cost. Two fields point at what to *do*, one per
 lever:
 
 **`tokens_before_first_edit` → a missing skill or wiki page.** Everything spent
-before the first `Edit` or `Write` is the agent working out where the code
-lives. It is summed per session, so a second session re-orienting from scratch
-is charged again rather than hidden behind the first session's answer.
-Repeatedly high in one area means that area has no usable map.
+before the first edit is the agent working out where the code lives. It is
+summed per session, so a second session re-orienting from scratch is charged
+again rather than hidden behind the first session's answer. Repeatedly high in
+one area means that area has no usable map.
+
+> [!warning] An edit is not only an `Edit` call, and an unseen edit is `null`.
+> This repository's agent instructions tell agents to change files "with sed,
+> heredocs, or short scripts, rather than using the dedicated Edit tool", so
+> counting only `Edit`/`Write` missed most of them. In the first 34 cards, 15
+> pull requests changed real source with zero `Edit` calls, and each reported
+> that **100%** of its tokens went on exploration. The per-package ranking was
+> then sorted by which branches happened to avoid the Edit tool: `cire/host`
+> appeared worst in the repository at 62%, and reads 5% once fixed.
+>
+> Two rules follow. Shell writes count as edits (`sed -i`, heredoc redirects,
+> `tee`, `mv`) — conservatively, since a false positive moves the boundary too
+> early. And a session that never shows an edit banks **nothing**: the card
+> reports `null`, and every ranking drops it. "We did not see the boundary" and
+> "all of it was exploration" are different claims, and only one is true.
 
 **`corrective_turns` → an unclear brief.** Human turns that arrive after the
 agent has already picked up tools: course corrections rather than the task. One
@@ -305,6 +321,12 @@ packages need a skill or a wiki page; whether briefs are getting clearer;
 whether the context surface is bloating; cost per unit of declared difficulty;
 whether delegation is paying off; and — run this one first — how much of the
 history can be trusted at all.
+
+Every per-pull-request distribution is summarised with a **median, never a
+mean**. These are severely right-skewed: across the first 34 cards the median
+was 3.6M tokens, the mean 15.4M and the maximum 92.7M. The mean described the
+three largest pull requests and showed 8.5× month-over-month growth where the
+median showed about 2×.
 
 The raw view, if you want to start from nothing:
 

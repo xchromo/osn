@@ -38,7 +38,8 @@ export interface CardRow {
   activeSeconds: number;
   totalTokens: number;
   cacheReadShare: number;
-  exploreShare: number;
+  /** `null` when the transcript showed no edit — unknown, not 100%. */
+  exploreShare: number | null;
   subagentShare: number;
 }
 
@@ -67,7 +68,10 @@ export function toRow(card: Card): CardRow {
     activeSeconds: card.window.active_seconds,
     totalTokens: total,
     cacheReadShare: ratio(t.cache_read, total),
-    exploreShare: ratio(card.interaction.tokens_before_first_edit, total),
+    exploreShare:
+      card.interaction.tokens_before_first_edit === null
+        ? null
+        : ratio(card.interaction.tokens_before_first_edit, total),
     subagentShare: ratio(card.spend.by_actor.subagent.usd_equivalent, card.spend.usd_equivalent),
   };
 }
@@ -87,8 +91,21 @@ export function merged(rows: CardRow[]): CardRow[] {
 
 const monthOf = (iso: string): string => iso.slice(0, 7);
 
-function mean(values: number[]): number {
-  return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
+/**
+ * Median, not mean, everywhere a per-pull-request distribution is summarised.
+ *
+ * These distributions are severely right-skewed: across the first 34 cards the
+ * median was 3.6M tokens, the mean 15.4M and the maximum 92.7M. A mean over
+ * that describes the three biggest pull requests and nothing else, and reading
+ * it as a trend invents month-over-month growth that is not there.
+ */
+export function median(values: number[]): number {
+  if (values.length === 0) return 0;
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
 function groupBy<K>(rows: CardRow[], key: (row: CardRow) => K): Map<K, CardRow[]> {
@@ -143,8 +160,18 @@ export function waste(rows: CardRow[]): Table {
 
 /** 2. Which packages need a skill or a wiki page. */
 export function exploration(rows: CardRow[], minPrs = 3): Table {
+  // Only cards where an edit was actually observed. A card whose transcript
+  // showed no edit has an unknown boundary, not a 100% one — counting those as
+  // pure exploration is what made this ranking sort by "which branches avoided
+  // the Edit tool" rather than by anything about the packages.
   const byPackage = new Map<string, number[]>();
+  let skipped = 0;
   for (const row of rows) {
+    if (row.exploreShare === null) {
+      skipped += 1;
+      continue;
+    }
+
     for (const pkg of row.packages) {
       const bucket = byPackage.get(pkg);
       if (bucket) bucket.push(row.exploreShare);
@@ -154,12 +181,16 @@ export function exploration(rows: CardRow[], minPrs = 3): Table {
 
   const ranked = [...byPackage.entries()]
     .filter(([, shares]) => shares.length >= minPrs)
-    .map(([pkg, shares]) => ({ pkg, prs: shares.length, share: mean(shares) }))
+    .map(([pkg, shares]) => ({ pkg, prs: shares.length, share: median(shares) }))
     .sort((a, b) => b.share - a.share);
 
   return {
     title: "2. Which packages need a skill or a wiki page",
-    note: "Share of spend before the first edit — the agent working out where the code lives. High and repeated means that package has no usable map.",
+    note:
+      "Share of spend before the first edit — the agent working out where the code lives. High and repeated means that package has no usable map." +
+      (skipped > 0
+        ? ` ${skipped} card(s) excluded: no edit observed in the transcript, so the boundary is unknown.`
+        : ""),
     headers: ["package", "PRs", "explore share"],
     rows: ranked.map((r) => [r.pkg, String(r.prs), pct(r.share)]),
   };
@@ -172,14 +203,14 @@ export function briefs(rows: CardRow[]): Table {
   return {
     title: "3. Are briefs getting clearer?",
     note: "Corrections are turns that arrived after work had started. The one number here that measures the brief rather than the model.",
-    headers: ["month", "PRs", "avg turns", "avg corrections"],
+    headers: ["month", "PRs", "median turns", "median corrections"],
     rows: [...byMonth.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([month, group]) => [
         month,
         String(group.length),
-        mean(group.map((r) => r.turns)).toFixed(1),
-        mean(group.map((r) => r.corrections)).toFixed(1),
+        median(group.map((r) => r.turns)).toFixed(1),
+        median(group.map((r) => r.corrections)).toFixed(1),
       ]),
   };
 }
@@ -191,14 +222,14 @@ export function context(rows: CardRow[]): Table {
   return {
     title: "4. Is the context surface bloating?",
     note: "Cache reads are the agent re-reading context. A share climbing month over month means CLAUDE.md, the skills and the wiki are growing faster than the work.",
-    headers: ["month", "PRs", "cache-read share", "avg tokens"],
+    headers: ["month", "PRs", "cache-read share", "median tokens"],
     rows: [...byMonth.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([month, group]) => [
         month,
         String(group.length),
-        pct(mean(group.map((r) => r.cacheReadShare))),
-        compactTokens(Math.round(mean(group.map((r) => r.totalTokens)))),
+        pct(median(group.map((r) => r.cacheReadShare))),
+        compactTokens(Math.round(median(group.map((r) => r.totalTokens)))),
       ]),
   };
 }
@@ -211,15 +242,15 @@ export function costByComplexity(rows: CardRow[]): Table {
   return {
     title: "5. Cost per unit of declared difficulty",
     note: "A trend, never a target: rating everything an 8 would drive it down, which is why the rating is set before the work.",
-    headers: ["declared", "PRs", "avg cost", "cost per point", "avg active"],
+    headers: ["declared", "PRs", "median cost", "cost per point", "median active"],
     rows: [...byDeclared.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([declared, group]) => [
         String(declared),
         String(group.length),
-        usd(mean(group.map((r) => r.usd))),
-        usd(mean(group.map((r) => r.usd)) / declared),
-        `${Math.round(mean(group.map((r) => r.activeSeconds)) / 60)}m`,
+        usd(median(group.map((r) => r.usd))),
+        usd(median(group.map((r) => r.usd)) / declared),
+        `${Math.round(median(group.map((r) => r.activeSeconds)) / 60)}m`,
       ]),
   };
 }
@@ -232,14 +263,14 @@ export function delegation(rows: CardRow[]): Table {
   return {
     title: "6. Is delegation paying off?",
     note: "Subagent share against cost at equal difficulty. If delegated PRs are not cheaper, the delegation is re-reading context rather than saving it.",
-    headers: ["declared", "PRs", "subagent share", "avg cost"],
+    headers: ["declared", "PRs", "subagent share", "median cost"],
     rows: [...byDeclared.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([declared, group]) => [
         String(declared),
         String(group.length),
-        pct(mean(group.map((r) => r.subagentShare))),
-        usd(mean(group.map((r) => r.usd))),
+        pct(median(group.map((r) => r.subagentShare))),
+        usd(median(group.map((r) => r.usd))),
       ]),
   };
 }

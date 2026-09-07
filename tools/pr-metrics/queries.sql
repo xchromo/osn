@@ -6,6 +6,11 @@
 -- reads .claude/metrics/*.json where they sit, git supplies the versioning, and
 -- nothing here has a free-tier cap to watch.
 --
+-- Median, never mean, for any per-pull-request distribution. These are
+-- severely right-skewed: across the first 34 cards the median was 3.6M tokens,
+-- the mean 15.4M and the maximum 92.7M, so a mean describes the three largest
+-- pull requests and invents month-over-month growth that is not there.
+--
 -- Full schema and the reasoning behind it: wiki/observability/session-metrics.md
 
 CREATE OR REPLACE VIEW cards AS
@@ -45,9 +50,13 @@ CREATE OR REPLACE VIEW metrics AS
     spend.tokens.cache_read
       / nullif(spend.tokens.output + spend.tokens.cache_read
                + spend.tokens.cache_write_5m + spend.tokens.cache_write_1h, 0) AS cache_read_share,
+    -- NULL when the transcript showed no edit: the boundary is unknown, not
+    -- zero and certainly not 100%. Counting those as pure exploration sorted
+    -- this ranking by which branches avoided the Edit tool.
     interaction.tokens_before_first_edit
       / nullif(spend.tokens.output + spend.tokens.cache_read
                + spend.tokens.cache_write_5m + spend.tokens.cache_write_1h, 0) AS explore_share,
+    interaction.sessions_with_observed_edit                                    AS edited_sessions,
     spend.by_actor.subagent.usd_equivalent
       / nullif(spend.usd_equivalent, 0)             AS subagent_share
   FROM merged;
@@ -75,9 +84,10 @@ LIMIT 20;
 -- package has no usable map, and the fix is a wiki page or a skill — not a
 -- cheaper model.
 
-SELECT package, count(*) AS prs, round(avg(explore_share) * 100, 1) AS explore_pct
+SELECT package, count(*) AS prs, round(median(explore_share) * 100, 1) AS explore_pct
 FROM merged, unnest(diff.packages) AS t(package)
 JOIN metrics USING (pr)
+WHERE explore_share IS NOT NULL
 GROUP BY package
 HAVING count(*) >= 3
 ORDER BY explore_pct DESC;
@@ -92,8 +102,8 @@ ORDER BY explore_pct DESC;
 
 SELECT date_trunc('month', at) AS month,
        count(*)                AS prs,
-       round(avg(turns), 1)    AS avg_turns,
-       round(avg(corrections), 1) AS avg_corrections
+       round(median(turns), 1)    AS median_turns,
+       round(median(corrections), 1) AS median_corrections
 FROM metrics
 GROUP BY month
 ORDER BY month;
@@ -106,8 +116,8 @@ ORDER BY month;
 -- opens are growing faster than the work is.
 
 SELECT date_trunc('month', at) AS month,
-       round(avg(cache_read_share) * 100, 1) AS cache_read_pct,
-       round(avg(total_tokens) / 1e6, 1)     AS avg_mtok
+       round(median(cache_read_share) * 100, 1) AS cache_read_pct,
+       round(median(total_tokens) / 1e6, 1)     AS median_mtok
 FROM metrics
 GROUP BY month
 ORDER BY month;
@@ -121,9 +131,9 @@ ORDER BY month;
 
 SELECT declared,
        count(*)                     AS prs,
-       round(avg(usd), 2)           AS avg_usd,
-       round(avg(usd) / declared, 2) AS usd_per_point,
-       round(avg(active_s) / 60)    AS avg_active_min
+       round(median(usd), 2)           AS median_usd,
+       round(median(usd) / declared, 2) AS usd_per_point,
+       round(median(active_s) / 60)    AS median_active_min
 FROM metrics
 WHERE rating_method = 'confirmed'
 GROUP BY declared
@@ -137,8 +147,8 @@ ORDER BY declared;
 -- re-reading context rather than saving it.
 
 SELECT declared,
-       round(avg(subagent_share) * 100) AS subagent_pct,
-       round(avg(usd), 2)               AS avg_usd,
+       round(median(subagent_share) * 100) AS subagent_pct,
+       round(median(usd), 2)               AS median_usd,
        count(*)                         AS prs
 FROM metrics
 WHERE rating_method = 'confirmed'

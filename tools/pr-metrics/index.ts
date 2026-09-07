@@ -125,6 +125,7 @@ export interface ToolUseInput {
   skill?: string;
   subagent_type?: string;
   file_path?: string;
+  command?: string;
 }
 
 export interface ContentBlock {
@@ -228,6 +229,43 @@ export function costOf(tokens: TokenTotals, model: string): number {
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
+
+/**
+ * A shell command that writes to a file in the working tree.
+ *
+ * Counting only `Edit` and `Write` was a real defect, not a gap: this
+ * repository's own agent instructions tell agents to make file changes "with
+ * sed, heredocs, or short scripts, rather than using the dedicated Read, Edit,
+ * or Write tools". In the first 34 cards, 15 pull requests changed real source
+ * with **zero** `Edit` calls — so the first-edit boundary never moved and every
+ * one of them reported that 100% of its tokens went on exploration. The
+ * per-package exploration ranking was then sorted by which branches happened to
+ * avoid the Edit tool, which is not a fact about anything.
+ *
+ * Deliberately conservative — a false positive here moves the boundary too
+ * early and under-reports exploration, which is the more misleading direction.
+ * `>` and `>>` must name a real path, so `2>&1` and `>/dev/null` do not count.
+ * A heredoc feeding an interpreter that writes files from inside the script
+ * (`python3 - <<'PY' … open(p,"w") … PY`) is still missed; there is no honest
+ * way to see that from the command line alone, and `null` handles it.
+ */
+export function isFileWritingCommand(command: string): boolean {
+  if (/\bsed\s+(-[a-zA-Z]*i|--in-place)\b/.test(command)) return true;
+  if (/\btee\s+(?!\/dev\/null)[^\s|;&]+/.test(command)) return true;
+  if (/\b(?:mv|cp|install)\s+[^\s|;&]+\s+[^\s|;&]+/.test(command)) return true;
+
+  // A redirect naming a path. `2>&1`, `>&2` and `/dev/null` are excluded, and
+  // the target must look like a filename rather than a descriptor.
+  return /(?<![0-9&])>>?\s*(?!\/dev\/null\b)(?!&)[\w./~$-]*[\w.-]/.test(command);
+}
+
+function isEditingUse(use: ToolUse): boolean {
+  if (EDIT_TOOLS.has(use.name)) return true;
+
+  return use.name === "Bash" && typeof use.input.command === "string"
+    ? isFileWritingCommand(use.input.command)
+    : false;
+}
 
 interface ToolUse {
   name: string;
@@ -432,7 +470,12 @@ export function aggregateWindow(records: SessionRecord[]): WindowSummary {
 export interface InteractionSummary {
   user_turns: number;
   corrective_turns: number;
-  tokens_before_first_edit: number;
+  /** `null` when no session showed an edit the collector could see — unknown,
+   *  never "all of it was exploration". */
+  tokens_before_first_edit: number | null;
+  /** How many sessions contributed to the figure above, so a partial reading
+   *  is visible as partial. */
+  sessions_with_observed_edit: number;
   tool_calls: Record<string, number>;
   edit_churn: { files_edited_3plus: number; max_edits_one_file: number };
   skills: Record<string, number>;
@@ -463,9 +506,17 @@ export function aggregateInteraction(records: SessionRecord[]): InteractionSumma
   const sessionsWithWork = new Set<string>();
   const sessionsPastFirstEdit = new Set<string>();
 
+  // Accumulated per session, not globally, and only banked once that session
+  // actually shows an edit. A session that never edited anything the collector
+  // could see contributes nothing rather than contributing all of its tokens —
+  // "we did not observe the boundary" and "every token was exploration" are
+  // very different claims, and only one of them is true.
+  const pendingBySession = new Map<string, number>();
+  let tokensBeforeFirstEdit = 0;
+  let sessionsWithObservedEdit = 0;
+
   let userTurns = 0;
   let correctiveTurns = 0;
-  let tokensBeforeFirstEdit = 0;
 
   const ordered = [...records].sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? ""));
 
@@ -508,12 +559,14 @@ export function aggregateInteraction(records: SessionRecord[]): InteractionSumma
 
     if (!record.isSidechain && !sessionsPastFirstEdit.has(session)) {
       const tokens = readUsage(record.message?.usage);
-      tokensBeforeFirstEdit +=
+      const spent =
         tokens.input +
         tokens.output +
         tokens.cache_write_5m +
         tokens.cache_write_1h +
         tokens.cache_read;
+
+      pendingBySession.set(session, (pendingBySession.get(session) ?? 0) + spent);
     }
 
     for (const use of uses) {
@@ -529,8 +582,13 @@ export function aggregateInteraction(records: SessionRecord[]): InteractionSumma
         subagents[kind] = (subagents[kind] ?? 0) + 1;
       }
 
-      if (EDIT_TOOLS.has(use.name)) {
-        if (!record.isSidechain) sessionsPastFirstEdit.add(session);
+      if (isEditingUse(use)) {
+        if (!record.isSidechain && !sessionsPastFirstEdit.has(session)) {
+          sessionsPastFirstEdit.add(session);
+          sessionsWithObservedEdit += 1;
+          tokensBeforeFirstEdit += pendingBySession.get(session) ?? 0;
+        }
+
         const path = use.input.file_path;
         if (path) editsPerFile.set(path, (editsPerFile.get(path) ?? 0) + 1);
       }
@@ -542,7 +600,8 @@ export function aggregateInteraction(records: SessionRecord[]): InteractionSumma
   return {
     user_turns: userTurns,
     corrective_turns: correctiveTurns,
-    tokens_before_first_edit: tokensBeforeFirstEdit,
+    tokens_before_first_edit: sessionsWithObservedEdit > 0 ? tokensBeforeFirstEdit : null,
+    sessions_with_observed_edit: sessionsWithObservedEdit,
     tool_calls: Object.fromEntries(Object.entries(tools).sort((a, b) => b[1] - a[1])),
     edit_churn: {
       files_edited_3plus: counts.filter((n) => n >= 3).length,
@@ -839,10 +898,12 @@ export function renderDetails(card: Card): string {
     ["Turns", `${interaction.user_turns} (${interaction.corrective_turns} corrective)`],
     [
       "Before first edit",
-      `${compactTokens(interaction.tokens_before_first_edit)} (${share(
-        interaction.tokens_before_first_edit,
-        total,
-      )})`,
+      interaction.tokens_before_first_edit === null
+        ? "not observed (no edit seen in the transcript)"
+        : `${compactTokens(interaction.tokens_before_first_edit)} (${share(
+            interaction.tokens_before_first_edit,
+            total,
+          )})`,
     ],
     [
       "Subagents",

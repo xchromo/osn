@@ -8,6 +8,7 @@ import {
   coverage,
   exploration,
   formatTable,
+  median,
   merged,
   toRow,
   waste,
@@ -95,6 +96,7 @@ function card(overrides: Partial<Card["pr"]> & Record<string, unknown> = {}): Ca
       user_turns: 4,
       corrective_turns: 2,
       tokens_before_first_edit: 2_000,
+      sessions_with_observed_edit: 1,
       tool_calls: {},
       edit_churn: { files_edited_3plus: 0, max_edits_one_file: 0 },
       skills: {},
@@ -221,4 +223,37 @@ test("formatTable pads columns to the widest cell", () => {
 
   expect(rendered).toContain("package  PRs");
   expect(rendered).toContain("osn/api  3");
+});
+
+// --- median, not mean -------------------------------------------------------
+
+// The distributions here are severely right-skewed — across the first 34 cards
+// the median was 3.6M tokens, the mean 15.4M, the maximum 92.7M. A mean over
+// that describes the three largest pull requests and invents month-over-month
+// growth that is not in the data.
+test("median resists the outlier a mean would follow", () => {
+  expect(median([1, 2, 3, 4, 100])).toBe(3);
+  expect(median([1, 2, 3, 4])).toBe(2.5);
+  expect(median([])).toBe(0);
+});
+
+test("toRow reports an unknown explore share as null, not as 100%", () => {
+  const c = card();
+  c.interaction.tokens_before_first_edit = null;
+  c.interaction.sessions_with_observed_edit = 0;
+
+  expect(toRow(c).exploreShare).toBeNull();
+});
+
+// Ranking packages by a share that silently means "no edit was seen" sorted
+// the table by which branches avoided the Edit tool.
+test("exploration excludes cards whose boundary was never observed", () => {
+  const unknown = { ...toRow(card()), exploreShare: null };
+  const known = toRow(card());
+
+  const table = exploration([unknown, unknown, unknown], 1);
+  expect(table.rows).toHaveLength(0);
+  expect(table.note).toContain("3 card(s) excluded");
+
+  expect(exploration([known, known], 2).rows).toHaveLength(1);
 });
