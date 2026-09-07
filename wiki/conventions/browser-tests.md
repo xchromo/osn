@@ -8,7 +8,7 @@ related:
 packages:
   - "@cire/invites"
   - "@cire/host"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-09-07
 ---
 # Browser Tests
 
@@ -81,6 +81,46 @@ strings. Those all belong in the fast tier — and a class-contract assertion
 there is a genuinely useful complement, because it names the mechanism while the
 browser test proves the outcome. `RsvpModal.test.tsx` and
 `RsvpModal.browser.test.tsx` are the worked example of that pairing.
+
+## Driving the whole app by hand
+
+This tier proves a component in isolation. The other half — seeing the built app
+the way a guest sees it — has no automated home and is worth writing down,
+because both cire invite reveal bugs were found this way after the whole test
+suite stayed green through them.
+
+For a still frame, headless Chrome needs nothing installed and renders WebGL
+through SwiftShader:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --screenshot=out.png --window-size=1440,900 --hide-scrollbars \
+  --virtual-time-budget=15000 "https://invite.cire.localhost/"
+```
+
+`--virtual-time-budget` fast-forwards timers and `requestAnimationFrame`, so a
+lazy scene or a fade-in has finished by the time the frame is taken. Vary
+`--window-size` for the phone case (390×844). This is how [[cire-landing]]'s wax
+seal was checked.
+
+**A still frame cannot see an animation bug.** Both reveal failures were single
+frames — one full-brightness paint before a snap to `opacity: 0` — invisible to
+happy-dom and to any assertion made after the fact. Drive the page with
+Playwright (already a devDependency of `@cire/invites`) and sample
+`getComputedStyle` on every `requestAnimationFrame`.
+
+Four traps, each of which has cost an hour or more:
+
+| Trap | What it looks like | What to do |
+|---|---|---|
+| `astro dev` never reaches `networkidle` | `page.goto` hangs until it times out | The HMR socket stays open by design — use `waitUntil: "load"` |
+| Below-the-fold islands hydrate on visibility | The component under test never mounts, and the page looks broken rather than un-hydrated | Both invite designs mount everything past the header as `client:visible={{ rootMargin: "600px" }}` — scroll it into view, or assert against the `client:load` header only |
+| The claim endpoint allows **5 attempts per minute per IP** | Back-to-back scenario runs 429, and the invite renders "Something went wrong" with no events — identical to the reveal regression you are chasing | `defaultClaimLimiter` in `cire/api/src/app.ts`. Space the runs out before believing a result |
+| A credentialed stub API echoing `*` | `…/registry/mine` silently reads as signed out | A CORS stub for a credentialed fetch must echo the exact origin |
+
+Anything proved this way that can be pinned belongs back in the tier above — the
+`EventCard` and `InvitePage` browser tests are both the settled form of a bug
+first seen by hand.
 
 ## How it is wired
 
