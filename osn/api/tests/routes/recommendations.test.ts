@@ -109,8 +109,8 @@ describe("recommendations routes", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 
-  // osn-tracker#311 (timestamp half): a list this endpoint never caches or
-  // stores otherwise gives the client no way to say how fresh it is.
+  // A list this endpoint never caches or stores otherwise gives the client
+  // no way to say how fresh it is.
   it("GET /recommendations/connections returns a generatedAt timestamp", async () => {
     const alice = await registerAndGetToken("a@e.com", "alice");
     const before = new Date();

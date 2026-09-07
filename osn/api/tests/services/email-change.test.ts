@@ -150,7 +150,7 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  // O3 write-time guard: the begin-time collision check only sees
+  // Write-time guard: the begin-time collision check only sees
   // accounts as they stand *right then*. Account B can grab the target
   // address (via its own, independent change) in the gap between account
   // A's begin (collision check passes — nobody holds it yet) and A's

@@ -450,7 +450,7 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // osn-tracker#574: the co-member fan-out splits MAX_ORG_COMEMBER_ROWS evenly
+  // The co-member fan-out splits MAX_ORG_COMEMBER_ROWS evenly
   // across ALL the caller's organisations, so no single organisation absorbs
   // the whole budget and starves the others, regardless of organisation id
   // order. This seeds exactly that shape: one organisation alone big enough

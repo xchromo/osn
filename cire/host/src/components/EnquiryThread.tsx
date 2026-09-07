@@ -147,8 +147,7 @@ export default function EnquiryThread(props: EnquiryThreadProps) {
                 // Every module view renders inside `ModuleShell`'s
                 // auto-sized frame, whose reflow guard watches width only —
                 // dragging this box's own resize grip at a fixed width
-                // reads as a content change on every delivery
-                // (xchromo/osn-tracker#130).
+                // reads as a content change on every delivery.
                 resize="none"
               />
             )}

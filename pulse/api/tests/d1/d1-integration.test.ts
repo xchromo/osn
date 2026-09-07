@@ -73,7 +73,7 @@ describe("pulse/api account erasure over real D1 (Miniflare)", () => {
     expect(status.scheduled).toBe(false);
   });
 
-  // osn-tracker#595. `hostedEventIds` is read unbounded and was then bound into
+  // `hostedEventIds` is read unbounded and was then bound into
   // four DELETEs inside one atomic commitBatch, so an account that had hosted
   // more than ~100 events put the batch over D1's 100-bound-parameter cap.
   // Because the deletes are deliberately one batch, the failure rolled every

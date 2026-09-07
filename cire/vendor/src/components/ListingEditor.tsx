@@ -70,7 +70,7 @@ export default function ListingEditor(props: ListingEditorProps) {
   // that changed — this is a single signal, not one per key, and SolidJS has
   // no way to see that only one property moved. That recomputes 14 boolean
   // lookups per toggle (`SERVICE_CATEGORIES` has 14 entries), which costs
-  // nothing worth a per-key signal split (xchromo/osn-tracker#132).
+  // nothing worth a per-key signal split.
   const [checked, setChecked] = createSignal<Record<string, boolean>>({});
 
   const [seeded, setSeeded] = createSignal(false);
@@ -248,7 +248,7 @@ export default function ListingEditor(props: ListingEditorProps) {
                 // This form sits inside `createAutoSize()`'s frame, whose
                 // reflow guard watches width only — dragging this box's own
                 // resize grip at a fixed width reads as a content change on
-                // every delivery (xchromo/osn-tracker#130).
+                // every delivery.
                 resize="none"
               />
             )}

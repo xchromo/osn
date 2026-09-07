@@ -102,7 +102,7 @@ function postLink(
 }
 
 /**
- * After a successful link the server rotates the guest session (C6) and returns
+ * After a successful link the server rotates the guest session and returns
  * a fresh `Set-Cookie`. Subsequent requests in the same household must use the
  * rotated cookie — the old one is revoked. Returns the new cookie if the
  * response rotated, else the prior cookie unchanged.

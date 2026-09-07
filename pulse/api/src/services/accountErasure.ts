@@ -484,7 +484,7 @@ export const purgeAccount = (
 
           // Drop hosted events + their cascading rows for the deleted profiles.
           //
-          // osn-tracker#595 (GDPR): `hostedEventIds` is unbounded — a host
+          // `hostedEventIds` is unbounded — a host
           // with 101+ hosted events bound one parameter per id here, past
           // D1's 100-parameter cap, which failed every statement in this
           // batch (D1 batches are atomic: one failing statement rolls back

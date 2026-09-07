@@ -833,7 +833,7 @@ function EventDrawer(props: {
                   // renders inside `ModuleShell`'s auto-sized frame, whose
                   // reflow guard watches width only — dragging this box's
                   // own resize grip at a fixed width reads as a content
-                  // change on every delivery (xchromo/osn-tracker#130).
+                  // change on every delivery.
                   resize="none"
                 />
               )}

@@ -70,7 +70,7 @@ describe("readConsentCookieValue", () => {
     expect(readConsentCookieValue(`novalue; ; ${CONSENT_COOKIE_NAME}=${encoded}`)).toBe(encoded);
   });
 
-  // osn-tracker#163: precedence between the `__Host-` and bare names. The
+  // Precedence between the `__Host-` and bare names. The
   // prefixed name must win whenever it's present — that is what stops a
   // domain cookie planted by a sibling origin under the bare name from
   // overriding a refusal this site actually recorded under the prefixed one.
@@ -136,7 +136,6 @@ describe("serialiseConsentCookie", () => {
     expect(readConsentRecord(header)?.grants).toEqual(allGrants());
   });
 
-  // osn-tracker#163
   describe("cookie name (osn-tracker#163)", () => {
     it("writes the __Host- prefixed name when secure", () => {
       const serialised = serialiseConsentCookie(record, true);
