@@ -54,7 +54,7 @@ import type { TokensModule } from "./tokens";
 import type { ProfileWithEmail, PublicProfile, SessionMeta, TokenSet } from "./types";
 import { toPublicProfile } from "./types";
 
-// P-I2: hoisted — a TextEncoder is stateless, so one module-level instance
+// Hoisted — a TextEncoder is stateless, so one module-level instance
 // serves every registration ceremony instead of allocating per call.
 const textEncoder = new TextEncoder();
 

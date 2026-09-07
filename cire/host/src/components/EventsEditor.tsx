@@ -603,7 +603,7 @@ function EventDrawer(props: {
 }) {
   // Memos, not plain accessors: the drawer reads each of these from several
   // places per render (the picker, the time input, `stamped`, the hint), and a
-  // plain accessor re-runs `splitIso`'s regex on every one of them (P-I1).
+  // plain accessor re-runs `splitIso`'s regex on every one of them.
   const start = createMemo(() => splitIso(props.event.startAt));
   const end = createMemo(() => splitIso(props.event.endAt));
 
@@ -649,7 +649,7 @@ function EventDrawer(props: {
    *
    *  Memoised because `Field` reads `props.hint` from four places — the
    *  `aria-describedby` id, the spread getter, the `<Show>` gate and the text
-   *  insert — and each read would otherwise redo an `Intl` lookup (P-I1). */
+   *  insert — and each read would otherwise redo an `Intl` lookup. */
   const zoneHint = createMemo(() => {
     const zone = props.event.timezone.trim();
     if (zone.length === 0) return "Pick the zone the event's times are in.";
@@ -657,7 +657,7 @@ function EventDrawer(props: {
   });
 
   /** The dropdown's option groups. Memoised so the ~900-node option list is not
-   *  rebuilt on every zone change (P-W1) — `timeZoneGroups` returns a stable
+   *  rebuilt on every zone change — `timeZoneGroups` returns a stable
    *  identity for a known zone, and this stops the `each` expression re-running
    *  for one anyway. */
   const zoneGroups = createMemo(() => timeZoneGroups(props.event.timezone));
