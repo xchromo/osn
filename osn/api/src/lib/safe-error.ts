@@ -1,12 +1,36 @@
 /**
  * Safe route-level error message extraction (S-M17).
  *
- * Route handlers execute service effects via `ManagedRuntime.runPromise`
- * (see `makeAppRunner`). Under Effect v4 that rejects with the squashed cause
- * — the typed failure itself — so a `_tag` check on the caught value matches
- * directly. This applies the tag allowlist to it; anything not allow-listed
- * (`DatabaseError`, defects) collapses to the generic message so DB internals
- * never leave the server.
+ * Route handlers execute service effects through `makeAppRunner`'s `run`
+ * (`lib/route-runtime.ts`), which rejects with the effect's TYPED failure — the
+ * first `Fail` error in the `Cause` — and with a tagless `OpaqueDefect` for
+ * anything else. This module applies the tag allowlist to whatever that
+ * rejection carried: an allow-listed tag returns its message, and everything
+ * else (`DatabaseError`, defects, plain `Error`s, non-errors) collapses to the
+ * generic message, so DB internals never leave the server.
+ *
+ * Two guarantees, and it matters which one is doing which job:
+ *
+ *   - The RUNNER guarantees only a value a service deliberately put in its
+ *     error channel can reach the tag check at all.
+ *   - The ALLOWLIST guarantees that, of those, only the tags whose messages are
+ *     audited static literals get their message forwarded
+ *     (`tests/lib/safe-error-static-messages.test.ts` enforces the literals).
+ *
+ * The allowlist alone is NOT enough, which is the whole reason the runner does
+ * the first job. `Data.TaggedError` produces real `Error` subclasses carrying a
+ * `_tag`, so an allow-listed tag on an `Error` is not by itself evidence the
+ * value came from `Effect.fail`: `Effect.die`, `Effect.orDie` (used in
+ * `routes/graph.ts`, `routes/recommendations.ts`, `routes/organisation.ts`) and
+ * a bare `throw` inside `Effect.sync` all wrap the same class as a DEFECT. Under
+ * Effect v4, `Cause.squash` — what a plain `ManagedRuntime.runPromise` rejects
+ * with — hands that defect object back verbatim, so it would arrive here fully
+ * dressed as an allow-listed failure and its message, an internal invariant
+ * written for an operator, would be returned to a client. (Under v3 the
+ * `FiberFailure` wrapper plus `Cause.failureOption` answered `None` for a
+ * defect, which is why this module was once written as though the allowlist
+ * were sufficient.) `OpaqueDefect` carries no `_tag` at all, so the check below
+ * cannot match one.
  */
 
 const GENERIC_MESSAGE = "Request failed";
@@ -30,20 +54,11 @@ function isTaggedServiceError(value: unknown): value is TaggedServiceError {
 
 /**
  * Narrow a rejected value to a tagged service error. `null` for a plain `Error`
- * or any other value, neither of which carries a message fit to return.
+ * (including an `OpaqueDefect`) or any other value, none of which carries a
+ * message fit to return.
  *
- * Effect v4 removed `FiberFailure`. `ManagedRuntime.runPromise` now rejects
- * with `Cause.squash(cause)`, which yields the first `Fail` error directly —
- * so there is no longer a wrapper to unwrap.
- *
- * One behaviour change comes with that, and the allowlist in
- * {@link makeSafeError} is what contains it. `Cause.squash` returns a *defect*
- * when the cause carries no `Fail`, whereas v3's `Cause.failureOption` returned
- * `None` and this helper answered `null`. A defect therefore reaches the tag
- * check now. It still cannot leak unless it is an `Error` carrying a `_tag`
- * string that is also allow-listed — and every allow-listed tag belongs to a
- * `Data.TaggedError` raised through `Effect.fail`, which is a `Fail`, not a
- * defect. Keep the allowlist tight and this stays closed.
+ * There is no wrapper to unwrap: Effect v4 removed `FiberFailure`, and the
+ * runner rejects with the typed failure itself.
  */
 function taggedFailure(e: unknown): TaggedServiceError | null {
   return isTaggedServiceError(e) ? e : null;
@@ -51,8 +66,13 @@ function taggedFailure(e: unknown): TaggedServiceError | null {
 
 /**
  * Build a `safeError` that surfaces only the message of allow-listed tagged
- * service errors. Works both for effects run through a `ManagedRuntime` and
- * for errors thrown directly — v4 rejects with the failure either way.
+ * service errors.
+ *
+ * Takes `unknown` and is total, so it is equally safe on a value thrown outside
+ * an effect — but the containment it is part of is only whole when the effect
+ * was run through `makeAppRunner`'s `run`. Reaching for a raw
+ * `runtime.runPromise` and passing its rejection here re-opens the defect hole
+ * described above.
  */
 export function makeSafeError(allowedTags: readonly string[]): (e: unknown) => string {
   const tags = new Set(allowedTags);

@@ -32,18 +32,22 @@ function isTaggedServiceError(value: unknown): value is TaggedServiceError {
  * Narrow a rejected value to a tagged service error. `null` for any other
  * value, which the caller reads as "no evidence".
  *
- * Effect v4 removed `FiberFailure`. `ManagedRuntime.runPromise` now rejects
- * with `Cause.squash(cause)`, which yields the first `Fail` error directly, so
- * there is no wrapper left to unwrap.
+ * There is no wrapper to unwrap: Effect v4 removed `FiberFailure`, and route
+ * handlers run effects through `makeAppRunner`'s `run` (`lib/route-runtime.ts`),
+ * which rejects with the typed failure itself.
  *
- * Note the one behaviour change, because this function feeds a security
- * decision rather than a message. `Cause.squash` returns a *defect* when the
- * cause carries no `Fail`, where v3's `Cause.failureOption` returned `None` and
- * this answered `null`. A defect that is an `Error` tagged `DatabaseError`
- * would now read as "status unknown" and keep the marker standing, where before
- * it retracted. That direction is the conservative one for this particular
- * caller — a kept marker costs a pointless grant, a wrongly-retracted one costs
- * a sign-in — but it is a change, not a no-op.
+ * That runner, not this narrowing, is what keeps the predicate honest, and it
+ * matters here because this feeds a security decision rather than a message.
+ * A `Data.TaggedError` IS an `Error` with a `_tag`, so `Effect.die`,
+ * `Effect.orDie` or a bare `throw` inside `Effect.sync` produce a DEFECT that
+ * still looks exactly like a tagged failure — and Effect v4's `Cause.squash`
+ * (what a plain `ManagedRuntime.runPromise` rejects with) would hand that
+ * object straight to the check below, so an internal invariant blowing up
+ * anywhere under `POST /token` could answer "status unknown" and pin the
+ * marker up. The runner instead rejects defects as a tagless `OpaqueDefect`,
+ * which falls through to `null` here and therefore to the retracting default:
+ * only a failure a service deliberately put in its error channel can say
+ * anything about the cookie.
  */
 function taggedFailure(e: unknown): TaggedServiceError | null {
   return isTaggedServiceError(e) ? e : null;
