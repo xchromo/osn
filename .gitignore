@@ -243,3 +243,14 @@ DerivedData/
 # Cloned by the effect-v3-to-v4 skill: shallow checkouts of the Effect repo
 # used as the migration reference. Reference material, never our source.
 .repos/
+
+# Scratch written by the agent skills and read back after a compaction, never
+# committed: `new-feat` writes the branch's plan and gate state, `orchestrate`
+# writes the run's, `stress-plan` writes the attack on the plan, and `prep-pr`
+# writes the PR body and its report. They are per-branch working notes, not
+# repository documentation — what belongs to the repo goes in the wiki or the PR.
+NEW-FEAT.md
+ORCHESTRATE.md
+PLAN-REVIEW.md
+PR-BODY.md
+PREP-PR-REPORT.md
