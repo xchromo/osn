@@ -67,11 +67,16 @@ Build the graph once into a long-lived `ManagedRuntime` at boot and run every re
 > exporter flush (≈3 s locally with no collector listening). In `@osn/api` that
 > surfaced as multi-second stalls on the debounced username-availability check.
 >
-> **v4's `MemoMap` is shared across `Effect.provide` calls** unless you pass
-> `{ local: true }`, so that particular rebuild largely stops happening. The
-> pattern is unchanged and still correct; only this justification for it is
-> weaker. Do not read the change as licence to start providing layers per
-> request — the lifecycle argument was always the load-bearing one.
+> v4 shares the `MemoMap` across `Effect.provide` calls **within one run** —
+> but not across separate `runPromise` roots, and a per-request provide is a
+> new root every time. Measured against `effect@4.0.0-rc.112`: five
+> `Effect.provide` calls of a scoped layer produce **five acquires and five
+> releases**, where a `ManagedRuntime` produces one acquire and zero releases
+> until it is disposed.
+>
+> So the rebuild-cost argument is **not** weakened where it actually applies.
+> Both reasons stand. This correction replaces an earlier note here that said
+> the opposite.
 
 ```typescript
 // index.ts — build once
