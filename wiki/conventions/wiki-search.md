@@ -91,6 +91,7 @@ Two repo-specific rules the skill can't know:
 grep -r "arc token" wiki/ --include="*.md" -l          # find matching pages
 grep -r "arc token" wiki/ --include="*.md" -n          # with line numbers
 ```
+
 ## Related
 
 - [[index]] — the full page-by-page map this search protocol is for

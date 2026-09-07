@@ -62,7 +62,7 @@ for a human reading the wiki. If the two ever disagree, the `.txt` file is
 right and this page is stale; re-read it rather than trusting the table below.
 That split used to not exist: the threshold was a third command-line argument,
 copied by hand into six `package.json` build scripts, one `ci.yml` step and
-eight `deploy.yml` steps — eight-plus copies of the same number, silently
+eight `deploy.yml` steps — fifteen copies of the same number, silently
 divergeable by missing one on a re-baseline. There is now exactly one place to
 edit.
 
