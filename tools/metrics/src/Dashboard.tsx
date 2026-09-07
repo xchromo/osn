@@ -18,12 +18,13 @@ import {
   toRow,
 } from "./shape.ts";
 
-// The reference categorical palette from the dataviz skill, validated for
-// CVD separation in light mode. Hues are assigned to keys in the fixed order
-// `Mix.keys` gives, never cycled, so a model keeps its colour across charts.
-const SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"];
-const ACCENT = "#c2410c";
-const INK_MUTED = "#9e9e9e";
+// The reference categorical palette's dark-surface steps, validated against
+// the `--card` surface (#242424): every slot clears 3:1 and the worst adjacent
+// pair holds ΔE 8.4 under protanopia. Hues are assigned to keys in the fixed
+// order `Mix.keys` gives, never cycled, so a model keeps its colour across
+// charts. Everything else a plot paints comes from the page tokens via
+// `ChartTheme`, so this is the only colour the dashboard names itself.
+const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"];
 
 const usd = (value: number): string => `$${value.toFixed(2)}`;
 const pct = (value: number): string => `${(value * 100).toFixed(0)}%`;
@@ -50,20 +51,22 @@ interface MonthlyChartProps {
 function MonthlyChart(props: MonthlyChartProps) {
   return (
     <Chart
-      options={(width) => ({
+      options={(width, theme) => ({
         height: 300,
         marginLeft: 64,
         marginBottom: 40,
-        style: { fontSize: "12px", overflow: "visible" },
         fx: { label: "month", padding: 0.3 },
         x: { axis: null },
-        y: { label: props.label, grid: true, tickFormat: props.tickFormat, nice: true },
+        y: { label: props.label, grid: theme.border, tickFormat: props.tickFormat, nice: true },
         marks: [
           Plot.boxY(props.data.points, {
             fx: "month",
             y: "value",
-            fill: "#f4f4f4",
-            stroke: INK_MUTED,
+            // `--muted` is one step off the card surface, too close to read
+            // as a box on the dark ground; a translucent ink fill is not.
+            fill: theme.mutedInk,
+            fillOpacity: 0.2,
+            stroke: theme.mutedInk,
             r: 0,
           }),
           Plot.dot(
@@ -73,8 +76,8 @@ function MonthlyChart(props: MonthlyChartProps) {
               y: "value",
               r: Math.max(3, Math.min(5, width / 200)),
               fill: SERIES[0],
-              fillOpacity: 0.75,
-              stroke: "white",
+              fillOpacity: 0.85,
+              stroke: theme.surface,
               strokeWidth: 1,
               title: (d) => `${prLabel(d.pr, d.branch)}\n${props.format(d.value)}`,
               tip: true,
@@ -87,7 +90,7 @@ function MonthlyChart(props: MonthlyChartProps) {
             text: (d) => `median ${props.format(d.median)} · ${d.prs} PRs`,
             frameAnchor: "top",
             dy: -6,
-            fill: "currentColor",
+            fill: theme.ink,
           }),
         ],
       })}
@@ -111,21 +114,23 @@ function MixChart(props: MixChartProps) {
   return (
     <>
       <Chart
-        options={() => ({
+        options={(_width, theme) => ({
           height: 260,
           marginLeft: 48,
-          style: { fontSize: "12px" },
           // Ordinal on purpose: a month label is a bucket, not a date to
           // interpolate between, and Plot warns unless told so.
           x: { label: "month", padding: 0.4, type: "band" },
-          y: { label: `share of ${props.label}`, tickFormat: ".0%", grid: true },
+          y: { label: `share of ${props.label}`, tickFormat: ".0%", grid: theme.border },
           color: color(),
           marks: [
             Plot.barY(props.mix.shares, {
               x: "month",
               y: "share",
               fill: "key",
-              insetTop: 1,
+              // A surface-coloured gap between stacked segments, so adjacent
+              // hues never touch.
+              stroke: theme.surface,
+              strokeWidth: 2,
               rx: 2,
               title: (d) => `${d.key}\n${pct(d.share)} · ${d.messages} messages`,
               tip: true,
@@ -345,25 +350,29 @@ export function Dashboard() {
             }
           >
             <Chart
-              options={() => ({
+              options={(_width, theme) => ({
                 height: 320,
                 marginLeft: 64,
-                style: { fontSize: "12px" },
                 x: {
                   label: "declared complexity (Fibonacci, set before work)",
                   domain: [0.5, 8.5],
                   ticks: [1, 2, 3, 5, 8],
-                  grid: true,
+                  grid: theme.border,
                 },
-                y: { label: "API-equivalent (USD)", grid: true, tickFormat: "$,.0f", nice: true },
+                y: {
+                  label: "API-equivalent (USD)",
+                  grid: theme.border,
+                  tickFormat: "$,.0f",
+                  nice: true,
+                },
                 marks: [
                   Plot.dot(rated.points, {
                     x: "declared",
                     y: "usd",
                     r: 5,
                     fill: SERIES[0],
-                    fillOpacity: 0.75,
-                    stroke: "white",
+                    fillOpacity: 0.85,
+                    stroke: theme.surface,
                     title: (d) =>
                       `${prLabel(d.pr, d.branch)}\n${usd(d.usd)} · ${d.sourceLoc} source LOC`,
                     tip: true,
@@ -381,34 +390,40 @@ export function Dashboard() {
         >
           <Show when={sessions.points.length > 0} fallback={<Empty>No merged cards yet.</Empty>}>
             <Chart
-              options={() => ({
+              options={(_width, theme) => ({
                 height: 320,
                 marginLeft: 64,
-                style: { fontSize: "12px" },
                 x: {
                   label: "sessions on the branch",
                   ticks: sessions.medians.map((m) => m.sessions),
                   tickFormat: "d",
                   domain: [0.5, Math.max(...sessions.medians.map((m) => m.sessions)) + 0.5],
-                  grid: true,
+                  grid: theme.border,
                 },
-                y: { label: "API-equivalent (USD)", grid: true, tickFormat: "$,.0f", nice: true },
+                y: {
+                  label: "API-equivalent (USD)",
+                  grid: theme.border,
+                  tickFormat: "$,.0f",
+                  nice: true,
+                },
                 marks: [
                   Plot.dot(sessions.points, {
                     x: "sessions",
                     y: "usd",
                     r: 4,
                     fill: SERIES[0],
-                    fillOpacity: 0.6,
-                    stroke: "white",
+                    fillOpacity: 0.7,
+                    stroke: theme.surface,
                     title: (d) =>
                       `${prLabel(d.pr, d.branch)}\n${usd(d.usd)} · ${d.sessions} sessions`,
                     tip: true,
                   }),
+                  // The median line is ink, not a second hue: it is a summary
+                  // of the dots, not another series.
                   Plot.lineY(sessions.medians, {
                     x: "sessions",
                     y: "median",
-                    stroke: ACCENT,
+                    stroke: theme.ink,
                     strokeWidth: 2,
                     marker: "circle-stroke",
                   }),
@@ -417,8 +432,8 @@ export function Dashboard() {
                     y: "median",
                     text: (d) => `${usd(d.median)} (n=${d.prs})`,
                     dy: -12,
-                    fill: "currentColor",
-                    stroke: "white",
+                    fill: theme.ink,
+                    stroke: theme.surface,
                     strokeWidth: 4,
                   }),
                 ],

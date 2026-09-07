@@ -9,6 +9,17 @@
  * this adds the dashboard's own files. */
 @source "../";
 
+/* Dark only. `index.html` puts `.dark` on the root, which is what selects
+ * App.css's dark token block — the same values @osn/social uses at night, so
+ * nothing here invents a hex. `color-scheme` makes native controls and the
+ * scrollbar agree, and painting the ground on `html` means no white flash
+ * before the stylesheet's body rule applies. */
+html {
+  color-scheme: dark;
+  background: var(--background);
+  color: var(--foreground);
+}
+
 /* Plot draws its own text in `currentColor`, so the chart inherits the ink
  * token from the page rather than carrying a colour of its own. */
 figure,

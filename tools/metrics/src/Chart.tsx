@@ -1,9 +1,37 @@
 import * as Plot from "@observablehq/plot";
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
+/**
+ * The page's colour tokens, read off the container so a plot uses the same
+ * dark values as the chrome around it rather than Plot's black-on-white
+ * defaults. Plot takes colour strings, not `var()` references, which is why
+ * they are resolved here.
+ */
+export interface ChartTheme {
+  /** `--foreground`: text, axes, the median line. */
+  ink: string;
+  /** `--muted-foreground`: secondary strokes such as a box outline. */
+  mutedInk: string;
+  /** `--border`: grid lines. */
+  border: string;
+  /** `--card`: what the chart is drawn on; halos around marks use it. */
+  surface: string;
+}
+
 interface ChartProps {
-  /** Called with the container's width every time the chart is (re)drawn. */
-  options: (width: number) => Plot.PlotOptions;
+  /** Called with the container's width and theme every time the chart is (re)drawn. */
+  options: (width: number, theme: ChartTheme) => Plot.PlotOptions;
+}
+
+function readTheme(element: Element): ChartTheme {
+  const style = getComputedStyle(element);
+  const token = (name: string) => style.getPropertyValue(name).trim();
+  return {
+    ink: token("--foreground"),
+    mutedInk: token("--muted-foreground"),
+    border: token("--border"),
+    surface: token("--card"),
+  };
 }
 
 /**
@@ -30,7 +58,14 @@ export function Chart(props: ChartProps) {
   createEffect(() => {
     const w = width();
     if (w === 0) return;
-    const node = Plot.plot({ width: w, ...props.options(w) });
+    const theme = readTheme(host);
+    const node = Plot.plot({
+      width: w,
+      // Explicit, not inherited: Plot's own default is a white figure with
+      // black text, and it sets both inline.
+      style: { background: "transparent", color: theme.ink },
+      ...props.options(w, theme),
+    });
     host.replaceChildren(node);
     onCleanup(() => node.remove());
   });
