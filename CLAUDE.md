@@ -6,7 +6,7 @@ AI coding assistant ref. Full spec in README.md. Work tracked in GitHub Issues �
 
 OSN: Modular social platform. Users own identity + social graph. Apps opt-in/out independently.
 
-**Deployed (2026-06-18):** the cire stack is **live on the `cireweddings.com` zone** (all Cloudflare Free tier). Domain reshuffle 2026-07-16: apex `cireweddings.com` = marketing landing, `invite.cireweddings.com` = guest site, `host.cireweddings.com` = organiser portal. **Identity moved to its own zone 2026-07-27:** `osn-api` is a deployed **Cloudflare Worker** on `id.musubi.social`, `@osn/social` (identity app + the OIDC consent screen) is on the apex `musubi.social`, and the WebAuthn RP ID is `musubi.social` — so the cireweddings.com origins can no longer run passkey ceremonies and sign in through the OIDC redirect flow instead (see `[[wiki/runbooks/musubi-identity-migration]]`). osn-api has Upstash prod secrets set; email is live over Resend from `hello@cireweddings.com` (the `OSN_EMAIL_OPTIONAL` degraded mode was dropped in #160). `cire-api` on `api.cireweddings.com`; guest + organiser sites on Pages with custom domains. **Two tiers since 2026-08-13:** a merge to `main` auto-deploys the isolated **dev** tier (`*.dev.cireweddings.com`, `id.dev`/`dev.musubi.social`), and the production jobs in the same run wait on a human approving the `production` GitHub Environment — no more unattended deploys to live weddings. Path filters mean only changed surfaces deploy. See `[[wiki/runbooks/dev-environment]]`. Architectural decision: **osn-api stays a single Worker** (split deferred). See `[[wiki/runbooks/production-deploy]]`, `[[wiki/runbooks/free-tier-limits]]`.
+**Deployed:** the cire stack is **live on the `cireweddings.com` zone** (all Cloudflare Free tier). Domain reshuffle 2026-07-16: apex `cireweddings.com` = marketing landing, `invite.cireweddings.com` = guest site, `host.cireweddings.com` = organiser portal. **Identity moved to its own zone 2026-07-27:** `osn-api` is a deployed **Cloudflare Worker** on `id.musubi.social`, `@osn/social` (identity app + the OIDC consent screen) is on the apex `musubi.social`, and the WebAuthn RP ID is `musubi.social` — so the cireweddings.com origins can no longer run passkey ceremonies and sign in through the OIDC redirect flow instead (see `[[wiki/runbooks/musubi-identity-migration]]`). osn-api has Upstash prod secrets set; email is live over Resend from `hello@cireweddings.com` (`OSN_EMAIL_OPTIONAL` still exists as the degraded-boot opt-in — `selectEmailLayer` in `osn/api/src/lib/email-layer.ts` — and is unneeded once `RESEND_API_KEY` is set). `cire-api` on `api.cireweddings.com`; guest + organiser sites on Pages with custom domains. **Two tiers since 2026-08-13:** a merge to `main` auto-deploys the isolated **dev** tier (`*.dev.cireweddings.com`, `id.dev`/`dev.musubi.social`), and the production jobs in the same run wait on a human approving the `production` GitHub Environment — no more unattended deploys to live weddings. Path filters mean only changed surfaces deploy. See `[[wiki/runbooks/dev-environment]]`. Architectural decision: **osn-api stays a single Worker** (split deferred). See `[[wiki/runbooks/production-deploy]]`, `[[wiki/runbooks/free-tier-limits]]`.
 
 Phase 1 surfaces:
 
@@ -17,6 +17,7 @@ Phase 1 surfaces:
 | Events | `@pulse/web` + `@pulse/api` (port 3001) + `@pulse/db` | Active |
 | Messaging | `@zap/api` (port 3002) + `@zap/db` | M0 scaffolded; M1 in flight; client app not started |
 | Wedding invites | @cire/api (:8787, prod `api.cireweddings.com`) + @cire/invites (:4321, prod `invite.cireweddings.com`) + @cire/host (:4322, prod `host.cireweddings.com`) + @cire/db + @cire/theme | Active — **deployed** (domain reshuffle 2026-07-16: guest→`invite.`, organiser→`host.`; package rename 2026-08-07: `@cire/web`→`@cire/invites`, `@cire/organiser`→`@cire/host`) |
+| Wedding vendor portal | `@cire/vendor` (`https://vendor.cire.localhost`) | Active — the vendor-facing surface for the enquiry flow. See `[[wiki/systems/cire-vendors]]` |
 | Wedding marketing site | `@cire/landing` (:4323) | Active — serves the **apex `cireweddings.com`** (reshuffle 2026-07-16). See `[[wiki/apps/cire-landing]]` |
 | OSN marketing site | `@osn/landing` (:4324) | Active — built (dark/dotted, connections-led). See `[[wiki/apps/osn-landing]]` |
 | Pulse marketing site | `@pulse/landing` (:4325) | Active — built (colourful + fun). See `[[wiki/apps/pulse-landing]]` |
@@ -224,7 +225,7 @@ Monorepo by domain. Five dirs, five prefixes — see `[[wiki/architecture/monore
 
 ## Tech (one-liner)
 
-Bun, TypeScript, Elysia, Effect.ts (trial), Drizzle, SQLite→Supabase, Eden+REST, WebSockets, Signal Protocol, SolidJS, Astro, Turborepo, oxlint, oxfmt, Vitest + @effect/vitest
+Bun, TypeScript, Elysia, Effect.ts (trial), Drizzle, `bun:sqlite` locally → Cloudflare D1 deployed, Eden+REST, WebSockets, Signal Protocol, SolidJS, Astro, Turborepo, oxlint, oxfmt, Vitest + @effect/vitest (`@cire/api` runs on `bun test`)
 
 ## Key Patterns
 
@@ -242,7 +243,7 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 | Recovery Codes | Copenhagen Book M2 — 10 × 64-bit single-use codes, hashed at rest. Generate/consume both in `security_events` and surfaced via in-app banner. | `[[wiki/systems/recovery-codes]]` |
 | Session Introspection | `GET/DELETE /sessions[/:id]`, `POST /sessions/revoke-all-other`. Coarse UA labels + HMAC-peppered IP hashes. | `[[wiki/systems/sessions]]` |
 | OIDC Provider | `@osn/api` is an OpenID Connect provider, so other apps recognise an OSN account without holding a passkey. Authorization code + PKCE (S256 only), pairwise `sub` per client sector, consent stored per (account, client). Invalid client / redirect URI **renders** an error, never redirects (open-redirect guard). Codes hashed, single use, 60s TTL. No refresh tokens, never an `osn-access` audience. Hardened 2026-07-24: real `auth_time` + `max_age`/`prompt=login` enforcement, per-request browser-binding cookie, reserved client-id deny-list + `typ: at+jwt`, `GET/DELETE /oidc/connections` (revoke kills in-flight codes). Hardened 2026-07-29: self-serve client sector = its own `client_id` (colluding clients can't share a sector); `auth_time` survives silent rotation via `sessions.authenticated_at`; consent-screen anti-impersonation (name confusable-skeleton block + verified-app/third-party-host signal); RFC 9207 `iss`; required browser-binding on every parked request; consent revocation is now a live Settings surface (`@osn/social` "Connected apps"). | `[[wiki/systems/oidc-provider]]` |
-| Cross-Device Login | QR-code mediated session transfer. Device B begins + polls; device A scans QR, approves. 256-bit secret, SHA-256 hashed at rest, one-time consumption, 5-min TTL. In-memory store (Redis Phase 4). | `[[wiki/systems/sessions]]` |
+| Cross-Device Login | QR-code mediated session transfer. Device B begins + polls; device A scans QR, approves. 256-bit secret, SHA-256 hashed at rest, one-time consumption, 5-min TTL. Stored in the shared ceremony-store bundle — Redis-backed where a client is configured (`osn/api/src/lib/redis-ceremony-stores.ts`), in-memory otherwise. | `[[wiki/systems/sessions]]` |
 | Email Change | Step-up gated; OTP to NEW address; atomically swaps email + revokes other sessions. Cap 2 changes / 7 days. | `[[wiki/systems/identity-model]]` |
 | Email Transport | Transactional-only (OTPs + security notices). `EmailService` Effect Tag in `@shared/email`; `ResendEmailLive` POSTs to Resend's HTTP API (`api.resend.com/emails`, bearer-authed) — **preferred live transport** (works on workerd); `CloudflareEmailLive` is a legacy fallback; `LogEmailLive` captures in-memory for dev + tests. Selection precedence Resend → Cloudflare → Log (local) → Noop (`OSN_EMAIL_OPTIONAL`) → throw. With `RESEND_API_KEY` set the opt-in is unneeded. | `[[wiki/systems/email]]` |
 | Origin Guard (M1) | Origin header validation on POST/PUT/PATCH/DELETE. ARC-protected internal routes exempt. | `osn/api/src/lib/origin-guard.ts` |
@@ -271,6 +272,7 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 | Map-membership guards | A guard that narrows to `keyof typeof MAP` must test `Object.hasOwn(MAP, key)`, never `key in MAP`. `in` walks the prototype chain, so `constructor`, `toString` and `__proto__` pass and the predicate then asserts an inherited `Object.prototype` member is a real entry. `house/no-in-operator-key-guard` (in `tools/oxlint/house`) is an error, and it matches the narrowed parameter rather than the literal `keyof typeof` syntax, so an aliased predicate is caught too — see `cire/theme/src/palette.ts` for the house form |
 | Non-subscribing store reads | In a `*-store.ts` organiser cache (cire only), `entryFor(id).accessor()` is the subscribing read — it mints the cache entry, so a tracked read always has something to register a dependency on. `cache.get(id)?.accessor()` does not mint the entry: when it is absent the read short-circuits before `accessor` ever runs, so a tracked read registers zero dependencies and never re-runs once the entry is created. That non-minting form is confined to `peekCached*`/`hasCached*` functions, whether written as the direct `cache.get(id)?.accessor()` chain or split across a `const entry = cache.get(id)` and a later `entry?.accessor()` / guarded `entry.accessor()`. `house/no-non-subscribing-store-read` (in `tools/oxlint/house`) enforces it as an error, scoped to `cire/**/*-store.ts` |
 | Where tests live | `tests/` at the package root, mirroring `src/` — **never** beside the source. Test-only support code (mocks, request harnesses, fixtures) lives there too, so `src/` holds nothing test-shaped: `cire/api/tests/test-helpers/`, `cire/host/tests/test-support/`. `scripts/` is not a workspace but follows the same rule (`scripts/tests/`, shell tests included). The one deliberate carve-out is the Miniflare-backed D1 tier at `tests/d1/` (cire's at `tests/db/`), which the vitest configs exclude by path because it imports `bun:test` and boots workerd — `bun run test:d1` is the only thing that runs it. See `[[wiki/conventions/testing-patterns]]` |
+| Guard thresholds | A guard that gates on a number — a bundle budget, a query-count cap, a timing ceiling — obeys two rules. **The number lives in one committed file the guard reads**, never as an argument at each call site: `scripts/bundle-size-budgets.txt` is the worked example, and it replaced the same threshold copied into six `package.json` scripts, one `ci.yml` step and eight `deploy.yml` steps, any one of which could be missed on a re-baseline. **The headroom is smaller than the smallest mistake the guard exists to catch**, measured against the current build rather than carried over from an older one — a guard whose slack exceeds the mistake can never fire, which is how a bundle budget once carried 47657 bytes of headroom against a 21261-byte dependency. Both rules, and the re-baselining recipe, are in `[[wiki/conventions/bundle-size-guards]]` |
 | Pre-commit | lefthook runs oxlint + oxfmt (auto-fix + re-stage) on staged files |
 | Pre-push | lefthook runs type check |
 | oxlint | `oxlintrc.json` — plugins: typescript, unicorn, oxc, import, promise, vitest, node, jsx-a11y (React plugin disabled — SolidJS) |
@@ -288,15 +290,26 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 ```bash
 # Development
 bun run dev              # Start all dev servers (turbo)
-bun run dev:pulse        # Pulse work: pulse API + app, osn core, zap API
-bun run dev:zap          # Zap work: zap API, osn core
-bun run dev:osn          # OSN work: osn core + app
-bun run dev:apis         # All backends only: osn core, pulse API, zap API
-bun run dev:cire         # Cire work: cire API + web + organiser, osn core
-bun run dev:landing      # Landing site only
+bun run dev:pulse        # @pulse/api + @pulse/web + @osn/api + @zap/api
+bun run dev:zap          # @zap/api + @osn/api
+bun run dev:osn          # @osn/api alone
+bun run dev:social       # @osn/social + @osn/api
+bun run dev:apis         # backends only: @osn/api + @pulse/api + @zap/api
+bun run dev:cire         # @cire/api + @cire/invites + @cire/host + @osn/api
+                         # (NOT @cire/vendor — run that one on its own)
+bun run dev:landing      # @osn/landing        (dev:cire-landing, dev:pulse-landing for the others)
+bun run dev:lab          # @tools/lab — component/three.js prototyping
 bun run build            # Build all packages (turbo)
 bun run check            # Type-check all packages (turbo)
 ```
+
+The shell is **fish** on the local machine and **bash** in Claude Code's remote
+environments, so a command that works in one can fail to parse in the other.
+Two that bite: an unquoted glob argument (`grep --include=*.ts`) is expanded by
+fish and errors when nothing matches, and a heredoc inside `bash -c '…'` is
+read by fish first. Both are fine under bash. Where a command has a glob or a
+heredoc and has to work in either place, quote the glob (`--include='*.ts'`) or
+put the whole thing in a script file rather than a `-c` string.
 
 ### Local URLs
 
@@ -348,14 +361,16 @@ One trap for agents: Astro 7 detects an agent environment and puts `astro dev` i
 
 # Testing
 bun run test                          # run all tests (turbo, skips packages without test script)
-bun run --cwd pulse/api test:run          # run Pulse events API tests once
-bun run --cwd osn/api test:run            # run OSN API (auth + graph) tests once
-bun run --cwd osn/client test:run         # run OSN client SDK tests once
-bun run --cwd osn/ui test:run             # run shared auth component tests once
-bun run --cwd pulse/db test:run           # run Pulse DB schema tests once
-bun run --cwd pulse/api test              # watch mode
-bun run --cwd zap/db test:run             # run Zap DB schema tests once
-bun run --cwd zap/api test:run            # run Zap API service tests once
+bun run test:d1                       # the Miniflare/workerd D1 tier (excluded from `test`)
+bun run test:browser                  # the real-Chromium tier
+bun run test:scripts                  # bun tests under scripts/ — TypeScript only. `bun test`
+                                      # never collects a *.test.sh, so the three shell tests
+                                      # get their own CI steps (changeset-check.yml, ci.yml);
+                                      # a new one needs a step or it runs nowhere
+bun run --cwd <pkg> test:run          # one package, once   (vitest packages)
+bun run --cwd <pkg> test              # one package, watch mode
+bun run --cwd cire/api test           # @cire/api is the exception — bun test, no test:run,
+                                      # and it picks up its own tests/db/ D1 tier
 
 # Code quality
 bun run lint             # oxlint
@@ -384,6 +399,18 @@ bun run reset            # clean + reinstall
 bun add solid-js --cwd osn/landing
 bun add drizzle-orm --cwd pulse/db
 ```
+
+**Never a bare `bun install` here.** Resolving on one machine drops every
+entry for a platform it is not running on — on a Mac that is 46 entries,
+including all the non-darwin binaries CI needs — and the diff then reads as a
+dependency change nobody asked for. Use `bun install --frozen-lockfile` to
+install, and when a dependency genuinely changes, splice the `bun.lock` entry
+by hand and prove it with `bun install --frozen-lockfile`. A lockfile diff
+larger than the dependency you changed is the tell.
+
+`bun run reset` (`bun run clean && bun i`) is the one script that still chains
+a bare install, so check `git diff bun.lock` after running it and discard the
+pruning it does.
 
 ## Cloudflare Workers debugging
 
