@@ -15,7 +15,7 @@ Phase 1 surfaces:
 | Identity / auth API | `@osn/api` (port 4000; prod Worker `id.musubi.social`) | Active — **deployed (Worker)** |
 | Identity & graph UI | `@osn/social` (port 1422; prod Pages `musubi.social`) | Active — **deployed (Pages)** |
 | Events | `@pulse/web` + `@pulse/api` (port 3001) + `@pulse/db` | Active |
-| Messaging | `@zap/api` (port 3002) + `@zap/db` | M0 scaffolded; M1 in flight; client app not started |
+| Messaging | `@zap/api` (port 3002) + `@zap/db` | Backend only — per-package milestone status is on `[[wiki/apps/zap]]` |
 | Wedding invites | @cire/api (:8787, prod `api.cireweddings.com`) + @cire/invites (:4321, prod `invite.cireweddings.com`) + @cire/host (:4322, prod `host.cireweddings.com`) + @cire/db + @cire/theme | Active — **deployed** (domain reshuffle 2026-07-16: guest→`invite.`, organiser→`host.`; package rename 2026-08-07: `@cire/web`→`@cire/invites`, `@cire/organiser`→`@cire/host`) |
 | Wedding vendor portal | `@cire/vendor` (:4326, prod `vendor.cireweddings.com`) | Active — **deployed (Pages)**. The vendor self-service portal: claim flow and directory listing. See `[[wiki/systems/cire-vendors]]` |
 | Wedding marketing site | `@cire/landing` (:4323) | Active — serves the **apex `cireweddings.com`** (reshuffle 2026-07-16). See `[[wiki/apps/cire-landing]]` |
@@ -83,7 +83,7 @@ One label is orthogonal to all of that: **`needs:decision`**, on both repos. It 
 | Write or review tests | `[[wiki/conventions/testing-patterns]]` |
 | Run the devloop (named HTTPS hosts per app, a stack per worktree, adding an app to it) | `[[wiki/conventions/devloop-urls]]` |
 | Split one goal across several PRs (stacked PRs — setting the base with the gh CLI, merge order, rebasing a stack) | `[[wiki/conventions/stacked-prs]]` |
-| Add or re-baseline an Astro app's bundle-size guard, or check the src/pages test-route check | `[[wiki/conventions/bundle-size-guards]]` |
+| Write, re-baseline or debug a guard that gates on a number (bundle budgets, and the two rules any such threshold obeys) | `[[wiki/conventions/bundle-size-guards]]` |
 | Add or use UI component (Button, Card, Dialog…) | `[[wiki/architecture/component-library]]` |
 | Raise a toast, theme one for an app, or debug a toast's stacking/contrast | `[[wiki/systems/toast]]` |
 | Add drag-to-reorder to a list (and get the keyboard + screen-reader path for free) | `[[wiki/architecture/drag-and-drop]]` |
@@ -108,77 +108,35 @@ One label is orthogonal to all of that: **`needs:decision`**, on both repos. It 
 
 ### Searching the wiki
 
-Three ways, in order. Try each; drop to the next when it isn't there.
+Three tiers. Try each, drop to the next when it isn't there:
 
-**1. Obsidian MCP (`mcp__obsidian-wiki__*`) — preferred, local sessions only.** The MCP Connector plugin (`mcp-tools-istefox`) serving the `wiki` vault. Reachable when the `mcp__obsidian-wiki__*` tools are listed and a call returns; an error ending `is Obsidian open with the vault loaded?` means it isn't — drop to step 2.
-
-Where it exists:
-
-| Where you're running | Obsidian MCP? |
-|---|---|
-| Claude Code on Aniket's Mac, Obsidian open with the `wiki` vault | Yes — registered at user scope |
-| Claude Code on that Mac, Obsidian shut | No — the server can't resolve a port |
-| Claude Desktop | Only if the `.mcpb` is installed there as well; the Claude Code registration doesn't carry over |
-| Remote or cloud session, cloud agent, CI, another machine | **Never.** It reaches a local Obsidian over `127.0.0.1`. Skip to step 3 — the `obsidian` CLI is local-only too. |
-
-Don't hunt for it, retry it, or ask for it to be started when the tools aren't listed. Absent means absent: go to grep.
-
-| To... | Call |
-|---|---|
-| Search by meaning, not wording | `search_vault_smart` (semantic index over the vault) |
-| Search for an exact string | `search_vault_simple` (substring + surrounding context) |
-| Read one page / up to 20 pages | `get_vault_file`, `get_vault_files` |
-| Read one heading, field, or the outline only | `get_vault_file_partial`, `get_note_outline` |
-| Follow the graph | `get_backlinks`, `get_outgoing_links` |
-| Find pages by tag | `get_files_by_tag`, `list_tags` |
-| Orient in an unfamiliar area | `get_vault_overview`, `list_vault_files` |
-
-Some tools start inactive — `tool_catalog` lists them, `activate_tools` promotes several in one call.
-
-**It always shows you `main`, not your branch.** The vault path is baked into the connector as the `main` worktree's `wiki/`. Obsidian stays open on that one vault; nobody re-points it per branch. Two consequences:
-
-- **Read only.** The write tools (`create_vault_file`, `patch_vault_file`, `search_and_replace`, …) would edit `main`'s working tree, not your branch. Retrieve over MCP; edit wiki pages in your own worktree with Edit/Write.
-- **Your branch's own wiki edits are invisible to it.** Before trusting a page the branch might have changed, run the guard — one command, not a re-read of the wiki:
-
-  ```bash
-  git diff --name-only origin/main...HEAD -- wiki/   # pages this branch changed
-  ```
-
-  Empty output (the usual case) → MCP results are authoritative, use them. Any page you need in that list → read the branch copy with Read; MCP has the pre-branch version.
-
-Keep the vault fresh, since a stale `main` worktree means stale answers. Obsidian re-indexes on file change, and a fast-forward of a clean worktree is safe:
-
-```bash
-git -C ~/.work/osn.git/main pull --ff-only
-```
-
-If it refuses, leave it alone — never force or reset another worktree. Grep your own `wiki/` instead.
-
-That's the whole protocol: freshen, one guard command, then lean on semantic search instead of grepping and reading whole pages.
-
-**2. Obsidian CLI** — same limits: local machine, app running. Invoke the **`obsidian:obsidian-cli` skill** for the command surface; it wraps `obsidian help`, which is authoritative and stays current. Quick reference:
-
-```bash
-which obsidian 2>/dev/null || echo "not installed"
-obsidian search vault=wiki query="arc tokens"          # full-text search
-obsidian search:context vault=wiki query="arc tokens"  # search with line context
-obsidian tag vault=wiki name=systems verbose           # list files tagged #systems
-obsidian read vault=wiki path=systems/arc-tokens.md    # read a page
-obsidian backlinks vault=wiki file=arc-tokens          # find pages linking to it
-obsidian files vault=wiki folder=systems               # list files in a folder
-```
-
-Two repo-specific rules the skill can't know:
-
-- **Paths are vault-root-relative, and the vault root is `wiki/`.** `path=systems/arc-tokens.md`, not `path=wiki/systems/...` — the latter errors with `File not found`. `file=` takes a wikilink target (`file=arc-tokens`) instead.
-- **Read only, same as the MCP and for the same reason.** The CLI acts on the vault, and the vault is `main`'s `wiki/`. `create`, `append`, and `property:set` would write to `main`'s working tree, not your branch. There are three vaults registered (`wiki`, `echo_chamber`, `vault_india_22`) — always pass `vault=wiki` rather than trusting the default.
-
-**3. grep** — works everywhere, including remote and CI. Reads your worktree's own `wiki/`:
+1. **Obsidian MCP** (`mcp__obsidian-wiki__*`) — semantic search, outlines,
+   backlinks. **Local machine with Obsidian open, and nowhere else.**
+2. **The `obsidian` CLI** — same limits: local machine, app running.
+3. **grep** — works everywhere, including remote and CI.
 
 ```bash
 grep -r "arc token" wiki/ --include="*.md" -l          # find matching pages
 grep -r "arc token" wiki/ --include="*.md" -n          # with line numbers
 ```
+
+Two rules that apply to the first two tiers and cost real time when missed.
+**Both are read-only**: they act on the `main` worktree's `wiki/`, so a write
+through either edits `main`'s working tree instead of your branch. And **both
+show you `main`, not your branch** — before trusting a page this branch might
+have changed, run the guard, not a re-read:
+
+```bash
+git diff --name-only origin/main...HEAD -- wiki/   # pages this branch changed
+```
+
+Empty output, the usual case, means the results are authoritative. Anything in
+that list, read with Read instead.
+
+The rest — which tool answers which kind of question, where each tier does and
+does not exist, vault-relative paths, keeping the vault fresh — is in
+`[[wiki/conventions/wiki-search]]`. Grep can read that page from any session,
+which is why the grep tier is written out here rather than only there.
 
 ### Writing to the wiki
 
@@ -272,7 +230,6 @@ One-line summaries — open wiki page for full contract, API surface, finding hi
 | Map-membership guards | A guard that narrows to `keyof typeof MAP` must test `Object.hasOwn(MAP, key)`, never `key in MAP`. `in` walks the prototype chain, so `constructor`, `toString` and `__proto__` pass and the predicate then asserts an inherited `Object.prototype` member is a real entry. `house/no-in-operator-key-guard` (in `tools/oxlint/house`) is an error, and it matches the narrowed parameter rather than the literal `keyof typeof` syntax, so an aliased predicate is caught too — see `cire/theme/src/palette.ts` for the house form |
 | Non-subscribing store reads | In a `*-store.ts` organiser cache (cire only), `entryFor(id).accessor()` is the subscribing read — it mints the cache entry, so a tracked read always has something to register a dependency on. `cache.get(id)?.accessor()` does not mint the entry: when it is absent the read short-circuits before `accessor` ever runs, so a tracked read registers zero dependencies and never re-runs once the entry is created. That non-minting form is confined to `peekCached*`/`hasCached*` functions, whether written as the direct `cache.get(id)?.accessor()` chain or split across a `const entry = cache.get(id)` and a later `entry?.accessor()` / guarded `entry.accessor()`. `house/no-non-subscribing-store-read` (in `tools/oxlint/house`) enforces it as an error, scoped to `cire/**/*-store.ts` |
 | Where tests live | `tests/` at the package root, mirroring `src/` — **never** beside the source. Test-only support code (mocks, request harnesses, fixtures) lives there too, so `src/` holds nothing test-shaped: `cire/api/tests/test-helpers/`, `cire/host/tests/test-support/`. `scripts/` is not a workspace but follows the same rule (`scripts/tests/`, shell tests included). The one deliberate carve-out is the Miniflare-backed D1 tier at `tests/d1/` (cire's at `tests/db/`), which the vitest configs exclude by path because it imports `bun:test` and boots workerd — `bun run test:d1` is the only thing that runs it. See `[[wiki/conventions/testing-patterns]]` |
-| Guard thresholds | A guard that gates on a number — a bundle budget, a query-count cap, a timing ceiling — obeys two rules. **The number lives in one committed file the guard reads**, never as an argument at each call site: `scripts/bundle-size-budgets.txt` is the worked example, and it replaced the same threshold copied into six `package.json` scripts, one `ci.yml` step and eight `deploy.yml` steps, any one of which could be missed on a re-baseline. **The headroom is smaller than the smallest mistake the guard exists to catch**, measured against the current build rather than carried over from an older one — a guard whose slack exceeds the mistake can never fire, which is how a bundle budget once carried 47657 bytes of headroom against a 21261-byte dependency. Both rules, and the re-baselining recipe, are in `[[wiki/conventions/bundle-size-guards]]` |
 | Pre-commit | lefthook runs oxlint + oxfmt (auto-fix + re-stage) on staged files |
 | Pre-push | lefthook runs type check |
 | oxlint | `oxlintrc.json` — plugins: typescript, unicorn, oxc, import, promise, vitest, node, jsx-a11y (React plugin disabled — SolidJS) |
@@ -352,7 +309,7 @@ The names mirror production hostnames, and the nesting is load-bearing: a WebAut
 
 Because those hostnames differ per worktree, no app can be told where its siblings live from a committed `.env`. Each `dev:app` runs through the `dev-env` launcher (`@shared/dev-urls`), which derives every sibling's origin from the app's own `PORTLESS_URL` and exports the same env vars the deployed tiers set (`OSN_ISSUER_URL`, `WEB_ORIGIN`, `PUBLIC_API_URL`, …). Those values win over `.env`. Adding an app means the `"portless"` key in its `package.json` and an entry in `DEV_APPS` (`shared/dev-urls/src/index.ts`), plus its env-var map in `src/app-env.ts`; a test asserts the first two agree.
 
-**What it costs.** A steady-state page load is 15–40 ms slower through the proxy — the TLS handshake and the hop. The *first* load after a cold start is the one to know about: about 3× slower on `@pulse/web` (~2.9 s vs ~0.87 s), because HTTP/2 drops the browser's per-origin connection cap and Vite's whole unbundled module graph arrives at a single-threaded dev server at once. Numbers and method are in `[[wiki/conventions/devloop-urls]]`.
+**What it costs.** Tens of milliseconds in the steady state, and a markedly slower *first* load after a cold start. Numbers, method and the reason are in `[[wiki/conventions/devloop-urls]]`.
 
 To run without the proxy, on the fixed ports the repo used before (`:4000` osn-api, `:8787` cire-api, `:1422` musubi, …):
 
