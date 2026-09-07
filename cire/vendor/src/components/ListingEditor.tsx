@@ -43,8 +43,8 @@ export default function ListingEditor(props: ListingEditorProps) {
   const { authFetch } = useAuth();
 
   // Load the listing (may be null for a brand-new org). A claim that just
-  // redirected here may have left the listing seeded in sessionStorage
-  // (VP-P-W2) — use it once instead of re-fetching what consumeClaim already
+  // redirected here may have left the listing seeded in sessionStorage —
+  // use it once instead of re-fetching what consumeClaim already
   // returned.
   const [listing] = createResource(async () => {
     const seeded = takeSeededListing(props.orgId);
@@ -115,7 +115,7 @@ export default function ListingEditor(props: ListingEditorProps) {
       .map(([k]) => k),
   );
 
-  // ── Save-button disable condition (VP-P-I3) ──────────────────────────────
+  // ── Save-button disable condition ────────────────────────────────────────
   // createMemo dedupes to signal-change boundaries rather than re-running on every
   // render pass of the button effect.
   const saveDisabled = createMemo(

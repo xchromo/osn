@@ -80,7 +80,7 @@ describe("pulse/api account erasure over real D1 (Miniflare)", () => {
   // statement back — the purge did not partially complete, it could never
   // complete at all, for exactly the accounts with the most data to erase.
   //
-  // This has to run against real D1: bun:sqlite enforces no bind cap, so the
+  // This has to run against real D1; bun:sqlite enforces no bind cap, so the
   // unit tier passes against the bug.
   it("purges an account that hosted more than 100 events (osn-tracker#595)", async () => {
     const now = new Date();

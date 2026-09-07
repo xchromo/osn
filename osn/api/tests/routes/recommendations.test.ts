@@ -194,7 +194,7 @@ describe("recommendations routes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Limit parsing (T-S1)
+  // Limit parsing
   // -------------------------------------------------------------------------
 
   it("accepts a numeric ?limit query param", async () => {
@@ -231,7 +231,7 @@ describe("recommendations routes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Rate limiting (S-H1/P-C2)
+  // Rate limiting
   // -------------------------------------------------------------------------
 
   it("returns 429 when the rate limiter rejects", async () => {
