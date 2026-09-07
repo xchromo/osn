@@ -9,8 +9,14 @@ bun run --cwd tools/pr-metrics card                          # current branch
 bun run --cwd tools/pr-metrics card -- --pr 908 --issue 895
 bun run --cwd tools/pr-metrics card -- --format markdown     # the PR-body block
 bun run --cwd tools/pr-metrics backfill -- --dry-run         # merged PRs, retroactively
-duckdb -init tools/pr-metrics/queries.sql                    # read the cards back
+bun run --cwd tools/pr-metrics report                        # read the cards back
+bun run --cwd tools/pr-metrics report -- --waste             # just one analysis
 ```
+
+`report` needs nothing installed and runs in every environment, including a
+remote session — which `queries.sql` cannot, since no `duckdb` npm package
+ships a binary and a cloud container has no `brew`. SQL stays for ad-hoc local
+questions.
 
 | Flag                                                | Default                        |
 | --------------------------------------------------- | ------------------------------ |

@@ -11,11 +11,15 @@
 CREATE OR REPLACE VIEW cards AS
   SELECT * FROM read_json_auto('.claude/metrics/*.json', union_by_name := true);
 
--- A card written at PR-open time cannot see review-cycle cost, so any query
--- that compares totals has to filter on phase or it is adding two different
--- measurements together.
+-- Merged pull requests. Filtered on merge status, deliberately NOT on
+-- `phase = 'at-merge'`: a remote session's container is destroyed when it ends,
+-- taking its transcripts with it, so remotely-produced cards can never be
+-- refreshed past `at-open`. Filtering on phase would silently drop every pull
+-- request that was not worked on a machine you still own — which biases every
+-- analysis below toward local work while looking like it is simply being
+-- careful. `phase` stays a visible column instead; query 7 reports the split.
 CREATE OR REPLACE VIEW merged AS
-  SELECT * FROM cards WHERE pr.phase = 'at-merge';
+  SELECT * FROM cards WHERE pr.merged_at IS NOT NULL;
 
 -- Ratios everything below shares. Kept as a view rather than stored on the
 -- card: a definition that lives in one file can be changed and re-run over
@@ -27,6 +31,7 @@ CREATE OR REPLACE VIEW metrics AS
     pr.generated_at::TIMESTAMP                      AS at,
     complexity.declared                             AS declared,
     complexity.method                               AS rating_method,
+    pr.phase                                        AS phase,
     spend.usd_equivalent                            AS usd,
     diff.loc.source.added + diff.loc.source.deleted AS source_loc,
     diff.files.source                               AS source_files,
@@ -144,9 +149,12 @@ ORDER BY declared;
 -- 7. Coverage — how much of the history can actually be trusted
 --------------------------------------------------------------------------------
 -- Run this before believing any of the above. A confirmed-rating count in the
--- single digits means every trend above is noise.
+-- single digits means every trend above is noise. The phase split matters just
+-- as much: an `at-open` card is missing its review-cycle cost, and every card
+-- produced by a remote session stays `at-open` forever, so a corpus that is
+-- mostly `at-open` under-reports the true cost of the work it describes.
 
-SELECT rating_method, count(*) AS prs, round(sum(usd), 2) AS total_usd
+SELECT rating_method, phase, count(*) AS prs, round(sum(usd), 2) AS total_usd
 FROM metrics
-GROUP BY rating_method
+GROUP BY rating_method, phase
 ORDER BY prs DESC;

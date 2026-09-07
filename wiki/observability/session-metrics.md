@@ -109,6 +109,26 @@ Two traps the collector handles and any reimplementation must:
 on the machine that did the work. Once written it is committed, which is what
 makes the history durable.
 
+### Remote sessions
+
+Nothing extra is needed. Every session — local, cloud, another machine — has its
+own transcripts, cards its own branch, and commits the JSON with the branch. The
+repository is the aggregation point, so a central service would only duplicate
+what the repository already does for a few hundred rows a year.
+
+One thing does need care: a remote container is destroyed when the session ends
+and takes its transcripts with it, and a card that was never written is gone for
+good. So a **`SessionEnd` hook in `.claude/settings.json`** writes the card at
+the end of every session, in every environment, whether or not anyone reached
+`prep-pr`. It is idempotent — it rewrites the same file — it already refuses
+`main`, and it ends in `|| true` so it can never fail a session. The settings
+file is committed, so remote sessions pick it up with no per-machine setup.
+
+The consequence to remember: **a remote card can never be refreshed past
+`at-open`**, because the container that held its transcripts is gone. That is
+why the `merged` view filters on merge status rather than on `phase` — see the
+warning below.
+
 ## Schema
 
 `schema_version` is `1`. Bump it when a field changes meaning or leaves.
@@ -153,9 +173,13 @@ which you are looking at:
 - `at-open` — written by `prep-pr`, covers work up to the pull request.
 - `at-merge` — written after merge, includes review fixes.
 
-Filter on `phase` in any query that compares totals, or a merged PR and an open
-one will not be measuring the same thing. `queries.sql` does this for you: its
-`merged` view is `at-merge` only.
+> [!caution] Do not filter a query on `phase = 'at-merge'`.
+> It looks like caution and behaves like bias. A remote session's cards stay
+> `at-open` forever, so that filter silently drops every pull request not worked
+> on a machine you still own — and every trend then describes your laptop rather
+> than the fleet. Both `merged` views (SQL and `report`) filter on **merge
+> status**, and keep `phase` as a visible column instead. Query 7 reports the
+> split so an `at-open`-heavy corpus is obvious rather than invisible.
 
 > [!warning] The `at-merge` refresh cannot run in CI, and this is not a gap
 > that can be closed.
@@ -251,12 +275,29 @@ still a true record, and it warns on stderr rather than exiting non-zero.
 The committed files *are* the datalake. DuckDB reads them where they sit, so
 there is no service to run and no free-tier cap to watch:
 
-**`tools/pr-metrics/queries.sql` holds the seven that matter** — run it and the
-views plus every query below are already defined:
+**`bun run --cwd tools/pr-metrics report` is the normal way in.** It computes
+the seven analyses over the same cards, in TypeScript, and needs nothing
+installed:
 
 ```bash
-duckdb -init tools/pr-metrics/queries.sql
+bun run --cwd tools/pr-metrics report               # all seven
+bun run --cwd tools/pr-metrics report -- --waste    # just one
 ```
+
+That matters because **DuckDB does not exist in a remote session.** None of the
+`duckdb` npm packages ship a binary — they are all libraries — so `bunx` is no
+help and there is no `brew` in a cloud container. A report that only runs on one
+laptop cannot tell you how the fleet is doing.
+
+`queries.sql` is the same seven in SQL, and it is the better tool for a question
+nobody anticipated. It is the optional local power tool, not the interface:
+
+```bash
+duckdb -init tools/pr-metrics/queries.sql     # local only; brew install duckdb
+```
+
+The two carry the same ratio definitions, duplicated on purpose. Change one,
+change the other.
 
 It defines `cards` (everything), `merged` (`at-merge` only) and `metrics` (the
 shared ratios), then answers: where agents cost too much for the job; which
