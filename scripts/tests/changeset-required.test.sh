@@ -62,16 +62,18 @@ run_case "agent instructions plus one source file" required \
   '.claude/commands/prep-pr.md
 cire/api/src/index.ts'
 
-# Third-party skills installed by `npx skills add`: the real tree lives in
-# `.agents/skills/`, `.claude/skills/<name>` is a symlink to it, and
-# `skills-lock.json` pins both. All three are agent instructions.
-run_case "installed third-party skills only" skip \
-  '.agents/skills/some-vendor-skill/SKILL.md
-.claude/skills/some-vendor-skill
+# RETIRED PATHS — `.agents/skills/` held third-party skills installed by
+# `npx skills add` and `skills-lock.json` pinned them; both went with the
+# Effect v4 migration. The allowlist entries survive only so the removal PR's
+# own deletions do not trip this gate, so these two cases go WITH those
+# entries when they are dropped.
+run_case "retired third-party skill tree alone" skip \
+  '.agents/skills/effect-v3-to-v4/SKILL.md
+.claude/skills/effect-v3-to-v4
 skills-lock.json'
 
-run_case "installed third-party skills plus one source file" required \
-  '.agents/skills/some-vendor-skill/SKILL.md
+run_case "retired third-party skill tree plus one source file" required \
+  '.agents/skills/effect-ts/SKILL.md
 osn/api/src/index.ts'
 
 run_case "source file in a versioned package" required \
