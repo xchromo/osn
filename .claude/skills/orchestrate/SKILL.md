@@ -98,7 +98,9 @@ git -C /Users/ac/.work/osn.git worktree add /Users/ac/.work/osn.git/<dir> -b <pr
 
 ### Step 3 — Hand the task off, whole
 
-Dispatch **one** `general-purpose` subagent that owns planning and implementation. Give it the task, the Step 1 pointers, the worktree path and branch, and these instructions.
+Dispatch **one** subagent that owns planning and implementation. Give it the task, the Step 1 pointers, the worktree path and branch, and these instructions.
+
+Which one: run the `pick-agent` skill. It maps the task and its `complexity:` label to a definition in `.claude/agents/`, and so to a model and an effort level — `implementer` for anything that designs something, `mechanic` for work whose answer is fixed before it starts. Default to `implementer` when unsure; defaulting up is recoverable and defaulting down produces a subagent that does a worse job and reports success.
 
 **The dispatch is a contract, not a description.** A subagent inherits no
 conversation, so anything not in the text does not exist, and anything wrong in it
@@ -172,11 +174,11 @@ Two rules for anything you dispatch into a worktree:
   reaches for `git checkout <ref> -- <path>`, and putting it back discards
   whatever you had uncommitted in that tree.
 
-Run the `prep-pr` skill on the branch. Its own steps validate the changeset, build and test, run `review-tests`, and run the performance and security reviews in parallel. This skill's contract is stronger: **after the reviews, dispatch fix subagents to add the missing tests and fix every security and performance finding** — Critical, High and Medium at minimum, Low and Info when cheap — then re-verify. **Critical and High are not deferrable at all**: fix them here, or open the follow-up pull request immediately and link it before either merges — see `wiki/conventions/review-findings.md`. A Medium deliberately deferred is carried into the PR body as a tracked follow-up. Scale review depth to the change: a docs or config PR does not need three review agents; an auth, route or binding change does. Then the five-section PR body, push, and open the PR.
+Run the `prep-pr` skill on the branch. Its own steps validate the changeset, build and test, run `review-tests`, and run the performance and security reviews in parallel. This skill's contract is stronger: **after the reviews, dispatch `implementer` fix subagents to add the missing tests and fix every security and performance finding** — Critical, High and Medium at minimum, Low and Info when cheap — then re-verify. **Critical and High are not deferrable at all**: fix them here, or open the follow-up pull request immediately and link it before either merges — see `wiki/conventions/review-findings.md`. A Medium deliberately deferred is carried into the PR body as a tracked follow-up. Scale review depth to the change: a docs or config PR does not need three review agents; an auth, route or binding change does. Then the five-section PR body, push, and open the PR.
 
 ### Step 5 — Watch, merge, tear down
 
-Delegate this to a **PR-shepherd subagent** — the slow CI polling should not sit in your context. It polls to a terminal state, merges, and removes the worktree:
+Delegate this to a **`shepherd` subagent** (`.claude/agents/shepherd.md`) — the slow CI polling should not sit in your context, and it does not need an expensive model to wait. It polls to a terminal state, merges, and removes the worktree:
 
 ```bash
 gh pr ready <n>                                                       # if opened as a draft; then wait ~10 s before reading state
@@ -185,7 +187,7 @@ gh pr view <n> --json mergeStateStatus,statusCheckRollup,state
 
 - All checks green and `mergeStateStatus: CLEAN` → `gh pr merge <n> --squash --delete-branch`.
 - `DIRTY` or `BEHIND` → rebase onto the latest `origin/main`, resolve conflicts (sibling PRs that merged first are usually additive — keep both sides; for changeset or version churn from the release workflow, take the regenerated state), re-run the touched package's tests, `git push --force-with-lease`, re-poll.
-- A real check failure → read the failing job, dispatch a fix subagent, push, re-poll. Never merge red.
+- A real check failure → read the failing job, dispatch an `implementer` fix subagent, push, re-poll. Never merge red.
 - Once `MERGED`, the shepherd runs `git worktree remove --force <dir>`, deletes the local branch, and reports back. Never leave a merged task's worktree behind.
 
 **Between dependent tasks:** `git fetch origin main` and fast-forward local `main` so the next worktree is cut from the updated tip. If a later task's branch already exists and now conflicts, rebase it before its Step 5.
