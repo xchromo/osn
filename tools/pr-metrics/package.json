@@ -6,7 +6,8 @@
   "scripts": {
     "card": "bun run index.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "backfill": "bun run backfill.ts"
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",

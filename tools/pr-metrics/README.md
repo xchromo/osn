@@ -5,8 +5,11 @@ produced a pull request cost, what it changed, and how much steering it needed.
 Writes one JSON file per branch to `.claude/metrics/<branch-slug>.json`.
 
 ```bash
-bun run --cwd tools/pr-metrics card                        # current branch
+bun run --cwd tools/pr-metrics card                          # current branch
 bun run --cwd tools/pr-metrics card -- --pr 908 --issue 895
+bun run --cwd tools/pr-metrics card -- --format markdown     # the PR-body block
+bun run --cwd tools/pr-metrics backfill -- --dry-run         # merged PRs, retroactively
+duckdb -init tools/pr-metrics/queries.sql                    # read the cards back
 ```
 
 | Flag                                                | Default                        |
@@ -38,7 +41,10 @@ the hardest legitimate work in the repository.
 
 | Path                           | What                                                                                          |
 | ------------------------------ | --------------------------------------------------------------------------------------------- |
-| `index.ts`                     | Pure aggregation functions, plus the CLI under `import.meta.main`                             |
+| `index.ts`                     | Pure aggregation functions, the `<details>` renderer, and the CLI under `import.meta.main`    |
+| `backfill.ts`                  | Cards for pull requests that merged before cards existed                                      |
+| `queries.sql`                  | The seven DuckDB queries worth having                                                         |
+| `tests/render.test.ts`         | The `<details>` block — including that it contributes no `##` heading                         |
 | `tests/pr-metrics.test.ts`     | The pure functions, against synthetic records                                                 |
 | `tests/pr-metrics.cli.test.ts` | The real script as a subprocess, against a throwaway git repo and a fake `~/.claude/projects` |
 

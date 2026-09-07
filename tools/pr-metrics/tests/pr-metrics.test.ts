@@ -397,6 +397,7 @@ test("parseNumstat buckets lines and collects packages", () => {
   expect(diff.loc.generated).toEqual({ added: 800, deleted: 60 });
   expect(diff.files.source).toBe(2);
   expect(diff.packages).toEqual(["osn/api", "shared/crypto"]);
+  expect(parseNumstat("1\t0\ttools/pr-metrics/index.ts", 1).packages).toEqual(["tools/pr-metrics"]);
   expect(diff.commits).toBe(6);
 });
 

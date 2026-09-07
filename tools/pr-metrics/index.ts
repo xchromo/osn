@@ -553,6 +553,8 @@ export function aggregateInteraction(records: SessionRecord[]): InteractionSumma
   };
 }
 
+const WORKSPACE_ROOTS = ["osn", "pulse", "zap", "cire", "shared", "tools"];
+
 export type PathBucket = "generated" | "test" | "docs" | "config" | "source";
 
 /**
@@ -642,8 +644,12 @@ export function parseNumstat(numstat: string, commits: number): DiffSummary {
 
     if (path.includes("/drizzle/") || path.includes("/migrations/")) touchesMigration = true;
 
+    // The workspace globs are `<dir>/*` for the five product directories and
+    // for `tools`, so the first two segments name the package. `tools/oxlint`
+    // is the one place that resolves to a parent of the real workspace
+    // (`tools/oxlint/house`) — still the right grouping for a card.
     const parts = path.split("/");
-    if (parts.length >= 2 && ["osn", "pulse", "zap", "cire", "shared"].includes(parts[0])) {
+    if (parts.length >= 2 && WORKSPACE_ROOTS.includes(parts[0])) {
       packages.add(`${parts[0]}/${parts[1]}`);
     }
   }
@@ -754,6 +760,116 @@ export function buildCard(records: SessionRecord[], diff: DiffSummary, context: 
     diff,
     interaction: aggregateInteraction(records),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/** 66_000_000 → "66.0M". Cards run to tens of millions of tokens and a raw
+ * digit string at that size is unreadable in a table. */
+export function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+
+  return String(value);
+}
+
+export function humanDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+
+  const hours = Math.floor(seconds / 3600);
+
+  return `${hours}h ${Math.round((seconds % 3600) / 60)}m`;
+}
+
+function share(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "0%";
+}
+
+/**
+ * The card as a collapsed block for a pull-request body.
+ *
+ * A `<details>` block rather than a section, and that is a constraint rather
+ * than a preference: `prep-pr` permits exactly five `##` headings and checks
+ * the count before it finishes, so a sixth would fail a body that is otherwise
+ * correct. `<details>` adds no heading.
+ *
+ * The summary line carries the four figures worth seeing without expanding.
+ * "API-equivalent" is spelled out every time because this work runs on a
+ * subscription and the number must never be read as a bill.
+ */
+export function renderDetails(card: Card): string {
+  const { spend, diff, interaction, window: session, complexity } = card;
+  const tokens = spend.tokens;
+  const total =
+    tokens.input +
+    tokens.output +
+    tokens.cache_write_5m +
+    tokens.cache_write_1h +
+    tokens.cache_read;
+
+  const declared =
+    complexity.declared === null
+      ? "unrated"
+      : `${complexity.declared}${complexity.method === "unconfirmed" ? " (unconfirmed)" : ""}`;
+
+  const source = `+${diff.loc.source.added}/-${diff.loc.source.deleted}`;
+  const models = Object.entries(spend.by_model)
+    .sort((a, b) => b[1].usd_equivalent - a[1].usd_equivalent)
+    .map(([model, bucket]) => `${model} (${share(bucket.usd_equivalent, spend.usd_equivalent)})`)
+    .join(", ");
+
+  const rows: [string, string][] = [
+    ["Cost (API-equivalent)", `$${spend.usd_equivalent.toFixed(2)}`],
+    [
+      "Tokens",
+      `${compactTokens(total)} — out ${compactTokens(tokens.output)} · cache-w ${compactTokens(
+        tokens.cache_write_5m + tokens.cache_write_1h,
+      )} · cache-r ${compactTokens(tokens.cache_read)} (${share(tokens.cache_read, total)})`,
+    ],
+    ["Models", models || "—"],
+    ["Active time", `${humanDuration(session.active_seconds)} over ${session.sessions} session(s)`],
+    ["Declared complexity", declared],
+    [
+      "Source diff",
+      `${source} across ${diff.files.source} file(s), ${diff.packages.length} package(s)`,
+    ],
+    ["Turns", `${interaction.user_turns} (${interaction.corrective_turns} corrective)`],
+    [
+      "Before first edit",
+      `${compactTokens(interaction.tokens_before_first_edit)} (${share(
+        interaction.tokens_before_first_edit,
+        total,
+      )})`,
+    ],
+    [
+      "Subagents",
+      Object.keys(interaction.subagents).length === 0
+        ? "none"
+        : `${Object.entries(interaction.subagents)
+            .map(([kind, n]) => `${n}× ${kind}`)
+            .join(
+              ", ",
+            )} (${share(spend.by_actor.subagent.usd_equivalent, spend.usd_equivalent)} of spend)`,
+    ],
+  ];
+
+  const summary =
+    `Session metrics — $${spend.usd_equivalent.toFixed(2)} · ${compactTokens(total)} tok · ` +
+    `complexity ${declared} · ${source} source`;
+
+  return [
+    `<details><summary>${summary}</summary>`,
+    "",
+    "| | |",
+    "|---|---|",
+    ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    "",
+    `<sub>Card: \`.claude/metrics/${branchSlug(card.pr.branch)}.json\` · phase \`${card.pr.phase}\` · [schema](../blob/main/wiki/observability/session-metrics.md)</sub>`,
+    "</details>",
+  ].join("\n");
 }
 
 /**
@@ -867,6 +983,14 @@ if (import.meta.main) {
     generatedAt: new Date().toISOString(),
   });
 
+  // `--format markdown` prints the `<details>` block on stdout and writes
+  // nothing, so `prep-pr` can append it to a body without a temporary file and
+  // without the warnings below landing in the middle of the markdown.
+  if (flag("format") === "markdown") {
+    console.log(renderDetails(card));
+    process.exit(0);
+  }
+
   const outDir = flag("out-dir") ?? ".claude/metrics";
   const outPath = `${outDir}/${branchSlug(branch)}.json`;
   require("node:fs").mkdirSync(outDir, { recursive: true });
@@ -883,7 +1007,7 @@ if (import.meta.main) {
     console.warn(
       `⚠️  pr-metrics: no rate for ${card.spend.unpriced_models.join(", ")} — cost excludes it.`,
     );
-    console.warn("   Add it to MODEL_RATES in scripts/pr-metrics.ts.");
+    console.warn("   Add it to MODEL_RATES in tools/pr-metrics/index.ts.");
   }
 
   console.log(`✅ pr-metrics: wrote ${outPath}`);

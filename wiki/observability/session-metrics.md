@@ -151,10 +151,54 @@ A card written when the PR opens cannot see review-cycle cost. `phase` says
 which you are looking at:
 
 - `at-open` — written by `prep-pr`, covers work up to the pull request.
-- `at-merge` — rewritten after merge, includes review fixes.
+- `at-merge` — written after merge, includes review fixes.
 
 Filter on `phase` in any query that compares totals, or a merged PR and an open
-one will not be measuring the same thing.
+one will not be measuring the same thing. `queries.sql` does this for you: its
+`merged` view is `at-merge` only.
+
+> [!warning] The `at-merge` refresh cannot run in CI, and this is not a gap
+> that can be closed.
+> `~/.claude/projects` is local and unversioned. A GitHub Actions runner has no
+> transcripts, so a workflow can update `merged_at` and the final diff but not
+> a single token of spend — and a card that silently kept `at-open` spend under
+> an `at-merge` label would be worse than no card at all, because no query
+> could tell it from a complete one.
+>
+> The refresh is therefore a **local** command, run on the machine that did the
+> work:
+>
+> ```bash
+> bun run --cwd tools/pr-metrics card -- \
+>   --branch feat/x --phase at-merge --merged-at "$(date -u +%FT%TZ)"
+> ```
+>
+> In practice the backfill below is the easier path: it rewrites every merged
+> pull request it has transcripts for in one pass, so the `at-merge` set can be
+> brought up to date periodically instead of per-merge.
+
+## Backfilling
+
+`bun run --cwd tools/pr-metrics backfill` writes cards for pull requests that
+merged before cards existed.
+
+```bash
+bun run --cwd tools/pr-metrics backfill -- --dry-run     # list what it would write
+bun run --cwd tools/pr-metrics backfill -- --limit 200
+```
+
+A merged branch is usually deleted, so the file list comes from the GitHub API
+(`repos/:owner/:repo/pulls/:n/files`) rather than a local `git diff`. Spend
+still comes from local transcripts, so a backfill reaches only as far back as
+this machine's logs and only for branches this machine worked on.
+
+**A pull request with no local transcript is skipped, not written as zero.** A
+zero-cost card is indistinguishable from a genuinely cheap one once it is in
+the datalake, and it would drag every average it touches toward nothing.
+
+Ratings are transcribed, never invented: a backfilled card carries whatever the
+issue's `complexity:` label says, and `rate-complexity`'s backfill mode marks
+anything it adds `complexity:unconfirmed`.
 
 ## The two fields that name a cause
 
@@ -206,6 +250,22 @@ still a true record, and it warns on stderr rather than exiting non-zero.
 
 The committed files *are* the datalake. DuckDB reads them where they sit, so
 there is no service to run and no free-tier cap to watch:
+
+**`tools/pr-metrics/queries.sql` holds the seven that matter** — run it and the
+views plus every query below are already defined:
+
+```bash
+duckdb -init tools/pr-metrics/queries.sql
+```
+
+It defines `cards` (everything), `merged` (`at-merge` only) and `metrics` (the
+shared ratios), then answers: where agents cost too much for the job; which
+packages need a skill or a wiki page; whether briefs are getting clearer;
+whether the context surface is bloating; cost per unit of declared difficulty;
+whether delegation is paying off; and — run this one first — how much of the
+history can be trusted at all.
+
+The raw view, if you want to start from nothing:
 
 ```sql
 CREATE VIEW cards AS
