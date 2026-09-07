@@ -6,7 +6,7 @@ AI coding assistant ref. Full spec in README.md. Work tracked in GitHub Issues �
 
 OSN: Modular social platform. Users own identity + social graph. Apps opt-in/out independently.
 
-**Deployed:** the cire stack is **live on the `cireweddings.com` zone** (all Cloudflare Free tier). Domain reshuffle 2026-07-16: apex `cireweddings.com` = marketing landing, `invite.cireweddings.com` = guest site, `host.cireweddings.com` = organiser portal. **Identity moved to its own zone 2026-07-27:** `osn-api` is a deployed **Cloudflare Worker** on `id.musubi.social`, `@osn/social` (identity app + the OIDC consent screen) is on the apex `musubi.social`, and the WebAuthn RP ID is `musubi.social` — so the cireweddings.com origins can no longer run passkey ceremonies and sign in through the OIDC redirect flow instead (see `[[wiki/runbooks/musubi-identity-migration]]`). osn-api has Upstash prod secrets set; email is live over Resend from `hello@cireweddings.com` (`OSN_EMAIL_OPTIONAL` still exists as the degraded-boot opt-in — `selectEmailLayer` in `osn/api/src/lib/email-layer.ts` — and is unneeded once `RESEND_API_KEY` is set). `cire-api` on `api.cireweddings.com`; guest + organiser sites on Pages with custom domains. **Two tiers since 2026-08-13:** a merge to `main` auto-deploys the isolated **dev** tier (`*.dev.cireweddings.com`, `id.dev`/`dev.musubi.social`), and the production jobs in the same run wait on a human approving the `production` GitHub Environment — no more unattended deploys to live weddings. Path filters mean only changed surfaces deploy. See `[[wiki/runbooks/dev-environment]]`. Architectural decision: **osn-api stays a single Worker** (split deferred). See `[[wiki/runbooks/production-deploy]]`, `[[wiki/runbooks/free-tier-limits]]`.
+**Deployed:** the cire stack is **live on the `cireweddings.com` zone** (all Cloudflare Free tier). Domain reshuffle 2026-07-16: apex `cireweddings.com` = marketing landing, `invite.cireweddings.com` = guest site, `host.cireweddings.com` = organiser portal; `vendor.cireweddings.com` joined them with the vendor portal (`cire/vendor`, its own Pages project and deploy job). **Identity moved to its own zone 2026-07-27:** `osn-api` is a deployed **Cloudflare Worker** on `id.musubi.social`, `@osn/social` (identity app + the OIDC consent screen) is on the apex `musubi.social`, and the WebAuthn RP ID is `musubi.social` — so the cireweddings.com origins can no longer run passkey ceremonies and sign in through the OIDC redirect flow instead (see `[[wiki/runbooks/musubi-identity-migration]]`). osn-api has Upstash prod secrets set; email is live over Resend from `hello@cireweddings.com` (`OSN_EMAIL_OPTIONAL` still exists as the degraded-boot opt-in — `selectEmailLayer` in `osn/api/src/lib/email-layer.ts` — and is unneeded once `RESEND_API_KEY` is set). `cire-api` on `api.cireweddings.com`; guest + organiser sites on Pages with custom domains. **Two tiers since 2026-08-13:** a merge to `main` auto-deploys the isolated **dev** tier (`*.dev.cireweddings.com`, `id.dev`/`dev.musubi.social`), and the production jobs in the same run wait on a human approving the `production` GitHub Environment — no more unattended deploys to live weddings. Path filters mean only changed surfaces deploy. See `[[wiki/runbooks/dev-environment]]`. Architectural decision: **osn-api stays a single Worker** (split deferred). See `[[wiki/runbooks/production-deploy]]`, `[[wiki/runbooks/free-tier-limits]]`.
 
 Phase 1 surfaces:
 
@@ -17,7 +17,7 @@ Phase 1 surfaces:
 | Events | `@pulse/web` + `@pulse/api` (port 3001) + `@pulse/db` | Active |
 | Messaging | `@zap/api` (port 3002) + `@zap/db` | M0 scaffolded; M1 in flight; client app not started |
 | Wedding invites | @cire/api (:8787, prod `api.cireweddings.com`) + @cire/invites (:4321, prod `invite.cireweddings.com`) + @cire/host (:4322, prod `host.cireweddings.com`) + @cire/db + @cire/theme | Active — **deployed** (domain reshuffle 2026-07-16: guest→`invite.`, organiser→`host.`; package rename 2026-08-07: `@cire/web`→`@cire/invites`, `@cire/organiser`→`@cire/host`) |
-| Wedding vendor portal | `@cire/vendor` (`https://vendor.cire.localhost`) | Active — the vendor-facing surface for the enquiry flow. See `[[wiki/systems/cire-vendors]]` |
+| Wedding vendor portal | `@cire/vendor` (:4326, prod `vendor.cireweddings.com`) | Active — **deployed (Pages)**. The vendor self-service portal: claim flow and directory listing. See `[[wiki/systems/cire-vendors]]` |
 | Wedding marketing site | `@cire/landing` (:4323) | Active — serves the **apex `cireweddings.com`** (reshuffle 2026-07-16). See `[[wiki/apps/cire-landing]]` |
 | OSN marketing site | `@osn/landing` (:4324) | Active — built (dark/dotted, connections-led). See `[[wiki/apps/osn-landing]]` |
 | Pulse marketing site | `@pulse/landing` (:4325) | Active — built (colourful + fun). See `[[wiki/apps/pulse-landing]]` |
@@ -305,11 +305,15 @@ bun run check            # Type-check all packages (turbo)
 
 The shell is **fish** on the local machine and **bash** in Claude Code's remote
 environments, so a command that works in one can fail to parse in the other.
-Two that bite: an unquoted glob argument (`grep --include=*.ts`) is expanded by
-fish and errors when nothing matches, and a heredoc inside `bash -c '…'` is
-read by fish first. Both are fine under bash. Where a command has a glob or a
-heredoc and has to work in either place, quote the glob (`--include='*.ts'`) or
-put the whole thing in a script file rather than a `-c` string.
+Two that bite. An unquoted glob argument (`grep --include=*.ts`) is expanded by
+fish, which errors when nothing matches; quote it (`--include='*.ts'`). And a
+heredoc is parsed by fish before the command runs unless it is sealed inside
+single quotes: `bash -c 'cat <<EOF … EOF'` is safe, because fish never looks
+inside single quotes, while `bash -c "$(cat <<'EOF' … EOF)"` fails at the bare
+`<<` with `Expected a string, but found a redirection` — and command
+substitution is the shape a long commit message reaches for. Both forms are
+fine under bash. Where a heredoc has to work in either place, write it to a
+file and run the file.
 
 ### Local URLs
 
@@ -369,8 +373,9 @@ bun run test:scripts                  # bun tests under scripts/ — TypeScript 
                                       # a new one needs a step or it runs nowhere
 bun run --cwd <pkg> test:run          # one package, once   (vitest packages)
 bun run --cwd <pkg> test              # one package, watch mode
-bun run --cwd cire/api test           # @cire/api is the exception — bun test, no test:run,
-                                      # and it picks up its own tests/db/ D1 tier
+bun run --cwd cire/api test           # three packages run on `bun test` and have no test:run
+                                      # at all: @cire/api (which also picks up its own
+                                      # tests/db/ D1 tier), @cire/db, @tools/oxlint-house
 
 # Code quality
 bun run lint             # oxlint
