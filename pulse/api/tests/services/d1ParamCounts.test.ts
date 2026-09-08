@@ -6,7 +6,7 @@
  * running past 100 params and watching it throw. What they DO prove,
  * cheaply and on every test run: the real service functions — not a
  * reconstruction of their queries — emit the SQL this fix promises,
- * exercised well past the OLD per-site cliff each site used to break at.
+ * exercised well past each site's own bind-count cliff.
  *
  * The capture mechanism is drizzle's own `logger` hook, which fires with
  * the exact SQL text and bound-parameter array the driver is about to
@@ -17,7 +17,7 @@
  * a plain `inArray(col, ids)` or `.values(rows)`, the captured parameter
  * count jumps from O(1) to O(n) and the relevant assertion below fails.
  *
- * Six sites, in the order the brief lists them:
+ * Six sites:
  *   1. series.ts        materializeInstances  — INSERT, 31 cols/row
  *   2. accountErasure.ts purgeAccount         — 4 hostedEventIds DELETEs
  *   3. closeFriends.ts  getCloseFriendsOfBatch
