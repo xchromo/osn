@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when driving one or more tasks end to end from the local bare-repo root — a feature designed with the user first when its scope is open, or a ready list of tasks — ordering them, cutting a worktree per task, handing each to a subagent that runs new-feat, running prep-pr with every finding fixed rather than reported, and shepherding each pull request to a squash merge and worktree teardown. Not for a one-file change, and not outside the bare repo.
+description: Use when driving one or more tasks end to end from the local bare repo's `main` worktree — a feature designed with the user first when its scope is open, or a ready list of tasks — ordering them, cutting a worktree per task, handing each to a subagent that runs new-feat, running prep-pr with every finding fixed rather than reported, and shepherding each pull request to a squash merge and worktree teardown. Not for a one-file change, and not outside the bare repo.
 ---
 
 Orchestrate `$ARGUMENTS` end to end. If it is empty, ask for the task or tasks first.
@@ -11,20 +11,50 @@ You are the orchestrator: you order the work and drive the loop, and you **do no
 
 Every task merged into `main` as its own squash-merged pull request, its worktree removed, and a closing summary: each PR (number and one line), anything deferred as a tracked follow-up, and any deploy-time or human action a subagent surfaced.
 
-## Precondition — the bare-repo root only
+## Precondition — the local bare-repo setup, run from `main/`
 
-This skill creates worktrees, so it runs only in the local bare-repo setup:
+This skill creates worktrees, so it needs the local bare repo. **Run it from the
+`main` worktree, not the bare root:**
 
 ```bash
-git rev-parse --is-bare-repository 2>/dev/null                              # expect: true
+git -C /Users/ac/.work/osn.git rev-parse --is-bare-repository                # expect: true
 [ -d /Users/ac/.work/osn.git ] && [ "$(uname)" = "Darwin" ] && echo OK
+pwd                                                                          # expect: …/osn.git/main
 ```
 
-Anywhere else — the remote environment, a container, or inside a worktree — **stop** and say: "orchestrate needs the local bare repo root so it can create worktrees — run it from `/Users/ac/.work/osn.git`, or use `new-feat` and `prep-pr` in place instead." There is no static equivalent of this run; the deliverable is merged pull requests.
+`git worktree add` resolves against the shared bare repo, so it works just as
+well from `main/` as from the root. The reason to prefer `main/` is what the
+session records look like afterwards. A bare repo has no checked-out branch, so
+Claude Code stamps every record of a session started there with
+`gitBranch: "HEAD"` — an anonymous bucket that no card and no report can name.
+From `main/` the same records read `main`, which is a label you can measure and
+subtract. 64% of this repository's recorded token spend currently sits in that
+anonymous `HEAD` pool, and moving the orchestrator is most of the fix.
+
+Anywhere else — the remote environment, a container, or inside a *task*
+worktree — **stop** and say: "orchestrate needs the local bare repo so it can
+create worktrees — run it from `/Users/ac/.work/osn.git/main`, or use
+`new-feat` and `prep-pr` in place instead." There is no static equivalent of
+this run; the deliverable is merged pull requests.
+
+> [!warning] An orchestrated task is not measured by a session card.
+> `gitBranch` is captured once when a session starts and inherited by every
+> subagent it dispatches — it is a property of the session, not of the work. So
+> a subagent building in a task worktree records the *orchestrator's* branch,
+> and the task's own card reads zero. This is not fixable by arranging branches
+> differently: `isolation: "worktree"` pins a subagent's `cwd` correctly but
+> still reports the parent's `gitBranch`, and the Agent tool has no way to pin
+> an agent to a worktree you chose.
+>
+> The consequence to hold on to: **cards describe work done by a session in its
+> own worktree, and orchestrated work is absent from them.** A coverage number
+> is not a statement about this workflow. Where a task's cost genuinely matters,
+> run it through `new-feat` in its own session instead — that attributes
+> correctly. See `wiki/observability/session-metrics.md`.
 
 ## The blackboard
 
-Write `ORCHESTRATE.md` at the root of the bare repo — outside every worktree, so
+Write `ORCHESTRATE.md` in the `main` worktree — outside every *task* worktree, so
 no `.gitignore` governs it and no worktree can stage it, which is the point: one
 file for a run that spans several branches. Rewrite it at every step
 boundary — a task dispatched, a gate run, a commit made, a PR opened. A long run
@@ -235,4 +265,4 @@ The full table, with the reason behind each, is `references/gotchas.md`. The one
 
 ## When not to use this
 
-A one-line or single-file change — edit it and open the PR directly. Outside the bare-repo root — `new-feat` then `prep-pr` in place.
+A one-line or single-file change — edit it and open the PR directly. Outside the local bare repo — `new-feat` then `prep-pr` in place. A task whose cost you want measured — `new-feat` in its own session, since orchestrated work is not carded.
