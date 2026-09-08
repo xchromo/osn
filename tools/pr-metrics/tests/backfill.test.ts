@@ -69,25 +69,42 @@ async function projectDirFor(repo: string): Promise<string> {
  * `ownedByRepo` then answers `true` for everything — the test would pass
  * without ever exercising ownership.
  */
-async function fixture(options: { withTranscript: boolean }) {
+async function fixture(options: { withTranscript: boolean; withBranch?: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), "pr-metrics-backfill-"));
+  // Identity through the environment and signing through `-c` rather than three
+  // `git config` spawns: `fixture()` is the largest line item in this file's
+  // runtime and every spawn here is paid five times.
   const git = async (...args: string[]) => {
-    const proc = Bun.spawn(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["git", "-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
     await proc.exited;
   };
 
   await git("init", "-q", "-b", "main");
-  await git("config", "user.email", "test@example.com");
-  await git("config", "user.name", "Test");
-  await git("config", "commit.gpgsign", "false");
   await writeFile(join(dir, "seed.txt"), "seed\n");
   await git("add", ".");
   await git("commit", "-qm", "seed");
-  await git("checkout", "-qb", BRANCH);
-  await mkdir(join(dir, "osn", "api", "src"), { recursive: true });
-  await writeFile(join(dir, "osn", "api", "src", "svc.ts"), "export const a = 1;\n");
-  await git("add", ".");
-  await git("commit", "-qm", "work");
+
+  // Only the test that also runs `card` needs a real branch: `index.ts` resolves
+  // `git diff --numstat main...HEAD` against it, while `backfill.ts` takes every
+  // branch name from the stubbed `gh` JSON and never touches a local ref.
+  if (options.withBranch) {
+    await git("checkout", "-qb", BRANCH);
+    await mkdir(join(dir, "osn", "api", "src"), { recursive: true });
+    await writeFile(join(dir, "osn", "api", "src", "svc.ts"), "export const a = 1;\n");
+    await git("add", ".");
+    await git("commit", "-qm", "work");
+  }
 
   const sessions = join(dir, "sessions");
   const project = join(sessions, await projectDirFor(dir));
@@ -249,7 +266,7 @@ async function runBackfill(f: Awaited<ReturnType<typeof fixture>>, extra: string
 }
 
 test("backfill cards a marked subagent, and agrees with `card` on both figure and filename", async () => {
-  const f = await fixture({ withTranscript: true });
+  const f = await fixture({ withTranscript: true, withBranch: true });
   try {
     const run = await runBackfill(f);
 
