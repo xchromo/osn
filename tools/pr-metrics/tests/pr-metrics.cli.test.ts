@@ -369,6 +369,19 @@ test("card writes to the repository root even when run with --cwd", async () => 
   }
 });
 
+/** Claude Code names a project directory after the session's cwd, with `/` and
+ * `.` flattened to `-`. The collector only trusts a `TASK-BRANCH:` marker from a
+ * project directory this repository owns, so a fixture has to be named the way
+ * a real one would be. `git` resolves symlinks (`/var` → `/private/var` on
+ * macOS), so the name comes from git rather than from `mkdtemp`. */
+async function projectDirFor(repo: string): Promise<string> {
+  const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], { cwd: repo, stdout: "pipe" });
+  const top = (await new Response(proc.stdout).text()).trim();
+  await proc.exited;
+
+  return top.replaceAll(/[/.]/g, "-");
+}
+
 // The unit tests feed `resolveDispatchBranch` a hand-built tree. This one runs
 // the real script end to end over a subagent transcript stamped with a
 // DIFFERENT branch from the card's — which is the actual shape on disk, and the
@@ -395,7 +408,7 @@ test("card attributes a subagent stamped `main` to the branch its dispatch marke
     await git("add", ".");
     await git("commit", "-qm", "work");
 
-    const project = join(dir, "sessions", "-orchestrator-root");
+    const project = join(dir, "sessions", await projectDirFor(dir));
     const subagents = join(project, "sess-1", "subagents");
     await mkdir(subagents, { recursive: true });
 
@@ -508,10 +521,11 @@ test("the CLI names unmarked subagent transcripts when a card comes back empty",
     await git("checkout", "-qb", branch);
 
     // One unmarked subagent under a `main` session: its spend belongs to no card.
-    const subagents = join(dir, "sessions", "-proj", "sess-1", "subagents");
+    const project = join(dir, "sessions", await projectDirFor(dir));
+    const subagents = join(project, "sess-1", "subagents");
     await mkdir(subagents, { recursive: true });
     await writeFile(
-      join(dir, "sessions", "-proj", "sess-1.jsonl"),
+      join(project, "sess-1.jsonl"),
       `${JSON.stringify({ type: "assistant", gitBranch: "main", timestamp: "2026-09-08T10:00:00.000Z" })}\n`,
     );
     await writeFile(

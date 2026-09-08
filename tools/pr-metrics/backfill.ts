@@ -30,6 +30,7 @@ import {
   defaultMetricsDir,
   parseNumstat,
   recordsByBranch,
+  repoProjectPaths,
 } from "./index.ts";
 
 interface PullRequest {
@@ -98,7 +99,7 @@ if (import.meta.main) {
   }
 
   const pulls = JSON.parse(listed.out) as PullRequest[];
-  const byBranch = recordsByBranch(sessionsDir);
+  const byBranch = recordsByBranch(sessionsDir, { repoPaths: repoProjectPaths() });
 
   console.log(
     `pr-metrics backfill: ${pulls.length} merged PR(s), ${byBranch.size} branch(es) with transcripts.`,

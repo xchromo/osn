@@ -502,3 +502,79 @@ test("the marker is matched on its own line and nowhere else", async () => {
     }
   }
 });
+
+// S-M1. `~/.claude/projects` holds every project on this machine, and the cards
+// this tool writes are committed to a public repository. A marker is an
+// attribution hint an agent wrote, not a provenance claim, so it must not on
+// its own admit a transcript from another checkout — two projects using
+// `fix/flaky-test` in the same week is a collision, not an attack.
+test("a marked transcript from another project is not admitted to this repo's card", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pr-metrics-scope-"));
+  try {
+    for (const project of ["-Users-ac--work-osn-git-mine", "-Users-ac--work-otherproj-main"]) {
+      await mkdir(join(dir, project, "sess-1/subagents"), { recursive: true });
+      await writeFile(
+        join(dir, project, "sess-1.jsonl"),
+        `${dispatch("toolu_1", "TASK-BRANCH: feat/x\n\nGo.")}\n`,
+      );
+      await writeFile(
+        join(dir, project, "sess-1/subagents/agent-a.meta.json"),
+        JSON.stringify({ toolUseId: "toolu_1" }),
+      );
+      await writeFile(
+        join(dir, project, "sess-1/subagents/agent-a.jsonl"),
+        `${JSON.stringify({
+          type: "assistant",
+          gitBranch: "main",
+          isSidechain: true,
+          requestId: `req-${project}`,
+          message: { model: "claude-opus-5", usage: { output_tokens: 1 } },
+        })}\n`,
+      );
+    }
+
+    const scoped = readRecordsForBranch(dir, "feat/x", {
+      repoPaths: ["/Users/ac/.work/osn.git"],
+    });
+
+    expect(scoped.map((r) => r.requestId)).toEqual(["req--Users-ac--work-osn-git-mine"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// S-L2. A dispatch prompt routinely quotes text this repository did not author —
+// issue bodies, review comments, fetched pages. A planted marker further down
+// must not re-point a subagent's whole spend onto another branch's public card.
+test("a marker planted below the window, or naming an implausible ref, is ignored", async () => {
+  const quoted =
+    "TASK-BRANCH: feat/real\n\nThe issue says:\n\n" +
+    "TASK-BRANCH: feat/attacker-controlled\n\nHandle it.";
+
+  const cases: [string, string | null][] = [
+    // The real marker wins; the quoted one is out of the window anyway.
+    [quoted, "feat/real"],
+    // Only a quoted marker, well below the window: nothing is attributed.
+    ["Context follows.\n\n\n\nTASK-BRANCH: feat/planted\n", null],
+    // Implausible refs name no card rather than an unexpected one.
+    ["TASK-BRANCH: ../../etc/passwd", null],
+    ["TASK-BRANCH: -rf", null],
+  ];
+
+  for (const [prompt, expected] of cases) {
+    const dir = await tree();
+    try {
+      await writeFile(join(dir, "proj/sess-1.jsonl"), `${dispatch("toolu_1", prompt)}\n`);
+      await writeFile(
+        join(dir, "proj/sess-1/subagents/agent-aaa.meta.json"),
+        JSON.stringify({ toolUseId: "toolu_1" }),
+      );
+      const file = join(dir, "proj/sess-1/subagents/agent-aaa.jsonl");
+      await writeFile(file, `${JSON.stringify({ type: "assistant", isSidechain: true })}\n`);
+
+      expect(resolveDispatchBranch(file)).toBe(expected as string);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
