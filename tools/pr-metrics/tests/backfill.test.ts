@@ -10,7 +10,7 @@
 // spawns `sh -c ls`, so a replaced `PATH` loses them and every transcript
 // silently vanishes.
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,32 @@ test("numstatFromApi reshapes the GitHub API's file list into numstat lines", ()
   expect(diff.commits).toBe(2);
   expect(diff.loc.source).toEqual({ added: 10, deleted: 3 });
   expect(diff.loc.docs).toEqual({ added: 5, deleted: 0 });
+});
+
+// Git permits tabs and newlines in path names and the files API returns the
+// path verbatim, so a merged PR adding such a file could inject an extra record
+// into the numstat that `parseNumstat` then counts as a real file — its own
+// bucket, its own counts, its own entry in `card.diff.packages`.
+test("numstatFromApi drops a filename carrying the delimiters it formats with", () => {
+  const files: ChangedFile[] = [
+    { filename: "osn/api/src/real.ts", additions: 1, deletions: 0 },
+    { filename: "evil\n999\t999\tfake/injected.ts", additions: 1, deletions: 0 },
+    { filename: "also\tevil.ts", additions: 1, deletions: 0 },
+  ];
+
+  const lines = numstatFromApi(files).split("\n").filter(Boolean);
+
+  expect(lines).toEqual(["1\t0\tosn/api/src/real.ts"]);
+  expect(parseNumstat(numstatFromApi(files), 1).files.source).toBe(1);
+});
+
+/** Every temp directory this file makes, removed even when a fixture throws
+ * partway through — `fixture()` does ~20 awaits after `mkdtemp` and each one
+ * can reject, leaving a directory behind with an executable `gh` in it. */
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const BACKFILL = new URL("../backfill.ts", import.meta.url).pathname;
@@ -71,6 +97,7 @@ async function projectDirFor(repo: string): Promise<string> {
  */
 async function fixture(options: { withTranscript: boolean; withBranch?: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), "pr-metrics-backfill-"));
+  tempDirs.push(dir);
   // Identity through the environment and signing through `-c` rather than three
   // `git config` spawns: `fixture()` is the largest line item in this file's
   // runtime and every spawn here is paid five times.
@@ -210,7 +237,7 @@ async function fixture(options: { withTranscript: boolean; withBranch?: boolean 
   await writeFile(
     join(binDir, "gh"),
     `#!/bin/sh
-printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+printf '%s\\n' "$*" >> "$GH_CALL_LOG"
 case "$*" in
   *"pr list"*)
     printf '%s' '[{"number":${PR},"headRefName":"${BRANCH}","mergedAt":"2026-09-09T12:00:00Z","baseRefOid":"aaa","headRefOid":"bbb","labels":[],"closingIssuesReferences":[]}]' ;;
@@ -253,6 +280,11 @@ async function runBackfill(f: Awaited<ReturnType<typeof fixture>>, extra: string
         GH_ENTERPRISE_TOKEN: "",
         GH_CONFIG_DIR: join(f.dir, "gh-config"),
         GH_NO_UPDATE_NOTIFIER: "1",
+        // The stub reads its log path from here rather than having it
+        // interpolated into its own source: `JSON.stringify` escapes `"` and
+        // `\` but leaves `$` and backticks live inside a double-quoted shell
+        // word, and this path descends from `TMPDIR`.
+        GH_CALL_LOG: f.log,
       },
     },
   );
@@ -381,7 +413,7 @@ test("backfill warns rather than silently overwriting when two branches share a 
     await writeFile(
       join(f.binDir, "gh"),
       `#!/bin/sh
-printf '%s\\n' "$*" >> ${JSON.stringify(f.log)}
+printf '%s\\n' "$*" >> "$GH_CALL_LOG"
 case "$*" in
   *"pr list"*)
     printf '%s' '[{"number":${PR},"headRefName":"${BRANCH}","mergedAt":"2026-09-09T12:00:00Z","baseRefOid":"aaa","headRefOid":"bbb","labels":[],"closingIssuesReferences":[]},{"number":9999,"headRefName":"${SLUG}","mergedAt":"2026-09-09T13:00:00Z","baseRefOid":"ccc","headRefOid":"ddd","labels":[],"closingIssuesReferences":[]}]' ;;
@@ -427,7 +459,7 @@ test("a failing `gh pr list` exits non-zero and says so, rather than carding not
     await writeFile(
       join(f.binDir, "gh"),
       `#!/bin/sh
-printf '%s\\n' "$*" >> ${JSON.stringify(f.log)}
+printf '%s\\n' "$*" >> "$GH_CALL_LOG"
 echo "gh: could not authenticate" >&2
 exit 1
 `,

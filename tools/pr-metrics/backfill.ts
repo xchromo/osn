@@ -72,7 +72,22 @@ function flag(name: string): string | null {
 /** GitHub's per-file additions and deletions, reshaped into the `git diff
  * --numstat` lines `parseNumstat` already understands. */
 export function numstatFromApi(files: ChangedFile[]): string {
-  return files.map((f) => `${f.additions}\t${f.deletions}\t${f.filename}`).join("\n");
+  return files
+    .filter((f) => {
+      // Git permits tabs and newlines in a path and the files API returns it
+      // verbatim, so such a name would inject an extra record into the numstat
+      // that `parseNumstat` counts as a real file. Dropping it loses one row of
+      // a diff summary; keeping it corrupts the whole card.
+      if (typeof f.filename !== "string" || /[\t\n\r]/.test(f.filename)) {
+        console.warn(`  ⚠️  skipping a changed file whose name carries a tab or newline.`);
+
+        return false;
+      }
+
+      return true;
+    })
+    .map((f) => `${f.additions}\t${f.deletions}\t${f.filename}`)
+    .join("\n");
 }
 
 /** The branch a card on disk was written for, or `null` if it cannot be read. */
