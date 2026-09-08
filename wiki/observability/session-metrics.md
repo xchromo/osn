@@ -156,6 +156,18 @@ Three things about it worth keeping:
   write, so `card` counts the subagent files that resolve to nothing under a
   `main`/`HEAD` session and warns. A forgotten marker shows up on the next card
   instead of silently under-reporting.
+- **A marker is never sufficient on its own.** `~/.claude/projects` holds every
+  project on the machine, and a card is committed to a public repository
+  carrying `tool_calls`, `skills` and `subagents` keyed verbatim from the
+  transcript — MCP server and private skill names among them. So a marked
+  transcript is admitted only from a project directory this repository owns,
+  derived from `git worktree list` and the common git dir. Two checkouts sharing
+  a branch name is a collision, not an attack, and it must not publish one
+  project's metadata from the other.
+- **The marker is read from the first three lines**, and the value has to look
+  like a ref. Dispatch prompts quote text nobody here wrote — issue bodies,
+  review comments, fetched pages — and a planted `TASK-BRANCH:` line further
+  down would otherwise re-point a subagent's whole spend onto another card.
 
 This is **forward-looking only**. Historical transcripts carry no marker, so the
 85.8% stays where it is; the fix changes what new work records, not what old
