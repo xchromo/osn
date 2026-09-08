@@ -299,3 +299,206 @@ test("a resolved subagent file is not counted as unattributed", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// T-E1. The exclusion is the only thing keeping one branch's delegated spend
+// off another branch's card, and a positive-only suite cannot see it: with the
+// guard deleted every test above still passed, while every marked transcript
+// would land on every card.
+test("readRecordsForBranch excludes a subagent marked for a different branch", async () => {
+  const dir = await tree();
+  try {
+    await writeFile(
+      join(dir, "proj/sess-1.jsonl"),
+      [
+        dispatch("toolu_x", "TASK-BRANCH: feat/x\n\nMine."),
+        dispatch("toolu_y", "TASK-BRANCH: feat/y\n\nSomeone else's."),
+      ].join("\n"),
+    );
+
+    for (const [name, tool, out] of [
+      ["agent-x", "toolu_x", 11],
+      ["agent-y", "toolu_y", 22],
+    ] as const) {
+      await writeFile(
+        join(dir, `proj/sess-1/subagents/${name}.meta.json`),
+        JSON.stringify({ toolUseId: tool, spawnDepth: 1 }),
+      );
+      await writeFile(
+        join(dir, `proj/sess-1/subagents/${name}.jsonl`),
+        `${JSON.stringify({
+          type: "assistant",
+          gitBranch: "main",
+          isSidechain: true,
+          requestId: `req-${name}`,
+          message: { model: "claude-opus-5", usage: { output_tokens: out } },
+        })}\n`,
+      );
+    }
+
+    // An equality, not an absence: this fails whether feat/y leaks in or
+    // feat/x drops out.
+    const output = readRecordsForBranch(dir, "feat/x").map(
+      (r) => r.message?.usage?.output_tokens ?? 0,
+    );
+    expect(output).toEqual([11]);
+    expect(readRecordsForBranch(dir, "feat/y").map((r) => r.message?.usage?.output_tokens)).toEqual(
+      [22],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-E3. The third arm of the warning's condition: an unmarked subagent whose
+// own gitBranch is already a real task branch is fine, and counting it would
+// make the warning cry wolf on a healthy run.
+test("unattributedSubagentFiles ignores an unmarked subagent already on a task branch", async () => {
+  const dir = await tree();
+  try {
+    // No meta file at all, so the resolver returns null.
+    await writeFile(
+      join(dir, "proj/sess-1/subagents/agent-fine.jsonl"),
+      `${JSON.stringify({ type: "assistant", gitBranch: "feat/already-right", isSidechain: true })}\n`,
+    );
+    expect(unattributedSubagentFiles(dir)).toBe(0);
+
+    // A record with no branch at all is the other arm, and does count.
+    await writeFile(
+      join(dir, "proj/sess-1/subagents/agent-nobranch.jsonl"),
+      `${JSON.stringify({ type: "assistant", isSidechain: true })}\n`,
+    );
+    expect(unattributedSubagentFiles(dir)).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-E4. Both readers call the resolver on every subagent file they see, so one
+// bad sidecar escaping the catch would abort the whole card rather than
+// degrade it.
+test("resolveDispatchBranch survives a missing, empty or unparseable sidecar", async () => {
+  const dir = await tree();
+  try {
+    const base = join(dir, "proj/sess-1/subagents");
+    const record = `${JSON.stringify({ type: "assistant", gitBranch: "main", isSidechain: true })}\n`;
+
+    await writeFile(join(base, "agent-nometa.jsonl"), record);
+
+    await writeFile(join(base, "agent-nokey.jsonl"), record);
+    await writeFile(join(base, "agent-nokey.meta.json"), JSON.stringify({ agentType: "x" }));
+
+    await writeFile(join(base, "agent-garbage.jsonl"), record);
+    await writeFile(join(base, "agent-garbage.meta.json"), "not json at all");
+
+    expect(resolveDispatchBranch(join(base, "agent-nometa.jsonl"))).toBeNull();
+    expect(resolveDispatchBranch(join(base, "agent-nokey.jsonl"))).toBeNull();
+    expect(resolveDispatchBranch(join(base, "agent-garbage.jsonl"))).toBeNull();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-E4, the cycle. `parentCandidates` returns every sibling, so two files each
+// naming the other's tool_use id recurse until the guard stops them. This test
+// fails by hanging or overflowing the stack, not by asserting.
+test("resolveDispatchBranch terminates when two siblings dispatch each other", async () => {
+  const dir = await tree();
+  try {
+    const base = join(dir, "proj/sess-1/subagents");
+    await writeFile(join(dir, "proj/sess-1.jsonl"), "");
+
+    await writeFile(join(base, "agent-a.jsonl"), `${dispatch("toolu_b", "No marker here.")}\n`);
+    await writeFile(join(base, "agent-a.meta.json"), JSON.stringify({ toolUseId: "toolu_a" }));
+    await writeFile(join(base, "agent-b.jsonl"), `${dispatch("toolu_a", "None here either.")}\n`);
+    await writeFile(join(base, "agent-b.meta.json"), JSON.stringify({ toolUseId: "toolu_b" }));
+
+    expect(resolveDispatchBranch(join(base, "agent-a.jsonl"))).toBeNull();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-U1. `requestId` is the assistant side; `uuid` is the fallback for the
+// records `user_turns` and `corrective_turns` are counted from. If it never
+// fires those numbers double on a duplicated conversation.
+test("the uuid fallback dedupes records that carry no requestId", async () => {
+  const dir = await tree();
+  try {
+    const assistant = JSON.stringify({
+      type: "assistant",
+      gitBranch: "feat/x",
+      requestId: "req-dup",
+      message: { model: "claude-opus-5", usage: { output_tokens: 5 } },
+    });
+    const user = JSON.stringify({ type: "user", gitBranch: "feat/x", uuid: "u-dup" });
+    const other = JSON.stringify({ type: "user", gitBranch: "feat/x", uuid: "u-different" });
+
+    await writeFile(join(dir, "proj/sess-1.jsonl"), [assistant, user, other].join("\n"));
+    await writeFile(join(dir, "proj/sess-2.jsonl"), [assistant, user].join("\n"));
+
+    // One assistant, one deduped user, one near-neighbour that must survive —
+    // deduping and dropping look the same from a single length assertion.
+    expect(readRecordsForBranch(dir, "feat/x")).toHaveLength(3);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-S1. `backfill` reads through `recordsByBranch`, so an un-deduped pass here
+// is the live-card/backfilled-card disagreement the shared reader exists to end.
+test("recordsByBranch dedupes a record present in two session files", async () => {
+  const dir = await tree();
+  try {
+    const line = JSON.stringify({
+      type: "assistant",
+      gitBranch: "feat/x",
+      requestId: "req-dup",
+      message: { model: "claude-opus-5", usage: { output_tokens: 7 } },
+    });
+    await writeFile(join(dir, "proj/sess-1.jsonl"), `${line}\n`);
+    await writeFile(join(dir, "proj/sess-2.jsonl"), `${line}\n`);
+
+    expect(recordsByBranch(dir).get("feat/x")).toHaveLength(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// T-S2. The producer is `.claude/skills/orchestrate/SKILL.md` and the consumer
+// is this parser; nothing else couples them. The last case reads the marker out
+// of the skill file itself, so the two fail together the day either changes.
+test("the marker is matched on its own line and nowhere else", async () => {
+  const skill = await Bun.file(
+    new URL("../../../.claude/skills/orchestrate/SKILL.md", import.meta.url).pathname,
+  ).text();
+  // The form the skill actually instructs, with a real branch substituted.
+  expect(skill).toContain("TASK-BRANCH: <branch>");
+
+  const cases: [string, string | null][] = [
+    ["TASK-BRANCH: feat/x\n\nGo.", "feat/x"],
+    // Not required to be the first line — a dispatch may lead with a worktree
+    // instruction. This is the `m` flag's whole reason.
+    ["Work only in /tmp/wt.\n\nTASK-BRANCH: feat/x\n\nGo.", "feat/x"],
+    // Quoted mid-sentence: must not card someone else's branch.
+    ["Use TASK-BRANCH: feat/x here.", null],
+    // Trailing note: matches nothing, and the warning then counts the file.
+    ["TASK-BRANCH: feat/x (worktree)", null],
+  ];
+
+  for (const [prompt, expected] of cases) {
+    const dir = await tree();
+    try {
+      await writeFile(join(dir, "proj/sess-1.jsonl"), `${dispatch("toolu_1", prompt)}\n`);
+      await writeFile(
+        join(dir, "proj/sess-1/subagents/agent-aaa.meta.json"),
+        JSON.stringify({ toolUseId: "toolu_1" }),
+      );
+      const file = join(dir, "proj/sess-1/subagents/agent-aaa.jsonl");
+      await writeFile(file, `${JSON.stringify({ type: "assistant", isSidechain: true })}\n`);
+
+      expect(resolveDispatchBranch(file)).toBe(expected as string);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});

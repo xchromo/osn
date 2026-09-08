@@ -1146,15 +1146,6 @@ function dedupeKey(record: SessionRecord): string | null {
 }
 
 /**
- * The records belonging to one branch.
- *
- * Two things beyond a `gitBranch` match. A subagent file's branch comes from
- * `resolveDispatchBranch` when the dispatch carried a marker — `gitBranch`
- * there is the *parent session's* and is wrong by construction. And a record
- * present in two session files is returned once; Claude Code sometimes writes
- * one conversation into two files, and both copies are real.
- */
-/**
  * Subagent transcripts that carry no marker and whose own `gitBranch` is not a
  * task branch — so their spend lands on no card at all.
  *
@@ -1242,6 +1233,15 @@ export function recordsByBranch(sessionsDir: string): Map<string, SessionRecord[
   return byBranch;
 }
 
+/**
+ * The records belonging to one branch.
+ *
+ * Two things beyond a `gitBranch` match. A subagent file's branch comes from
+ * `resolveDispatchBranch` when the dispatch carried a marker — `gitBranch`
+ * there is the *parent session's* and is wrong by construction. And a record
+ * present in two session files is returned once; Claude Code sometimes writes
+ * one conversation into two files, and both copies are real.
+ */
 export function readRecordsForBranch(sessionsDir: string, branch: string): SessionRecord[] {
   const records: SessionRecord[] = [];
   const seen = new Set<string>();

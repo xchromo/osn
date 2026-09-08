@@ -483,3 +483,71 @@ test("card attributes a subagent stamped `main` to the branch its dispatch marke
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// The marker is a line a skill asks an agent to write, so nothing enforces it.
+// This warning is the whole enforcement story, and it fires on exactly the run
+// where the operator has no other signal — the card that came back empty. The
+// existing empty-card test points at a directory with no transcripts at all, so
+// the count is always 0 and this block never ran.
+test("the CLI names unmarked subagent transcripts when a card comes back empty", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pr-metrics-warn-"));
+  const branch = "feat/nothing-matched";
+
+  try {
+    const git = async (...args: string[]) => {
+      const proc = Bun.spawn(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      await proc.exited;
+    };
+    await git("init", "-q", "-b", "main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await git("config", "commit.gpgsign", "false");
+    await writeFile(join(dir, "seed.txt"), "seed\n");
+    await git("add", ".");
+    await git("commit", "-qm", "seed");
+    await git("checkout", "-qb", branch);
+
+    // One unmarked subagent under a `main` session: its spend belongs to no card.
+    const subagents = join(dir, "sessions", "-proj", "sess-1", "subagents");
+    await mkdir(subagents, { recursive: true });
+    await writeFile(
+      join(dir, "sessions", "-proj", "sess-1.jsonl"),
+      `${JSON.stringify({ type: "assistant", gitBranch: "main", timestamp: "2026-09-08T10:00:00.000Z" })}\n`,
+    );
+    await writeFile(
+      join(subagents, "agent-orphan.jsonl"),
+      `${JSON.stringify({ type: "assistant", gitBranch: "main", isSidechain: true })}\n`,
+    );
+
+    const proc = Bun.spawn(
+      [
+        "bun",
+        SCRIPT,
+        "--branch",
+        branch,
+        "--base",
+        "main",
+        "--sessions-dir",
+        join(dir, "sessions"),
+        "--out-dir",
+        join(dir, "cards"),
+      ],
+      { cwd: dir, stdout: "pipe", stderr: "pipe" },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+
+    expect(stderr).toContain("no session records matched");
+    expect(stderr).toContain("1 subagent transcript(s) carry no TASK-BRANCH marker");
+    // The pointer the operator is sent to must exist; a rename would otherwise
+    // break it silently.
+    expect(stderr).toContain("wiki/observability/session-metrics.md");
+    expect(
+      await Bun.file(
+        new URL("../../../wiki/observability/session-metrics.md", import.meta.url).pathname,
+      ).text(),
+    ).toContain("## Attributing subagent spend");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
