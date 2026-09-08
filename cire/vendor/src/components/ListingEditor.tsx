@@ -245,10 +245,11 @@ export default function ListingEditor(props: ListingEditorProps) {
                 onInput={(e) => setDescription(e.currentTarget.value)}
                 rows={3}
                 maxLength={2000}
-                // This form sits inside `createAutoSize()`'s frame, whose
-                // reflow guard watches width only — dragging this box's own
-                // resize grip at a fixed width reads as a content change on
-                // every delivery.
+                // This field sits inside `createAutoSize()`'s frame, whose
+                // reflow guard keys on width only. A `resize-y` textarea has
+                // its height-only drag misread as a content swap and forced
+                // into continuous relayout — any textarea inside an auto-sized
+                // panel must stay `resize="none"`.
                 resize="none"
               />
             )}

@@ -220,6 +220,8 @@ describe("ConsentPreferences dialog", () => {
     // Turnstile loads before any choice can apply — the claim form can't
     // function without it. Listing it under the toggle would overstate what
     // the toggle does; omitting it would understate what the site loads.
+    // (Google Fonts is not in the registry at all: it is self-hosted, so
+    // there is no third-party font request to gate.)
     const text = dialog()!.textContent ?? "";
     expect(text).toContain("Loads on every visit");
     expect(text).toContain("Cloudflare Turnstile");

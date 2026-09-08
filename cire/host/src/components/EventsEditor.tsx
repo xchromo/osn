@@ -831,9 +831,10 @@ function EventDrawer(props: {
                   }
                   // This editor is a module view, and every module view
                   // renders inside `ModuleShell`'s auto-sized frame, whose
-                  // reflow guard watches width only — dragging this box's
-                  // own resize grip at a fixed width reads as a content
-                  // change on every delivery.
+                  // reflow guard keys on width only. A vertically resizable
+                  // textarea holds its width steady while its height changes,
+                  // so the guard reads that as a content swap — keep textareas
+                  // in an auto-sized panel `resize-none`.
                   resize="none"
                 />
               )}
