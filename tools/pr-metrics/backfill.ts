@@ -25,6 +25,7 @@
  */
 
 import {
+  branchSlug,
   buildCard,
   declaredFromLabels,
   defaultMetricsDir,
@@ -43,7 +44,7 @@ interface PullRequest {
   closingIssuesReferences: { number: number }[];
 }
 
-interface ChangedFile {
+export interface ChangedFile {
   filename: string;
   additions: number;
   deletions: number;
@@ -68,7 +69,7 @@ function flag(name: string): string | null {
 
 /** GitHub's per-file additions and deletions, reshaped into the `git diff
  * --numstat` lines `parseNumstat` already understands. */
-function numstatFromApi(files: ChangedFile[]): string {
+export function numstatFromApi(files: ChangedFile[]): string {
   return files.map((f) => `${f.additions}\t${f.deletions}\t${f.filename}`).join("\n");
 }
 
@@ -152,7 +153,11 @@ if (import.meta.main) {
       generatedAt: new Date().toISOString(),
     });
 
-    const path = `${outDir}/${pull.headRefName.replace(/[^a-zA-Z0-9._-]/g, "-")}.json`;
+    // `branchSlug`, not a copy of its first step: the inline version omitted
+    // the trailing `^-+|-+$` strip, so a branch name ending in a character
+    // outside the class made `backfill` and `card` write two different files
+    // for the same branch, and nothing downstream keys on the filename.
+    const path = `${outDir}/${branchSlug(pull.headRefName)}.json`;
 
     if (dryRun) {
       console.log(
