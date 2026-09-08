@@ -141,6 +141,49 @@ async function fixture(options: { withTranscript: boolean }) {
     );
   }
 
+  // A SECOND project directory, with a name this repository does not own,
+  // carrying the same marker for the same branch. `repoPaths` is what stops
+  // another checkout's transcript — MCP server names, private skill names —
+  // being attributed to a card this repo commits publicly, and a positive-only
+  // fixture cannot tell a working scope check from one that admits everything.
+  // Its 9999 tokens must not appear in any assertion below.
+  const foreign = join(sessions, "-Users-ac--work-otherproj-main", "sess-1", "subagents");
+  await mkdir(foreign, { recursive: true });
+  await writeFile(
+    join(sessions, "-Users-ac--work-otherproj-main", "sess-1.jsonl"),
+    `${JSON.stringify({
+      type: "assistant",
+      sessionId: "other-1",
+      gitBranch: "main",
+      message: {
+        model: "claude-opus-5",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_foreign",
+            name: "Agent",
+            input: { prompt: `TASK-BRANCH: ${BRANCH}\n\nSomeone else's work.` },
+          },
+        ],
+      },
+    })}\n`,
+  );
+  await writeFile(
+    join(foreign, "agent-other.meta.json"),
+    JSON.stringify({ toolUseId: "toolu_foreign", spawnDepth: 1 }),
+  );
+  await writeFile(
+    join(foreign, "agent-other.jsonl"),
+    `${JSON.stringify({
+      type: "assistant",
+      sessionId: "other-1",
+      gitBranch: "main",
+      isSidechain: true,
+      requestId: "req-foreign",
+      message: { model: "claude-opus-5", usage: { output_tokens: 9999 } },
+    })}\n`,
+  );
+
   // The stub. Executable with a shebang, or Bun skips it and silently resolves
   // the REAL `gh` further down PATH — verified on Bun 1.4.0 — which would send
   // the test to the network with the developer's credentials.
@@ -200,15 +243,17 @@ async function runBackfill(f: Awaited<ReturnType<typeof fixture>>, extra: string
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
-  await proc.exited;
+  const exitCode = await proc.exited;
 
-  return { stdout, stderr };
+  return { stdout, stderr, exitCode };
 }
 
 test("backfill cards a marked subagent, and agrees with `card` on both figure and filename", async () => {
   const f = await fixture({ withTranscript: true });
   try {
-    await runBackfill(f);
+    const run = await runBackfill(f);
+
+    expect(run.exitCode).toBe(0);
 
     // The stub was actually reached — without this the test passes just as well
     // against the real `gh` failing on a PR number no repository has.
@@ -226,6 +271,8 @@ test("backfill cards a marked subagent, and agrees with `card` on both figure an
     // Assert the marker path FIRST. Equality alone can pass vacuously: if
     // ownership were broken for both tools they would agree on a number that
     // never included the subagent at all.
+    // 1000, never 10999: the foreign project's marked transcript names this
+    // same branch and must be rejected on ownership alone.
     expect(backfilled.spend.by_actor.subagent?.tokens.output).toBe(1000);
     expect(backfilled.spend.by_actor.main?.tokens.output).toBe(0);
 
@@ -349,6 +396,42 @@ esac
 
     expect(stdout + stderr).toContain("collision");
     expect(stdout + stderr).toContain(SLUG);
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+// `backfill.ts` guards `gh pr list` failing and exits 1 with a message naming
+// authentication. The stub always exited 0, so that path had never run — and it
+// is the path a developer hits first, on the day their `gh` token expires.
+test("a failing `gh pr list` exits non-zero and says so, rather than carding nothing quietly", async () => {
+  const f = await fixture({ withTranscript: true });
+  try {
+    await writeFile(
+      join(f.binDir, "gh"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(f.log)}
+echo "gh: could not authenticate" >&2
+exit 1
+`,
+    );
+    await chmod(join(f.binDir, "gh"), 0o755);
+
+    const { stderr, exitCode } = await runBackfill(f);
+
+    expect(exitCode).toBe(1);
+
+    // The FIRST line, not a substring of the whole stream. Bun prints a source
+    // excerpt when a script throws, and that excerpt quotes the very
+    // `console.error` line this asserts on — so `toContain` over all of stderr
+    // passes just as happily on a crash as on the handled path, which is the
+    // opposite of what this test is for. A crash's first line is the excerpt's
+    // `110 | …`; the handled path's is the message itself.
+    const firstLine = stderr.trim().split("\n")[0] ?? "";
+
+    expect(firstLine).toContain("pr-metrics backfill:");
+    expect(firstLine).toContain("authenticated");
+    expect(await Bun.file(join(f.dir, "cards", `${SLUG}.json`)).exists()).toBe(false);
   } finally {
     await rm(f.dir, { recursive: true, force: true });
   }
