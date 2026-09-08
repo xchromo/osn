@@ -1,0 +1,11 @@
+{
+  "description": "A card corpus where the exploration ranking is dominated by cards whose first-edit boundary was never observed, and where nothing is rated. Tests whether the agent reads coverage before ranking, excludes the null-boundary cards instead of treating them as 100% exploration, and declines to name a worst-mapped package on the sample that survives.",
+  "fixtures": {
+    "repo": {
+      "type": "commit",
+      "repoUrl": "https://github.com/xchromo/osn.git",
+      "ref": "5438649d8f6018bda1ce7a188afae040ca99a55d",
+      "installPath": "."
+    }
+  }
+}

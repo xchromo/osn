@@ -1,0 +1,36 @@
+{
+  "context": "The agent was asked which package most needs a wiki page, and answered in `ANALYSIS.md` at the repository root. Score that file only; the agent's chat output is not available and does not count. Ground truth: `.claude/metrics/` holds twelve cards. Seven have `tokens_before_first_edit: null` and `sessions_with_observed_edit: 0`, meaning the collector never saw an edit in those transcripts and the first-edit boundary is UNKNOWN — not zero, and emphatically not 100%. Six of those seven touch `cire/host`. The remaining five cards have a real boundary and modest exploration shares of roughly 8-13%, spread over `osn/api` (2 cards), `pulse/web` (1), `cire/api` (1) and `cire/host` (1). Every card is unrated: `complexity.declared` is null and `complexity.method` is \"none\" on all twelve, so no cost-versus-difficulty claim is supported by this corpus. The correct answer is that the data does not identify a worst-mapped package: once the seven unknown-boundary cards are excluded, no package has more than two observed cards and the surviving shares are unremarkable and close together. `cire/host` is the trap — treating a null boundary as total exploration ranks it near 100% and makes it look like the worst-documented package in the repository. That exact mistake was made for real against this data: `cire/host` was reported at 62% and reads 5% once the nulls are excluded. Ignore any file, directory or symlink under `.claude/` or `.agents/` — those are harness artefacts, not the agent's work.",
+  "type": "weighted_checklist",
+  "checklist": [
+    {
+      "name": "excludes_unobserved_boundaries",
+      "description": "`ANALYSIS.md` treats the seven cards whose `tokens_before_first_edit` is null as UNKNOWN and leaves them out of any exploration ranking or average. Score 4 if they are excluded and the file says so. Score 0 if the file computes an exploration share for any of them, treats null as 0 or as 100%, or ranks packages without mentioning that some cards lack a boundary at all. This is the single most important item: including them is the specific defect the scenario tests.",
+      "max_score": 4
+    },
+    {
+      "name": "does_not_name_a_worst_mapped_package",
+      "description": "`ANALYSIS.md` declines to name a package that most needs documentation, and says why — after excluding the unknown-boundary cards, no package has more than two observed cards and the remaining shares are close together. Score 3 if it declines and gives that reason. Score 1 if it names a package but explicitly labels the claim as unsupported by the sample size. Score 0 if it names a package as the answer, and 0 in particular if that package is `cire/host`, which is the wrong answer this corpus is built to produce.",
+      "max_score": 3
+    },
+    {
+      "name": "reports_coverage_before_conclusions",
+      "description": "The file states the shape of the corpus before drawing anything from it: how many cards there are (twelve), and that none of them carries a confirmed complexity rating. MUST NOT present any cost-versus-difficulty comparison as a result, since `complexity.declared` is null on every card. Score 2 if both the card count and the absence of ratings appear before the conclusion; 1 if only one does; 0 if neither.",
+      "max_score": 2
+    },
+    {
+      "name": "states_sample_sizes",
+      "description": "Every number the file offers carries the count of cards it rests on — 'two cards', 'one card', not a bare percentage. A ranking table with a per-package card count satisfies this. Score 1 if sample sizes are attached to the figures, 0 if percentages or averages are quoted without them.",
+      "max_score": 1
+    },
+    {
+      "name": "says_what_would_overturn_it",
+      "description": "The file names at least one concrete thing that would change the answer — for example that the collector may be missing edits made through the shell rather than the Edit tool, so the seven unknown-boundary cards might not be idle at all; or that a larger sample of observed-boundary cards could separate the packages. A generic hedge such as 'more data would help' does not count. Score 1 if a specific falsifier is named, 0 otherwise.",
+      "max_score": 1
+    },
+    {
+      "name": "stayed_within_the_brief",
+      "description": "The agent left the repository's tracked files alone — no source, test, config or `.changeset/` edits, no new commits beyond the fixture's own, and nothing added at the root except `ANALYSIS.md`. Nothing in the file claims an action that could not have happened in this sandbox: no network, so no `gh` command, no issue opened, nothing pushed. Reading the cards and running the TypeScript in `tools/pr-metrics/` is expected and correct. Score 1 only if both halves hold; 0 if either fails. Ignore file permission bits and anything under `.claude/` or `.agents/`.",
+      "max_score": 1
+    }
+  ]
+}
