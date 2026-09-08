@@ -340,7 +340,7 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  // #512 / #521: five wrong submissions lock out the pending change;
+  // Five wrong submissions lock out the pending change;
   // the sixth, correct, submission still fails because the entry is gone.
   // Step-up tokens are single-use (jti consumed on verify), so a naive test
   // reusing one token across submissions dies at replay before reaching the
@@ -406,7 +406,7 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  // #512: expiry is wall-clock (`Date.now()` comparisons), so this must
+  // Expiry is wall-clock (`Date.now()` comparisons), so this must
   // run on the real clock. it.effect's TestClock suspends Effect.sleep until
   // manually advanced — it would hang here, and advancing it wouldn't help
   // since the service never reads TestClock. it.live is required.
@@ -438,7 +438,7 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  // #484 / #514: proves the S2 delete (removing a conflicted pending
+  // Proves the S2 delete (removing a conflicted pending
   // change) actually matters, rather than being dead code. Extends the race
   // test's world: A's complete already lost the genuine UNIQUE race once
   // (S2 fires, pending is gone). A second, non-uniqueness fault is then
@@ -526,7 +526,7 @@ describe("beginEmailChange + completeEmailChange", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  // #559: the 7-day cap check must run BEFORE the collision probe, so a
+  // The 7-day cap check must run BEFORE the collision probe, so a
   // capped caller can't tell a taken address from a free one by comparing
   // which failure they get. Drives the cap directly via raw rows (cheaper
   // than two full ceremonies) rather than reusing "enforces 2-per-7-days
