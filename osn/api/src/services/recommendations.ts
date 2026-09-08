@@ -45,12 +45,12 @@ export class DatabaseError extends Data.TaggedError("DatabaseError")<{
  *
  * Bounds two things that must stay in lockstep: the size of `myConnectionIds`
  * below (which step 3 uses to tell "one of my connections" from "a
- * candidate") and the seed subquery the FOF query correlates against — see
- * that query for the subquery form it uses, which binds `profileId` once and
- * never binds `myConnectionIds` itself. Raising this constant is therefore
- * purely a decision about read cost and recall; it cannot overflow D1's
- * 100-bound-parameter-per-query cap, because the bind count does not grow
- * with it.
+ * candidate") and the seed subquery the FOF query filters against — see that
+ * query for the subquery form it uses, which binds `profileId` a fixed number
+ * of times and never binds `myConnectionIds` itself. Raising this constant is
+ * therefore purely a decision about read cost and recall; it cannot overflow
+ * D1's 100-bound-parameter-per-query cap, because the bind count does not
+ * grow with it.
  */
 const MAX_MY_CONNECTIONS_FOR_FOF = 500;
 
@@ -82,13 +82,11 @@ const MAX_FOF_FANOUT_ROWS = 10_000;
  * evenly — see the query that reads it, below — so each organisation's actual
  * share is `MAX_ORG_COMEMBER_ROWS / (number of the caller's organisations)`.
  *
- * A single query ordered `(organisation_id, profile_id)` and capped at this
- * total would starve every organisation but the lowest-id one: a caller in one
- * large organisation would fill the budget from that organisation alone, and a
- * caller in fifty organisations of 250 members each would see co-members from
- * about eight of them, every time, because organisation ids are random and the
- * draw is fixed per caller. The per-organisation split below exists to prevent
- * exactly that.
+ * The split is per-organisation on purpose: one global `ORDER BY
+ * (organisation_id, profile_id) LIMIT` spends the whole budget on the
+ * lowest-id organisations the caller belongs to, and organisation ids are
+ * random and fixed per caller, so the same few win every request. Do not
+ * revert it.
  */
 const MAX_ORG_COMEMBER_ROWS = 2_000;
 
@@ -642,8 +640,7 @@ export function createRecommendationService() {
                 // comment for why 5, not the 50 this originally unioned in one
                 // statement. The query both versions replaced gave the whole
                 // budget to one global `ORDER BY (organisation_id, profile_id)
-                // LIMIT MAX_ORG_COMEMBER_ROWS` — see the note on that constant
-                // for why that starved every organisation but the lowest-id one.
+                // LIMIT MAX_ORG_COMEMBER_ROWS`.
                 // Splitting the budget per organisation, with its own `ORDER
                 // BY profile_id LIMIT <share>`, is what fixes it: every
                 // organisation the caller belongs to contributes candidates,
@@ -672,7 +669,7 @@ export function createRecommendationService() {
                 // `LIMIT`.
                 //
                 // Measured on real (Miniflare/workerd) D1, three organisations
-                // of 600/300/100 members, cap 150, share 50: the pre-#574
+                // of 600/300/100 members, cap 150, share 50: the single
                 // global query read 151 rows for 150 results, and the window
                 // function read 2,860 for the same 150. Both the single-
                 // statement `UNION ALL` this batching replaces and the
@@ -846,10 +843,10 @@ export function createRecommendationService() {
       //
       // Fixed by re-reading, fresh, immediately before hydration, for just
       // the ids that survived ranking — at most `safeLimit` (≤ 50), so this
-      // cannot reopen #589's 100-bound cap. That safety is measured, not
+      // cannot reopen the 100-bound cap. That safety is measured, not
       // asserted: naively filtering with `or(inArray(requesterId, ids),
       // inArray(addresseeId, ids))` binds the id list TWICE, the same
-      // mistake #589 fixed, and at safeLimit's ceiling of 50 that is 102
+      // mistake this shape exists to avoid, and at safeLimit's ceiling of 50 that is 102
       // params (`bun run` against `.toSQL()` — 2 profileId equality binds +
       // 2 × 50-id `inArray`s — over D1's 100-per-statement cap). Each query
       // below instead runs the id filter once, against a subquery that
