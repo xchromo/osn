@@ -8,27 +8,20 @@
  * cleanup while growing comment volume, which is otherwise invisible until a
  * human opens the diff and counts by eye.
  *
- * Pass the base explicitly. Resolving it here with `git merge-base` would be
- * wrong whenever the base branch has been force-pushed since this branch was
- * cut: the merge-base then falls back to an older ancestor and the base's own
- * commits land in the count, which is how a branch running -40 once got
- * reported as +85.
+ * The base is passed in rather than resolved here. Resolving it with
+ * `git merge-base` is wrong whenever the base branch has been force-pushed
+ * since the branch was cut: the merge-base falls back to an older ancestor and
+ * the base's own commits land in the count, turning a branch that removes 40
+ * comment lines into one that appears to add 85.
  */
 
-const base = process.argv[2];
-if (!base) {
-  console.error("usage: bun run scripts/comment-delta.ts <base-ref>");
-  process.exit(2);
+export interface CommentDelta {
+  readonly added: number;
+  readonly removed: number;
+  readonly addedComments: number;
+  readonly removedComments: number;
+  readonly netComments: number;
 }
-
-const EXTENSIONS = ["*.ts", "*.tsx", "*.mjs", "*.js"];
-
-const diff = new TextDecoder().decode(
-  Bun.spawnSync({
-    cmd: ["git", "diff", `${base}...HEAD`, "--", ...EXTENSIONS],
-    stdout: "pipe",
-  }).stdout,
-);
 
 /**
  * Whether a diffed source line is comment text.
@@ -38,37 +31,68 @@ const diff = new TextDecoder().decode(
  * comment. Both are rare enough not to move the figure, and the alternative —
  * parsing every revision of every file — buys precision this does not need.
  */
-function isComment(line: string): boolean {
+export function isCommentLine(line: string): boolean {
   const t = line.trim();
   return t.startsWith("//") || t.startsWith("/*") || t.startsWith("*");
 }
 
-let added = 0;
-let removed = 0;
-let addedComments = 0;
-let removedComments = 0;
+/** Count added/removed lines in a unified diff, and how many of them are comments. */
+export function countCommentDelta(diff: string): CommentDelta {
+  let added = 0;
+  let removed = 0;
+  let addedComments = 0;
+  let removedComments = 0;
 
-for (const line of diff.split("\n")) {
-  if (line.startsWith("+++") || line.startsWith("---")) continue;
-  if (line.startsWith("+")) {
-    added++;
-    if (isComment(line.slice(1))) addedComments++;
-  } else if (line.startsWith("-")) {
-    removed++;
-    if (isComment(line.slice(1))) removedComments++;
+  for (const line of diff.split("\n")) {
+    // `+++`/`---` are file headers, not content, and would otherwise be counted
+    // as an added and a removed line in every file the diff touches.
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) {
+      added++;
+      if (isCommentLine(line.slice(1))) addedComments++;
+    } else if (line.startsWith("-")) {
+      removed++;
+      if (isCommentLine(line.slice(1))) removedComments++;
+    }
   }
+
+  return {
+    added,
+    removed,
+    addedComments,
+    removedComments,
+    netComments: addedComments - removedComments,
+  };
 }
 
-const net = addedComments - removedComments;
-const sign = net > 0 ? "+" : "";
+const EXTENSIONS = ["*.ts", "*.tsx", "*.mjs", "*.js"];
 
-console.log(`comment lines: +${addedComments} -${removedComments} (net ${sign}${net})`);
-console.log(
-  `all lines:     +${added} -${removed} (net ${added - removed >= 0 ? "+" : ""}${added - removed})`,
-);
-if (net > 0) {
-  console.log(
-    `\nThis branch adds ${net} comment lines. That is not a failure — but if it\n` +
-      `is a cleanup branch, check the diff for parentheticals that became paragraphs.`,
+function gitDiff(base: string): string {
+  return new TextDecoder().decode(
+    Bun.spawnSync({ cmd: ["git", "diff", `${base}...HEAD`, "--", ...EXTENSIONS], stdout: "pipe" })
+      .stdout,
   );
+}
+
+function signed(n: number): string {
+  return n >= 0 ? `+${n}` : `${n}`;
+}
+
+if (import.meta.main) {
+  const base = process.argv[2];
+  if (!base) {
+    console.error("usage: bun run scripts/comment-delta.ts <base-ref>");
+    process.exit(2);
+  }
+  const d = countCommentDelta(gitDiff(base));
+  console.log(
+    `comment lines: +${d.addedComments} -${d.removedComments} (net ${signed(d.netComments)})`,
+  );
+  console.log(`all lines:     +${d.added} -${d.removed} (net ${signed(d.added - d.removed)})`);
+  if (d.netComments > 0) {
+    console.log(
+      `\nThis branch adds ${d.netComments} comment lines. Not a failure — but on a\n` +
+        `cleanup branch, check the diff for parentheticals that became paragraphs.`,
+    );
+  }
 }
