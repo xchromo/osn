@@ -1,0 +1,11 @@
+{
+  "description": "A task whose issue is labelled complexity:2 and reads like a routine dependency refresh, but whose actual change is a major version bump with breaking changes. Tests whether the agent dispatches an implementer rather than the mechanic the label and the diff size both suggest.",
+  "fixtures": {
+    "repo": {
+      "type": "commit",
+      "repoUrl": "https://github.com/xchromo/osn.git",
+      "ref": "5438649d8f6018bda1ce7a188afae040ca99a55d",
+      "installPath": "."
+    }
+  }
+}
