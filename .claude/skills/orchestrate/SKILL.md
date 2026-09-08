@@ -178,17 +178,21 @@ Run the `prep-pr` skill on the branch. Its own steps validate the changeset, bui
 
 ### Step 5 — Watch, merge, tear down
 
-Delegate this to a **`shepherd` subagent** (`.claude/agents/shepherd.md`) — the slow CI polling should not sit in your context, and it does not need an expensive model to wait. It polls to a terminal state, merges, and removes the worktree:
+**Delegate the waiting, not the deciding.** Dispatch a **`shepherd` subagent** (`.claude/agents/shepherd.md`) to poll — slow CI polling should not sit in your context, and waiting does not need an expensive model. It polls to a terminal state and reports. It does not merge, does not rebase, does not push and does not remove a worktree: those are the only irreversible operations in this loop, and `shepherd` pins the cheapest model in the fleet precisely because it is not the thing making that call.
+
+The shepherd's whole job:
 
 ```bash
 gh pr ready <n>                                                       # if opened as a draft; then wait ~10 s before reading state
 gh pr view <n> --json mergeStateStatus,statusCheckRollup,state
 ```
 
-- All checks green and `mergeStateStatus: CLEAN` → `gh pr merge <n> --squash --delete-branch`.
-- `DIRTY` or `BEHIND` → rebase onto the latest `origin/main`, resolve conflicts (sibling PRs that merged first are usually additive — keep both sides; for changeset or version churn from the release workflow, take the regenerated state), re-run the touched package's tests, `git push --force-with-lease`, re-poll.
-- A real check failure → read the failing job, dispatch an `implementer` fix subagent, push, re-poll. Never merge red.
-- Once `MERGED`, the shepherd runs `git worktree remove --force <dir>`, deletes the local branch, and reports back. Never leave a merged task's worktree behind.
+It reports the terminal state, and for a failure the job name and the decisive line of its output — not the whole log. Then you act on what it reports:
+
+- All checks green and `mergeStateStatus: CLEAN` → **you** run `gh pr merge <n> --squash --delete-branch`.
+- `DIRTY` or `BEHIND` → dispatch an **`implementer`** to rebase onto the latest `origin/main`, resolve conflicts (sibling PRs that merged first are usually additive — keep both sides; for changeset or version churn from the release workflow, take the regenerated state), re-run the touched package's tests and `git push --force-with-lease`. Conflict resolution is a judgement call and a force-push is not recoverable, so neither belongs to the polling agent.
+- A real check failure → dispatch an `implementer` fix subagent, push, re-poll. Never merge red.
+- Once `MERGED`, **you** run `git worktree remove --force <dir>` and delete the local branch. Never leave a merged task's worktree behind.
 
 **Between dependent tasks:** `git fetch origin main` and fast-forward local `main` so the next worktree is cut from the updated tip. If a later task's branch already exists and now conflicts, rebase it before its Step 5.
 
