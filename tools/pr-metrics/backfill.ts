@@ -24,6 +24,8 @@
  * worse than no card, because a query cannot tell it from a cheap one.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+
 import {
   branchSlug,
   buildCard,
@@ -71,6 +73,17 @@ function flag(name: string): string | null {
  * --numstat` lines `parseNumstat` already understands. */
 export function numstatFromApi(files: ChangedFile[]): string {
   return files.map((f) => `${f.additions}\t${f.deletions}\t${f.filename}`).join("\n");
+}
+
+/** The branch a card on disk was written for, or `null` if it cannot be read. */
+function readCardBranch(path: string): string | null {
+  try {
+    const card = JSON.parse(readFileSync(path, "utf8") as string) as { pr?: { branch?: string } };
+
+    return card.pr?.branch ?? null;
+  } catch {
+    return null;
+  }
 }
 
 if (import.meta.main) {
@@ -158,6 +171,20 @@ if (import.meta.main) {
     // outside the class made `backfill` and `card` write two different files
     // for the same branch, and nothing downstream keys on the filename.
     const path = `${outDir}/${branchSlug(pull.headRefName)}.json`;
+
+    // `branchSlug` is not injective — `feat/x-`, `feat-x` and `feat/x` all slug
+    // to `feat-x` — and this loop writes many cards in one pass. `card` writes
+    // one per run and cannot see a clash; here it is visible, and a silently
+    // overwritten card is indistinguishable from a pull request that was never
+    // backfilled at all.
+    const existing = written > 0 && existsSync(path) ? readCardBranch(path) : null;
+    if (existing !== null && existing !== pull.headRefName) {
+      console.warn(
+        `  ⚠️  slug collision on ${branchSlug(pull.headRefName)}.json: \`${existing}\` and \`${pull.headRefName}\` — keeping the first, skipping #${pull.number}.`,
+      );
+      skipped.push(pull.number);
+      continue;
+    }
 
     if (dryRun) {
       console.log(

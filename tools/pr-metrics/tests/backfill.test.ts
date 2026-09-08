@@ -11,7 +11,7 @@
 // silently vanishes.
 
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -163,6 +163,10 @@ esac
   );
   await chmod(join(binDir, "gh"), 0o755);
 
+  // Assert the mode rather than trusting the `chmod` above. A comment saying
+  // why something is safe is intent; this is the control.
+  expect((await stat(join(binDir, "gh"))).mode & 0o111).toBeGreaterThan(0);
+
   return { dir, sessions, binDir, log, git };
 }
 
@@ -174,7 +178,22 @@ async function runBackfill(f: Awaited<ReturnType<typeof fixture>>, extra: string
       stdout: "pipe",
       stderr: "pipe",
       // Prepend, never replace: `git` and `sh` are still needed.
-      env: { ...process.env, PATH: `${f.binDir}:${process.env.PATH}` },
+      //
+      // The tokens are blanked as a SECOND line of defence. Shadowing on PATH
+      // is the happy path, but it fails on any exec error — a `noexec` TMPDIR,
+      // a filesystem that drops the execute bit, an MDM policy — and the real
+      // `gh` then resolves further down. With no credentials that fall-through
+      // exits non-zero and the test fails loudly offline, instead of quietly
+      // going online with the developer's account.
+      env: {
+        ...process.env,
+        PATH: `${f.binDir}:${process.env.PATH}`,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
+        GH_ENTERPRISE_TOKEN: "",
+        GH_CONFIG_DIR: join(f.dir, "gh-config"),
+        GH_NO_UPDATE_NOTIFIER: "1",
+      },
     },
   );
   const [stdout, stderr] = await Promise.all([
@@ -252,6 +271,11 @@ test("a merged PR with no local transcript is skipped, not written as a zero car
     expect(stdout).toContain("wrote 0 card(s)");
     expect(stdout).toContain(String(PR));
 
+    // Every test that spawns backfill proves the stub answered, not the real
+    // `gh` — otherwise this one would fail on the assertions above only after
+    // an authenticated call had already gone out.
+    expect(await readFile(f.log, "utf8")).toContain("pr list");
+
     // `mkdirSync` sits inside the write branch, so on a skip the directory is
     // never created — assert absence, not emptiness.
     expect(await Bun.file(join(f.dir, "cards", `${SLUG}.json`)).exists()).toBe(false);
@@ -276,6 +300,55 @@ test("--dry-run reports what it would write and writes nothing", async () => {
     const calls = await readFile(f.log, "utf8");
     expect(calls).toContain("pr list");
     expect(calls).toContain("--jq .commits");
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+// `branchSlug` is not injective: `feat/x-`, `feat-x` and `feat/x` all slug to
+// `feat-x`. `card` writes one file per run so it cannot notice; `backfill`
+// writes many in one pass and can. A silently overwritten card is
+// indistinguishable from a PR that was never backfilled, which is the same
+// failure the file already refuses for zero-cost cards.
+test("backfill warns rather than silently overwriting when two branches share a slug", async () => {
+  const f = await fixture({ withTranscript: true });
+  try {
+    // A second merged PR whose different branch name slugs to the same file.
+    await writeFile(
+      join(f.binDir, "gh"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(f.log)}
+case "$*" in
+  *"pr list"*)
+    printf '%s' '[{"number":${PR},"headRefName":"${BRANCH}","mergedAt":"2026-09-09T12:00:00Z","baseRefOid":"aaa","headRefOid":"bbb","labels":[],"closingIssuesReferences":[]},{"number":9999,"headRefName":"${SLUG}","mergedAt":"2026-09-09T13:00:00Z","baseRefOid":"ccc","headRefOid":"ddd","labels":[],"closingIssuesReferences":[]}]' ;;
+  *"/files"*)
+    printf '%s\\n' '{"filename":"osn/api/src/svc.ts","additions":1,"deletions":0}' ;;
+  *)
+    printf '%s' '3' ;;
+esac
+`,
+    );
+    await chmod(join(f.binDir, "gh"), 0o755);
+
+    // Both branches need transcripts, or the second is skipped before the
+    // collision can happen.
+    const project = join(f.sessions, await projectDirFor(f.dir));
+    await writeFile(
+      join(project, "sess-2.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        sessionId: "sess-2",
+        gitBranch: SLUG,
+        requestId: "req-other",
+        timestamp: "2026-09-09T11:00:00.000Z",
+        message: { model: "claude-opus-5", usage: { output_tokens: 50 } },
+      })}\n`,
+    );
+
+    const { stdout, stderr } = await runBackfill(f);
+
+    expect(stdout + stderr).toContain("collision");
+    expect(stdout + stderr).toContain(SLUG);
   } finally {
     await rm(f.dir, { recursive: true, force: true });
   }
