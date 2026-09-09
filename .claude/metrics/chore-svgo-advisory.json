@@ -5,7 +5,7 @@
     "branch": "chore/svgo-advisory",
     "base_sha": "2eb9393ca64639068c42d5a614e3df8ab68c6e61",
     "head_sha": "9d19c6885a48edb24aff2e429496fc5d53f97bb2",
-    "generated_at": "2026-09-09T06:24:29.014Z",
+    "generated_at": "2026-09-09T06:29:32.626Z",
     "merged_at": "2026-09-09T01:40:51Z",
     "phase": "at-merge"
   },
@@ -27,7 +27,7 @@
     "compactions": 0
   },
   "spend": {
-    "usd_equivalent": 0,
+    "usd_equivalent": 0.1384297,
     "tokens": {
       "input": 126,
       "output": 30,
@@ -46,7 +46,7 @@
           "cache_write_1h": 0,
           "cache_read": 682587
         },
-        "usd_equivalent": 0,
+        "usd_equivalent": 0.1384297,
         "messages": 15
       }
     },
@@ -72,14 +72,12 @@
           "cache_write_1h": 0,
           "cache_read": 682587
         },
-        "usd_equivalent": 0,
+        "usd_equivalent": 0.1384297,
         "messages": 15
       }
     },
     "effort": {},
-    "unpriced_models": [
-      "claude-haiku-4-5-20251001"
-    ]
+    "unpriced_models": []
   },
   "diff": {
     "files": {

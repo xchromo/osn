@@ -5,7 +5,7 @@
     "branch": "feat/shared-crypto-totp",
     "base_sha": "be06e53fb322237baf274b4091a777d7a1cad08f",
     "head_sha": "da51b21a83f31123722841649f4ef193118a0a4c",
-    "generated_at": "2026-09-09T06:24:29.012Z",
+    "generated_at": "2026-09-09T06:29:32.625Z",
     "merged_at": "2026-09-09T01:46:00Z",
     "phase": "at-merge"
   },
@@ -27,7 +27,7 @@
     "compactions": 0
   },
   "spend": {
-    "usd_equivalent": 21.198507000000003,
+    "usd_equivalent": 21.297085950000003,
     "tokens": {
       "input": 760,
       "output": 28062,
@@ -70,7 +70,7 @@
           "cache_write_1h": 0,
           "cache_read": 580957
         },
-        "usd_equivalent": 0,
+        "usd_equivalent": 0.09857895000000001,
         "messages": 13
       }
     },
@@ -96,7 +96,7 @@
           "cache_write_1h": 0,
           "cache_read": 28924624
         },
-        "usd_equivalent": 21.198507000000003,
+        "usd_equivalent": 21.297085950000003,
         "messages": 217
       }
     },
@@ -104,9 +104,7 @@
       "high": 9,
       "xhigh": 195
     },
-    "unpriced_models": [
-      "claude-haiku-4-5-20251001"
-    ]
+    "unpriced_models": []
   },
   "diff": {
     "files": {
