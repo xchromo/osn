@@ -12,7 +12,7 @@ packages:
   - "@osn/api"
   - "@osn/client"
   - "@osn/ui"
-last-reviewed: 2026-09-09
+last-reviewed: 2026-09-10
 ---
 # Recovery Codes
 
@@ -39,12 +39,66 @@ minutes and can do exactly one thing: enrol a passkey. Doing so lifts the
 restriction.
 
 All three behave identically once the factor is accepted: every session on the
-account is revoked and an audit row is written **in the same batch**, before the
-new session exists, then a notice is detached. `consumeRecoveryCode` is the
-reference implementation and the other two match it deliberately — a second
-recovery ceremony that revoked less, or recorded less, would be a quieter way
-into the same account. The audit rows differ only in `kind`
-(`recovery_code_consume` vs `account_recovered`).
+account is revoked, `accounts.last_recovered_at` is stamped, and an audit row is
+written **in the same batch**, before the new session exists, then a notice is
+detached. `consumeRecoveryCode` is the reference implementation and the other two
+match it deliberately — a second recovery ceremony that revoked less, or
+recorded less, would be a quieter way into the same account. The audit rows
+differ only in `kind` (`recovery_code_consume` vs `account_recovered`).
+
+## The cooldown, and the one path exempt from it
+
+`accounts.last_recovered_at` opens a 72-hour window in which two things are
+refused: changing the account email on a step-up whose factor was an emailed OTP
+— the reason that factor is admitted at all is that it proves control of the
+*current* mailbox, which is exactly what a recovery calls into question — and
+completing a **second** email or TOTP recovery.
+
+**The recovery-code path stamps the window and is never refused by it.** A
+recovery code is a 64-bit secret handed to the user once and told to keep;
+capping that path would shut the owner's only unauthenticated door for three
+days, and it is the one door a mailbox holder cannot open. The cap is on the two
+factor paths a mailbox or a stolen seed re-opens at will.
+
+The refusal happens at `complete`, the single point both factor paths pass
+through, and answers the same generic failure everything else there answers.
+`begin` is unchanged and still answers 202 on every branch — a cooldown that
+announced itself would be an account-existence oracle.
+
+> [!warning] What the window does not cover
+> `POST /recovery/generate` sits outside it. An attacker holding the mailbox can
+> still replace the owner's unused codes during the cooldown, and can dismiss
+> the security banner and remove TOTP the same way. Gating recovery generation
+> would stop an honest user replacing the codes a recovery has just spent —
+> which [[musubi-identity-migration]] prescribes as the immediate next step — so
+> the trade was made the other way. All three actions stay audited and notified.
+
+## `POST /recovery/disown` — "this wasn't me"
+
+The `recovery-used` notice carries a single-use token, valid 72 hours, in the
+URL **fragment**: mail scanners prefetch links, and a token in the query string
+would be spent by a security appliance before the recipient read the message.
+Unauthenticated, because the person who needs it has just been signed out of
+everything.
+
+It revokes the credentials that recovery enrolled — filtered on
+`provenance_amr` as well as time, so a credential the owner added afterwards
+with a passkey they still held survives — every session on the account, and
+`last_recovered_at` itself. Clearing the window is what stops one click becoming
+a three-day lockout: "this wasn't me" is by definition a request to be allowed
+to recover again.
+
+Every branch answers `202 {"status":"accepted"}` — a good token, a wrong one, a
+spent one, an expired one, and an account that would be left with no passkey at
+all. The last-passkey invariant wins over the revocation; in that case the
+sessions still go and only the outcome counter says so.
+
+> [!note] It arrives in the mailbox
+> Which, in the case the cooldown is written for, is the attacker's. The lever is
+> real for a TOTP recovery with the mailbox intact and for an owner who also
+> reads the mail. What protects an owner whose inbox is lost is the asymmetry:
+> a passkey that predates the recovery acts immediately. See
+> [[step-up#Credential provenance]].
 
 > [!warning] The email path is the one that sends mail to somebody who did not ask
 > `POST /login/recovery/email/begin` is unauthenticated and takes an **email
