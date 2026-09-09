@@ -245,7 +245,10 @@ describe("StepUpDialog — authenticator app factor", () => {
     const totp = totpStub({ enrolled: false });
     mount({ totp, purpose: "recovery_generate" });
     await waitFor(() => expect(totp.status).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
+    // A bare check here runs before the status resource has settled, so it
+    // observes "not yet rendered" rather than "correctly absent". Keep
+    // retrying until the resource resolves and the guard has had its say.
+    await waitFor(() => expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull());
   });
 
   it("hides the factor when no TOTP client is supplied at all", async () => {
@@ -259,7 +262,10 @@ describe("StepUpDialog — authenticator app factor", () => {
     mount({ totp: totpStub(new Error("network")), purpose: "recovery_generate" });
     await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
     expect(screen.getByRole("button", { name: /Email me a code/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
+    // Waiting on the always-present "Use passkey" button does not prove the
+    // status resource itself has settled. Keep retrying the absence check
+    // until it is genuinely true, rather than catching it mid-flight.
+    await waitFor(() => expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull());
   });
 
   it("exchanges a code for a token bound to the ceremony", async () => {
