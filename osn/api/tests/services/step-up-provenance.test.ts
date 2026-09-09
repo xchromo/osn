@@ -595,9 +595,10 @@ describe("fail-closed shapes", () => {
       );
       expect(err._tag).toBe("AuthError");
 
-      // And the case `<=` was proposed for is already covered, by W1: a WEAK
-      // post-recovery credential is refused against the same-second target
-      // whatever the recovery window says.
+      // And the case `<=` was proposed for is already covered by the
+      // registration-provenance rule — a WEAK post-recovery credential is
+      // refused against the same-second target whatever the recovery window
+      // says, which is why the strict comparison above gives nothing away.
       yield* stampCreatedAt(target.id, recoveredAt);
       const weakRegister = yield* auth.issueStepUpToken(
         profile.accountId,

@@ -751,7 +751,7 @@ describe("POST /recovery/disown", () => {
           .where(eq(passkeys.accountId, profile.accountId)),
       ),
     );
-    expect(after.map((r) => r.id).sort()).toEqual([original.id, secondCredential].sort());
+    expect(after.map((r) => r.id).toSorted()).toEqual([original.id, secondCredential].toSorted());
 
     // And the second recovery keeps its own 72 hours.
     const [row] = await h.svc(
