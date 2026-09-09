@@ -35,6 +35,26 @@ the common recovery case. The alternative — letting a restricted session mint
 step-up tokens — would hand it `/recovery/generate`, `DELETE /account`,
 `GET /account/export` and `/account/email/complete` as well.
 
+That bypass is the one grant of privilege here, and it is priced rather than
+assumed. `issueRecoverySession` takes a **required** `amr` — `"otp"`, `"totp"` or
+`"webauthn"` — refuses at mint time anything `passkeyRegisterAllowedAmr` does not
+admit, and records it in `sessions.restricted_amr` (new column, migration
+`0009`), which rotation carries forward alongside the deadline.
+`beginPasskeyRegistration` reads that column back off the caller's own session
+row, so its `caller` argument is now the session's hash
+(`{ recoverySessionHash }`) rather than a boolean the route asserted from the
+token's audience: no route can mint a session whose factor the gate would have
+refused, and narrowing the allow-list withdraws the bypass from sessions already
+issued.
+
+Two predicates were added to the write that lifts the restriction, which is the
+one place a restricted session becomes a full one. It is now scoped to the
+caller's `account_id`, like the two sibling session writes that take the same
+server-derived hash, and to `expires_at > now` — `liveSessionIds` has no expiry
+term, so an expired restricted row still classified as the caller's own and
+enrolment converted it into an ordinary 30-day session, making the real bound the
+15-minute deadline plus one access-token TTL rather than 15 minutes.
+
 Two behaviour changes beyond the issue, both closing ways the restriction would
 have failed open:
 

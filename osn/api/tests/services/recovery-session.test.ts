@@ -30,6 +30,8 @@ import { resolveAccessTokenPrincipal, resolveAccountId } from "../../src/lib/aut
 import { buildSessionCookies, readSessionCookie } from "../../src/lib/cookie-session";
 import {
   ACCESS_TOKEN_AUDIENCE,
+  MAX_PASSKEYS_PER_ACCOUNT,
+  MAX_SESSIONS_PER_ACCOUNT,
   RECOVERY_SESSION_TTL_SEC,
   RECOVERY_TOKEN_AUDIENCE,
   isReservedOidcClientId,
@@ -92,6 +94,34 @@ const sessionRow = (db: ReturnType<typeof makeHarness>["db"], refreshToken: stri
     return rows[0];
   });
 
+/**
+ * Seeds one credential on an account, so it is past the point where the
+ * step-up gate starts asking for a token.
+ */
+const seedPasskey = (
+  db: ReturnType<typeof makeHarness>["db"],
+  accountId: string,
+  id: string,
+  credentialId: string,
+) =>
+  Effect.promise(() =>
+    db.insert(passkeys).values({
+      id,
+      accountId,
+      credentialId,
+      publicKey: "AQIDBA==",
+      counter: 0,
+      transports: null,
+      createdAt: new Date(),
+      label: null,
+      lastUsedAt: null,
+      aaguid: null,
+      backupEligible: false,
+      backupState: false,
+      updatedAt: Math.floor(Date.now() / 1000),
+    }),
+  );
+
 /** Decodes a JWT payload without verifying it — these tests assert on `aud`. */
 function payloadOf(jwt: string): Record<string, unknown> {
   const part = jwt.split(".")[1]!;
@@ -112,6 +142,7 @@ describe("restricted recovery session — minting", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
 
       const payload = payloadOf(restricted.accessToken);
@@ -172,6 +203,7 @@ describe("restricted recovery session — every verifier rejects it", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const ordinary = yield* auth.issueTokens(
         user.id,
@@ -199,6 +231,7 @@ describe("restricted recovery session — every verifier rejects it", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const ordinary = yield* auth.issueTokens(
         user.id,
@@ -227,6 +260,7 @@ describe("restricted recovery session — every verifier rejects it", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const ordinary = yield* auth.issueTokens(
         user.id,
@@ -281,6 +315,7 @@ describe("restricted recovery session — every verifier rejects it", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const ordinary = yield* auth.issueTokens(
         user.id,
@@ -315,6 +350,7 @@ describe("restricted recovery session — rotation and expiry", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const before = yield* sessionRow(db, restricted.refreshToken);
 
@@ -347,6 +383,7 @@ describe("restricted recovery session — rotation and expiry", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const before = yield* sessionRow(db, restricted.refreshToken);
 
@@ -394,6 +431,7 @@ describe("restricted recovery session — rotation and expiry", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const ordinary = yield* auth.issueTokens(
         user.id,
@@ -435,6 +473,7 @@ describe("restricted recovery session — rotation and expiry", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
 
       const err = yield* Effect.flip(auth.verifyRefreshToken(restricted.refreshToken));
@@ -466,6 +505,7 @@ describe("restricted recovery session — the session cookie", () => {
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
 
       // Exactly what `POST /login/recovery/complete` does with its token set.
@@ -511,6 +551,7 @@ describe("restricted recovery session — enrolling a passkey lifts the restrict
         user.email,
         user.handle,
         user.displayName,
+        "otp",
       );
       const callerHash = auth.hashSessionToken(restricted.refreshToken);
 
@@ -567,22 +608,14 @@ describe("restricted recovery session — enrolling a passkey lifts the restrict
       // its passkey row, so the account still has ≥1 credential and the
       // step-up gate would otherwise make recovery impossible.
       const user = yield* auth.registerProfile("rs-gate@example.com", "rsgate");
-      yield* Effect.promise(() =>
-        db.insert(passkeys).values({
-          id: "pk_seeded00001",
-          accountId: user.accountId,
-          credentialId: "seeded-credential",
-          publicKey: "AQIDBA==",
-          counter: 0,
-          transports: null,
-          createdAt: new Date(),
-          label: null,
-          lastUsedAt: null,
-          aaguid: null,
-          backupEligible: false,
-          backupState: false,
-          updatedAt: Math.floor(Date.now() / 1000),
-        }),
+      yield* seedPasskey(db, user.accountId, "pk_seeded00001", "seeded-credential");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
       );
 
       // No step-up token, account already holds a passkey.
@@ -590,9 +623,375 @@ describe("restricted recovery session — enrolling a passkey lifts the restrict
       expect(refused._tag).toBe("AuthError");
 
       const allowed = yield* auth.beginPasskeyRegistration(user.accountId, undefined, {
-        viaRecoverySession: true,
+        recoverySessionHash: auth.hashSessionToken(restricted.refreshToken),
       });
       expect(allowed.options.challenge).toBeTruthy();
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("restricted recovery session — the factor the bypass rests on", () => {
+  // Enrolling past the step-up gate is the one privilege this session has, and
+  // the argument for it is that the ceremony which minted the session was
+  // already strong enough for that gate. These tests are what make that an
+  // enforced precondition rather than a claim in a comment: the factor is
+  // named at mint time, refused when the allow-list does not admit it, written
+  // to the row, carried across rotation, and read back at the gate.
+
+  it.effect("records the minting factor on the session row", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      const user = yield* auth.registerProfile("rs-amr@example.com", "rsamr");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "totp",
+      );
+      const ordinary = yield* auth.issueTokens(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+      );
+
+      expect((yield* sessionRow(db, restricted.refreshToken))?.restrictedAmr).toBe("totp");
+      // The control: an ordinary session records no factor, so nothing on the
+      // everyday path can ever satisfy the gate's allow-list check.
+      expect((yield* sessionRow(db, ordinary.refreshToken))?.restrictedAmr).toBeNull();
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses to mint on a factor the register allow-list does not admit", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // A deployment that narrows `passkeyRegisterAllowedAmr` is saying an
+      // emailed OTP is not strong enough to bind a new authenticator. A
+      // recovery session minted from one would hand that account exactly the
+      // strength the operator just withdrew.
+      const narrowed = createAuthService({ ...config, passkeyRegisterAllowedAmr: ["webauthn"] });
+      const user = yield* narrowed.registerProfile("rs-amrno@example.com", "rsamrno");
+
+      const err = yield* Effect.flip(
+        narrowed.issueRecoverySession(
+          user.id,
+          user.accountId,
+          user.email,
+          user.handle,
+          user.displayName,
+          "otp",
+        ),
+      );
+      expect(err._tag).toBe("AuthError");
+      // Refused at mint time means no session at all, not a session that fails
+      // later: only the admitted factor's row exists.
+      const admitted = yield* narrowed.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "webauthn",
+      );
+      const rows = yield* Effect.promise(() =>
+        db.select().from(sessions).where(eq(sessions.accountId, user.accountId)),
+      );
+      expect(rows.map((r) => r.restrictedAmr)).toEqual(["webauthn"]);
+      expect(admitted.accessToken).toBeTruthy();
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("rotation carries the factor forward with the deadline", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // Dropping it on rotation would retire the bypass on the first silent
+      // refresh — five minutes in, mid-recovery, with no error anywhere.
+      const user = yield* auth.registerProfile("rs-amrrot@example.com", "rsamrrot");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "totp",
+      );
+
+      const rotated = yield* auth.refreshTokens(restricted.refreshToken);
+
+      expect((yield* sessionRow(db, rotated.refreshToken))?.restrictedAmr).toBe("totp");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("the gate reads the recorded factor, not the caller's word for it", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // Same session, same hash, two services that disagree about which factors
+      // may bind an authenticator. The one that does not admit `otp` must refuse
+      // the bypass — which it can only do by reading the row.
+      const user = yield* auth.registerProfile("rs-amrgate@example.com", "rsamrgate");
+      yield* seedPasskey(db, user.accountId, "pk_amrgate0001", "amr-gate-credential");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+      const caller = { recoverySessionHash: auth.hashSessionToken(restricted.refreshToken) };
+
+      const narrowed = createAuthService({ ...config, passkeyRegisterAllowedAmr: ["webauthn"] });
+      const refused = yield* Effect.flip(
+        narrowed.beginPasskeyRegistration(user.accountId, undefined, caller),
+      );
+      expect(refused._tag).toBe("AuthError");
+
+      // The control, on the same row: the default allow-list admits `otp`.
+      const allowed = yield* auth.beginPasskeyRegistration(user.accountId, undefined, caller);
+      expect(allowed.options.challenge).toBeTruthy();
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a hash that is not a live restricted session of this account admits nothing", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      const user = yield* auth.registerProfile("rs-amrbad@example.com", "rsamrbad");
+      yield* seedPasskey(db, user.accountId, "pk_amrbad00001", "amr-bad-credential");
+      const ordinary = yield* auth.issueTokens(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+      );
+      const other = yield* auth.registerProfile("rs-amrbad2@example.com", "rsamrbad2");
+      const othersRecovery = yield* auth.issueRecoverySession(
+        other.id,
+        other.accountId,
+        other.email,
+        other.handle,
+        other.displayName,
+        "otp",
+      );
+
+      // The caller's own ORDINARY session: restricted_until is null, so there
+      // is no ceremony behind it to inherit strength from.
+      const viaOrdinary = yield* Effect.flip(
+        auth.beginPasskeyRegistration(user.accountId, undefined, {
+          recoverySessionHash: auth.hashSessionToken(ordinary.refreshToken),
+        }),
+      );
+      expect(viaOrdinary._tag).toBe("AuthError");
+
+      // Another account's restricted session. Scoped by `account_id`, so a
+      // borrowed hash buys nothing.
+      const viaOther = yield* Effect.flip(
+        auth.beginPasskeyRegistration(user.accountId, undefined, {
+          recoverySessionHash: auth.hashSessionToken(othersRecovery.refreshToken),
+        }),
+      );
+      expect(viaOther._tag).toBe("AuthError");
+
+      // A hash matching no row at all.
+      const viaNothing = yield* Effect.flip(
+        auth.beginPasskeyRegistration(user.accountId, undefined, {
+          recoverySessionHash: auth.hashSessionToken("ses_nothing"),
+        }),
+      );
+      expect(viaNothing._tag).toBe("AuthError");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a restricted session past its deadline does not open the gate", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // `liveSessionIds` has no expiry term, so a row an instant past its
+      // deadline is still nameable as the caller's session. The gate checks the
+      // deadline itself rather than trusting that.
+      const user = yield* auth.registerProfile("rs-amrexp@example.com", "rsamrexp");
+      yield* seedPasskey(db, user.accountId, "pk_amrexp00001", "amr-exp-credential");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+      const caller = { recoverySessionHash: auth.hashSessionToken(restricted.refreshToken) };
+
+      // The control first, while the session is alive.
+      const allowed = yield* auth.beginPasskeyRegistration(user.accountId, undefined, caller);
+      expect(allowed.options.challenge).toBeTruthy();
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(Date.now() + (RECOVERY_SESSION_TTL_SEC + 60) * 1000));
+
+      const refused = yield* Effect.flip(
+        auth.beginPasskeyRegistration(user.accountId, undefined, caller),
+      );
+      expect(refused._tag).toBe("AuthError");
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("restricted recovery session — what the lift refuses to do", () => {
+  const fakeAttestation = () =>
+    ({
+      id: "x",
+      rawId: "x",
+      response: {},
+      type: "public-key",
+      clientExtensionResults: {},
+    }) as never;
+
+  it.effect("does not revive a restricted session that is already past its deadline", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // The deadline is absolute, and the enrolment path is the one place that
+      // could undo it: `liveSessionIds` still names an expired restricted row,
+      // so without a liveness term the lift would turn a dead 15-minute session
+      // into a live 30-day one. Expiry is otherwise enforced in
+      // `verifyRefreshToken`, which enrolment never calls.
+      const user = yield* auth.registerProfile("rs-liftexp@example.com", "rsliftexp");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+      const before = yield* sessionRow(db, restricted.refreshToken);
+      const callerHash = auth.hashSessionToken(restricted.refreshToken);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(Date.now() + (RECOVERY_SESSION_TTL_SEC + 60) * 1000));
+
+      // The account holds no passkey yet, so the enrolment itself still runs —
+      // this is the lift being refused, not the ceremony.
+      yield* auth.beginPasskeyRegistration(user.accountId);
+      yield* auth.completePasskeyRegistration(user.accountId, fakeAttestation(), callerHash);
+
+      const after = yield* sessionRow(db, restricted.refreshToken);
+      expect(after?.restrictedUntil).toBe(before!.restrictedUntil);
+      expect(after!.expiresAt).toBe(before!.expiresAt);
+      expect(after?.restrictedAmr).toBe("otp");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not lift a session belonging to another account", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // `completePasskeyRegistration` takes the caller's hash as a plain
+      // parameter, so the predicate is what stops one account's enrolment
+      // clearing the restriction on another account's recovery session. Its two
+      // siblings over this table both scope by account for the same reason.
+      const victim = yield* auth.registerProfile("rs-liftown@example.com", "rsliftown");
+      const other = yield* auth.registerProfile("rs-liftown2@example.com", "rsliftown2");
+      const restricted = yield* auth.issueRecoverySession(
+        victim.id,
+        victim.accountId,
+        victim.email,
+        victim.handle,
+        victim.displayName,
+        "otp",
+      );
+      const before = yield* sessionRow(db, restricted.refreshToken);
+
+      yield* auth.beginPasskeyRegistration(other.accountId);
+      yield* auth.completePasskeyRegistration(
+        other.accountId,
+        fakeAttestation(),
+        auth.hashSessionToken(restricted.refreshToken),
+      );
+
+      const after = yield* sessionRow(db, restricted.refreshToken);
+      expect(after?.restrictedUntil).toBe(before!.restrictedUntil);
+      expect(after!.expiresAt).toBe(before!.expiresAt);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("restricted recovery session — the caps it does not lift", () => {
+  // Both properties are documented in `[[wiki/systems/sessions]]`, and a
+  // documented property with no test quietly stops being true. The passkey one
+  // is the subject of `xchromo/osn#970`, so the behaviour that issue is about
+  // has to be the behaviour a test names.
+
+  it.effect("an account at the passkey cap still cannot enrol through recovery", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      const user = yield* auth.registerProfile("rs-cap@example.com", "rscap");
+      for (let i = 0; i < MAX_PASSKEYS_PER_ACCOUNT; i++) {
+        yield* seedPasskey(db, user.accountId, `pk_cap${i}`, `cap-credential-${i}`);
+      }
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+
+      const refused = yield* Effect.flip(
+        auth.beginPasskeyRegistration(user.accountId, undefined, {
+          recoverySessionHash: auth.hashSessionToken(restricted.refreshToken),
+        }),
+      );
+      expect(refused._tag).toBe("AuthError");
+      expect((refused as { message: string }).message).toContain("Passkey limit reached");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a recovery session counts against the per-account session cap", () => {
+    const { layer, db } = makeHarness();
+    return Effect.gen(function* () {
+      // It takes a slot like any other session — an account at the cap loses
+      // its least recently used one to make room, rather than the recovery
+      // session failing to issue.
+      const user = yield* auth.registerProfile("rs-scap@example.com", "rsscap");
+      const nowSec = Math.floor(Date.now() / 1000);
+      yield* Effect.promise(() =>
+        db.insert(sessions).values(
+          Array.from({ length: MAX_SESSIONS_PER_ACCOUNT }, (_, i) => ({
+            id: `seeded-session-${i}`,
+            accountId: user.accountId,
+            familyId: `sfam_seeded_${i}`,
+            expiresAt: nowSec + 2592000,
+            createdAt: nowSec,
+            authenticatedAt: nowSec,
+            uaLabel: null,
+            ipHash: null,
+            // Ascending, so `seeded-session-0` is the least recently used and
+            // the one eviction should take.
+            lastUsedAt: nowSec + i,
+            restrictedUntil: null,
+            restrictedAmr: null,
+          })),
+        ),
+      );
+
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+
+      const rows = yield* Effect.promise(() =>
+        db.select().from(sessions).where(eq(sessions.accountId, user.accountId)),
+      );
+      expect(rows).toHaveLength(MAX_SESSIONS_PER_ACCOUNT);
+      const ids = rows.map((r) => r.id);
+      expect(ids).toContain(auth.hashSessionToken(restricted.refreshToken));
+      expect(ids).not.toContain("seeded-session-0");
     }).pipe(Effect.provide(layer));
   });
 });

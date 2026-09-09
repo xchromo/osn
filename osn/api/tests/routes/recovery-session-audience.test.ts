@@ -12,19 +12,59 @@
  * See `wiki/architecture/account-recovery-factors.md` §B.
  */
 
-import { passkeys } from "@osn/db/schema";
+import { passkeys, sessions } from "@osn/db/schema";
 import type { Db } from "@osn/db/service";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 
+import { buildSessionCookies } from "../../src/lib/cookie-session";
 import { createGraphRoutes } from "../../src/routes/graph";
 import { createOrganisationRoutes } from "../../src/routes/organisation";
 import { createRecommendationRoutes } from "../../src/routes/recommendations";
 import { createAuthService } from "../../src/services/auth";
+import { ACCESS_TOKEN_AUDIENCE } from "../../src/services/auth/constants";
 import { makeTestAuthConfig } from "../helpers/auth-config";
 import { createTestLayerWithSqlite } from "../helpers/db";
 // Wrapped factory (trust XFF under app.handle). See helpers/routes.
 import { createAuthRoutes } from "../helpers/routes";
+
+// `/passkey/register/complete` runs a real WebAuthn attestation through
+// `@simplewebauthn/server`, which no route test can produce. Only the verifier
+// is stubbed, so `/begin` still plants a real challenge and the route composition
+// under test — principal, caller classification, lift — is untouched.
+vi.mock("@simplewebauthn/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@simplewebauthn/server")>();
+  return {
+    ...actual,
+    verifyRegistrationResponse: vi.fn(async () => ({
+      verified: true,
+      registrationInfo: {
+        credential: {
+          id: `cred-${Math.random().toString(16).slice(2, 10)}`,
+          publicKey: new Uint8Array([1, 2, 3, 4]),
+          counter: 0,
+          transports: undefined,
+        },
+        aaguid: "00000000-0000-0000-0000-000000000000",
+        credentialBackedUp: false,
+        credentialDeviceType: "singleDevice",
+      },
+    })),
+  };
+});
+
+/** Matches the route factories' default: no TLS locally, so no `__Host-` prefix. */
+const COOKIE_CONFIG = { secure: false } as const;
+
+/** The body `/passkey/register/complete` takes; the attestation is stubbed above. */
+const FAKE_ATTESTATION = {
+  id: "x",
+  rawId: "x",
+  response: {},
+  type: "public-key",
+  clientExtensionResults: {},
+};
 
 let config: Awaited<ReturnType<typeof makeTestAuthConfig>>;
 
@@ -62,10 +102,52 @@ describe("the osn-recovery audience at the route boundary", () => {
       auth.issueTokens(user.id, user.accountId, user.email, user.handle, user.displayName),
     );
     const restricted = await runWithLayer(
-      auth.issueRecoverySession(user.id, user.accountId, user.email, user.handle, user.displayName),
+      auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      ),
     );
-    return { user, ordinary: ordinary.accessToken, restricted: restricted.accessToken };
+    return {
+      user,
+      ordinary: ordinary.accessToken,
+      restricted: restricted.accessToken,
+      // The opaque half of the recovery session, for the routes that need the
+      // cookie as well as the bearer.
+      restrictedRefresh: restricted.refreshToken,
+    };
   }
+
+  /** The `Cookie` header a recovery route's `Set-Cookie` produces. */
+  const cookieHeaderFor = (refreshToken: string): string =>
+    buildSessionCookies(refreshToken, COOKIE_CONFIG)
+      .map((c) => c.split(";")[0])
+      .join("; ");
+
+  /** Seeds one credential, so the account is past the step-up gate's trigger. */
+  const seedPasskey = (accountId: string, id: string, credentialId: string) =>
+    runWithLayer(
+      Effect.promise(() =>
+        db.insert(passkeys).values({
+          id,
+          accountId,
+          credentialId,
+          publicKey: "AQIDBA==",
+          counter: 0,
+          transports: null,
+          createdAt: new Date(),
+          label: null,
+          lastUsedAt: null,
+          aaguid: null,
+          backupEligible: false,
+          backupState: false,
+          updatedAt: Math.floor(Date.now() / 1000),
+        }),
+      ),
+    );
 
   // ---------------------------------------------------------------------------
   // The three routes that call `verifyAccessToken` directly rather than through
@@ -207,25 +289,7 @@ describe("the osn-recovery audience at the route boundary", () => {
     // Losing the phone does not delete its passkey row, so the account still
     // holds a credential — the common recovery case, and the one the step-up
     // gate would otherwise make unrecoverable.
-    await runWithLayer(
-      Effect.promise(() =>
-        db.insert(passkeys).values({
-          id: "pk_raenrol00001",
-          accountId: user.accountId,
-          credentialId: "ra-enrol-credential",
-          publicKey: "AQIDBA==",
-          counter: 0,
-          transports: null,
-          createdAt: new Date(),
-          label: null,
-          lastUsedAt: null,
-          aaguid: null,
-          backupEligible: false,
-          backupState: false,
-          updatedAt: Math.floor(Date.now() / 1000),
-        }),
-      ),
-    );
+    await seedPasskey(user.accountId, "pk_raenrol00001", "ra-enrol-credential");
     const url = "http://localhost/passkey/register/begin";
     const body = JSON.stringify({ profileId: user.id });
 
@@ -256,7 +320,11 @@ describe("the osn-recovery audience at the route boundary", () => {
     // session could mint a step-up token it would reach /recovery/generate,
     // DELETE /account, GET /account/export and /account/email/complete — every
     // route the restriction exists to prevent.
-    const { ordinary, restricted } = await tokensFor("ra-stepup@example.com", "rastepup");
+    const { user, ordinary, restricted } = await tokensFor("ra-stepup@example.com", "rastepup");
+    // The ceremony needs a credential to challenge, so the control is only a
+    // control once the account holds one — otherwise it answers "no passkeys
+    // registered" and proves nothing about the audience.
+    await seedPasskey(user.accountId, "pk_rastepup0001", "ra-stepup-credential");
     const url = "http://localhost/step-up/passkey/begin";
 
     const refused = await authApp.handle(
@@ -275,6 +343,128 @@ describe("the osn-recovery audience at the route boundary", () => {
         body: JSON.stringify({}),
       }),
     );
-    expect(allowed.status).not.toBe(401);
+    // An exact status, and the ceremony options with it. `not.toBe(401)` also
+    // passes on 400, 429 and 500, so it never proved the ordinary token gets a
+    // working step-up ceremony — only that it failed differently.
+    expect(allowed.status).toBe(200);
+    const options = (await allowed.json()) as {
+      options?: { challenge?: string; allowCredentials?: { id: string }[] };
+    };
+    expect(options.options?.challenge).toBeTruthy();
+    expect(options.options?.allowCredentials?.map((c) => c.id)).toEqual(["ra-stepup-credential"]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // `/passkey/register/complete` — the route that lifts the restriction.
+  //
+  // It composes three things no service test composes: the resolver accepting
+  // the recovery audience, `readSessionCookie` + `classifyCallerSession` naming
+  // the caller's own restricted session, and the lift firing on the hash that
+  // comes back. Break any one and the enrolment still returns 200 or 409 while
+  // the restriction is silently never lifted — leaving a user whose session dies
+  // fifteen minutes after a successful recovery.
+  // ---------------------------------------------------------------------------
+
+  it("/passkey/register/complete lifts the restriction on a recovery caller", async () => {
+    const { user, restricted, restrictedRefresh } = await tokensFor(
+      "ra-complete@example.com",
+      "racomplete",
+    );
+    await seedPasskey(user.accountId, "pk_racomplete01", "ra-complete-credential");
+    const headers = {
+      Authorization: `Bearer ${restricted}`,
+      "Content-Type": "application/json",
+      // Exactly what `POST /login/recovery/complete` sets.
+      cookie: cookieHeaderFor(restrictedRefresh),
+    };
+
+    const begun = await authApp.handle(
+      new Request("http://localhost/passkey/register/begin", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ profileId: user.id }),
+      }),
+    );
+    expect(begun.status).toBe(200);
+
+    const completed = await authApp.handle(
+      new Request("http://localhost/passkey/register/complete", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ profileId: user.id, attestation: FAKE_ATTESTATION }),
+      }),
+    );
+    expect(completed.status).toBe(200);
+    expect((await completed.json()) as { passkeyId?: string }).toHaveProperty("passkeyId");
+
+    // The restriction is gone from the row the caller still holds...
+    const rows = await runWithLayer(
+      Effect.promise(() =>
+        db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, auth.hashSessionToken(restrictedRefresh)))
+          .limit(1),
+      ),
+    );
+    expect(rows[0]?.restrictedUntil).toBeNull();
+    expect(rows[0]?.restrictedAmr).toBeNull();
+
+    // ...and the session it leaves behind is an ordinary one on the wire: the
+    // next grant returns a token every verifier accepts.
+    const granted = await authApp.handle(
+      new Request("http://localhost/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          cookie: cookieHeaderFor(restrictedRefresh),
+        },
+        body: JSON.stringify({ grant_type: "refresh_token" }),
+      }),
+    );
+    expect(granted.status).toBe(200);
+    const { access_token } = (await granted.json()) as { access_token: string };
+    const claims = JSON.parse(
+      Buffer.from(access_token.split(".")[1]!, "base64url").toString("utf8"),
+    ) as { aud?: string };
+    expect(claims.aud).toBe(ACCESS_TOKEN_AUDIENCE);
+  });
+
+  it("/passkey/register/complete answers 409 when it cannot name the caller's session", async () => {
+    // A recovery token whose `osn_sid` names no live row: the session expired,
+    // was rotated out or was LRU-evicted. Wiping every session on the account
+    // is the wrong answer — the caller plainly has a session — and lifting
+    // nothing while returning 200 would hide a dead recovery. It fails closed.
+    const { user, restricted, restrictedRefresh } = await tokensFor(
+      "ra-stale@example.com",
+      "rastale",
+    );
+    const begun = await authApp.handle(
+      new Request("http://localhost/passkey/register/begin", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${restricted}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ profileId: user.id }),
+      }),
+    );
+    expect(begun.status).toBe(200);
+
+    await runWithLayer(
+      Effect.promise(() =>
+        db.delete(sessions).where(eq(sessions.id, auth.hashSessionToken(restrictedRefresh))),
+      ),
+    );
+
+    const completed = await authApp.handle(
+      // No cookie, and the binding now names nothing.
+      new Request("http://localhost/passkey/register/complete", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${restricted}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ profileId: user.id, attestation: FAKE_ATTESTATION }),
+      }),
+    );
+    expect(completed.status).toBe(409);
+    expect((await completed.json()) as { error?: string }).toMatchObject({
+      error: "session_stale",
+    });
   });
 });

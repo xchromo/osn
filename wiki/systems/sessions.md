@@ -153,6 +153,7 @@ So the access token is minted with `aud: "osn-recovery"` instead of `"osn-access
 |---|---|---|
 | Access-token `aud` | `osn-access` | `osn-recovery` |
 | `sessions.restricted_until` | `NULL` | Unix seconds, = `expires_at` |
+| `sessions.restricted_amr` | `NULL` | the factor that minted it — `otp`, `totp` or `webauthn` |
 | Lifetime | 30 days, sliding | **15 minutes, absolute — never slides** |
 | Accepted by | every verifier | `resolvePasskeyEnrollPrincipal` only |
 | Counts against `MAX_SESSIONS_PER_ACCOUNT` | yes | yes |
@@ -164,11 +165,28 @@ Two guards are load-bearing and neither is emergent:
 - **The sliding window is switched off explicitly.** `shouldExtend` is `expires_at - now < halfTtl`, and a restricted session's whole 15-minute life sits far inside half of a 30-day TTL — so the comparison alone is *always* true, and without a `restricted_until === null` term the one session that must expire on schedule is the one that gets extended to a month.
 - **`verifyRefreshToken` rejects a restricted session by default**, and `refreshTokens` is the only caller that opts in. This matters because `GET /authorize` resolves the signed-in user from the **session cookie**, not from an access token — see [[oidc-provider]]. A restricted session sets that cookie (it must; see below), so without the default it would complete an OIDC authorization and sign the user into every relying party: full access at a different service, from a session that has none here.
 
-**The enrolment gate is bypassed on purpose.** `beginPasskeyRegistration` refuses without a `passkey_register` step-up once the account holds ≥1 passkey — and losing a phone does not delete its passkey row, so that is the *common* recovery case, not an edge. A recovery-audience caller therefore skips that gate. The OTP or TOTP code that minted the session already was a ceremony at an AMR strength `passkeyRegisterAllowedAmr` accepts. The alternative — letting a restricted session mint step-up tokens — would hand it `/recovery/generate`, `DELETE /account`, `GET /account/export` and `/account/email/complete` along with it, which is everything the restriction exists to prevent. The per-account passkey cap is *not* bypassed, and an account already at the cap is currently unrecoverable (`xchromo/osn#970`).
+**The enrolment gate is bypassed on purpose, and the bypass is priced.** `beginPasskeyRegistration` refuses without a `passkey_register` step-up once the account holds ≥1 passkey — and losing a phone does not delete its passkey row, so that is the *common* recovery case, not an edge. A recovery-audience caller can therefore pass that gate. The alternative — letting a restricted session mint step-up tokens — would hand it `/recovery/generate`, `DELETE /account`, `GET /account/export` and `/account/email/complete` along with it, which is everything the restriction exists to prevent.
+
+The argument for skipping it is that the OTP or TOTP code which minted the session already **was** a ceremony, at a strength `passkeyRegisterAllowedAmr` accepts — so that is a precondition the code enforces rather than a claim it makes:
+
+- `issueRecoverySession` takes a **required** `amr` (`otp` / `totp` / `webauthn`), refuses at mint time anything the allow-list does not admit, and stores it in `sessions.restricted_amr`. There is no way to mint a session whose factor the gate would have refused.
+- The gate reads that column back off the caller's own session row — named from the cookie or the token's `osn_sid`, exactly as `/complete` names it — and admits the bypass only for a row that is this account's, still restricted, inside its deadline, and recording an admitted factor. Four fail-closed answers; an unresolvable session simply needs a step-up token like anyone else.
+- Narrowing `passkeyRegisterAllowedAmr` therefore withdraws the bypass from sessions **already issued**, not just from future ones.
+
+The per-account passkey cap is *not* bypassed, and an account already at the cap is currently unrecoverable (`xchromo/osn#970`).
 
 **Whatever issues one must set the session cookie**, exactly as `POST /login/recovery/complete` does. `completePasskeyRegistration`'s other-session sweep derives the caller from that cookie (or from the token's `osn_sid`) and answers `session_stale` (409) when it can do neither — so a recovery route that forgets `buildSessionCookies` produces a session that cannot finish the one thing it exists for.
 
-**Enrolling the passkey lifts the restriction.** `completePasskeyRegistration` clears `restricted_until` and replaces the absolute deadline with an ordinary sliding TTL, so the user is not signed out minutes after recovering. The write is conditional on `restricted_until IS NOT NULL`, so an everyday passkey add does not have its session clock quietly reset. From the next `/token` grant the access token carries `osn-access` again.
+**Enrolling the passkey lifts the restriction.** `completePasskeyRegistration` clears `restricted_until` and `restricted_amr` and replaces the absolute deadline with an ordinary sliding TTL, so the user is not signed out minutes after recovering. From the next `/token` grant the access token carries `osn-access` again.
+
+That `UPDATE` is the one write that turns a restricted session into a full one, so all four of its predicates earn their place:
+
+| Predicate | What it stops |
+|---|---|
+| `id = <caller's session hash>` | Lifting a session other than the one that just enrolled |
+| `account_id = <caller's account>` | A hash from another account being lifted through a caller who does not own it. Its two siblings over this table (`invalidateOtherAccountSessions`, `revokeAccountSession`) scope the same way, and `completePasskeyRegistration` takes the hash as a plain parameter |
+| `restricted_until IS NOT NULL` | An everyday passkey add quietly resetting the caller's session clock |
+| `expires_at > now` | Reviving a session past its 15-minute deadline. `liveSessionIds` has no expiry term, so an expired restricted row still classifies as the caller's own, and expiry is otherwise enforced only in `verifyRefreshToken` — which this path never calls. Without it the real bound was the deadline plus one access-token TTL |
 
 > [!note] No route mints one yet
 > The primitive ships ahead of the endpoints that use it. `POST /login/recovery/email/complete` and `POST /login/recovery/totp/complete` are separate work — see `wiki/architecture/account-recovery-factors.md` §B.

@@ -6,7 +6,7 @@
 import { sessions } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { rowsChanged } from "@shared/db-utils";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { ROTATION_RACE_MESSAGE } from "../../lib/grant-failure";
@@ -40,7 +40,7 @@ import {
 } from "./helpers";
 import type { AccessTokenClaims } from "./helpers";
 import type { ProfilesModule } from "./profiles";
-import type { SessionMeta, TokenSet } from "./types";
+import type { RecoveryFactorAmr, SessionMeta, TokenSet } from "./types";
 
 export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
   const {
@@ -50,6 +50,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     rotatedSessionStore,
     rotatedSessionStoreBackend,
     hashIp,
+    passkeyRegisterAllowedAmr,
   } = ctx;
   const { findDefaultProfile } = profiles;
 
@@ -124,9 +125,16 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     displayName: string | null,
     familyId: string | undefined,
     sessionMeta: SessionMeta | undefined,
-    restricted: boolean,
+    /**
+     * The factor behind a restricted recovery session, or `null` for an
+     * ordinary one. Non-null is what makes the session restricted, and the
+     * value is stored: the enrolment bypass reads it back rather than trusting
+     * the token's audience alone.
+     */
+    restrictedAmr: RecoveryFactorAmr | null,
   ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
+      const restricted = restrictedAmr !== null;
       // Generate opaque session token + store SHA-256 hash in DB. This runs
       // BEFORE the access token is signed: the JWT carries a binding to the
       // session it was minted from (`osn_sid`).
@@ -185,6 +193,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             ipHash: sessionMeta?.ip ? hashIp(sessionMeta.ip) : null,
             lastUsedAt: nowSec,
             restrictedUntil,
+            restrictedAmr,
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -202,7 +211,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     familyId?: string,
     sessionMeta?: SessionMeta,
   ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
-    issueSession(profileId, accountId, email, handle, displayName, familyId, sessionMeta, false);
+    issueSession(profileId, accountId, email, handle, displayName, familyId, sessionMeta, null);
 
   /**
    * Issues a **restricted recovery session**: the session account recovery
@@ -215,6 +224,14 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
    * Always a fresh family: a recovery session is a new chain, never a
    * continuation of whatever the user held before.
    *
+   * `amr` names the factor that proved the user's identity, and it is
+   * **required**. Enrolling past the step-up gate is the one privilege this
+   * session has, and it is granted on the strength of that ceremony — so the
+   * factor is refused here when `passkeyRegisterAllowedAmr` does not admit it,
+   * and recorded on the session row so the gate can check it rather than infer
+   * it from the audience. A caller cannot mint a session whose factor the
+   * enrolment gate would not have accepted.
+   *
    * The caller must set the session cookie exactly as `/login/recovery/complete`
    * does. `completePasskeyRegistration`'s other-session sweep resolves the
    * caller from that cookie (or from the token's `osn_sid`), and answers
@@ -226,9 +243,28 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     email: string,
     handle: string,
     displayName: string | null,
+    amr: RecoveryFactorAmr,
     sessionMeta?: SessionMeta,
   ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
-    issueSession(profileId, accountId, email, handle, displayName, undefined, sessionMeta, true);
+    Effect.gen(function* () {
+      if (!passkeyRegisterAllowedAmr.has(amr)) {
+        // Same shape as any other refusal on this surface: the caller asked for
+        // a session it may not have, and no session is issued.
+        return yield* Effect.fail(
+          new AuthError({ message: "Recovery factor not permitted for passkey enrolment" }),
+        );
+      }
+      return yield* issueSession(
+        profileId,
+        accountId,
+        email,
+        handle,
+        displayName,
+        undefined,
+        sessionMeta,
+        amr,
+      );
+    });
 
   // -------------------------------------------------------------------------
   // Token refresh (server-side sessions — Copenhagen Book C1)
@@ -272,6 +308,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
       uaLabel: string | null;
       ipHash: string | null;
       restrictedUntil: number | null;
+      restrictedAmr: string | null;
     },
     AuthError | DatabaseError,
     Db
@@ -353,6 +390,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         uaLabel: session.uaLabel,
         ipHash: session.ipHash,
         restrictedUntil: session.restrictedUntil,
+        restrictedAmr: session.restrictedAmr,
       };
     });
 
@@ -554,6 +592,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         uaLabel,
         ipHash,
         restrictedUntil,
+        restrictedAmr,
         // The one caller allowed to rotate a restricted session — rotating it
         // is the only thing a restricted session is for.
       } = yield* verifyRefreshToken(sessionToken, { allowRestricted: true });
@@ -655,6 +694,10 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             ipHash,
             lastUsedAt: nowSec,
             restrictedUntil,
+            // Carried forward with the deadline: the enrolment bypass reads the
+            // factor off whichever row the caller currently holds, and a
+            // rotation that dropped it would silently retire the bypass.
+            restrictedAmr,
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -741,13 +784,29 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
    * because enrolling a passkey is the one thing a restricted session exists to
    * do and the user has just done it.
    *
-   * `WHERE restricted_until IS NOT NULL` keeps this off the ordinary path: an
-   * everyday passkey add must not have its session's expiry quietly reset. A
-   * `null` hash is a no-op — that caller had no identifiable session, and
+   * Four predicates, and each closes a different way this write could grant
+   * more than it means to:
+   *
+   *  - `id = sessionHash` — the caller's own session, server-derived.
+   *  - `account_id = accountId` — scoped like every other session write that
+   *    takes a hash (`invalidateOtherAccountSessions`, `revokeAccountSession`),
+   *    so a hash belonging to another account can never be lifted through a
+   *    caller who does not own it.
+   *  - `restricted_until IS NOT NULL` keeps this off the ordinary path: an
+   *    everyday passkey add must not have its session's expiry quietly reset.
+   *  - `expires_at > now` — the 15-minute deadline is absolute, and nothing
+   *    revives a row that has passed it. `liveSessionIds` has no expiry term,
+   *    so a restricted row an instant past its deadline still classifies as the
+   *    caller's session, and without this the enrolment would convert it into
+   *    an ordinary 30-day one. Expiry is otherwise enforced in
+   *    `verifyRefreshToken`, which this path never calls.
+   *
+   * A `null` hash is a no-op — that caller had no identifiable session, and
    * `completePasskeyRegistration` has already revoked every session on the
    * account, restricted one included.
    */
   const liftSessionRestriction = (
+    accountId: string,
     sessionHash: string | null,
   ): Effect.Effect<void, DatabaseError, Db> =>
     Effect.gen(function* () {
@@ -758,8 +817,19 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         try: () =>
           db
             .update(sessions)
-            .set({ restrictedUntil: null, expiresAt: nowSec + refreshTokenTtl })
-            .where(and(eq(sessions.id, sessionHash), isNotNull(sessions.restrictedUntil))),
+            .set({
+              restrictedUntil: null,
+              restrictedAmr: null,
+              expiresAt: nowSec + refreshTokenTtl,
+            })
+            .where(
+              and(
+                eq(sessions.id, sessionHash),
+                eq(sessions.accountId, accountId),
+                isNotNull(sessions.restrictedUntil),
+                gt(sessions.expiresAt, nowSec),
+              ),
+            ),
         catch: (cause) => new DatabaseError({ cause }),
       });
     }).pipe(Effect.withSpan("auth.session.lift_restriction"));

@@ -294,6 +294,19 @@ export const sessions = sqliteTable(
      * lifts the restriction. NULL on every ordinary session.
      */
     restrictedUntil: integer("restricted_until"),
+    /**
+     * The RFC 8176 `amr` value of the factor that proved the user's identity
+     * before this restricted recovery session was minted — `otp`, `totp` or
+     * `webauthn`. NULL on every ordinary session, and cleared alongside
+     * `restrictedUntil` when the restriction lifts.
+     *
+     * A restricted session enrols a passkey **past the step-up gate**, and this
+     * column is what that bypass rests on: the enrolment path admits it only
+     * when the recorded factor is one `passkeyRegisterAllowedAmr` accepts, so
+     * the strength of the ceremony behind the session is checked rather than
+     * assumed. A restricted row with no recorded factor admits nothing.
+     */
+    restrictedAmr: text("restricted_amr"),
   },
   (t) => [
     index("sessions_account_idx").on(t.accountId),

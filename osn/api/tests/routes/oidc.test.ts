@@ -1144,19 +1144,22 @@ describe("token typing (S-M2)", () => {
     expect(header(id_token).typ).toBeUndefined();
   });
 
-  it("treats a client registered under a reserved audience as unknown", async () => {
-    const h = setup();
-    h.seedClient({ clientId: "osn-access" });
+  it.each(["osn-access", "osn-recovery"])(
+    "treats a client registered under the reserved audience %s as unknown",
+    async (clientId) => {
+      const h = setup();
+      h.seedClient({ clientId });
 
-    const res = await h.app.handle(
-      new Request(authorizeUrl({ ...goodParams, client_id: "osn-access" })),
-    );
+      const res = await h.app.handle(
+        new Request(authorizeUrl({ ...goodParams, client_id: clientId })),
+      );
 
-    expect(res.status).toBe(401);
-    expect(res.headers.get("location")).toBeNull();
-    expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("invalid_client");
-  });
+      expect(res.status).toBe(401);
+      expect(res.headers.get("location")).toBeNull();
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(await res.text()).toContain("invalid_client");
+    },
+  );
 });
 
 describe("connections (S-M3)", () => {
@@ -1603,6 +1606,7 @@ describe("GET /authorize with a restricted recovery session", () => {
         profile!.email,
         profile!.handle,
         profile!.displayName,
+        "otp",
       ),
     );
     const recoveryCookie = `osn_session=${restricted.refreshToken}`;
@@ -1642,6 +1646,7 @@ describe("GET /authorize with a restricted recovery session", () => {
         profile!.email,
         profile!.handle,
         profile!.displayName,
+        "otp",
       ),
     );
 

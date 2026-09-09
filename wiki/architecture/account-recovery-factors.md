@@ -106,10 +106,21 @@ The restriction is a **distinct token audience**, not a flag:
 *common* recovery case, since losing a phone does not delete its passkey row.
 A recovery-audience token therefore **bypasses that step-up**: the email OTP or
 TOTP code that minted the session already was a ceremony, at an AMR strength
-`passkeyRegisterAllowedAmr` accepts today. The alternative — letting a
+`passkeyRegisterAllowedAmr` accepts. The alternative — letting a
 restricted session mint step-up tokens — would let it reach
 `/recovery/generate`, `DELETE /account`, `GET /account/export` and
 `/account/email/complete`, i.e. everything the restriction claims to prevent.
+
+**And that strength is enforced, not assumed.** `issueRecoverySession` takes a
+**required** `amr` — `otp`, `totp` or `webauthn` — refuses at mint time anything
+`passkeyRegisterAllowedAmr` does not admit, and writes the value to
+`sessions.restricted_amr`. The gate reads it back off the caller's own session
+row, so the bypass turns on the recorded factor rather than on the audience
+alone: no route can mint a session whose factor the gate would have refused, an
+operator narrowing the allow-list withdraws the bypass from sessions already
+issued, and a restricted row with no recorded factor admits nothing. Whichever
+route ends a recovery therefore has to name the factor it verified — that
+argument is how the endpoints in §B connect to this gate.
 
 ### C. Recovery is loud — most of which already exists
 

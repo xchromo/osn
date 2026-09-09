@@ -163,6 +163,7 @@ Session tokens (formerly "refresh tokens") are **opaque** — not JWTs. The serv
 | `expires_at` | `integer` | Unix seconds |
 | `created_at` | `integer` | Unix seconds |
 | `restricted_until` | `integer` nullable | Non-null only on a restricted recovery session, where it equals `expires_at`. Drives **rotation**, not request-time authorisation — see [[sessions#The restricted recovery session]] |
+| `restricted_amr` | `text` nullable | The RFC 8176 factor that minted a restricted recovery session (`otp` / `totp` / `webauthn`). What the passkey-enrolment bypass is checked against, so the step-up it skips is priced at the ceremony actually performed. NULL on every ordinary session |
 
 Two profile management endpoints:
 - `POST /profiles/switch` — present the session token + target `profileId` in the request body; receive a new access token for that profile. Per-account rate limited (20 switches/hr).
