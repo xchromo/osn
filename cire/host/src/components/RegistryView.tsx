@@ -92,6 +92,11 @@ function giftStatus(gift: GiftLogEntry) {
         return { label: "Received", gone: false };
       case "refunded":
         return { label: "Refunded", gone: true };
+      // Held, not ended: the guest's bank has the money while it decides. `gone`
+      // keeps it out of the received total, which is the honest side to be on —
+      // the couple does not have this money today.
+      case "disputed":
+        return { label: "Payment disputed", gone: true };
       case "failed":
         return { label: "Didn't go through", gone: true };
     }

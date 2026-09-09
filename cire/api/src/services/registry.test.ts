@@ -87,7 +87,7 @@ function seedContribution(
     currency: string;
     primaryAmountMinor: number | null;
     primaryCurrency: string | null;
-    status: "pending" | "succeeded" | "failed" | "refunded";
+    status: "pending" | "succeeded" | "failed" | "refunded" | "disputed";
     familyId: string;
     /** Explicit `null` is meaningful: an attempt that never got a page (0060). */
     sessionId: string | null;
@@ -1203,6 +1203,77 @@ describe("refundContribution", () => {
     expect(outcome).toBe("ambiguous");
     expect(contribution(db, first).status).toBe("succeeded");
     expect(contribution(db, second).status).toBe("succeeded");
+  });
+
+  it("refuses to guess which of two gifts a dispute names", async () => {
+    // Same undecidable read the refund path has, and the same answer: nothing
+    // is written, and the log is what wants a human.
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const first = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+    const second = seedContribution(db, { status: "succeeded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.disputeContribution({
+        paymentIntentId: "pi_1",
+        stripeAccountId: ACCOUNT,
+        resolution: "opened",
+      }),
+    );
+
+    expect(outcome).toBe("ambiguous");
+    expect(contribution(db, first).status).toBe("succeeded");
+    expect(contribution(db, second).status).toBe("succeeded");
+  });
+
+  it("will not re-open a dispute on a gift already refunded", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+    const id = seedContribution(db, { status: "refunded", paymentIntentId: "pi_1" });
+
+    const outcome = await ok(
+      db,
+      registryService.disputeContribution({
+        paymentIntentId: "pi_1",
+        stripeAccountId: ACCOUNT,
+        resolution: "opened",
+      }),
+    );
+
+    expect(outcome).toBe("ignored");
+    expect(contribution(db, id).status).toBe("refunded");
+  });
+
+  it("clears the account a couple revoked, and says so only once", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+
+    const first = await ok(db, registryService.detachStripeAccount({ accountId: ACCOUNT }));
+    // The second delivery — Stripe sends every event at least once — matches
+    // nothing, because the id it names is already gone.
+    const second = await ok(db, registryService.detachStripeAccount({ accountId: ACCOUNT }));
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+
+  it("leaves another wedding's account alone", async () => {
+    const db = db0();
+    ownAccount(db, ACCOUNT);
+
+    const matched = await ok(
+      db,
+      registryService.detachStripeAccount({ accountId: "acct_someone_else" }),
+    );
+
+    expect(matched).toBe(false);
+    const row = db
+      .select()
+      .from(registrySettings)
+      .where(eq(registrySettings.weddingId, BOOTSTRAP_WEDDING_ID))
+      .get();
+    expect(row?.stripeAccountId).toBe(ACCOUNT);
   });
 
   it("takes a refunded gift out of the primary-currency total", async () => {

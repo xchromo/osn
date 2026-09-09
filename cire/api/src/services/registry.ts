@@ -105,7 +105,7 @@ export type RegistryClaimStatus = "reserved" | "purchased" | "released";
 /**
  * A contribution's lifecycle, mirroring `registry_contributions.status`.
  *
- * Every one of the four is written, and each by exactly one kind of Stripe
+ * Every one of the five is written, and each by exactly one kind of Stripe
  * event (S-M2):
  *
  *  - `pending` — the row the guest's own request writes, before they are handed
@@ -123,13 +123,25 @@ export type RegistryClaimStatus = "reserved" | "purchased" | "released";
  *  - `refunded` — it moved and went back. A `charge.refunded` for the FULL
  *    amount; a partial refund leaves the row `succeeded`, because the couple
  *    did keep part of it and the log would otherwise say a gift never arrived.
+ *  - `disputed` — the guest's bank has taken it back while it decides
+ *    (`charge.dispute.created`). The one status that is a HOLD rather than an
+ *    ending: `charge.dispute.closed` moves it on, to `succeeded` if the couple
+ *    won and `refunded` if they lost. It stays in the gift log — the couple
+ *    needs to see it — and out of the received total, which filters on
+ *    `succeeded`, because today the money is not theirs.
  *
  * The transitions are one-way and guarded in the service, not here: `pending` is
- * the only status that may fail or settle, and `succeeded` the only one that may
- * refund. Stripe delivers at least once, out of order, and retries for days, so
- * every one of these events arrives twice sooner or later.
+ * the only status that may fail or settle, `succeeded` the only one that may
+ * refund or open a dispute, and only a dispute may leave `disputed`. Stripe
+ * delivers at least once, out of order, and retries for days, so every one of
+ * these events arrives twice sooner or later.
  */
-export type RegistryContributionStatus = "pending" | "succeeded" | "failed" | "refunded";
+export type RegistryContributionStatus =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "refunded"
+  | "disputed";
 /** Which table a gift-log row came from — the discriminator the portal reads. */
 export type GiftKind = "claim" | "contribution";
 
@@ -661,7 +673,7 @@ function contributionsOnAccount(
  * uniqueness guard.
  */
 interface ContributionPatch {
-  status: string;
+  status: RegistryContributionStatus;
   updatedAt: Date;
   stripeCheckoutSessionId?: string;
   stripePaymentIntentId?: string | null;
@@ -1140,6 +1152,65 @@ export const registryService = {
       );
       return (rows as Array<{ weddingId: string }>).length > 0;
     }).pipe(Effect.withSpan("cire.registry.applyStripeAccountState"));
+  },
+
+  /**
+   * The couple revoked cire's access to their connected account, from their own
+   * Stripe dashboard. Stripe says so once, as `account.application.deauthorized`.
+   *
+   * Everything the platform could do with that account is gone with it: no
+   * charge, no account link, not even a capability read. So the id is CLEARED
+   * rather than flagged. Two things follow from that, and both are the point:
+   *
+   *  - the guest gate needs an account id, so the contribute button disarms in
+   *    the same write. Left alone, a guest would reach a Checkout that refuses;
+   *  - `attachStripeAccount` only ever fills a NULL id, so clearing it is also
+   *    what lets the couple reconnect. A flag beside a stale id would wedge them
+   *    on a dead account with no way back.
+   *
+   * `cash_gifts_enabled` is left alone, for the same reason `account.updated`
+   * leaves it alone: it is the couple's intent, and revoking a key is not the
+   * same as saying they never want gifts again. With no account the guest
+   * surface is closed regardless, and reconnecting restores what they chose.
+   *
+   * NO monotonic guard, unlike `applyStripeAccountState`, and deliberately.
+   * Deauthorization is terminal — after it, no `account.updated` can match a row
+   * whose id is now NULL — so the ordering hazard runs one way only: a stale
+   * `charges_enabled: true` arriving late must never re-open the surface, while
+   * a deauthorization arriving late must always close it. Gating this write on a
+   * timestamp would invert exactly that.
+   *
+   * Returns whether a row matched, so the caller can 200 either way: an event
+   * for an account this platform does not know is not an error.
+   */
+  detachStripeAccount(input: {
+    accountId: string;
+    /** Stripe's own `created`, in seconds. Recorded, never used as a gate. */
+    observedAt?: number;
+  }): Effect.Effect<boolean, never, DbService> {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const now = new Date();
+      const observed = input.observedAt === undefined ? now : new Date(input.observedAt * 1000);
+      const rows = yield* dbQuery(() =>
+        db
+          .update(registrySettings)
+          .set({
+            stripeAccountId: null,
+            // What the cleared id leaves behind — see the column comments.
+            stripeDeauthorizedAccountId: input.accountId,
+            stripeDeauthorizedAt: observed,
+            stripeChargesEnabled: false,
+            stripePayoutsEnabled: false,
+            stripeAccountUpdatedAt: observed,
+            updatedAt: now,
+          })
+          .where(eq(registrySettings.stripeAccountId, input.accountId))
+          .returning({ weddingId: registrySettings.weddingId })
+          .all(),
+      );
+      return (rows as Array<{ weddingId: string }>).length > 0;
+    }).pipe(Effect.withSpan("cire.registry.detachStripeAccount"));
   },
 
   /**
@@ -1759,6 +1830,94 @@ export const registryService = {
       );
       return "refunded";
     }).pipe(Effect.withSpan("cire.registry.refundContribution"));
+  },
+
+  /**
+   * A guest's bank pulled a gift back while it decides whether to keep it.
+   *
+   * Found by payment intent, exactly as a refund is, and carrying the same
+   * ambiguity check for the same reason: the column is indexed and not unique,
+   * so two gifts on one intent means the event names a row nothing here can
+   * pick, and picking one would move somebody else's gift.
+   *
+   * The three transitions, and why each is the one it is:
+   *
+   *  - `opened` moves a `succeeded` gift to `disputed`. The money is out of the
+   *    couple's balance today, so a log still reading "Received" is telling them
+   *    something untrue about their own bank account.
+   *  - `won` moves it back to `succeeded`. The bank sided with the couple and
+   *    the money returns; a gift that survived a dispute is a gift.
+   *  - `lost` moves it to `refunded`, which is what it has become — the guest
+   *    has their money and the couple does not.
+   *
+   * A `lost` may act on a `succeeded` row as well as a `disputed` one, because
+   * the `created` delivery can be the one that failed while `closed` got
+   * through, and a gift the couple no longer has must not stay in their total on
+   * the strength of a missed webhook. Nothing else moves: a `refunded` or
+   * `failed` row is already at an ending, and `pending` never held any money.
+   */
+  disputeContribution(input: {
+    paymentIntentId: string;
+    stripeAccountId: string;
+    resolution: "opened" | "won" | "lost";
+  }): Effect.Effect<
+    "disputed" | "restored" | "refunded" | "ignored" | "unknown" | "rejected" | "ambiguous",
+    never,
+    DbService
+  > {
+    return Effect.gen(function* () {
+      const db = yield* DbService;
+      const rows = yield* contributionsOnAccount(
+        and(
+          eq(registryContributions.stripePaymentIntentId, input.paymentIntentId),
+          ne(registryContributions.status, "pending"),
+        ) as SQL,
+        input.stripeAccountId,
+        2,
+      );
+      if (rows.length > 1) {
+        yield* Effect.logError("dispute names more than one contribution", {
+          paymentIntentId: input.paymentIntentId,
+          stripeAccountId: input.stripeAccountId,
+          contributionIds: rows.map((candidate) => candidate.id),
+        });
+        return "ambiguous";
+      }
+      const row = rows[0];
+      if (!row) return "unknown";
+      // The join found no settings row holding this account, so the gift does
+      // not belong to the account the event came from. Same refusal a refund
+      // makes, and for the same reason.
+      if (!row.ownedAccountId) return "rejected";
+
+      const next =
+        input.resolution === "opened"
+          ? row.status === "succeeded"
+            ? "disputed"
+            : null
+          : input.resolution === "won"
+            ? row.status === "disputed"
+              ? "succeeded"
+              : null
+            : row.status === "disputed" || row.status === "succeeded"
+              ? "refunded"
+              : null;
+      if (!next) return "ignored";
+
+      yield* dbQuery(() =>
+        db
+          .update(registryContributions)
+          .set({ status: next, updatedAt: new Date() })
+          // The status is re-checked in the predicate, not just read above: two
+          // dispute deliveries for one charge can be in flight together, and the
+          // read has already happened by the time either writes.
+          .where(
+            and(eq(registryContributions.id, row.id), eq(registryContributions.status, row.status)),
+          )
+          .run(),
+      );
+      return next === "disputed" ? "disputed" : next === "refunded" ? "refunded" : "restored";
+    }).pipe(Effect.withSpan("cire.registry.disputeContribution"));
   },
 
   createItem(

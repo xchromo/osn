@@ -606,6 +606,20 @@ export const registrySettings = sqliteTable("registry_settings", {
     .notNull()
     .default(false),
   stripeAccountUpdatedAt: integer("stripe_account_updated_at", { mode: "timestamp" }),
+  // A couple can revoke cire's access from their own Stripe dashboard, and
+  // Stripe says so once, in `account.application.deauthorized`. When that
+  // arrives `stripe_account_id` is cleared — the platform can no longer act on
+  // that account, and leaving the id would both keep the couple's contribute
+  // button armed against an account that will refuse the charge and block the
+  // reconnect (`attachStripeAccount` only ever fills a NULL id).
+  //
+  // The two columns below are what the cleared id leaves behind: WHEN it
+  // happened, and WHICH account it was. Nothing in the product reads them —
+  // they exist because this is the money path, and "which account did this
+  // wedding's gifts settle into before the couple disconnected" is a question
+  // somebody eventually asks with no other way to answer it.
+  stripeDeauthorizedAt: integer("stripe_deauthorized_at", { mode: "timestamp" }),
+  stripeDeauthorizedAccountId: text("stripe_deauthorized_account_id"),
   // ── What survives the 1-year sweep ──────────────────────────────────────
   // Gifts are guest data: `registry_claims` and `registry_contributions` both
   // hang off `families`, so the retention sweep's family delete cascades them
@@ -751,7 +765,11 @@ export const registryContributions = sqliteTable(
     familyId: text("family_id")
       .notNull()
       .references(() => families.id, { onDelete: "cascade" }),
-    status: text("status", { enum: ["pending", "succeeded", "failed", "refunded"] })
+    // `disputed` is a HOLD, not an ending: the guest's bank has pulled the money
+    // back while it decides, and the couple should see that rather than a gift
+    // that still reads as received. It resolves to `succeeded` (dispute won) or
+    // `refunded` (lost) when Stripe closes the case.
+    status: text("status", { enum: ["pending", "succeeded", "failed", "refunded", "disputed"] })
       .notNull()
       .default("pending"),
     // ── The money, both ways round ──────────────────────────────────────────

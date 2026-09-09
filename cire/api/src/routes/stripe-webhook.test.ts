@@ -775,6 +775,238 @@ describe("charge.refunded — money that went back", () => {
   });
 });
 
+const deauthorized = (overrides: { account?: string | null } = {}) =>
+  JSON.stringify({
+    id: "evt_deauth",
+    type: "account.application.deauthorized",
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    // The OBJECT is the application, whose id is the platform's own — the
+    // connected account is in the envelope, and that is what must be read.
+    data: { object: { id: "ca_platform", object: "application", name: "cire" } },
+  });
+
+const dispute = (
+  type: "charge.dispute.created" | "charge.dispute.closed",
+  overrides: { account?: string | null; dispute?: Record<string, unknown> } = {},
+) =>
+  JSON.stringify({
+    id: `evt_${type}`,
+    type,
+    created: nowSeconds(),
+    account: overrides.account === undefined ? ACCOUNT : overrides.account,
+    data: {
+      object: {
+        id: "dp_1",
+        charge: "ch_1",
+        payment_intent: "pi_1",
+        status: type === "charge.dispute.created" ? "needs_response" : "lost",
+        ...overrides.dispute,
+      },
+    },
+  });
+
+/**
+ * The couple revoking cire from their own Stripe dashboard.
+ *
+ * The money bug this closes: nothing here noticed. The cached
+ * `stripe_charges_enabled` stayed true, so the couple's contribute button stayed
+ * armed against an account that would refuse every charge — a guest pressing it
+ * got as far as a Stripe error, and the couple got nothing.
+ */
+describe("account.application.deauthorized — the couple revoked our access", () => {
+  it("clears the account and disarms the guest surface", async () => {
+    const { app, db } = buildApp();
+    // Start from a fully working account: charges on, gifts on.
+    await deliver(app, accountUpdated());
+    await db
+      .update(registrySettings)
+      .set({ cashGiftsEnabled: true })
+      .where(eq(registrySettings.weddingId, BOOTSTRAP_WEDDING_ID))
+      .run();
+
+    const res = await deliver(app, deauthorized());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, matched: true });
+    const row = await settings(db);
+    // The id is gone, which is what closes the guest gate AND what lets them
+    // reconnect — the attach path only ever fills a NULL id.
+    expect(row?.stripeAccountId).toBeNull();
+    expect(row?.stripeChargesEnabled).toBe(false);
+    expect(row?.stripePayoutsEnabled).toBe(false);
+    // And what the cleared id left behind.
+    expect(row?.stripeDeauthorizedAccountId).toBe(ACCOUNT);
+    expect(row?.stripeDeauthorizedAt).not.toBeNull();
+  });
+
+  it("never touches the couple's own intent", async () => {
+    // Same rule `account.updated` follows: `cash_gifts_enabled` is what they
+    // chose, and revoking a key is not them changing their mind. With no
+    // account the guest surface is shut regardless, and reconnecting restores
+    // what they picked.
+    const { app, db } = buildApp();
+    await db
+      .update(registrySettings)
+      .set({ cashGiftsEnabled: true })
+      .where(eq(registrySettings.weddingId, BOOTSTRAP_WEDDING_ID))
+      .run();
+
+    await deliver(app, deauthorized());
+
+    expect((await settings(db))?.cashGiftsEnabled).toBe(true);
+  });
+
+  it("cannot be re-opened by an account.updated that was in flight", async () => {
+    // The ordering hazard, and the reason detach carries no monotonic guard: a
+    // stale `charges_enabled: true` delivered after the revocation must never
+    // arm the surface again. It matches nothing, because the id is now NULL.
+    const { app, db } = buildApp();
+    await deliver(app, deauthorized());
+
+    const res = await deliver(app, accountUpdated());
+
+    expect(await res.json()).toEqual({ received: true, matched: false });
+    const row = await settings(db);
+    expect(row?.stripeAccountId).toBeNull();
+    expect(row?.stripeChargesEnabled).toBe(false);
+  });
+
+  it("acknowledges a revocation for an account it does not know", async () => {
+    const { app, db } = buildApp();
+    const res = await deliver(app, deauthorized({ account: "acct_someone_else" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, matched: false });
+    expect((await settings(db))?.stripeAccountId).toBe(ACCOUNT);
+  });
+
+  it("acknowledges a revocation with no account on the envelope", async () => {
+    const { app } = buildApp();
+    const res = await deliver(app, deauthorized({ account: null }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true });
+  });
+});
+
+/**
+ * Disputes — the one gift event that reaches the PLATFORM's balance.
+ *
+ * Express leaves cire liable for a connected account that goes negative, so a
+ * dispute nobody records is the expensive kind of silence. And the couple's log
+ * saying "Received" about money their bank has already taken back is the kind
+ * that costs trust.
+ */
+describe("charge.dispute — money held while the bank decides", () => {
+  it("holds a settled gift at disputed", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(app, dispute("charge.dispute.created"));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "disputed" });
+    const [gift] = await gifts(db);
+    expect(gift?.status).toBe("disputed");
+    // The amount is as GIVEN, here as everywhere: the row records what the
+    // guest sent, not what survived.
+    expect(gift?.amountMinor).toBe(12_500);
+  });
+
+  it("gives the gift back when the couple win", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    await deliver(app, dispute("charge.dispute.created"));
+
+    const res = await deliver(
+      app,
+      dispute("charge.dispute.closed", { dispute: { status: "won" } }),
+    );
+
+    expect(await res.json()).toEqual({ received: true, outcome: "restored" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("refunds it when the couple lose", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    await deliver(app, dispute("charge.dispute.created"));
+
+    const res = await deliver(app, dispute("charge.dispute.closed"));
+
+    expect(await res.json()).toEqual({ received: true, outcome: "refunded" });
+    expect((await gifts(db))[0]?.status).toBe("refunded");
+  });
+
+  it("refunds a lost dispute whose opening delivery never arrived", async () => {
+    // Stripe retries each delivery independently, so `closed` getting through
+    // while `created` did not is ordinary. A gift the couple no longer has must
+    // not stay in their total on the strength of a missed webhook.
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(app, dispute("charge.dispute.closed"));
+
+    expect(await res.json()).toEqual({ received: true, outcome: "refunded" });
+    expect((await gifts(db))[0]?.status).toBe("refunded");
+  });
+
+  it("ignores a close that ends an early warning, where no money moved", async () => {
+    // `warning_closed` ends an enquiry that never became a dispute. Treating it
+    // as a win would move a gift the bank never took.
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+
+    const res = await deliver(
+      app,
+      dispute("charge.dispute.closed", { dispute: { status: "warning_closed" } }),
+    );
+
+    expect(await res.json()).toEqual({ received: true, outcome: "ignored" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("refuses a dispute from an account the wedding does not own", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const res = await deliver(app, dispute("charge.dispute.created", { account: "acct_other" }));
+    expect(await res.json()).toEqual({ received: true, outcome: "rejected" });
+    expect((await gifts(db))[0]?.status).toBe("succeeded");
+  });
+
+  it("holds once, however many times Stripe delivers", async () => {
+    const { app, db, familyId } = buildApp();
+    await seedSettled(app, db, familyId);
+    const payload = dispute("charge.dispute.created");
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "disputed",
+    });
+    expect(await (await deliver(app, payload)).json()).toEqual({
+      received: true,
+      outcome: "ignored",
+    });
+    expect((await gifts(db))[0]?.status).toBe("disputed");
+  });
+
+  it("cannot dispute a gift that never settled", async () => {
+    const { app, db, familyId } = buildApp();
+    seedPending(db, familyId);
+    const res = await deliver(app, dispute("charge.dispute.created"));
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+    expect((await gifts(db))[0]?.status).toBe("pending");
+  });
+
+  it("acknowledges a dispute with no payment intent to join on", async () => {
+    const { app } = buildApp();
+    const res = await deliver(
+      app,
+      dispute("charge.dispute.created", { dispute: { payment_intent: null } }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, outcome: "unknown" });
+  });
+});
+
 /**
  * How much body it will read (S-H1).
  *

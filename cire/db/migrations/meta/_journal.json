@@ -421,6 +421,13 @@
       "when": 1786784249756,
       "tag": "0060_contribution_session_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1786784249757,
+      "tag": "0061_stripe_deauthorized",
+      "breakpoints": true
     }
   ]
 }

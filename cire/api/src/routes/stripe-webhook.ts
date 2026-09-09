@@ -59,6 +59,20 @@ import { verifyStripeWebhook } from "../services/stripe";
  * Every one of those transitions is one-way and guarded in the service: only a
  * `pending` row may fail, only a `succeeded` row may refund. A replayed or
  * forged `expired` cannot un-settle a gift somebody actually gave.
+ *
+ * **What it does with `account.application.deauthorized`.** Clears the couple's
+ * connected account off the settings row. A couple can revoke cire from their
+ * own Stripe dashboard, and until this event was handled nothing here noticed:
+ * the cached `charges_enabled` stayed true, so the contribute button stayed
+ * armed against an account that would refuse the charge. Clearing the id is
+ * also what lets them reconnect — the attach path only ever fills a NULL.
+ *
+ * **What it does with the two dispute events.** A gift whose money the guest's
+ * bank has pulled back is held at `disputed` rather than left reading as
+ * received, and the close puts it where the verdict says: back to `succeeded`
+ * if the couple won, `refunded` if they lost. Disputes are the one gift event
+ * that reaches the PLATFORM's balance — Express leaves cire liable for a
+ * connected account that goes negative — so a silent one is the expensive kind.
  */
 
 /**
@@ -137,6 +151,20 @@ const CHECKOUT_EXPIRED = "checkout.session.expired";
  * path finds its row by payment intent (migration 0059 indexes that column).
  */
 const CHARGE_REFUNDED = "charge.refunded";
+/**
+ * The couple revoked cire's access from their own Stripe dashboard. The event's
+ * object is the APPLICATION that was revoked — the account it happened on is in
+ * the envelope, same as every other Connect event, and that is what the handler
+ * reads.
+ */
+const ACCOUNT_DEAUTHORIZED = "account.application.deauthorized";
+/**
+ * A guest's bank pulled a gift back. Carries a DISPUTE, whose `payment_intent`
+ * is the same column the refund path matches on. `closed` says which way it
+ * went in `status`.
+ */
+const DISPUTE_CREATED = "charge.dispute.created";
+const DISPUTE_CLOSED = "charge.dispute.closed";
 
 export interface StripeWebhookDeps {
   /** Stripe's signing secret for this endpoint. Absent ⇒ do not mount. */
@@ -187,6 +215,30 @@ interface CheckoutSessionObject {
 interface ChargeObject {
   payment_intent?: unknown;
   refunded?: unknown;
+}
+
+/**
+ * The fields this product reads off a Dispute.
+ *
+ * `payment_intent` is the join back to the gift — the same column the refund
+ * path matches on. `status` only matters on `closed`, where it is Stripe's
+ * verdict; on `created` the handler already knows what happened.
+ */
+interface DisputeObject {
+  payment_intent?: unknown;
+  status?: unknown;
+}
+
+/**
+ * Which way a closed dispute went, or `null` for a close this product does not
+ * act on.
+ *
+ * `warning_closed` is the one worth naming: it ends an early-warning enquiry
+ * that never became a dispute, so no money ever moved and there is nothing to
+ * put back. Treating it as a win would move a gift the bank never took.
+ */
+function disputeVerdict(status: unknown): "won" | "lost" | null {
+  return status === "won" ? "won" : status === "lost" ? "lost" : null;
 }
 
 /** A metadata value Stripe gave back: a string, or nothing usable. */
@@ -334,6 +386,43 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
             const outcome = yield* registryService.refundContribution({
               paymentIntentId,
               stripeAccountId,
+            });
+            return { received: true, outcome };
+          }
+
+          if (type === ACCOUNT_DEAUTHORIZED) {
+            // The account is in the ENVELOPE, not the object: the object is the
+            // application that was revoked, and its id is the platform's own.
+            const stripeAccountId = metaString(envelope.account);
+            if (!stripeAccountId) return { received: true };
+            const matched = yield* registryService.detachStripeAccount({
+              accountId: stripeAccountId,
+              observedAt: typeof envelope.created === "number" ? envelope.created : undefined,
+            });
+            return { received: true, matched };
+          }
+
+          if (type === DISPUTE_CREATED || type === DISPUTE_CLOSED) {
+            const dispute = envelope.data?.object as DisputeObject;
+            const stripeAccountId = metaString(envelope.account);
+            const paymentIntentId = metaString(dispute?.payment_intent);
+            if (!stripeAccountId || !paymentIntentId) {
+              // A dispute with no intent to join on names nothing here. Same
+              // acknowledgement the refund path makes: a retry cannot add a
+              // field Stripe never sent.
+              return { received: true, outcome: "unknown" };
+            }
+            const resolution =
+              type === DISPUTE_CREATED ? "opened" : disputeVerdict(dispute?.status);
+            if (!resolution) {
+              // A close this product does not act on — an early-warning enquiry
+              // that ended without the money ever moving.
+              return { received: true, outcome: "ignored" };
+            }
+            const outcome = yield* registryService.disputeContribution({
+              paymentIntentId,
+              stripeAccountId,
+              resolution,
             });
             return { received: true, outcome };
           }

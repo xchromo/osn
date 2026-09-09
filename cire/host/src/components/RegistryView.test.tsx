@@ -638,15 +638,16 @@ describe("RegistryView — gifts received", () => {
 
   it("leaves an unfamiliar status showing rather than blanking the pill", async () => {
     // A newer API than this build. Swallowing the value would leave the row
-    // with no state at all.
+    // with no state at all. (`disputed` used to stand in for this and no longer
+    // can — the build learned it. Any value this one has no word for will do.)
     setCachedRegistry(
       "wed_1",
-      snapshot({ gifts: [gift({ id: "x", kind: "contribution", status: "disputed" })] }),
+      snapshot({ gifts: [gift({ id: "x", kind: "contribution", status: "reversed" })] }),
     );
     render(() => (
       <RegistryView weddingId="wed_1" weddingSlug="wed-1" view="gifts" canEdit={true} />
     ));
-    expect(await screen.findByText("disputed")).toBeInTheDocument();
+    expect(await screen.findByText("reversed")).toBeInTheDocument();
   });
 
   it("says so when there are no gifts yet", async () => {
