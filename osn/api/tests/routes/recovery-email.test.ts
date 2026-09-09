@@ -949,10 +949,10 @@ describe("recovery routes cost the same however a request ends", () => {
   });
 
   it("POST /login/recovery/email/complete — every branch makes the same four hops", async () => {
-    // THE test S-H1 exists for. The wrong-code branch is the costliest: the
-    // lockout lookup, the entry read, the attempt write, the failure record.
-    // Every other branch is padded up to it, including — especially — the one
-    // where the identifier resolves to nothing.
+    // The wrong-code branch is the costliest: the lockout lookup, the entry
+    // read, the attempt write, the failure record. Every other branch is padded
+    // up to it, including — especially — the one where the identifier resolves
+    // to nothing.
     //
     // Goes red on: removing any `burnProbeRead`/`burnLockoutRead` from the
     // unknown, locked or no-pending branches. Deleting the four in the unknown
@@ -1032,10 +1032,10 @@ describe("recovery routes cost the same however a request ends", () => {
   });
 
   it("POST /login/recovery/totp/complete — an unknown identifier costs what a real account costs", async () => {
-    // THE test S-H2 exists for, and the sharper of the two: this route resolves
-    // through the same `resolveIdentifier`, and the client documents that the
-    // identifier "may be a handle or an email address" — so a cheap miss here
-    // lets a stranger ask whether an EMAIL ADDRESS has an OSN account.
+    // The sharper of the two parity tests: this route resolves through the same
+    // `resolveIdentifier`, and the client documents that the identifier "may be
+    // a handle or an email address" — so a cheap miss here lets a stranger ask
+    // whether an EMAIL ADDRESS has an OSN account.
     //
     // The old padding burned one read against `pendingRecoveryOtp`, a store
     // this ceremony never otherwise touches, while a real account ran the
