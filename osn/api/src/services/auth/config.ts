@@ -57,18 +57,29 @@ export interface AuthConfig {
    */
   sessionIpPepper?: string;
   /**
-   * Permitted AMR ("authentication method reference") values for
-   * `/recovery/generate` step-up. The user explicitly wanted both passkey
-   * and OTP flows allowed; set narrower in production if desired.
+   * Permitted AMR ("authentication method reference") values for the
+   * `/recovery/generate` step-up gate.
+   *
+   * The name understates its reach: this one set is read by FIVE verifiers —
+   * `verifyStepUpForRecoveryGenerate`, `verifyStepUpForAccountDelete`
+   * (`DELETE /account`), `verifyStepUpForAccountExport` (the DSAR export),
+   * `verifyStepUpForExternalPurpose` (Pulse / Zap app deletion over
+   * `/internal/step-up/verify`) and both security-event acknowledge paths.
+   * Widening it widens all five. Defaults to passkey, OTP or TOTP.
    */
-  recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp")[];
+  recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
    * Permitted AMR values for `DELETE /passkeys/:id` step-up. Defaults to
    * passkey-only (`["webauthn"]`) — by construction the caller already
    * has at least one passkey (the last-passkey guard fires otherwise),
    * so accepting OTP would weaken the gate without UX gain (S-L4).
+   *
+   * TOTP is deliberately NOT admitted here, and the type permits it only so
+   * this array is assignable from the same literals as its two siblings. A
+   * stolen access token plus a cloud-synced authenticator seed must not be
+   * enough to delete the victim's real passkeys.
    */
-  passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp")[];
+  passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
    * Permitted AMR values for `/passkey/register/{begin,complete}` step-up
    * when the account already has ≥1 passkey (S-H1). First-passkey
@@ -77,9 +88,10 @@ export interface AuthConfig {
    * `["webauthn", "otp"]` because a user who legitimately wants to add a
    * second device may be doing so precisely because the original is hard
    * to reach; forcing passkey-only step-up would create a chicken-and-
-   * egg.
+   * egg. TOTP is admitted for the same reason, and this set also gates TOTP's
+   * own enrol / disable ceremonies.
    */
-  passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp")[];
+  passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
    * Cluster-wide single-use guard for step-up token jtis (S-H1). Inject a
    * Redis-backed store in multi-pod deployments; otherwise the default
@@ -100,6 +112,22 @@ export interface AuthConfig {
    * `recovery-lockout-store.ts`.
    */
   recoveryLockoutStore?: RecoveryLockoutStore;
+  /**
+   * Per-account TOTP failed-code lockout. Same shape as the recovery counter
+   * and the OPPOSITE outage posture — it fails closed. See
+   * `lib/recovery-lockout-store.ts`.
+   */
+  totpLockoutStore?: RecoveryLockoutStore;
+  /**
+   * AES-GCM key that TOTP shared secrets are encrypted under at rest, imported
+   * once at boot from `OSN_TOTP_ENCRYPTION_KEY`. `buildAppDeps` always supplies
+   * one — the real secret in a deployed tier, an ephemeral key in local dev.
+   *
+   * Optional here so every existing `AuthConfig` literal still type-checks.
+   * Absent does NOT mean "store the secret in plain text": the TOTP service has
+   * no plaintext path and fails closed when this is unset.
+   */
+  totpEncryptionKey?: CryptoKey;
   /**
    * O3: injectable Redis-backed ceremony / pending-state stores. When omitted
    * each falls back to an in-memory `Map` (single-process only). Multi-pod

@@ -14,6 +14,8 @@ import {
   EMAIL_CHANGE_BEGIN_PER_ACCOUNT_WINDOW_MS,
   PROFILE_SWITCH_MAX,
   PROFILE_SWITCH_WINDOW_MS,
+  TOTP_LOCKOUT_MS,
+  TOTP_LOCKOUT_THRESHOLD,
 } from "./constants";
 import {
   createDefaultCeremonyStores,
@@ -26,12 +28,16 @@ export function createAuthContext(config: AuthConfig) {
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
   const otpTtl = config.otpTtl ?? 600;
   const stepUpTokenTtl = config.stepUpTokenTtl ?? 300;
+  // TOTP joins the two sets that already accept an emailed OTP. It does NOT
+  // join `passkeyDeleteAllowedAmr`, which stays the strongest gate in the
+  // service, and the email-change gate keeps its own inline set — see
+  // `[[wiki/systems/step-up]]` for the whole table and the reasoning.
   const recoveryGenerateAllowedAmr = new Set<string>(
-    config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp"],
+    config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp", "totp"],
   );
   const passkeyDeleteAllowedAmr = new Set<string>(config.passkeyDeleteAllowedAmr ?? ["webauthn"]);
   const passkeyRegisterAllowedAmr = new Set<string>(
-    config.passkeyRegisterAllowedAmr ?? ["webauthn", "otp"],
+    config.passkeyRegisterAllowedAmr ?? ["webauthn", "otp", "totp"],
   );
   const jtiStore = config.stepUpJtiStore ?? createInMemoryJtiStore();
   const rotatedSessionStore = config.rotatedSessionStore ?? createInMemoryRotatedSessionStore();
@@ -52,6 +58,14 @@ export function createAuthContext(config: AuthConfig) {
     );
   // Per-account recovery-code lockout counter.
   const recoveryLockoutStore = config.recoveryLockoutStore ?? createInMemoryRecoveryLockoutStore();
+  // Per-account TOTP lockout. The in-memory default cannot fail, so the
+  // fail-closed posture only bites on the injected Redis-backed store.
+  const totpLockoutStore =
+    config.totpLockoutStore ??
+    createInMemoryRecoveryLockoutStore({
+      threshold: TOTP_LOCKOUT_THRESHOLD,
+      lockoutMs: TOTP_LOCKOUT_MS,
+    });
   /**
    * HMAC-SHA256 pepper for IP hashing. Only applied when the caller has
    * configured one — in dev we leave ip_hash NULL so local Docker IPs
@@ -79,6 +93,7 @@ export function createAuthContext(config: AuthConfig) {
     profileSwitchCap,
     emailChangeBeginCap,
     recoveryLockoutStore,
+    totpLockoutStore,
     hashIp,
   };
 }
