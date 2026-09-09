@@ -321,8 +321,18 @@ export async function buildAppDeps(env: EnvVars, parts: BuildParts): Promise<Bui
       "OSN_TOTP_ENCRYPTION_KEY must be set to 32 base64-encoded random bytes in non-local environments",
     );
   }
+  // The decoded length goes to the operator's log rather than into the thrown
+  // message: that message becomes the body of an unauthenticated 503, and the
+  // length is a property of the secret's value.
   const totpEncryptionKey = env.OSN_TOTP_ENCRYPTION_KEY
-    ? await importTotpEncryptionKey(env.OSN_TOTP_ENCRYPTION_KEY)
+    ? await importTotpEncryptionKey(env.OSN_TOTP_ENCRYPTION_KEY, (decodedBytes) => {
+        void Effect.runPromise(
+          Effect.logError("OSN_TOTP_ENCRYPTION_KEY decodes to the wrong length").pipe(
+            Effect.annotateLogs({ decodedBytes }),
+            Effect.provide(observabilityLayer),
+          ),
+        );
+      })
     : await generateEphemeralTotpEncryptionKey();
 
   const authConfig = {

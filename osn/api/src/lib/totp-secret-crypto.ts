@@ -12,8 +12,14 @@
  *
  * The accountId is bound in as additional authenticated data, so a row copied
  * onto another account fails to decrypt rather than authenticating the wrong
- * person. `keyVersion` is stored per row and checked on the way back, so a
- * later key rotation has somewhere to go and cannot silently produce garbage.
+ * person.
+ *
+ * Key rotation is NOT implemented. There is one key and one version, no map
+ * from version to key, and a row stamped with any other version is refused
+ * rather than decrypted — so two keys cannot coexist and no staged rotation is
+ * expressible. `keyVersion` is stored per row so that adding rotation later is
+ * a code change rather than a migration; until then the only remedy for an
+ * exposed key is re-enrolment by every user. Adding it is xchromo/osn#968.
  */
 
 /** Length of `OSN_TOTP_ENCRYPTION_KEY` once base64-decoded. AES-256. */
@@ -23,8 +29,9 @@ const TOTP_KEY_BYTES = 32;
 const TOTP_IV_BYTES = 12;
 
 /**
- * The key version new ciphertexts are written under. Bump on a rotation and
- * teach {@link decryptTotpSecret} to select a key by the stored version.
+ * The version every ciphertext is written under, and the only version
+ * {@link decryptTotpSecret} accepts. Nothing selects a key by it, because there
+ * is only one key — see the module docstring.
  */
 export const TOTP_KEY_VERSION = 1;
 
@@ -53,9 +60,18 @@ export interface StoredTotpSecret {
  * just deployed ones. A short or mistyped key would otherwise import fine in
  * local dev and fail at the first enrolment, and the point of a boot-time check
  * is that the wrong value is loud where it is set rather than quiet until
- * someone uses the feature. The message names no part of the value.
+ * someone uses the feature.
+ *
+ * The thrown message states the requirement and interpolates nothing, because
+ * `index.ts` turns a boot failure into the body of an **unauthenticated** 503:
+ * the decoded length is a property of the secret's value and does not belong on
+ * that wire. `onInvalidLength` is the operator's channel for it — `build-deps`
+ * passes a reporter that writes the number through the redacting logger.
  */
-export async function importTotpEncryptionKey(base64: string): Promise<CryptoKey> {
+export async function importTotpEncryptionKey(
+  base64: string,
+  onInvalidLength?: (decodedBytes: number) => void,
+): Promise<CryptoKey> {
   let raw: Buffer;
   try {
     raw = Buffer.from(base64, "base64");
@@ -65,9 +81,8 @@ export async function importTotpEncryptionKey(base64: string): Promise<CryptoKey
   // Buffer.from is lenient — it decodes what it can and drops the rest rather
   // than throwing — so the length check is the real validation, not a formality.
   if (raw.length !== TOTP_KEY_BYTES) {
-    throw new Error(
-      `OSN_TOTP_ENCRYPTION_KEY must decode to exactly ${TOTP_KEY_BYTES} bytes (got ${raw.length})`,
-    );
+    onInvalidLength?.(raw.length);
+    throw new Error(`OSN_TOTP_ENCRYPTION_KEY must decode to exactly ${TOTP_KEY_BYTES} bytes`);
   }
   return crypto.subtle.importKey("raw", new Uint8Array(raw), { name: "AES-GCM" }, false, [
     "encrypt",

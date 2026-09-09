@@ -345,7 +345,12 @@ export const totpCredentials = sqliteTable(
     secretCiphertext: blob("secret_ciphertext", { mode: "buffer" }).notNull(),
     /** The 96-bit nonce for the ciphertext above. Fresh per encryption. */
     iv: blob("iv", { mode: "buffer" }).notNull(),
-    /** Which encryption key the ciphertext is under. Starts at 1. */
+    /**
+     * Which encryption key the ciphertext is under. Always 1: key rotation is
+     * not implemented, one key exists, and a row stamped with any other version
+     * is refused rather than decrypted. The column is here so that adding
+     * rotation later is a code change rather than a migration — xchromo/osn#968.
+     */
     keyVersion: integer("key_version").notNull().default(1),
     /** User-supplied name for the authenticator. Never used as a secret. */
     label: text("label"),

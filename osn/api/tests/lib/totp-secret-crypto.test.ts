@@ -45,6 +45,28 @@ describe("importTotpEncryptionKey", () => {
       expect.objectContaining({ message: expect.not.stringContaining(secretish) }) as Error,
     );
   });
+
+  it("states the requirement without publishing the decoded length", async () => {
+    // `index.ts` turns a boot failure into the body of an UNAUTHENTICATED 503,
+    // so the decoded length — a property of the secret's value, and the same
+    // thing every sibling guard declines to interpolate — must not appear in
+    // the message. The operator gets it through `onInvalidLength` instead.
+    const reported: number[] = [];
+    await expect(
+      importTotpEncryptionKey(Buffer.from("k".repeat(31)).toString("base64"), (n) => {
+        reported.push(n);
+      }),
+    ).rejects.toThrow(/^OSN_TOTP_ENCRYPTION_KEY must decode to exactly 32 bytes$/);
+    expect(reported).toEqual([31]);
+  });
+
+  it("does not call onInvalidLength for a key of the right length", async () => {
+    const reported: number[] = [];
+    await importTotpEncryptionKey(validKeyB64, (n) => {
+      reported.push(n);
+    });
+    expect(reported).toEqual([]);
+  });
 });
 
 describe("encrypt / decrypt round trip", () => {

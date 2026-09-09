@@ -28,9 +28,9 @@ export function createAuthContext(config: AuthConfig) {
   const refreshTokenTtl = config.refreshTokenTtl ?? 2592000;
   const otpTtl = config.otpTtl ?? 600;
   const stepUpTokenTtl = config.stepUpTokenTtl ?? 300;
-  // TOTP joins the two sets that already accept an emailed OTP. It does NOT
-  // join `passkeyDeleteAllowedAmr`, which stays the strongest gate in the
-  // service, and the email-change gate keeps its own inline set — see
+  // The four step-up AMR allow-lists, in one place. TOTP joins the two sets
+  // that already accept an emailed OTP; it joins neither
+  // `passkeyDeleteAllowedAmr` nor `emailChangeAllowedAmr` — see
   // `[[wiki/systems/step-up]]` for the whole table and the reasoning.
   const recoveryGenerateAllowedAmr = new Set<string>(
     config.recoveryGenerateAllowedAmr ?? ["webauthn", "otp", "totp"],
@@ -39,6 +39,12 @@ export function createAuthContext(config: AuthConfig) {
   const passkeyRegisterAllowedAmr = new Set<string>(
     config.passkeyRegisterAllowedAmr ?? ["webauthn", "otp", "totp"],
   );
+  // `/account/email/complete`. The one allow-list with no `AuthConfig` field:
+  // its `otp` arm proves control of the CURRENT mailbox, which a TOTP seed does
+  // not, and email change is the pivot to permanent takeover — so it is not a
+  // deployment's choice to widen. Fixed here rather than inline at the verifier
+  // so all four sets are read in one place.
+  const emailChangeAllowedAmr = new Set<string>(["webauthn", "otp"]);
   const jtiStore = config.stepUpJtiStore ?? createInMemoryJtiStore();
   const rotatedSessionStore = config.rotatedSessionStore ?? createInMemoryRotatedSessionStore();
   const rotatedSessionStoreBackend = rotatedSessionStore.backend;
@@ -86,6 +92,7 @@ export function createAuthContext(config: AuthConfig) {
     recoveryGenerateAllowedAmr,
     passkeyDeleteAllowedAmr,
     passkeyRegisterAllowedAmr,
+    emailChangeAllowedAmr,
     jtiStore,
     rotatedSessionStore,
     rotatedSessionStoreBackend,

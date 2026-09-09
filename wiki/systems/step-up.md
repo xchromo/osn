@@ -32,20 +32,40 @@ than by knob for exactly that reason.
 | `POST /totp/enroll/begin` | `passkeyRegisterAllowedAmr` | yes | yes | **yes** |
 | `DELETE /totp` | `passkeyRegisterAllowedAmr` | yes | yes | **yes** |
 | `DELETE /passkeys/:id` and `PATCH /passkeys/:id` (rename) | `passkeyDeleteAllowedAmr` | yes | **no** | **no** |
-| `POST /account/email/complete` | inline `new Set(["webauthn","otp"])` in `email-change.ts` — no knob reaches it | yes | yes | **no** |
+| `POST /account/email/complete` | `emailChangeAllowedAmr` (`context.ts`) — the one set with no `AuthConfig` field | yes | yes | **no** |
 
 Two rows are deliberately narrower than the rest, and both would be easy to
 widen by accident:
 
 - **`passkeyDeleteAllowedAmr` stays `["webauthn"]`.** By construction the caller
   already holds a passkey — the last-passkey guard fires otherwise — so
-  requiring one costs nothing (S-L4). With TOTP present the rule earns its keep
-  twice over: admitting it would make a stolen access token plus a cloud-synced
-  authenticator seed enough to delete the victim's real passkeys.
-- **Email change keeps its own inline set.** Its `otp` arm proves control of the
-  **current** mailbox; a TOTP seed does not. Email change is the silent pivot to
-  permanent takeover, so it is the one gate where the two factors are not
-  interchangeable.
+  requiring one costs nothing (S-L4).
+- **Email change keeps a set of its own, and no knob reaches it.** Its `otp` arm
+  proves control of the **current** mailbox; a TOTP seed does not. Email change
+  is the silent pivot to permanent takeover, so it is the one gate where the two
+  factors are not interchangeable — and the one a deployment may not widen. It
+  lives in `context.ts` beside its three siblings rather than inline at the
+  verifier, so all four sets are read in one place.
+
+> [!caution] Both narrow rows narrow the **direct** path only
+> Both admit `webauthn`, and a passkey registered a minute ago mints a
+> `webauthn` AMR exactly like one the user has held for a year. So any factor
+> admitted at `passkeyRegisterAllowedAmr` reaches both gates in two hops: step
+> up with that factor, register a credential of your own, assert **that**
+> credential for the purpose you want, and you hold a token either list accepts.
+>
+> At `passkey_delete` the rest of the account's passkeys then go; the
+> last-passkey guard needs only one survivor and the new credential is one. At
+> `email_change` the second factor is an OTP to the **new** address, which the
+> caller chose — `POST /account/email/begin` is gated on the access token alone
+> — so the mailbox proof the narrow list was written for is not proof of the
+> *current* mailbox once the AMR arrived this way.
+>
+> This is open to `otp` as much as to `totp`, and predates both TOTP and this
+> table. Closing it needs credential provenance — the AMR a passkey was
+> registered under, and a cool-down on `passkey_delete` and `email_change` for
+> one enrolled under a weaker factor. That is `xchromo/osn#952`; the
+> walk-through is in [[totp#Threat model]].
 
 Everywhere else, `totp` is admitted precisely where an emailed OTP already is.
 

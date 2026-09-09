@@ -1,26 +1,31 @@
 import { it, expect, describe } from "@effect/vitest";
+import { totpCredentials } from "@osn/db/schema";
+import { Db } from "@osn/db/service";
 import { base32Decode, deriveTotpCode } from "@shared/crypto/totp";
 import { makeLogEmailLive } from "@shared/email";
+import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeAll, vi } from "vitest";
 
 import { createInMemoryRecoveryLockoutStore } from "../../src/lib/recovery-lockout-store";
+import { TOTP_KEY_VERSION } from "../../src/lib/totp-secret-crypto";
 import { createAuthService, type AuthConfig } from "../../src/services/auth";
 import { TOTP_LOCKOUT_THRESHOLD } from "../../src/services/auth/constants";
 import { makeTestAuthConfig } from "../helpers/auth-config";
-import { createTestLayer } from "../helpers/db";
+import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
 /**
  * The TOTP credential's own behaviour. What matters here and is easy to get
  * wrong:
  *
  *   • an accepted code is single use (RFC 6238 §5.2), INCLUDING the one typed
- *     into the enrolment form;
+ *     into the enrolment form, and including two submissions racing;
  *   • the next step's code still works, which is the whole reason
  *     `verifyTotpCode` returns the matched step rather than a boolean;
  *   • every failure looks identical on the wire;
- *   • a `totp` step-up token is admitted at `passkey_register` and refused at
- *     `passkey_delete`.
+ *   • the per-account lockout fails CLOSED, unlike its recovery-code sibling;
+ *   • enrolment and disable each leave an audit row and send a notice;
+ *   • which step-up verifiers a `totp` AMR reaches, and which refuse it.
  */
 
 let config: AuthConfig;
@@ -36,6 +41,69 @@ const STEP_SECONDS = 30;
 function makeLayer() {
   const email = makeLogEmailLive();
   return Layer.merge(createTestLayer(), email.layer);
+}
+
+/**
+ * Wrap a drizzle query builder so it does not execute until `delayMs` has
+ * passed. Builders are thenable and chain by returning more builders, so every
+ * method is proxied and `then` — the one point where the statement actually
+ * runs — is what gets deferred.
+ */
+function delayChain(node: object, delayMs: number): object {
+  return new Proxy(node, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") return value;
+      if (prop === "then") {
+        return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+          new Promise((resolve) => setTimeout(resolve, delayMs))
+            .then(() =>
+              (value as (...a: unknown[]) => unknown).call(target, (real: unknown) => real),
+            )
+            .then(onFulfilled, onRejected);
+      }
+      return (...args: unknown[]) => {
+        const out = (value as (...a: unknown[]) => unknown).apply(target, args);
+        return out !== null && typeof out === "object" ? delayChain(out, delayMs) : out;
+      };
+    },
+  });
+}
+
+/**
+ * A layer whose UPDATE statements land a few milliseconds after they are
+ * issued. SELECTs are untouched, and everything still runs for real against
+ * the in-memory SQLite.
+ *
+ * The gap between reading a row and writing it back is the entire subject of
+ * `consumeStep`, and in a deployed tier that gap is a network round trip to
+ * D1 — ample time for a second request to read the same row. On bun:sqlite it
+ * is a couple of microtasks, and measurably too short: two fibres started
+ * together still run one at a time through the consume, so an unmodified
+ * in-memory run cannot tell a conditional UPDATE from a read-then-write and a
+ * concurrency test over it passes under both. Deferring the write restores the
+ * production timing rather than inventing a race that could not happen.
+ */
+function makeSlowUpdateLayer(delayMs = 20) {
+  const real = Effect.runSync(
+    Effect.provide(
+      Effect.gen(function* () {
+        return yield* Db;
+      }),
+      createTestLayer(),
+    ),
+  ).db;
+  const proxied = new Proxy(real as object, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (prop === "update" && typeof value === "function") {
+        return (...args: unknown[]) =>
+          delayChain((value as (...a: unknown[]) => object).apply(target, args), delayMs);
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as typeof real;
+  return Layer.merge(Layer.succeed(Db, { db: proxied }), makeLogEmailLive().layer);
 }
 
 /** Register an account and put a confirmed TOTP credential on it. */
@@ -211,6 +279,59 @@ describe("TOTP single use (RFC 6238 §5.2)", () => {
       expect(next.stepUpToken).toMatch(/^eyJ/);
     }).pipe(Effect.provide(makeLayer())),
   );
+
+  it.effect("lets exactly ONE of two concurrent submissions of the same code through", () =>
+    Effect.gen(function* () {
+      // The claim `consumeStep` is written for, and the only test here that can
+      // see it. Every other single-use test submits sequentially, where a
+      // SELECT-then-UPDATE rejects the second attempt just as well — so none of
+      // them can tell the two implementations apart.
+      //
+      // The write is deferred (see `makeSlowUpdateLayer`) so the second fibre
+      // reads the row while the first fibre's write is still in flight, which
+      // is the ordinary case against D1 and the one the docstring is about.
+      // A read-then-write lets both through here; the conditional UPDATE means
+      // the loser changes zero rows and is rejected as a replay.
+      const { profile, secret } = yield* enrolled("totp-cc@example.com", "totpcc");
+      const code = yield* codeAtStep(secret, currentStep() + 1);
+
+      const outcomes = yield* Effect.all(
+        [
+          Effect.result(auth.completeStepUpTotp(profile.accountId, code)),
+          Effect.result(auth.completeStepUpTotp(profile.accountId, code)),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      expect(outcomes.filter((o) => o._tag === "Success")).toHaveLength(1);
+    }).pipe(Effect.provide(makeSlowUpdateLayer())),
+  );
+});
+
+describe("TOTP key version", () => {
+  it.effect("a row under an unknown key version is a DatabaseError, not the generic 400", () =>
+    Effect.gen(function* () {
+      // Rotation is not implemented (xchromo/osn#968), so today the only way to
+      // reach this is a hand-edited row — but the moment anyone attempts a
+      // rotation it is every row, and this is the shape of the failure: a
+      // decrypt error inside `checkTotpCode`'s tryPromise, which maps to
+      // DatabaseError and a 500 rather than the 400 every other TOTP failure
+      // produces.
+      const { profile, secret } = yield* enrolled("totp-kv@example.com", "totpkv");
+
+      const { db } = yield* Db;
+      yield* Effect.promise(() =>
+        db
+          .update(totpCredentials)
+          .set({ keyVersion: TOTP_KEY_VERSION + 1 })
+          .where(eq(totpCredentials.accountId, profile.accountId)),
+      );
+
+      const code = yield* codeAtStep(secret, currentStep() + 1);
+      const err = yield* Effect.flip(auth.completeStepUpTotp(profile.accountId, code));
+      expect(err._tag).toBe("DatabaseError");
+    }).pipe(Effect.provide(makeLayer())),
+  );
 });
 
 describe("TOTP failures are indistinguishable on the wire", () => {
@@ -281,11 +402,19 @@ describe("TOTP per-account lockout", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it.effect("denies when the lockout store itself fails — fail closed", () =>
+  it.effect("denies a CORRECT code when the lockout store itself fails — fail closed", () =>
     Effect.gen(function* () {
-      // A guard is not verified until it has been seen to fail. Recovery codes
-      // fail OPEN here on purpose; TOTP must not, because a six-digit code has
-      // no wide search space behind the counter.
+      // A guard is not verified until it has been seen to fail, and it is not
+      // verified against an account that would have been refused anyway: with
+      // no credential enrolled, `checkTotpCode` falls through to the
+      // constant-cost "not enrolled" branch and answers the same AuthError
+      // whatever `isLocked` returned. So enrol first and submit a code that
+      // WOULD be accepted — flip `isLocked` to false and this test goes red.
+      //
+      // Recovery codes fail OPEN here on purpose; TOTP must not, because a
+      // six-digit code has no wide search space behind the counter.
+      const { profile, secret } = yield* enrolled("totp-o@example.com", "totpo");
+
       const broken = {
         backend: "redis" as const,
         isLocked: () => Promise.resolve(true),
@@ -294,17 +423,24 @@ describe("TOTP per-account lockout", () => {
       };
       const failClosedAuth = createAuthService({ ...config, totpLockoutStore: broken });
 
-      const profile = yield* failClosedAuth.registerProfile("totp-o@example.com", "totpo");
-      const err = yield* Effect.flip(
-        failClosedAuth.completeStepUpTotp(profile.accountId, "123456"),
-      );
+      const good = yield* codeAtStep(secret, currentStep() + 1);
+      const err = yield* Effect.flip(failClosedAuth.completeStepUpTotp(profile.accountId, good));
       expect(err._tag).toBe("AuthError");
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it("the in-memory store honours failClosed on neither read nor write (it cannot fail)", async () => {
-    const store = createInMemoryRecoveryLockoutStore({ failClosed: true });
+  it("the in-memory store cannot fail, so failClosed leaves its counting alone", async () => {
+    // The fail-closed posture only ever bites on the Redis-backed store (its
+    // own tests cover that). Pinned here so nobody "implements" failClosed in
+    // the memory backend: reporting a permanent lockout, or a first failure as
+    // having reached the threshold, would break every local dev ceremony.
+    const store = createInMemoryRecoveryLockoutStore({ failClosed: true, threshold: 3 });
     expect(await store.isLocked("acc_x")).toBe(false);
+    expect(await store.recordFailure("acc_x")).toBe(1);
+    expect(await store.isLocked("acc_x")).toBe(false);
+    expect(await store.recordFailure("acc_x")).toBe(2);
+    expect(await store.recordFailure("acc_x")).toBe(3);
+    expect(await store.isLocked("acc_x")).toBe(true);
   });
 });
 
@@ -336,10 +472,57 @@ describe("TOTP disable", () => {
   );
 });
 
+describe("TOTP enrolment and disable are audible", () => {
+  // The `security_events` row is the only IN-APP channel telling a user their
+  // account grew or lost a second factor, and the threat model leans on it. It
+  // shares a `commitBatch` with the credential write, so a regression could
+  // drop the audit row while the ceremony itself keeps working — nothing else
+  // in this file would notice.
+
+  it.effect("enrolment writes totp_enrolled and dispatches the notice", () => {
+    const test = createTestLayerWithSqlite();
+    return Effect.gen(function* () {
+      const { profile } = yield* enrolled("totp-ev1@example.com", "totpev1");
+
+      const { events } = yield* auth.listUnacknowledgedSecurityEvents(profile.accountId);
+      expect(events.map((e) => e.kind)).toContain("totp_enrolled");
+
+      // The notice is forked detached — let the fiber finish.
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      const sent = test.email
+        .recorded()
+        .filter((e) => e.template === "totp-enrolled" && e.to === "totp-ev1@example.com");
+      expect(sent).toHaveLength(1);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("disable writes totp_disabled and dispatches the notice", () => {
+    const test = createTestLayerWithSqlite();
+    return Effect.gen(function* () {
+      const { profile } = yield* enrolled("totp-ev2@example.com", "totpev2");
+      const token = yield* auth.issueStepUpToken(profile.accountId, "passkey", "totp_disable");
+      yield* auth.disableTotp(profile.accountId, token);
+
+      const { events } = yield* auth.listUnacknowledgedSecurityEvents(profile.accountId);
+      expect(events.map((e) => e.kind)).toContain("totp_disabled");
+
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      const sent = test.email
+        .recorded()
+        .filter((e) => e.template === "totp-disabled" && e.to === "totp-ev2@example.com");
+      expect(sent).toHaveLength(1);
+    }).pipe(Effect.provide(test.layer));
+  });
+});
+
 describe("which gates a totp-AMR step-up token reaches", () => {
-  // The design page names three allow-lists; `recoveryGenerateAllowedAmr` is
-  // read by five verifiers, so this pins the WHOLE contract rather than the two
-  // gates the issue happens to mention.
+  // Four allow-lists, and `recoveryGenerateAllowedAmr` is read by five separate
+  // verifiers — so a gate per verifier, not a gate per list. Every one of the
+  // five is exercised below by the verifier it actually runs through.
+  //
+  // Each case pins the DIRECT gate: whether a token carrying `amr: ["totp"]`
+  // satisfies that verifier. None of them says anything about what a chain of
+  // ceremonies can reach — see wiki/systems/totp.md §Threat model.
   const mintTotpToken = (accountId: string, purpose: Parameters<typeof auth.issueStepUpToken>[2]) =>
     auth.issueStepUpToken(accountId, "totp", purpose);
 
@@ -354,10 +537,15 @@ describe("which gates a totp-AMR step-up token reaches", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it.effect("is REJECTED at passkey_delete", () =>
+  it.effect("is REJECTED at the DIRECT passkey_delete verifier", () =>
     Effect.gen(function* () {
-      // The one gate that must stay WebAuthn-only: a stolen access token plus a
-      // cloud-synced authenticator seed must not delete the victim's passkeys.
+      // What this pins is `passkeyDeleteAllowedAmr` itself: a token carrying
+      // `amr: ["totp"]` does not satisfy `verifyStepUpForPasskeyDelete`.
+      //
+      // It does NOT establish that a TOTP seed cannot reach passkey deletion,
+      // and must not be read that way. The register-then-assert pivot arrives
+      // at this verifier carrying `amr: ["webauthn"]`, which this list admits,
+      // and nothing here models it. See wiki/systems/totp.md §Threat model.
       const profile = yield* auth.registerProfile("totp-s@example.com", "totps");
       const token = yield* mintTotpToken(profile.accountId, "passkey_delete");
       const err = yield* Effect.flip(auth.verifyStepUpForPasskeyDelete(profile.accountId, token));
@@ -401,12 +589,38 @@ describe("which gates a totp-AMR step-up token reaches", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it.effect("is REJECTED at email_change, which keeps its own inline allow-list", () =>
+  it.effect("is ACCEPTED at verifyStepUpForExternalPurpose, the Pulse / Zap app delete", () =>
     Effect.gen(function* () {
-      // `email-change.ts` hard-codes `new Set(["webauthn","otp"])` — a fourth
-      // allow-list no config knob reaches. Left narrow deliberately: the `otp`
-      // arm there proves control of the CURRENT mailbox, which a TOTP seed does
-      // not, and email change is the silent-takeover pivot.
+      // The cross-service verifier behind ARC-gated `/internal/step-up/verify`.
+      // It reads the same allow-list but takes no expected accountId — it
+      // returns the token's verified `sub` for the calling service to use.
+      const profile = yield* auth.registerProfile("totp-ex@example.com", "totpex");
+      const token = yield* mintTotpToken(profile.accountId, "pulse_app_delete");
+      const result = yield* auth.verifyStepUpForExternalPurpose(token, "pulse_app_delete");
+      expect(result.accountId).toBe(profile.accountId);
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("is ACCEPTED at the security-event ack-all path", () =>
+    Effect.gen(function* () {
+      // The fifth reader of the list, and the least discoverable from its name.
+      // Enrolment left a `totp_enrolled` row, so the ack is a real one — a
+      // no-op ack would pass with the gate removed and prove nothing.
+      const { profile } = yield* enrolled("totp-ack@example.com", "totpack");
+      const token = yield* mintTotpToken(profile.accountId, "security_event_ack");
+      const { acknowledged } = yield* auth.acknowledgeAllSecurityEvents(profile.accountId, token);
+      expect(acknowledged).toBeGreaterThan(0);
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("is REJECTED at email_change, which keeps an allow-list of its own", () =>
+    Effect.gen(function* () {
+      // `emailChangeAllowedAmr` in `context.ts` is `["webauthn","otp"]` — the
+      // fourth allow-list, and the one no config knob reaches. Left narrow
+      // deliberately: the `otp` arm there proves control of the CURRENT
+      // mailbox, which a TOTP seed does not.
+      //
+      // As with `passkey_delete` above, this pins the DIRECT gate only.
       const profile = yield* auth.registerProfile("totp-t@example.com", "totpt");
       const token = yield* mintTotpToken(profile.accountId, "email_change");
       const err = yield* Effect.flip(

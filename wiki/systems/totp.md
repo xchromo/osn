@@ -35,7 +35,7 @@ service is `osn/api/src/services/auth/totp.ts` and the routes are
 | Column | Why it exists |
 |---|---|
 | `secret_ciphertext`, `iv` | The shared secret, AES-256-GCM encrypted. See below. |
-| `key_version` | Which key the ciphertext is under. Starts at 1. |
+| `key_version` | Which key the ciphertext is under. Always 1 — see [[#Rotation is not implemented]]. |
 | `confirmed_at` | NULL until a code proves the user holds the secret. A row with NULL here is not a credential and every read filters on it. |
 | `last_used_step` | The RFC 6238 step counter of the last accepted code — the single-use guard. |
 | `last_used_at`, `label` | Settings display only. |
@@ -64,14 +64,29 @@ Three details that are load-bearing:
 - A **fresh 96-bit IV per encryption**, stored beside the ciphertext.
 - The **accountId is the additional authenticated data**, so a row copied onto
   another account fails to decrypt rather than authenticating the wrong person.
-- `key_version` is checked on the way back, so a future rotation has somewhere
-  to go instead of silently producing garbage.
+- `key_version` is checked on the way back, so a ciphertext written under one
+  key is refused rather than fed to another.
 
-> [!warning] The key is never rotated in place
+### Rotation is not implemented
+
+`key_version` is a column, not a rotation path. `osn/api/src/lib/totp-secret-crypto.ts`
+holds a single key and a single module constant, and `decryptTotpSecret` throws
+on any other version. There is no map from version to key, so two keys cannot
+coexist and no staged rotation is expressible.
+
+The column exists so that adding rotation later is a code change rather than a
+migration. Until that lands, **the only remedy for an exposed encryption key is
+re-enrolment by every enrolled user.**
+
+> [!warning] Installing a new key today breaks every enrolled account
 > It decrypts every enrolled secret. A new key turns every second factor into an
-> unverifiable ciphertext at once, so rotating it means re-enrolling every user —
-> a migration, not a workflow run. `.github/workflows/set-osn-api-secret.yml`
-> refuses to overwrite an existing value for this reason.
+> unverifiable ciphertext at once. `.github/workflows/set-osn-api-secret.yml`
+> records the same policy — `rotate="never"` — and refuses to overwrite an
+> existing value.
+
+The two-key map that would fix it — `OSN_TOTP_ENCRYPTION_KEY_PREVIOUS`, new rows
+encrypted under the highest version, each successful verify lazily re-encrypting
+its row so the old key drains — is issue `xchromo/osn#968`.
 
 **Fail-closed at boot.** A non-local tier without the key throws in
 `build-deps.ts`, which `index.ts` turns into a 503 on every route — the same
@@ -213,8 +228,47 @@ one, or mint a step-up token. Each needs a fresh ceremony.
 What a stolen access token **plus** a cloud-synced authenticator seed can do: add
 a passkey, generate recovery codes, delete or export the account, acknowledge
 security events. All of those already accept an emailed OTP, so admitting TOTP
-does not widen them. What it cannot do is delete the victim's existing passkeys
-or change the account email — see [[step-up]].
+does not widen them.
+
+What it cannot do **directly** is delete the victim's existing passkeys or change
+the account email. Neither `passkeyDeleteAllowedAmr` nor `emailChangeAllowedAmr`
+admits a `totp` AMR.
+
+> [!caution] Both of those are reachable in two hops, and always have been
+> Those two lists narrow the **direct** path and nothing else. Both admit
+> `webauthn`, and a passkey registered a minute ago mints a `webauthn` AMR
+> exactly like one the user has held for a year — so any factor admitted at
+> `passkeyRegisterAllowedAmr` gets there by registering a credential and
+> asserting it:
+>
+> 1. `POST /step-up/totp/complete` with `purpose: "passkey_register"` — a token
+>    with `amr: ["totp"]`.
+> 2. `POST /passkey/register/{begin,complete}` — the attacker's authenticator is
+>    now a registered passkey on the victim's account.
+> 3. `POST /step-up/passkey/complete` asserting **that** passkey with
+>    `purpose: "passkey_delete"` — this mints `amr: ["webauthn"]`, which
+>    `passkeyDeleteAllowedAmr` admits.
+> 4. `DELETE /passkeys/:id` for each real passkey. The last-passkey guard needs
+>    only one survivor, and the attacker's credential is one.
+>
+> Email change falls to the same pivot with `purpose: "email_change"` at step 3.
+> Its second factor is an OTP to the **new** address, and
+> `POST /account/email/begin` is gated on the access token alone — so the
+> current-mailbox proof that list was written for is not what the caller ends up
+> presenting.
+>
+> This branch does not create the hole: the identical chain already ran through
+> `otp`, which `passkeyRegisterAllowedAmr` has admitted since that gate was
+> added. Admitting `totp` adds a factor to a path already open.
+>
+> Closing it is credential **provenance**: record the AMR a passkey was
+> registered under, and refuse a `passkey_delete` or `email_change` step-up
+> asserted by a credential enrolled under a non-`webauthn` AMR inside a
+> cool-down. That is issue `xchromo/osn#952`, which already carries
+> `passkeys.enrolledViaRecoveryAt` for the same shape of problem — see
+> [[account-recovery-factors]].
+
+The full gate table is in [[step-up]].
 
 A TOTP secret is an authentication credential bound to a person, so it carries
 rows in [[data-map]] and [[retention]] (`wiki/compliance/data-map.md`,

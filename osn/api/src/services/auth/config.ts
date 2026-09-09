@@ -75,9 +75,22 @@ export interface AuthConfig {
    * so accepting OTP would weaken the gate without UX gain (S-L4).
    *
    * TOTP is deliberately NOT admitted here, and the type permits it only so
-   * this array is assignable from the same literals as its two siblings. A
-   * stolen access token plus a cloud-synced authenticator seed must not be
-   * enough to delete the victim's real passkeys.
+   * this array is assignable from the same literals as its two siblings.
+   *
+   * What this narrows is the **direct** path, and only that. A passkey
+   * registered a minute ago mints a `webauthn` AMR exactly like one the user
+   * has held for a year, so any factor admitted at
+   * {@link passkeyRegisterAllowedAmr} still reaches passkey deletion in two
+   * hops: step up with that factor, register a credential of your own, then
+   * assert **it** to mint the `webauthn` step-up this list accepts. The
+   * last-passkey guard needs only one survivor, and the new credential is one.
+   * The same pivot reaches `email_change`. Both paths are open to `otp` today
+   * and to `totp` with this branch; closing them means recording the AMR a
+   * passkey was registered under and refusing those two purposes to a
+   * credential enrolled under a weaker one inside a cool-down.
+   *
+   * @see wiki/architecture/account-recovery-factors.md
+   * @see wiki/systems/totp.md
    */
   passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
@@ -92,6 +105,14 @@ export interface AuthConfig {
    * own enrol / disable ceremonies.
    */
   passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
+  // A fourth AMR allow-list exists and has no field here on purpose:
+  // `emailChangeAllowedAmr` (`context.ts`) gates `/account/email/complete` at
+  // `["webauthn", "otp"]` and no deployment may widen it. Its `otp` arm proves
+  // control of the CURRENT mailbox, which a TOTP seed does not, and email
+  // change is the pivot to permanent takeover — so it is a property of the
+  // service rather than a knob. Like `passkeyDeleteAllowedAmr` above, it
+  // narrows the direct path only: the register-then-assert pivot described
+  // there produces a `webauthn` AMR this list also accepts.
   /**
    * Cluster-wide single-use guard for step-up token jtis (S-H1). Inject a
    * Redis-backed store in multi-pod deployments; otherwise the default
