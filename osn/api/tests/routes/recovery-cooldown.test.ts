@@ -1052,16 +1052,39 @@ describe("POST /recovery/disown — when the write fails", () => {
     return chain as never;
   };
 
-  /** Wrap the routes' database so one operation fails on demand. */
+  /**
+   * Fault injection with a budget, and the budget is the point.
+   *
+   * `remaining: 1` fails exactly ONE operation and lets every later one
+   * through, which is what a transient outage looks like and — more
+   * importantly — what makes a swallowed error visible. Failing every read
+   * instead would let a second unguarded read produce the same 500 as the
+   * first, and the test would then pass with the swallow on the first one put
+   * back.
+   */
+  interface Brittle {
+    mode: FailMode;
+    remaining: number;
+  }
+
   const brittle =
-    (mode: () => FailMode) =>
+    (state: Brittle) =>
     (db: TestDb): TestDb =>
       new Proxy(db, {
         get(target, prop, receiver) {
-          if (prop === "select" && mode() === "select") return () => rejecting();
+          const armed = state.remaining > 0;
+          // The first read `revokeDisownedRecovery` makes: the account's
+          // credentials, the list the revocable set is computed from.
+          if (armed && prop === "select" && state.mode === "select") {
+            state.remaining -= 1;
+            return () => rejecting();
+          }
           // The audit-row insert, third of the four batched statements — so the
           // `last_recovered_at` clear behind it never runs.
-          if (prop === "insert" && mode() === "write") return () => rejecting();
+          if (armed && prop === "insert" && state.mode === "write") {
+            state.remaining -= 1;
+            return () => rejecting();
+          }
           const value = Reflect.get(target, prop, receiver);
           return typeof value === "function" ? (value as () => unknown).bind(target) : value;
         },
@@ -1112,21 +1135,18 @@ describe("POST /recovery/disown — when the write fails", () => {
     );
 
   it("a failed READ answers 500, records revoke_failed, and changes nothing", async () => {
-    // Goes red on restoring either swallow in `revokeDisownedRecovery` — the
-    // `Effect.catch(() => Effect.succeed([]))` on the passkey read most of all,
-    // which turns an outage into "this account has no credentials to revoke"
-    // and then reports that as an accepted disown.
-    let mode: FailMode = "none";
-    const h = makeApp(
-      {},
-      brittle(() => mode),
-    );
+    // Goes red on restoring the `Effect.catch(() => Effect.succeed([]))` on the
+    // credential read, which turns an outage into "this account has no
+    // credentials to revoke" and then reports that as an accepted disown.
+    const fault: Brittle = { mode: "none", remaining: 0 };
+    const h = makeApp({}, brittle(fault));
     const { profile, token } = await recoverAndEnrol(h, "fail-read@example.com", "failread");
     const before = await stateOf(h, profile.accountId);
     expect(before.passkeys).toBe(2);
     expect(before.window).not.toBeNull();
 
-    mode = "select";
+    fault.mode = "select";
+    fault.remaining = 1;
     const mark = disownOutcomes.length;
     const res = await post(h.app, "/recovery/disown", { token });
     expect(res.status).toBe(500);
@@ -1136,7 +1156,7 @@ describe("POST /recovery/disown — when the write fails", () => {
 
     // The token is put back, so the owner's second click is the one that works.
     // Without the re-park a transient blip destroys the lever for good.
-    mode = "none";
+    fault.mode = "none";
     const retry = await post(h.app, "/recovery/disown", { token });
     expect(retry.status).toBe(202);
     expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed", "accepted"]);
@@ -1148,14 +1168,12 @@ describe("POST /recovery/disown — when the write fails", () => {
     // Goes red on restoring the `Effect.catch(logWarning)` around the
     // `commitBatch`: the batch fails, the metric says `accepted`, and the route
     // tells the account owner their recovery has been disowned.
-    let mode: FailMode = "none";
-    const h = makeApp(
-      {},
-      brittle(() => mode),
-    );
+    const fault: Brittle = { mode: "none", remaining: 0 };
+    const h = makeApp({}, brittle(fault));
     const { profile, token } = await recoverAndEnrol(h, "fail-write@example.com", "failwrite");
 
-    mode = "write";
+    fault.mode = "write";
+    fault.remaining = 1;
     const mark = disownOutcomes.length;
     const res = await post(h.app, "/recovery/disown", { token });
     expect(res.status).toBe(500);
@@ -1165,7 +1183,7 @@ describe("POST /recovery/disown — when the write fails", () => {
     // before it must leave the window standing.
     expect((await stateOf(h, profile.accountId)).window).not.toBeNull();
 
-    mode = "none";
+    fault.mode = "none";
     expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
     expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed", "accepted"]);
     expect((await stateOf(h, profile.accountId)).window).toBeNull();
