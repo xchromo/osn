@@ -129,15 +129,13 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("the dashboard's module graph stays browser-safe", () => {
-  it("never reaches the pr-metrics CLI entry point", () => {
-    const { files } = walk(sourceFiles(SRC));
+  const { files, builtins } = walk(sourceFiles(SRC));
 
+  it("never reaches the pr-metrics CLI entry point", () => {
     expect([...files].filter((file) => file === CLI)).toEqual([]);
   });
 
   it("statically imports no Node builtin", () => {
-    const { builtins } = walk(sourceFiles(SRC));
-
     expect([...builtins].map(([file, specifier]) => `${file} → ${specifier}`)).toEqual([]);
   });
 
@@ -145,8 +143,6 @@ describe("the dashboard's module graph stays browser-safe", () => {
     // Without this the first two assertions could pass by seeing almost
     // nothing. `@osn/ui` is the dashboard's one workspace dependency, and its
     // files must be inside the graph for their imports to have been checked.
-    const { files } = walk(sourceFiles(SRC));
-
     expect([...files].some((file) => file.includes("/osn/ui/src/"))).toBe(true);
   });
 });
