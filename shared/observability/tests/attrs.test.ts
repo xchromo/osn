@@ -72,6 +72,7 @@ describe("AuthRateLimitedEndpoint", () => {
       recovery_email_begin: true,
       recovery_email_complete: true,
       recovery_totp_complete: true,
+      recovery_disown: true,
       step_up_passkey_begin: true,
       step_up_passkey_complete: true,
       step_up_otp_begin: true,

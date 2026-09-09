@@ -91,6 +91,9 @@ export type SecurityInvalidationTrigger =
   // Email-OTP or TOTP recovery completed: every session on the account is
   // wiped and a restricted recovery session replaces them.
   | "account_recovered"
+  // A `POST /recovery/disown` was accepted: the recovery-enrolled credentials
+  // and every session on the account go, and the recovery window is cleared.
+  | "recovery_disowned"
   | "session_revoke"
   | "session_revoke_all";
 
@@ -144,7 +147,13 @@ export type StepUpVerifyResult =
   | "wrong_subject"
   | "wrong_purpose"
   | "jti_replay"
-  | "amr_not_allowed";
+  | "amr_not_allowed"
+  // The factor was permitted but the credential behind it was not: a passkey
+  // registered under a weaker AMR, inside its 72-hour window, asked to delete
+  // an older credential or change the account email. Distinct from
+  // `amr_not_allowed` so a dashboard separates "wrong factor" from "right
+  // factor, wrong provenance" — those need different answers from the user.
+  | "provenance_blocked";
 
 /** Session-management actions initiated by the caller. */
 export type SessionAction = "list" | "revoke" | "revoke_all";
@@ -171,7 +180,34 @@ export type RecoveryCodeStep =
   | "consume"
   | "email_begin"
   | "email_complete"
-  | "totp_complete";
+  | "totp_complete"
+  // `POST /recovery/disown` — the "this wasn't me" lever in the recovery notice.
+  | "disown";
+
+/**
+ * Why the post-recovery cooldown refused an action. Every one of these answers
+ * the caller with the same generic error, so the dashboard is the only place
+ * the three are told apart.
+ */
+export type RecoveryCooldownOutcome =
+  | "second_recovery_refused"
+  | "passkey_mutation_refused"
+  | "email_change_refused";
+
+/**
+ * Outcome of `POST /recovery/disown`. Every one answers 202, including
+ * `store_error` — a token that cannot be read revokes nothing, and the caller
+ * must not be able to tell that apart from a token that was simply wrong.
+ */
+export type RecoveryDisownResult =
+  | "accepted"
+  // Bad, spent, or expired token — one bucket, because the route cannot tell
+  // them apart without leaking which.
+  | "invalid"
+  // The credentials the disown would revoke are the account's only ones. The
+  // sessions still go; the last-passkey invariant wins over the revocation.
+  | "kept_last_passkey"
+  | "store_error";
 
 /** Recovery code consume outcomes. */
 export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
@@ -198,6 +234,9 @@ export type SecurityEventKind =
   | "recovery_otp_lockout"
   | "passkey_register"
   | "passkey_delete"
+  // A recovery was disowned from the notice email: the credentials it enrolled
+  // and every session on the account were revoked.
+  | "recovery_disowned"
   | "totp_enrolled"
   | "totp_disabled"
   | "cross_device_login"
@@ -289,6 +328,7 @@ export type AuthRateLimitedEndpoint =
   | "recovery_email_begin"
   | "recovery_email_complete"
   | "recovery_totp_complete"
+  | "recovery_disown"
   | "step_up_passkey_begin"
   | "step_up_passkey_complete"
   | "step_up_otp_begin"
