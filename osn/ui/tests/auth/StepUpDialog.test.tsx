@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { StepUpClient, StepUpPurpose, StepUpToken, TotpClient } from "@osn/client";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/browser";
-import { render, cleanup, screen, fireEvent, waitFor } from "@solidjs/testing-library";
+import { render, cleanup, screen, fireEvent, waitFor, within } from "@solidjs/testing-library";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { StepUpDialog } from "../../src/auth/StepUpDialog";
@@ -301,49 +301,75 @@ describe("StepUpDialog — authenticator app factor", () => {
  */
 describe("StepUpDialog — factors the ceremony would refuse", () => {
   const asTotp = (s: object): TotpClient => s as TotpClient;
-  const enrolled = {
-    status: async () => ({
-      enrolled: true,
-      label: "iPhone",
-      lastUsedAt: null,
-      createdAt: 1_700_000_000,
-    }),
-  };
+  const TOTP_BUTTON = /Use your authenticator app/i;
 
-  function mount(purpose: StepUpPurpose) {
-    render(() => (
+  function totpClient() {
+    return asTotp({
+      status: async () => ({
+        enrolled: true,
+        label: "iPhone",
+        lastUsedAt: null,
+        createdAt: 1_700_000_000,
+      }),
+    });
+  }
+
+  function dialog(purpose: StepUpPurpose) {
+    return (
       <StepUpDialog
         client={asClient(stub)}
         accessToken="acc"
         onToken={() => {}}
         onCancel={() => {}}
         runPasskeyCeremony={async () => assertion}
-        totpClient={asTotp(enrolled)}
+        totpClient={totpClient()}
         purpose={purpose}
       />
+    );
+  }
+
+  /**
+   * Mounts the ceremony under test beside one that DOES admit the
+   * authenticator, and waits for the factor to appear in that one.
+   *
+   * Asserting the factor's absence on its own cannot fail: whether it renders
+   * depends on a `GET /totp/status` resource, so a bare `queryByRole` runs
+   * before the fetch resolves and passes whether or not the guard exists.
+   * Both dialogs read the same already-resolved status, so once the admitting
+   * one has painted the button, the refusing one has had its chance.
+   */
+  async function mountBesideAnAdmittingCeremony(refusing: StepUpPurpose) {
+    render(() => (
+      <>
+        <div data-testid="admits">{dialog("passkey_register")}</div>
+        <div data-testid="refuses">{dialog(refusing)}</div>
+      </>
     ));
+    const admits = within(screen.getByTestId("admits"));
+    await waitFor(() => expect(admits.getByRole("button", { name: TOTP_BUTTON })).toBeTruthy());
+    return within(screen.getByTestId("refuses"));
   }
 
   it("passkey_delete offers neither code factor — the gate is WebAuthn-only", async () => {
     // `passkeyDeleteAllowedAmr` is `["webauthn"]`, and this purpose gates
     // rename as well as delete.
-    mount("passkey_delete");
-    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
-    expect(screen.queryByRole("button", { name: /Email me a code/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Use your authenticator app/i })).toBeNull();
+    const refuses = await mountBesideAnAdmittingCeremony("passkey_delete");
+    expect(refuses.getByRole("button", { name: /Use passkey/i })).toBeTruthy();
+    expect(refuses.queryByRole("button", { name: /Email me a code/i })).toBeNull();
+    expect(refuses.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
   });
 
   it("email_change keeps the emailed code but not the authenticator", async () => {
     // The emailed code proves control of the CURRENT mailbox; an
     // authenticator seed does not, which is the whole point of that gate.
-    mount("email_change");
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
-    expect(screen.queryByRole("button", { name: /Use your authenticator app/i })).toBeNull();
+    const refuses = await mountBesideAnAdmittingCeremony("email_change");
+    expect(refuses.getByRole("button", { name: /Email me a code/i })).toBeTruthy();
+    expect(refuses.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
   });
 
   it("passkey_register admits both, so a lost device is not a lock-out", async () => {
-    mount("passkey_register");
-    expect(await screen.findByRole("button", { name: /Use your authenticator app/i })).toBeTruthy();
+    render(() => dialog("passkey_register"));
+    expect(await screen.findByRole("button", { name: TOTP_BUTTON })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Email me a code/i })).toBeTruthy();
   });
 });

@@ -171,6 +171,26 @@ describe("PasskeysView", () => {
     expect(pk.list).toHaveBeenCalledTimes(2);
   });
 
+  it("offers no emailed code for rename or delete", async () => {
+    // Both mint `passkey_delete`, whose gate accepts `webauthn` alone. Offering
+    // the emailed code here used to send a real code for an action the server
+    // then refused — a dead end that looked like a working flow.
+    pk.list.mockResolvedValue({ passkeys: passkeyRows });
+    render(() => (
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        runPasskeyCeremony={runPasskeyCeremony}
+      />
+    ));
+
+    await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
+    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
+    expect(screen.queryByRole("button", { name: /Email me a code/i })).toBeNull();
+  });
+
   it("disables save when the draft label is empty / whitespace-only", async () => {
     pk.list.mockResolvedValue({ passkeys: passkeyRows });
     render(() => (
