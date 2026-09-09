@@ -236,19 +236,68 @@ describe("StepUpDialog — authenticator app factor", () => {
     ));
   }
 
+  /**
+   * Mounts the dialog under test beside one that DOES admit the
+   * authenticator (enrolled, no error), and waits for that companion's
+   * button to appear before returning the one under test.
+   *
+   * Asserting the factor's absence on its own — even inside `waitFor` —
+   * cannot fail: whether it renders depends on the `GET /totp/status`
+   * resource settling, and `waitFor`'s first check runs synchronously,
+   * before that resource has had a single microtask to resolve. A
+   * `queryByRole(...).toBeNull()` that is already true at that instant
+   * resolves on the spot, whatever the guard would eventually decide — the
+   * same failure mode a bare check has, just with extra ceremony. Both
+   * dialogs' resources resolve on the same microtask cadence, so once the
+   * admitting one has painted its button, the one under test has had its
+   * chance too.
+   */
+  async function mountBesideAnAdmittingCeremony(overrides: {
+    totp?: { status: ReturnType<typeof vi.fn> };
+    purpose?: StepUpPurpose;
+  }) {
+    render(() => (
+      <>
+        <div data-testid="admits">
+          <StepUpDialog
+            client={asClient(stub)}
+            accessToken="acc"
+            onToken={() => {}}
+            onCancel={() => {}}
+            runPasskeyCeremony={async () => assertion}
+            totpClient={asTotp(totpStub({ enrolled: true }))}
+            purpose={overrides.purpose}
+          />
+        </div>
+        <div data-testid="under-test">
+          <StepUpDialog
+            client={asClient(stub)}
+            accessToken="acc"
+            onToken={() => {}}
+            onCancel={() => {}}
+            runPasskeyCeremony={async () => assertion}
+            totpClient={overrides.totp ? asTotp(overrides.totp) : undefined}
+            purpose={overrides.purpose}
+          />
+        </div>
+      </>
+    ));
+    const admits = within(screen.getByTestId("admits"));
+    await waitFor(() => expect(admits.getByRole("button", { name: TOTP_BUTTON })).toBeTruthy());
+    return within(screen.getByTestId("under-test"));
+  }
+
   it("offers the factor when the account has a confirmed credential", async () => {
     mount({ totp: totpStub({ enrolled: true }), purpose: "recovery_generate" });
     expect(await screen.findByRole("button", { name: TOTP_BUTTON })).toBeTruthy();
   });
 
   it("hides the factor when the account has no confirmed credential", async () => {
-    const totp = totpStub({ enrolled: false });
-    mount({ totp, purpose: "recovery_generate" });
-    await waitFor(() => expect(totp.status).toHaveBeenCalled());
-    // A bare check here runs before the status resource has settled, so it
-    // observes "not yet rendered" rather than "correctly absent". Keep
-    // retrying until the resource resolves and the guard has had its say.
-    await waitFor(() => expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull());
+    const underTest = await mountBesideAnAdmittingCeremony({
+      totp: totpStub({ enrolled: false }),
+      purpose: "recovery_generate",
+    });
+    expect(underTest.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
   });
 
   it("hides the factor when no TOTP client is supplied at all", async () => {
@@ -259,13 +308,13 @@ describe("StepUpDialog — authenticator app factor", () => {
 
   it("keeps the other factors when the status read fails", async () => {
     // Whether an authenticator exists is not worth failing a ceremony over.
-    mount({ totp: totpStub(new Error("network")), purpose: "recovery_generate" });
-    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
-    expect(screen.getByRole("button", { name: /Email me a code/i })).toBeTruthy();
-    // Waiting on the always-present "Use passkey" button does not prove the
-    // status resource itself has settled. Keep retrying the absence check
-    // until it is genuinely true, rather than catching it mid-flight.
-    await waitFor(() => expect(screen.queryByRole("button", { name: TOTP_BUTTON })).toBeNull());
+    const underTest = await mountBesideAnAdmittingCeremony({
+      totp: totpStub(new Error("network")),
+      purpose: "recovery_generate",
+    });
+    expect(underTest.getByRole("button", { name: /Use passkey/i })).toBeTruthy();
+    expect(underTest.getByRole("button", { name: /Email me a code/i })).toBeTruthy();
+    expect(underTest.queryByRole("button", { name: TOTP_BUTTON })).toBeNull();
   });
 
   it("exchanges a code for a token bound to the ceremony", async () => {
