@@ -35,6 +35,7 @@ import { type EmailError, EmailService } from "@shared/email";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 
+import { forkBackground } from "../../lib/background";
 import { RECOVERY_LOCKOUT_THRESHOLD } from "../../lib/recovery-lockout-store";
 import {
   metricAuthOtpSent,
@@ -61,7 +62,13 @@ import type { ProfilesModule } from "./profiles";
 import type { SecurityEventsModule } from "./security-events";
 import type { TokensModule } from "./tokens";
 import type { TotpModule } from "./totp";
-import type { ProfileWithEmail, PublicProfile, SessionMeta, TokenSet } from "./types";
+import type {
+  ProfileWithEmail,
+  PublicProfile,
+  RecoveryFactorAmr,
+  SessionMeta,
+  TokenSet,
+} from "./types";
 import { toPublicProfile } from "./types";
 
 /**
@@ -218,7 +225,7 @@ export function createRecoveryFactorsModule(
       // to complete this flow on a dev machine with no inbox.
       yield* logDevOtp("recovery", code);
 
-      yield* Effect.forkDetach(
+      yield* forkBackground(
         sendRecoveryOtp(profile.email, code).pipe(
           Effect.timeout("10 seconds"),
           Effect.catch(() => Effect.void),
@@ -246,6 +253,7 @@ export function createRecoveryFactorsModule(
    */
   const completeRecoveryFactor = (
     profile: ProfileWithEmail,
+    amr: RecoveryFactorAmr,
     sessionMeta?: SessionMeta,
   ): Effect.Effect<
     { session: TokenSet; profile: PublicProfile },
@@ -282,7 +290,7 @@ export function createRecoveryFactorsModule(
       // email is the confirmation, so user-visible latency must not track
       // mailer health. Same detached-with-timeout shape as every other notice,
       // and the same caveat — see xchromo/osn#971.
-      yield* Effect.forkDetach(
+      yield* forkBackground(
         securityEventsModule
           .notifySecurityEventByAccountId(profile.accountId, "account_recovered", "recovery-used")
           .pipe(
@@ -297,6 +305,9 @@ export function createRecoveryFactorsModule(
         profile.email,
         profile.handle,
         profile.displayName,
+        // The factor that actually ran, recorded on the session so the passkey
+        // enrolment bypass can assert on it rather than on the audience alone.
+        amr,
         sessionMeta,
       );
 
@@ -391,7 +402,7 @@ export function createRecoveryFactorsModule(
       yield* Effect.promise(() => recoveryOtpLockoutStore.reset(profile.accountId));
       metricRecoveryLockout("reset");
 
-      return yield* completeRecoveryFactor(profile, sessionMeta);
+      return yield* completeRecoveryFactor(profile, "otp", sessionMeta);
     }).pipe(withAuthRecovery("email_complete"), withAuthLogin("email_recovery"));
 
   /**
@@ -474,7 +485,7 @@ export function createRecoveryFactorsModule(
       }
 
       yield* checkTotpCode(profile.accountId, code, "recovery");
-      return yield* completeRecoveryFactor(profile, sessionMeta);
+      return yield* completeRecoveryFactor(profile, "totp", sessionMeta);
     }).pipe(withAuthRecovery("totp_complete"), withAuthLogin("totp_recovery"));
 
   return {
