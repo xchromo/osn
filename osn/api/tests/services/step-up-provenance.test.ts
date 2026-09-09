@@ -89,8 +89,18 @@ const fakeAssertion = (credentialId: string) =>
     clientExtensionResults: {},
   }) as never;
 
-/** The newest credential on the account — the one the last enrolment created. */
-const newestPasskey = (accountId: string) =>
+/**
+ * Read one credential by id.
+ *
+ * By ID, and never "the newest row": `passkeys.created_at` is unix SECONDS, so
+ * two credentials enrolled back to back tie, and a sort on that column returns
+ * an arbitrary one of them. An earlier version of this helper did exactly that
+ * and made the inheritance test unable to fail — it read the parent's `otp`
+ * provenance and asserted it against the child, so an implementation that
+ * stamped the child `webauthn` passed. `completePasskeyRegistration` returns
+ * the id it wrote; that is the only reliable handle.
+ */
+const passkeyById = (passkeyId: string) =>
   Effect.gen(function* () {
     const { db } = yield* Db;
     const rows = yield* Effect.promise(() =>
@@ -102,10 +112,9 @@ const newestPasskey = (accountId: string) =>
           provenanceAmr: passkeys.provenanceAmr,
         })
         .from(passkeys)
-        .where(eq(passkeys.accountId, accountId)),
+        .where(eq(passkeys.id, passkeyId)),
     );
-    const sorted = [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    return sorted[0]!;
+    return rows[0]!;
   });
 
 /**
@@ -131,8 +140,12 @@ const backdate = (passkeyId: string, ms: number) =>
 const enrol = (accountId: string, stepUpToken?: string) =>
   Effect.gen(function* () {
     yield* auth.beginPasskeyRegistration(accountId, stepUpToken);
-    yield* auth.completePasskeyRegistration(accountId, fakeAttestation(), null);
-    return yield* newestPasskey(accountId);
+    const { passkeyId } = yield* auth.completePasskeyRegistration(
+      accountId,
+      fakeAttestation(),
+      null,
+    );
+    return yield* passkeyById(passkeyId);
   });
 
 /** Drive a real passkey step-up ceremony against `credentialId`. */
@@ -458,6 +471,39 @@ describe("fail-closed shapes", () => {
         auth.verifyStepUpForPasskeyDelete(profile.accountId, deleteToken, attacker.id),
       );
       expect(permitted._tag).toBe("Success");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("a target created in the SAME SECOND as the asserter is refused", () =>
+    Effect.gen(function* () {
+      // `passkeys.created_at` is unix seconds, so two credentials enrolled back
+      // to back carry the same value. A strict `<` lets the second delete the
+      // first — the attacker registers twice and the comparison never fires.
+      // Nothing else in this file covers it: every other fixture is backdated,
+      // which puts the two rows in different seconds and makes `<` and `<=`
+      // agree.
+      const { profile } = yield* seedWithOldPasskey("prov-tie@example.com", "provtie");
+
+      const firstToken = yield* auth.issueStepUpToken(profile.accountId, "otp", "passkey_register");
+      const a = yield* enrol(profile.accountId, firstToken);
+      const secondToken = yield* auth.issueStepUpToken(
+        profile.accountId,
+        "otp",
+        "passkey_register",
+      );
+      const b = yield* enrol(profile.accountId, secondToken);
+
+      // Same second, different rows — the precondition the guard exists for.
+      expect(Math.floor(b.createdAt.getTime() / 1000)).toBe(
+        Math.floor(a.createdAt.getTime() / 1000),
+      );
+      expect(b.id).not.toBe(a.id);
+
+      const deleteToken = yield* assertFor(profile.accountId, b.credentialId, "passkey_delete");
+      const err = yield* Effect.flip(
+        auth.verifyStepUpForPasskeyDelete(profile.accountId, deleteToken, a.id),
+      );
+      expect(err._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 
