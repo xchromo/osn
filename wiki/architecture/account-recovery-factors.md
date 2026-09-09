@@ -1,7 +1,21 @@
-# Design — additional account-access factors (TOTP + email-verified recovery)
+---
+title: Account recovery factors — TOTP and email-verified recovery
+tags: [architecture, auth, security, recovery, totp]
+related:
+  - "[[passkey-primary]]"
+  - "[[recovery-codes]]"
+  - "[[step-up]]"
+  - "[[sessions]]"
+  - "[[identity-model]]"
+last-reviewed: 2026-09-09
+---
 
-Status: **amended after stress-plan**. Author: orchestrate run 2026-09-09.
-Revision 2 — every finding from the attack pass is closed below, in the text.
+# Account recovery factors — TOTP and email-verified recovery
+
+The design for two new ways back into an OSN account, and the six issues it
+splits into. Written 2026-09-09 and amended after a stress-plan pass; every
+finding from that pass is closed below, in the text. Actionable work lives in
+GitHub Issues — this page holds the decisions those issues are built from.
 
 ## Problem
 
@@ -13,8 +27,8 @@ no second independent factor.
 
 ## Non-goals, and the decision they preserve
 
-`wiki/systems/passkey-primary.md` records that OTP and magic-link **primary
-login were removed on purpose**. Nothing here reinstates them. No new factor
+[[passkey-primary]] records that OTP and magic-link **primary login were
+removed on purpose**. Nothing here reinstates them. No new factor
 mints an ordinary session, and no new factor becomes a login factor. Phishing
 resistance of the sign-in path is unchanged.
 
@@ -116,7 +130,7 @@ So the cooldown is asymmetric:
   the recovery-enrolled credential and the recovery session family. Without
   this the owner has a warning and no lever.
 
-`wiki/runbooks/musubi-identity-migration.md` step 8 walks an operator through
+[[musubi-identity-migration]] step 8 walks an operator through
 recovery-login → OTP step-up → enrol passkey → delete the old passkeys. Under a
 global lock that runbook breaks; under the asymmetric rule it still works,
 because the operator's step-up comes from the pre-recovery credential. The
@@ -216,7 +230,8 @@ reason nothing here runs concurrently:
   (`Env`), `wrangler.toml`.
 - `osn/db/src/schema/index.ts` and `osn/db/drizzle/` — sequential numbering.
 - `osn/client/src/step-up.ts` mirrors `StepUpPurpose` **by hand**.
-- `wiki/systems/{step-up,passkey-primary,recovery-codes,email,identity-model}.md`.
+- The wiki pages every phase makes stale: [[step-up]], [[passkey-primary]],
+  [[recovery-codes]], [[email]], [[identity-model]].
 
 | # | Issue | Complexity |
 |---|---|---|
@@ -240,6 +255,19 @@ pass holds it all at once.
 - No secret in a log line, a metric attribute or an error body. Bounded metric
   attributes only; no `console.*`; no raw OTel constructors.
 - Constant-time compare for every code check.
+- **Every accepted code is single use**, TOTP included. RFC 6238 §5.2 requires
+  it and `verifyTotpCode` cannot: it is stateless, so the entry point records
+  the accepted step against the account and refuses a repeat for the rest of
+  that step. A TOTP code mints a session at
+  `POST /login/recovery/totp/complete`, so a code replayed off the wire is an
+  account takeover rather than a repeated ceremony.
+- **Both TOTP entry points are throttled per account**, not only per IP — the
+  step-up verify and `POST /login/recovery/totp/complete`. RFC 4226 §7.3
+  requires a throttling parameter, and the arithmetic says why: six digits over
+  ±1 step is three acceptable codes in a million, even odds inside a few
+  hundred thousand attempts, which a rotating fleet reaches in under an hour
+  against a per-IP limit alone. `osn/api/src/lib/recovery-lockout-store.ts` is
+  the existing shape to reuse.
 - Enumeration-safe: uniform response **and** comparable latency, which for a
   mail-sending branch means detaching the send.
 - Every new unauthenticated endpoint is rate limited per IP **and** capped per
@@ -247,4 +275,11 @@ pass holds it all at once.
 - Tests: `it.effect` + `createTestLayer()`; route tests via
   `createXxxRoutes(createTestLayer())`. TDD for anything with logic.
 - Wiki updated in the same PR as the code it describes, `last-reviewed` bumped.
+- The compliance pages count as wiki: a TOTP secret is an authentication
+  credential bound to a person, and `lastUsedAt` sits on the same footing as
+  `passkeys.last_used_at`, which already has a row in both. The phase that adds
+  a column adds its row to [[compliance/data-map]] (`wiki/compliance/data-map.md`
+  — purpose, lawful basis, retention, who can read it) and to
+  [[compliance/retention]] (`wiki/compliance/retention.md` — how long, and what
+  deletes it).
 - A changeset in every PR, package names matching the workspace `name` exactly.

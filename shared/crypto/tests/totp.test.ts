@@ -1,13 +1,30 @@
-import { describe, expect, it } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { timingSafeEqualString } from "../src/timing-safe";
 import {
   base32Decode,
   base32Encode,
   deriveTotpCode,
   generateTotpSecret,
+  parseTotpSecret,
   totpUri,
   verifyTotpCode,
 } from "../src/totp";
+
+/**
+ * The comparison is wrapped, not replaced: every test still compares for real,
+ * and the wrapper only counts. Counting is how "no early return" is asserted
+ * at all — the property is about how many comparisons happen, and a timing
+ * measurement would decide it differently on a loaded CI machine than on a
+ * quiet one.
+ */
+vi.mock("../src/timing-safe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/timing-safe")>();
+  return { timingSafeEqualString: vi.fn(actual.timingSafeEqualString) };
+});
+
+const comparisons = vi.mocked(timingSafeEqualString);
 
 /**
  * The seed both RFC 4226 Appendix D and RFC 6238 Appendix B publish their
@@ -65,6 +82,27 @@ function counterAt(seconds: number): number {
   return Math.floor(seconds / TOTP_STEP_SECONDS);
 }
 
+/**
+ * A six-digit code no candidate in the window can equal, chosen rather than
+ * assumed: of the ten repeated-digit codes at most three are in any window, so
+ * one of them is always free and the test never turns on a one-in-a-million
+ * collision.
+ */
+async function unmatchableCode(secret: Uint8Array, counter: number, span: number): Promise<string> {
+  const accepted = new Set(
+    await Promise.all(
+      Array.from({ length: span * 2 + 1 }, (_, index) =>
+        deriveTotpCode(secret, counter - span + index),
+      ),
+    ),
+  );
+  const free = Array.from({ length: 10 }, (_, digit) => String(digit).repeat(6)).find(
+    (candidate) => !accepted.has(candidate),
+  );
+  if (free === undefined) throw new Error("every repeated-digit code was in the window");
+  return free;
+}
+
 describe("deriveTotpCode — RFC 4226 Appendix D", () => {
   it.each(HOTP_VECTORS.map((code, counter) => ({ counter, code })))(
     "counter $counter derives $code",
@@ -97,6 +135,10 @@ describe("deriveTotpCode — rejected inputs", () => {
 
   it("rejects an empty secret", async () => {
     await expect(deriveTotpCode(new Uint8Array(0), 1)).rejects.toThrow(TypeError);
+  });
+
+  it("accepts a secret of exactly the 128-bit floor", async () => {
+    await expect(deriveTotpCode(new Uint8Array(16), 1)).resolves.toMatch(/^[0-9]{6}$/);
   });
 });
 
@@ -163,6 +205,71 @@ describe("base32Decode — RFC 4648 §10", () => {
   });
 });
 
+describe("base32Decode — bounded work", () => {
+  it("decodes an input at the 512-character ceiling", () => {
+    expect(base32Decode("A".repeat(512))).toHaveLength(320);
+  });
+
+  it("rejects an input above the ceiling rather than decoding it", () => {
+    expect(() => base32Decode("A".repeat(513))).toThrow(TypeError);
+  });
+
+  it("rejects on the length it was given, before whitespace is stripped", () => {
+    expect(() => base32Decode(`${RFC_SEED_BASE32}${" ".repeat(600)}`)).toThrow(TypeError);
+  });
+
+  it("keeps the rejected input out of the error message", () => {
+    let message = "";
+    try {
+      base32Decode("MZXW6YTB".repeat(100));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toBe("");
+    expect(message).not.toContain("MZXW6YTB");
+  });
+});
+
+describe("parseTotpSecret", () => {
+  it("decodes the published seed encoding into the Appendix B seed", () => {
+    expect([...parseTotpSecret(RFC_SEED_BASE32)]).toStrictEqual([...RFC_SEED]);
+  });
+
+  it("accepts the spellings the codec accepts", () => {
+    expect([...parseTotpSecret("gezd gnbv gy3t qojq gezd gnbv gy3t qojq")]).toStrictEqual([
+      ...RFC_SEED,
+    ]);
+    expect([...parseTotpSecret(`${RFC_SEED_BASE32}======`)]).toStrictEqual([...RFC_SEED]);
+  });
+
+  it("accepts a secret of exactly the 128-bit floor", () => {
+    expect(parseTotpSecret(base32Encode(RFC_SEED.slice(0, 16)))).toHaveLength(16);
+  });
+
+  it("rejects a secret one byte below the floor", () => {
+    expect(() => parseTotpSecret(base32Encode(RFC_SEED.slice(0, 15)))).toThrow(TypeError);
+  });
+
+  it.each(["A", "AB", ""])("rejects %j, which carries no whole byte at all", (input) => {
+    expect(() => parseTotpSecret(input)).toThrow(TypeError);
+  });
+
+  it("rejects a character outside the alphabet, as the codec does", () => {
+    expect(() => parseTotpSecret(`${RFC_SEED_BASE32}!`)).toThrow(TypeError);
+  });
+
+  it("keeps the rejected input out of the error message", () => {
+    let message = "";
+    try {
+      parseTotpSecret("MZXW6YTB");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toBe("");
+    expect(message).not.toContain("MZXW6YTB");
+  });
+});
+
 describe("base32 and the code derivation agree", () => {
   it("decodes the published seed encoding back into the Appendix B seed", async () => {
     const decoded = base32Decode(RFC_SEED_BASE32);
@@ -213,6 +320,98 @@ describe("verifyTotpCode — drift window", () => {
     expect(await verifyTotpCode({ secret: RFC_SEED, code: inside, at, window: 100 })).toBe(true);
     expect(await verifyTotpCode({ secret: RFC_SEED, code: outside, at, window: 100 })).toBe(false);
   });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.4])(
+    "collapses a window of %s to the current step, and still accepts it",
+    async (window) => {
+      const current = await deriveTotpCode(RFC_SEED, counter);
+      const next = await deriveTotpCode(RFC_SEED, counter + 1);
+      expect(await verifyTotpCode({ secret: RFC_SEED, code: current, at, window })).toBe(true);
+      expect(await verifyTotpCode({ secret: RFC_SEED, code: next, at, window })).toBe(false);
+    },
+  );
+});
+
+describe("verifyTotpCode — the same work wherever the match is", () => {
+  const at = new Date(1_111_111_111 * 1000);
+  const counter = counterAt(1_111_111_111);
+  const WINDOW = 1;
+  const CANDIDATES = WINDOW * 2 + 1;
+
+  let signatures: MockInstance<SubtleCrypto["sign"]>;
+
+  beforeEach(() => {
+    signatures = vi.spyOn(crypto.subtle, "sign");
+  });
+
+  afterEach(() => {
+    signatures.mockRestore();
+  });
+
+  it.each([
+    { where: "the first candidate", offset: -1 },
+    { where: "the middle candidate", offset: 0 },
+    { where: "the last candidate", offset: 1 },
+  ])("derives and compares every candidate when the code matches $where", async ({ offset }) => {
+    const code = await deriveTotpCode(RFC_SEED, counter + offset);
+    comparisons.mockClear();
+    signatures.mockClear();
+
+    expect(await verifyTotpCode({ secret: RFC_SEED, code, at, window: WINDOW })).toBe(true);
+
+    expect(comparisons).toHaveBeenCalledTimes(CANDIDATES);
+    expect(signatures).toHaveBeenCalledTimes(CANDIDATES);
+  });
+
+  it("derives and compares every candidate when the code matches none of them", async () => {
+    const code = await unmatchableCode(RFC_SEED, counter, WINDOW);
+    comparisons.mockClear();
+    signatures.mockClear();
+
+    expect(await verifyTotpCode({ secret: RFC_SEED, code, at, window: WINDOW })).toBe(false);
+
+    expect(comparisons).toHaveBeenCalledTimes(CANDIDATES);
+    expect(signatures).toHaveBeenCalledTimes(CANDIDATES);
+  });
+
+  it.each([0, 15])(
+    "does the same work for a %s-byte secret it cannot verify against",
+    async (length) => {
+      comparisons.mockClear();
+      signatures.mockClear();
+
+      expect(
+        await verifyTotpCode({
+          secret: new Uint8Array(length),
+          code: "123456",
+          at,
+          window: WINDOW,
+        }),
+      ).toBe(false);
+
+      expect(comparisons).toHaveBeenCalledTimes(CANDIDATES);
+      expect(signatures).toHaveBeenCalledTimes(CANDIDATES);
+    },
+  );
+});
+
+describe("verifyTotpCode — the code guard runs before any HMAC", () => {
+  const at = new Date(1_111_111_111 * 1000);
+
+  let signatures: MockInstance<SubtleCrypto["sign"]>;
+
+  beforeEach(() => {
+    signatures = vi.spyOn(crypto.subtle, "sign");
+  });
+
+  afterEach(() => {
+    signatures.mockRestore();
+  });
+
+  it.each(["1234567", "12345", "12a456", ""])("derives nothing for %j", async (code) => {
+    expect(await verifyTotpCode({ secret: RFC_SEED, code, at })).toBe(false);
+    expect(signatures).not.toHaveBeenCalled();
+  });
 });
 
 describe("verifyTotpCode — malformed input", () => {
@@ -232,10 +431,12 @@ describe("verifyTotpCode — malformed input", () => {
     );
   });
 
-  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("survives a window of %s", async (window) => {
-    const code = await deriveTotpCode(RFC_SEED, counterAt(1_111_111_111));
-    const accepted = await verifyTotpCode({ secret: RFC_SEED, code, at, window });
-    expect(typeof accepted).toBe("boolean");
+  it("returns false for a pre-1970 date, whose step counter is negative", async () => {
+    // The code for counter 0 — what a negative counter clamps to if it is not
+    // refused first, and so the code such a date would wrongly accept.
+    expect(
+      await verifyTotpCode({ secret: RFC_SEED, code: HOTP_VECTORS[0], at: new Date(-1000) }),
+    ).toBe(false);
   });
 
   it("returns false for a secret below the 128-bit floor rather than throwing", async () => {
@@ -244,6 +445,12 @@ describe("verifyTotpCode — malformed input", () => {
 
   it("returns false for an empty secret rather than throwing", async () => {
     expect(await verifyTotpCode({ secret: new Uint8Array(0), code: "123456", at })).toBe(false);
+  });
+
+  it("verifies against a secret of exactly the 128-bit floor", async () => {
+    const secret = RFC_SEED.slice(0, 16);
+    const code = await deriveTotpCode(secret, counterAt(1_111_111_111));
+    expect(await verifyTotpCode({ secret, code, at })).toBe(true);
   });
 });
 
@@ -290,6 +497,19 @@ describe("totpUri", () => {
     const uri = new URL(totpUri({ secret, accountName: "ada", issuer: "OSN" }));
     expect([...base32Decode(uri.searchParams.get("secret") ?? "")]).toStrictEqual([...secret]);
   });
+
+  it.each([0, 4, 15])("refuses to encode a %s-byte secret into a QR code", (length) => {
+    expect(() =>
+      totpUri({ secret: new Uint8Array(length), accountName: "ada", issuer: "OSN" }),
+    ).toThrow(TypeError);
+  });
+
+  it("encodes a secret of exactly the 128-bit floor", () => {
+    const uri = new URL(
+      totpUri({ secret: RFC_SEED.slice(0, 16), accountName: "ada", issuer: "OSN" }),
+    );
+    expect(base32Decode(uri.searchParams.get("secret") ?? "")).toHaveLength(16);
+  });
 });
 
 describe("the ./totp subpath", () => {
@@ -298,5 +518,6 @@ describe("the ./totp subpath", () => {
     expect(viaSubpath.verifyTotpCode).toBe(verifyTotpCode);
     expect(viaSubpath.deriveTotpCode).toBe(deriveTotpCode);
     expect(viaSubpath.base32Decode).toBe(base32Decode);
+    expect(viaSubpath.parseTotpSecret).toBe(parseTotpSecret);
   });
 });
