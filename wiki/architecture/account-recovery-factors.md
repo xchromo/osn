@@ -235,6 +235,19 @@ Two limits are worth naming because neither is obvious from the rule:
   for an owner who also reads the mail. What protects an owner whose inbox is
   lost is the asymmetry itself.
 
+The two exclusions above interact, and the interaction is bounded rather than
+left standing. A disown token freezes `recovered_at` at mint time and lives 72
+hours; the recovery-**code** path is exempt from the cap and re-stamps
+`accounts.last_recovered_at` on every use. So recover by email at `t1`, again by
+code at `t2`, then present the `t1` token: without a bound it would revoke
+credentials the second recovery legitimately produced and clear a window that
+belongs to it, ending `W2` early for a recovery nobody disowned. Both halves are
+scoped in `revokeDisownedRecovery` — the revocation stops at `t2`, and the clear
+is a compare-and-set on the token's own `recovered_at`. Invalidating the whole
+token instead would have been the wrong trade: the owner who recovers by code
+after someone else's email recovery is exactly the person who then wants to
+disown it. See [[recovery-codes]].
+
 And one case the asymmetric rule does not improve on the global lock: a user who
 loses an **unlocked** phone and recovers cannot remove that phone's credential
 for 72 hours, while whoever holds it can remove the newly enrolled one and

@@ -88,10 +88,35 @@ with a passkey they still held survives — every session on the account, and
 a three-day lockout: "this wasn't me" is by definition a request to be allowed
 to recover again.
 
+**A token names one recovery, and reaches no further than that recovery.** It
+freezes `recovered_at` when it is minted and lives 72 hours, but the
+recovery-**code** path is exempt from the one-recovery-per-72-hours cap and
+re-stamps `last_recovered_at` on every use — so a second, legitimate recovery
+can land while an earlier token is still live. Two bounds keep the older token
+inside its own era:
+
+| Bound | Effect |
+|---|---|
+| The revocation stops at the later recovery | Credentials the second recovery produced are not deleted by the first recovery's token |
+| The clear is a compare-and-set on the token's own `recovered_at` | A later recovery keeps its window, so disowning an old recovery cannot re-open the second-recovery cap or the email-change gate early |
+
 Every branch answers `202 {"status":"accepted"}` — a good token, a wrong one, a
-spent one, an expired one, and an account that would be left with no passkey at
-all. The last-passkey invariant wins over the revocation; in that case the
-sessions still go and only the outcome counter says so.
+spent one, an expired one, an account that would be left with no passkey at all,
+and a token-store outage. The last-passkey invariant wins over the revocation;
+in that case the sessions still go and only the outcome counter says so.
+
+**One branch does not.** If the token matches and the *database* then refuses
+the revocation, the route answers `500` and the counter records
+`revoke_failed`. Reporting "accepted" there would claim the only lever the owner
+has had fired when nothing was revoked, and the counter that exists to tell a
+real revocation from a no-op would agree. Nothing is enumerable by that point —
+the writes sit behind a 256-bit secret that has already matched — so the loud
+answer costs no privacy, and the token is put back so the owner's second click
+works.
+
+The token is claimed **atomically** (`CeremonyStore.consume`, the same
+first-consumer-wins guarantee `StepUpJtiStore.consume` gives a step-up `jti`),
+so two concurrent presentations cannot both pass the check and both revoke.
 
 > [!note] It arrives in the mailbox
 > Which, in the case the cooldown is written for, is the attacker's. The lever is

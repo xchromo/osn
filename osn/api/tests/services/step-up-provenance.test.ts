@@ -25,7 +25,7 @@
  */
 
 import { it, expect, describe } from "@effect/vitest";
-import { passkeys } from "@osn/db/schema";
+import { accounts, passkeys } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -152,7 +152,7 @@ const enrol = (accountId: string, stepUpToken?: string) =>
 const assertFor = (
   accountId: string,
   credentialId: string,
-  purpose: "passkey_delete" | "email_change",
+  purpose: "passkey_delete" | "email_change" | "passkey_register",
 ) =>
   Effect.gen(function* () {
     yield* auth.beginStepUpPasskey(accountId);
@@ -162,6 +162,33 @@ const assertFor = (
       purpose,
     );
     return stepUpToken;
+  });
+
+/**
+ * Put a credential's `created_at` on an EXACT unix second.
+ *
+ * `backdate` subtracts from `Date.now()`, which lands wherever the clock
+ * happens to be inside the second. A boundary test has to name the second it
+ * is testing, so this takes one.
+ */
+const stampCreatedAt = (passkeyId: string, sec: number) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    yield* Effect.promise(() =>
+      db
+        .update(passkeys)
+        .set({ createdAt: new Date(sec * 1000) })
+        .where(eq(passkeys.id, passkeyId)),
+    );
+  });
+
+/** Open the recovery window at an exact unix second. */
+const stampRecoveredAt = (accountId: string, sec: number) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    yield* Effect.promise(() =>
+      db.update(accounts).set({ lastRecoveredAt: sec }).where(eq(accounts.id, accountId)),
+    );
   });
 
 /** An account with one bootstrap credential, backdated well clear of the window. */
@@ -504,6 +531,86 @@ describe("fail-closed shapes", () => {
         auth.verifyStepUpForPasskeyDelete(profile.accountId, deleteToken, a.id),
       );
       expect(err._tag).toBe("AuthError");
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  it.effect("the RECOVERY window's boundary is strict, and W1 is why that is safe", () =>
+    Effect.gen(function* () {
+      // The sibling of the test above, for the other window — and the opposite
+      // answer, on purpose. The registration-provenance rule compares `<=`
+      // because a same-second tie means two credentials' ages cannot be told
+      // apart and the older must win. The recovery window asks a different
+      // question — "does the target predate the recovery" — and a credential
+      // stamped in the recovery's own second does not.
+      //
+      // Making it `<=` would refuse exactly one asserter that `<` admits: a
+      // post-recovery credential carrying `webauthn`, which by the inheritance
+      // rule is one the owner derived from a passkey they still hold. That is
+      // the credential the whole asymmetry exists to keep working, so this test
+      // is what makes the choice deliberate rather than a third seconds-
+      // resolution accident.
+      const { profile, original } = yield* seedWithOldPasskey("prov-w2@example.com", "provw2");
+      const recoveredAt = Math.floor(Date.now() / 1000);
+      yield* stampRecoveredAt(profile.accountId, recoveredAt);
+
+      // The owner returns and derives a credential from the passkey they kept.
+      // `original` is past its own window, so the child is stamped `webauthn`.
+      const registerToken = yield* assertFor(
+        profile.accountId,
+        original.credentialId,
+        "passkey_register",
+      );
+      const derived = yield* enrol(profile.accountId, registerToken);
+      expect(derived.provenanceAmr).toBe("webauthn");
+
+      // A target stamped in the recovery's own second.
+      const targetToken = yield* assertFor(
+        profile.accountId,
+        original.credentialId,
+        "passkey_register",
+      );
+      const target = yield* enrol(profile.accountId, targetToken);
+      yield* stampCreatedAt(target.id, recoveredAt);
+
+      const sameSecond = yield* assertFor(
+        profile.accountId,
+        derived.credentialId,
+        "passkey_delete",
+      );
+      const permitted = yield* Effect.exit(
+        auth.verifyStepUpForPasskeyDelete(profile.accountId, sameSecond, target.id),
+      );
+      expect(permitted._tag).toBe("Success");
+
+      // One second earlier is genuinely pre-recovery, and refused. Without this
+      // half the test above would pass on a rule that had been deleted.
+      yield* stampCreatedAt(target.id, recoveredAt - 1);
+      const secondBefore = yield* assertFor(
+        profile.accountId,
+        derived.credentialId,
+        "passkey_delete",
+      );
+      const err = yield* Effect.flip(
+        auth.verifyStepUpForPasskeyDelete(profile.accountId, secondBefore, target.id),
+      );
+      expect(err._tag).toBe("AuthError");
+
+      // And the case `<=` was proposed for is already covered, by W1: a WEAK
+      // post-recovery credential is refused against the same-second target
+      // whatever the recovery window says.
+      yield* stampCreatedAt(target.id, recoveredAt);
+      const weakRegister = yield* auth.issueStepUpToken(
+        profile.accountId,
+        "otp",
+        "passkey_register",
+      );
+      const weak = yield* enrol(profile.accountId, weakRegister);
+      expect(weak.provenanceAmr).toBe("otp");
+      const weakDelete = yield* assertFor(profile.accountId, weak.credentialId, "passkey_delete");
+      const weakErr = yield* Effect.flip(
+        auth.verifyStepUpForPasskeyDelete(profile.accountId, weakDelete, target.id),
+      );
+      expect(weakErr._tag).toBe("AuthError");
     }).pipe(Effect.provide(createTestLayer())),
   );
 

@@ -195,19 +195,32 @@ export type RecoveryCooldownOutcome =
   | "email_change_refused";
 
 /**
- * Outcome of `POST /recovery/disown`. Every one answers 202, including
- * `store_error` — a token that cannot be read revokes nothing, and the caller
- * must not be able to tell that apart from a token that was simply wrong.
+ * Outcome of `POST /recovery/disown`. Every one answers 202 except
+ * `revoke_failed`, including `store_error` — a token that cannot be read
+ * revokes nothing, and the caller must not be able to tell that apart from a
+ * token that was simply wrong.
+ *
+ * `accepted` and `kept_last_passkey` are the only two that mean the writes
+ * landed. Nothing else may be counted as the lever having fired: this is the
+ * one signal that separates a real revocation from a no-op, and a disown that
+ * revoked nothing while reporting success is indistinguishable from one that
+ * was never needed.
  */
 export type RecoveryDisownResult =
   | "accepted"
   // Bad, spent, or expired token — one bucket, because the route cannot tell
-  // them apart without leaking which.
+  // them apart without leaking which. A token whose single-use claim another
+  // caller won lands here too: to this caller it was already spent.
   | "invalid"
   // The credentials the disown would revoke are the account's only ones. The
   // sessions still go; the last-passkey invariant wins over the revocation.
   | "kept_last_passkey"
-  | "store_error";
+  // The token store could not be read or claimed. Revokes nothing, answers 202.
+  | "store_error"
+  // The token matched and was spent, but the database refused the revocation.
+  // The ONLY outcome that answers 5xx: the caller is told the lever did not
+  // fire, because they are the one who can pull it again.
+  | "revoke_failed";
 
 /** Recovery code consume outcomes. */
 export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";

@@ -670,9 +670,11 @@ export function createRecoveryFactorsModule(
    * The token is a 256-bit secret, so there is nothing to enumerate — but the
    * uniform answer costs nothing and removes the need to argue about it.
    *
-   * **Two store round trips on every branch.** A `get` and a `delete` when the
-   * token is accepted; a `get` and a probe `get` when it is not. The database
-   * work sits behind the secret and is not reachable by probing.
+   * **Two store round trips on every branch a stranger can reach.** A `get`
+   * and an atomic `consume` when the token is accepted; a `get` and a probe
+   * `get` when it is not. The database work sits behind the secret and is not
+   * reachable by probing, and neither is the third hop that re-parks the token
+   * when the revocation write fails.
    *
    * What it does, and why each part is wider or narrower than the obvious:
    *
@@ -689,13 +691,26 @@ export function createRecoveryFactorsModule(
    *   the account postdates the recovery, because completing one deletes them
    *   all; and the attacker's ordinary sign-in with their new credential starts
    *   a DIFFERENT family, which family-scoped revocation would leave alive.
-   * - **Clears `last_recovered_at`.** Otherwise one click on a link in a
-   *   mailbox turns an honest owner's recovery into a 72-hour lockout: their
-   *   new credential is deleted, their sessions are gone, and the
-   *   second-recovery refusal stops them getting back in. "This wasn't me" is
-   *   by definition a request to be allowed to recover again.
+   * - **Clears `last_recovered_at` — but only the recovery this token names.**
+   *   Otherwise one click on a link in a mailbox turns an honest owner's
+   *   recovery into a 72-hour lockout: their new credential is deleted, their
+   *   sessions are gone, and the second-recovery refusal stops them getting
+   *   back in. "This wasn't me" is by definition a request to be allowed to
+   *   recover again. That argument is about the recovery the token was minted
+   *   for, so a LATER recovery's window is left standing — see
+   *   `revokeDisownedRecovery`.
+   *
+   * **The one branch that does not answer 202** is a database failure after the
+   * token has matched. Reporting "accepted" there would be a lie about the only
+   * lever the account owner has, and the counter that exists to tell a real
+   * revocation from a no-op would say the lever fired. Nothing is enumerable by
+   * then — the writes sit behind a 256-bit secret that has already matched — so
+   * a 5xx costs no privacy, and the token is re-parked so the click can be
+   * repeated.
    */
-  const disownRecovery = (token: string): Effect.Effect<RecoveryEmailBeginResult, never, Db> =>
+  const disownRecovery = (
+    token: string,
+  ): Effect.Effect<RecoveryEmailBeginResult, DatabaseError, Db> =>
     Effect.gen(function* () {
       const parsed = parseDisownToken(token);
       // A malformed token still pays for both hops, so "that was not even the
@@ -730,11 +745,49 @@ export function createRecoveryFactorsModule(
         return DISOWN_ACCEPTED;
       }
 
-      // Single use. Deleted before the revocation, so a token can never be
-      // spent twice even if the writes below fail.
-      yield* Effect.promise(() => stores.recoveryDisownTokens.delete(lookupId));
+      // Single use, claimed ATOMICALLY — the guarantee `StepUpJtiStore.consume`
+      // gives a step-up jti, for the same reason. A `get` above followed by a
+      // plain `delete` here lets two concurrent presentations of one token both
+      // pass the check and both revoke; the claim makes the first consumer the
+      // only one. Claimed BEFORE the revocation, so the token cannot be spent
+      // twice even if the writes below fail.
+      const claimed = yield* Effect.tryPromise({
+        try: () => stores.recoveryDisownTokens.consume(lookupId),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("auth.recovery.disown: token claim failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(null),
+          ),
+        ),
+      );
+      if (claimed !== true) {
+        // `false` is a lost race: another presentation of this token got there
+        // first and is doing the work, so this one is a replay. `null` is a
+        // store outage, which revokes nothing — the same fail-closed posture as
+        // an unreadable store above.
+        metricRecoveryDisown(claimed === false ? "invalid" : "store_error");
+        return DISOWN_ACCEPTED;
+      }
 
-      const outcome = yield* revokeDisownedRecovery(entry.accountId, entry.recoveredAt);
+      const outcome = yield* revokeDisownedRecovery(entry.accountId, entry.recoveredAt).pipe(
+        Effect.tapError(() =>
+          Effect.gen(function* () {
+            metricRecoveryDisown("revoke_failed");
+            // Put the token back so the owner's second click works. The writes
+            // are idempotent, so re-parking cannot do harm even where the batch
+            // had in fact landed and only the acknowledgement was lost.
+            yield* Effect.promise(() =>
+              stores.recoveryDisownTokens.set(
+                lookupId,
+                entry,
+                Math.max(0, entry.expiresAt - Date.now()),
+              ),
+            ).pipe(Effect.catch(() => Effect.void));
+          }),
+        ),
+      );
       metricRecoveryDisown(outcome);
       return DISOWN_ACCEPTED;
     }).pipe(withAuthRecovery("disown"));
@@ -749,11 +802,29 @@ export function createRecoveryFactorsModule(
   /**
    * The writes behind an accepted disown. Split out so the branch table above
    * stays readable and so the last-passkey guard is in one place.
+   *
+   * **Nothing here is swallowed.** Every failure leaves the caller a 5xx and
+   * the `revoke_failed` counter, because the return value is computed from an
+   * in-memory read and would otherwise report a revocation that never
+   * happened — on the one lever the account owner has, with no way to see it
+   * and no way to retry. `completeRecoveryFactor`'s batch fails loudly for the
+   * same reason, and these two writes are the same kind of thing.
+   *
+   * **The token names ONE recovery, and this is scoped to it.** `recoveredAt`
+   * is frozen at mint time and the token lives 72 hours, but the
+   * recovery-CODE path is deliberately exempt from the one-recovery-per-72h
+   * cap and re-stamps `accounts.last_recovered_at` on every use. So a second,
+   * legitimate recovery can land while an earlier token is still live, and an
+   * unscoped run would reach through it: revoking the credentials that second
+   * recovery produced, and clearing a window that has nothing to do with the
+   * recovery being disowned. Both are bounded here — the revocation by an
+   * upper bound at the later recovery, the clear by a compare-and-set on the
+   * value the token was minted against.
    */
   const revokeDisownedRecovery = (
     accountId: string,
     recoveredAt: number,
-  ): Effect.Effect<"accepted" | "kept_last_passkey", never, Db> =>
+  ): Effect.Effect<"accepted" | "kept_last_passkey", DatabaseError, Db> =>
     Effect.gen(function* () {
       const { db } = yield* Db;
       const nowSec = Math.floor(Date.now() / 1000);
@@ -769,17 +840,37 @@ export function createRecoveryFactorsModule(
             .from(passkeys)
             .where(eq(passkeys.accountId, accountId)),
         catch: (cause) => new DatabaseError({ cause }),
-      }).pipe(Effect.catch(() => Effect.succeed([])));
+      });
+
+      const [account] = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+            .from(accounts)
+            .where(eq(accounts.id, accountId))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+
+      // A recovery later than the one this token names, if there is one. Only
+      // the recovery-code path can produce it inside the window; the two factor
+      // paths are capped. `null` covers "no later recovery" and "already
+      // cleared", which want the same treatment: no upper bound.
+      const current = account?.lastRecoveredAt ?? null;
+      const laterRecovery = current !== null && current > recoveredAt ? current : null;
 
       // A NULL provenance is a row older than the column, so it is not one this
       // recovery produced whatever its timestamp says.
-      const revocable = accountPasskeys.filter(
-        (row) =>
-          Math.floor(row.createdAt.getTime() / 1000) >= recoveredAt &&
-          (row.provenanceAmr === "recovery" ||
-            row.provenanceAmr === "otp" ||
-            row.provenanceAmr === "totp"),
-      );
+      const revocable = accountPasskeys.filter((row) => {
+        const createdAtSec = Math.floor(row.createdAt.getTime() / 1000);
+        if (createdAtSec < recoveredAt) return false;
+        if (laterRecovery !== null && createdAtSec >= laterRecovery) return false;
+        return (
+          row.provenanceAmr === "recovery" ||
+          row.provenanceAmr === "otp" ||
+          row.provenanceAmr === "totp"
+        );
+      });
       const keepsOne = accountPasskeys.length > revocable.length;
 
       const securityEventRow: typeof securityEvents.$inferInsert = {
@@ -813,19 +904,23 @@ export function createRecoveryFactorsModule(
       statements.push(
         db.delete(sessions).where(eq(sessions.accountId, accountId)),
         db.insert(securityEvents).values(securityEventRow),
-        db.update(accounts).set({ lastRecoveredAt: null }).where(eq(accounts.id, accountId)),
+        db
+          .update(accounts)
+          .set({ lastRecoveredAt: null })
+          // Compare-and-set on the value the token was minted against, so a
+          // recovery that landed AFTER it keeps its own window. Without the
+          // second clause a stale token would end a later recovery's cooldown
+          // early — re-opening the second-recovery cap and the email-change
+          // gate for whoever is holding the mailbox. It is also why this is
+          // safe against a race with a concurrent recovery: the statement
+          // matches nothing once the row has moved on.
+          .where(and(eq(accounts.id, accountId), eq(accounts.lastRecoveredAt, recoveredAt))),
       );
 
       yield* Effect.tryPromise({
         try: () => commitBatch(db, statements),
         catch: (cause) => new DatabaseError({ cause }),
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("auth.recovery.disown: revocation write failed").pipe(
-            Effect.annotateLogs({ error: String(cause) }),
-          ),
-        ),
-      );
+      });
 
       metricSessionSecurityInvalidation("recovery_disowned");
       metricSecurityEventRecorded("recovery_disowned");

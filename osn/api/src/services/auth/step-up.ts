@@ -113,11 +113,24 @@ const PROVENANCE_VALUES = new Set<string>(["webauthn", "otp", "totp", "recovery"
  *   signing key can mint one, so it is not an attack path — but a rule that
  *   reads a missing claim as "unrestricted" is one forgotten mint site away
  *   from being no rule at all.
- * - **`<=`, not `<`, plus an id guard.** `passkeys.created_at` is unix
- *   seconds, so a credential registered in the same second as its target would
- *   slip a strict comparison. The id guard is what still lets a credential
- *   delete itself, so the account can never be trapped into keeping the one
- *   the recovery enrolled.
+ * - **W1 compares `<=`, not `<`, plus an id guard.** `passkeys.created_at` is
+ *   unix seconds, so a credential registered in the same second as its target
+ *   would slip a strict comparison. The id guard is what still lets a
+ *   credential delete itself, so the account can never be trapped into keeping
+ *   the one the recovery enrolled.
+ *
+ * **W2 compares `<`, and the asymmetry with W1 is deliberate.** The two
+ * comparisons are not the same question. W1 asks "is the target at least as
+ * old as the credential asking", where a same-second tie means the two are
+ * indistinguishable in age and the older must win. W2 asks "does the target
+ * predate the recovery", and a credential stamped in the recovery's own second
+ * does not. Widening it to `<=` would buy nothing and cost the owner: a target
+ * created in the recovery's second is at most a second old when the recovery
+ * lands, so W1 already refuses every weak-provenance credential against it,
+ * and the only asserter W2's `<=` could newly refuse is a post-recovery
+ * credential carrying `webauthn` — which by the inheritance rule means one the
+ * owner derived from a passkey they still hold. That is exactly the credential
+ * that has to be able to delete what the recovery enrolled.
  */
 export function provenanceRefusal(
   claims: StepUpProvenanceClaims,
@@ -168,6 +181,10 @@ export function provenanceRefusal(
     if (
       check.targetCreatedAt !== null &&
       check.targetId !== claims.passkeyId &&
+      // Strict, unlike W1's `<=` above, and the docstring says why: a target
+      // stamped in the recovery's own second does not predate it, and refusing
+      // one would only ever stop the owner's `webauthn`-provenance credential
+      // from removing what the recovery enrolled.
       check.targetCreatedAt < recoveredAt
     ) {
       return refusal;

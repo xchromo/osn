@@ -29,6 +29,27 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+/**
+ * Every `metricRecoveryDisown` call, in order.
+ *
+ * The counter goes to a NoOp meter under test, and it is the ONLY signal that
+ * separates a disown that revoked something from one that revoked nothing —
+ * every branch that a stranger can reach answers the same 202. So the outcome
+ * has to be observable here, or the tests below can only assert that the route
+ * did not crash. The spy calls through, so nothing else changes.
+ */
+const disownOutcomes = vi.hoisted(() => [] as string[]);
+vi.mock("../../src/metrics", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/metrics")>();
+  return {
+    ...actual,
+    metricRecoveryDisown: (result: string) => {
+      disownOutcomes.push(result);
+      actual.metricRecoveryDisown(result as Parameters<typeof actual.metricRecoveryDisown>[0]);
+    },
+  };
+});
+
 vi.mock("@simplewebauthn/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@simplewebauthn/server")>();
   let seq = 0;
@@ -76,17 +97,27 @@ const json = (path: string, init: RequestInit = {}) =>
     headers: { "content-type": "application/json", ...init.headers },
   });
 
-function makeApp(overrides: Partial<AuthConfig> = {}) {
+type TestDb = ReturnType<typeof drizzle<typeof schema>>;
+
+/**
+ * `wrapDb` is how the database-failure tests reach the routes: the service the
+ * routes hold is built over whatever it returns, while the tests keep the real
+ * handle to assert against.
+ */
+function makeApp(overrides: Partial<AuthConfig> = {}, wrapDb: (db: TestDb) => TestDb = (d) => d) {
   const sqlite = new Database(":memory:");
   applySchema(sqlite);
   const db = drizzle(sqlite, { schema });
   const recorder = makeLogEmailLive();
-  const layer = Layer.merge(Layer.succeed(Db, { db }), recorder.layer);
+  const routeLayer = Layer.merge(Layer.succeed(Db, { db: wrapDb(db) }), recorder.layer);
+  // The tests' own reads and seeds always go through the real handle, so a
+  // wrapped database can fail the routes without blinding the assertions.
+  const testLayer = Layer.merge(Layer.succeed(Db, { db }), recorder.layer);
   const merged = { ...config, ...overrides };
-  const app = createAuthRoutes(merged, layer);
+  const app = createAuthRoutes(merged, routeLayer);
   const auth = createAuthService(merged);
   const svc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<A, E, never>);
+    Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
   return { app, auth, db, svc, recorded: recorder.recorded };
 }
 
@@ -648,6 +679,92 @@ describe("POST /recovery/disown", () => {
     expect(liveSessions).toHaveLength(0);
   });
 
+  it("cannot reach past a LATER recovery — neither its credentials nor its window", async () => {
+    // The two documented exclusions interact. A token freezes `recovered_at`
+    // at mint time and lives 72 hours; the recovery-CODE path is exempt from
+    // the one-per-72-hours cap and re-stamps `last_recovered_at` every time.
+    // So a second, legitimate recovery can land while an older token is still
+    // live, and an unscoped run would revoke the credentials that second
+    // recovery produced and clear a window belonging to it — ending W2 early
+    // for a recovery nobody disowned, which re-opens both the second-recovery
+    // cap and the email-change gate for whoever holds the mailbox.
+    //
+    // Goes red on dropping either bound: the `laterRecovery` upper bound on
+    // the revocable set, or the compare-and-set on the `last_recovered_at`
+    // clear.
+    const h = makeApp();
+    const { profile, original, token } = await recoverAndEnrol(
+      h,
+      "dis-later@example.com",
+      "dislater",
+    );
+
+    // The second recovery is stood in for by the two writes one performs: it
+    // stamps `last_recovered_at` (proved against the real route by "the
+    // recovery-code path stamps the window it is exempt from") and leaves a
+    // credential behind. Five seconds later, because the column is unix
+    // SECONDS and two recoveries inside one second are one recovery to every
+    // comparison here.
+    const [firstStamp] = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+          .from(accounts)
+          .where(eq(accounts.id, profile.accountId)),
+      ),
+    );
+    const secondRecoveryAt = firstStamp!.lastRecoveredAt! + 5;
+    const secondCredential = `pk_${Math.random().toString(16).slice(2, 14).padEnd(12, "0")}`;
+    await h.svc(
+      Effect.promise(async () => {
+        await h.db
+          .update(accounts)
+          .set({ lastRecoveredAt: secondRecoveryAt })
+          .where(eq(accounts.id, profile.accountId));
+        await h.db.insert(passkeys).values({
+          id: secondCredential,
+          accountId: profile.accountId,
+          credentialId: `cred-${secondCredential}`,
+          publicKey: "AAAA",
+          counter: 0,
+          transports: null,
+          createdAt: new Date(secondRecoveryAt * 1000),
+          label: null,
+          lastUsedAt: null,
+          aaguid: null,
+          backupEligible: false,
+          backupState: false,
+          provenanceAmr: "recovery",
+        });
+      }),
+    );
+
+    expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
+
+    // The first recovery's credential goes. The second's stays, and so does the
+    // pre-recovery original.
+    const after = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ id: passkeys.id })
+          .from(passkeys)
+          .where(eq(passkeys.accountId, profile.accountId)),
+      ),
+    );
+    expect(after.map((r) => r.id).sort()).toEqual([original.id, secondCredential].sort());
+
+    // And the second recovery keeps its own 72 hours.
+    const [row] = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+          .from(accounts)
+          .where(eq(accounts.id, profile.accountId)),
+      ),
+    );
+    expect(row!.lastRecoveredAt).toBe(secondRecoveryAt);
+  });
+
   it("spares a post-recovery credential the owner enrolled with a real passkey", async () => {
     // The filter is on provenance as well as time. A bare
     // `created_at >= recoveredAt` would delete the credential the owner added
@@ -697,5 +814,360 @@ describe("POST /recovery/disown", () => {
     // The recovery-enrolled one goes; both `webauthn` credentials stay.
     expect(after).toHaveLength(2);
     expect(after.every((r) => r.provenanceAmr === "webauthn")).toBe(true);
+  });
+});
+
+/**
+ * The gate, reached the way a browser reaches it.
+ *
+ * Everything above verifies `provenanceRefusal` through the service layer. That
+ * leaves two joints unproven, and both are the kind that fail silently: whether
+ * `params.id` from the URL actually becomes the target the rule compares
+ * against, and whether a refusal surfaces as an HTTP status rather than an
+ * unhandled rejection. A gate wired to the wrong id refuses nothing and every
+ * service test still passes.
+ *
+ * Each case below sends the SAME token twice and changes only the `:id`, so a
+ * route that ignored the parameter would have to answer both the same way.
+ */
+describe("the provenance gate through the routes", () => {
+  /** Recover, enrol through the bypass, and return both credentials + a session. */
+  async function recoveredAccount(h: ReturnType<typeof makeApp>, email: string, handle: string) {
+    const profile = await h.svc(h.auth.registerProfile(email, handle));
+    await h.svc(h.auth.beginPasskeyRegistration(profile.accountId));
+    await h.svc(h.auth.completePasskeyRegistration(profile.accountId, fakeAttestation(), null));
+    const [original] = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ id: passkeys.id })
+          .from(passkeys)
+          .where(eq(passkeys.accountId, profile.accountId)),
+      ),
+    );
+
+    const code = await requestCode(h.app, h.recorded, email);
+    const done = await post(h.app, "/login/recovery/email/complete", { identifier: email, code });
+    const body = (await done.json()) as { session: { access_token: string } };
+    await h.app.handle(
+      json("/passkey/register/begin", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id }),
+      }),
+    );
+    await h.app.handle(
+      json("/passkey/register/complete", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id, attestation: {} }),
+      }),
+    );
+
+    const rows = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ id: passkeys.id, credentialId: passkeys.credentialId })
+          .from(passkeys)
+          .where(eq(passkeys.accountId, profile.accountId)),
+      ),
+    );
+    const fresh = rows.find((r) => r.id !== original!.id)!;
+
+    // An ordinary session, so the routes have an access token to resolve. The
+    // recovery session is restricted and reaches none of these gates.
+    const tokens = await h.svc(
+      h.auth.issueTokens(
+        profile.id,
+        profile.accountId,
+        profile.email,
+        profile.handle,
+        profile.displayName,
+      ),
+    );
+    return { profile, original: original!, fresh, accessToken: tokens.accessToken };
+  }
+
+  /** A `passkey_delete` step-up minted by asserting `credentialId`. */
+  async function deleteToken(h: ReturnType<typeof makeApp>, accountId: string, credId: string) {
+    await h.svc(h.auth.beginStepUpPasskey(accountId));
+    const { stepUpToken } = await h.svc(
+      h.auth.completeStepUpPasskey(accountId, fakeAssertion(credId), "passkey_delete"),
+    );
+    return stepUpToken;
+  }
+
+  it("DELETE /passkeys/:id refuses the older target and permits the asserter itself", async () => {
+    // Goes red on passing anything but `params.id` as the target — including
+    // dropping the argument, which makes the target `null` and the rule inert.
+    const h = makeApp();
+    const acct = await recoveredAccount(h, "rt-del@example.com", "rtdel");
+
+    const refused = await h.app.handle(
+      json(`/passkeys/${acct.original.id}`, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${acct.accessToken}`,
+          "x-step-up-token": await deleteToken(h, acct.profile.accountId, acct.fresh.credentialId),
+        },
+      }),
+    );
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: "invalid_request" });
+
+    // Same account, same kind of token, only the id differs.
+    const permitted = await h.app.handle(
+      json(`/passkeys/${acct.fresh.id}`, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${acct.accessToken}`,
+          "x-step-up-token": await deleteToken(h, acct.profile.accountId, acct.fresh.credentialId),
+        },
+      }),
+    );
+    expect(permitted.status).toBe(200);
+  });
+
+  it("PATCH /passkeys/:id carries the same gate", async () => {
+    // Rename shares the purpose claim and the comparison. Goes red on dropping
+    // `params.id` from the rename route's verifier call.
+    const h = makeApp();
+    const acct = await recoveredAccount(h, "rt-ren@example.com", "rtren");
+
+    const refused = await h.app.handle(
+      json(`/passkeys/${acct.original.id}`, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${acct.accessToken}` },
+        body: JSON.stringify({
+          label: "renamed",
+          step_up_token: await deleteToken(h, acct.profile.accountId, acct.fresh.credentialId),
+        }),
+      }),
+    );
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: "invalid_request" });
+
+    const permitted = await h.app.handle(
+      json(`/passkeys/${acct.fresh.id}`, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${acct.accessToken}` },
+        body: JSON.stringify({
+          label: "renamed",
+          step_up_token: await deleteToken(h, acct.profile.accountId, acct.fresh.credentialId),
+        }),
+      }),
+    );
+    expect(permitted.status).toBe(200);
+  });
+
+  it("POST /account/email/complete refuses an otp step-up inside the window", async () => {
+    // The recovery window's other arm, through the route that matters most:
+    // an email change is the pivot to a takeover the mailbox no longer bounds.
+    // Goes red on the route calling a verifier that skips the cooldown.
+    const h = makeApp();
+    const acct = await recoveredAccount(h, "rt-ec@example.com", "rtec");
+
+    const emailChangeCode = async (): Promise<string> => {
+      const before = h.recorded().filter((r) => r.template === "otp-email-change").length;
+      const begun = await h.app.handle(
+        json("/account/email/begin", {
+          method: "POST",
+          headers: { authorization: `Bearer ${acct.accessToken}` },
+          body: JSON.stringify({ new_email: "rt-ec-new@example.com" }),
+        }),
+      );
+      expect(begun.status).toBe(200);
+      const sent = h.recorded().filter((r) => r.template === "otp-email-change");
+      expect(sent).toHaveLength(before + 1);
+      return codeOf(sent.at(-1)!.text);
+    };
+
+    const complete = async (code: string) =>
+      h.app.handle(
+        json("/account/email/complete", {
+          method: "POST",
+          headers: { authorization: `Bearer ${acct.accessToken}` },
+          body: JSON.stringify({
+            code,
+            step_up_token: await h.svc(
+              h.auth.issueStepUpToken(acct.profile.accountId, "otp", "email_change"),
+            ),
+          }),
+        }),
+      );
+
+    const refused = await complete(await emailChangeCode());
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: "invalid_request" });
+
+    // Age the recovery out and repeat: the same request now goes through, so
+    // the 400 above was the window and not a bad code.
+    await h.svc(
+      Effect.promise(() =>
+        h.db
+          .update(accounts)
+          .set({ lastRecoveredAt: Math.floor((Date.now() - RECOVERY_COOLDOWN_MS - 60_000) / 1000) })
+          .where(eq(accounts.id, acct.profile.accountId)),
+      ),
+    );
+    const permitted = await complete(await emailChangeCode());
+    expect(permitted.status).toBe(200);
+    expect(await permitted.json()).toEqual({ email: "rt-ec-new@example.com" });
+  });
+});
+
+/**
+ * What the disown does when the database says no.
+ *
+ * This is the branch that shipped wrong once and could not be seen from
+ * anywhere: both database calls behind `POST /recovery/disown` swallowed their
+ * errors, the return value was computed from an in-memory read taken before the
+ * write, and so a transient outage spent the token, revoked nothing, answered
+ * "accepted", and recorded a successful revocation on the one counter whose
+ * whole purpose is to tell a real revocation from a no-op.
+ *
+ * The rule these tests hold is that the two are distinguishable — a caller can
+ * see it, and an operator can see it — and that a click which failed can be
+ * repeated.
+ */
+describe("POST /recovery/disown — when the write fails", () => {
+  type FailMode = "none" | "select" | "write";
+
+  /**
+   * A rejected promise that answers every Drizzle chaining method with itself.
+   * Building the statement stays synchronous, exactly as production does; the
+   * failure lands where a real driver's would, on the await — which matters,
+   * because a statement built into the batch array is constructed outside the
+   * `Effect.tryPromise` that has to turn it into a `DatabaseError`.
+   */
+  const rejecting = (): never => {
+    const promise = Promise.reject(new Error("d1 unavailable"));
+    // Attaching a handler marks it handled, so a builder that is constructed
+    // and then not awaited cannot raise an unhandled rejection. `await` still
+    // rejects.
+    void promise.catch(() => undefined);
+    const chain = promise as unknown as Record<string, unknown>;
+    for (const method of ["from", "where", "limit", "values", "set"]) {
+      chain[method] = () => chain;
+    }
+    return chain as never;
+  };
+
+  /** Wrap the routes' database so one operation fails on demand. */
+  const brittle =
+    (mode: () => FailMode) =>
+    (db: TestDb): TestDb =>
+      new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === "select" && mode() === "select") return () => rejecting();
+          // The audit-row insert, third of the four batched statements — so the
+          // `last_recovered_at` clear behind it never runs.
+          if (prop === "insert" && mode() === "write") return () => rejecting();
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? (value as () => unknown).bind(target) : value;
+        },
+      });
+
+  async function recoverAndEnrol(h: ReturnType<typeof makeApp>, email: string, handle: string) {
+    const profile = await h.svc(h.auth.registerProfile(email, handle));
+    await h.svc(h.auth.beginPasskeyRegistration(profile.accountId));
+    await h.svc(h.auth.completePasskeyRegistration(profile.accountId, fakeAttestation(), null));
+
+    const code = await requestCode(h.app, h.recorded, email);
+    const done = await post(h.app, "/login/recovery/email/complete", { identifier: email, code });
+    const body = (await done.json()) as { session: { access_token: string } };
+    await h.app.handle(
+      json("/passkey/register/begin", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id }),
+      }),
+    );
+    await h.app.handle(
+      json("/passkey/register/complete", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id, attestation: {} }),
+      }),
+    );
+    return { profile, token: await disownTokenFrom(h.recorded) };
+  }
+
+  const stateOf = (h: ReturnType<typeof makeApp>, accountId: string) =>
+    h.svc(
+      Effect.gen(function* () {
+        const pks = yield* Effect.promise(() =>
+          h.db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.accountId, accountId)),
+        );
+        const live = yield* Effect.promise(() =>
+          h.db.select({ id: sessions.id }).from(sessions).where(eq(sessions.accountId, accountId)),
+        );
+        const [row] = yield* Effect.promise(() =>
+          h.db
+            .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+            .from(accounts)
+            .where(eq(accounts.id, accountId)),
+        );
+        return { passkeys: pks.length, sessions: live.length, window: row!.lastRecoveredAt };
+      }),
+    );
+
+  it("a failed READ answers 500, records revoke_failed, and changes nothing", async () => {
+    // Goes red on restoring either swallow in `revokeDisownedRecovery` — the
+    // `Effect.catch(() => Effect.succeed([]))` on the passkey read most of all,
+    // which turns an outage into "this account has no credentials to revoke"
+    // and then reports that as an accepted disown.
+    let mode: FailMode = "none";
+    const h = makeApp(
+      {},
+      brittle(() => mode),
+    );
+    const { profile, token } = await recoverAndEnrol(h, "fail-read@example.com", "failread");
+    const before = await stateOf(h, profile.accountId);
+    expect(before.passkeys).toBe(2);
+    expect(before.window).not.toBeNull();
+
+    mode = "select";
+    const mark = disownOutcomes.length;
+    const res = await post(h.app, "/recovery/disown", { token });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal_error" });
+    expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed"]);
+    expect(await stateOf(h, profile.accountId)).toEqual(before);
+
+    // The token is put back, so the owner's second click is the one that works.
+    // Without the re-park a transient blip destroys the lever for good.
+    mode = "none";
+    const retry = await post(h.app, "/recovery/disown", { token });
+    expect(retry.status).toBe(202);
+    expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed", "accepted"]);
+    const after = await stateOf(h, profile.accountId);
+    expect(after).toEqual({ passkeys: 1, sessions: 0, window: null });
+  });
+
+  it("a failed WRITE answers 500, records revoke_failed, and leaves the window open", async () => {
+    // Goes red on restoring the `Effect.catch(logWarning)` around the
+    // `commitBatch`: the batch fails, the metric says `accepted`, and the route
+    // tells the account owner their recovery has been disowned.
+    let mode: FailMode = "none";
+    const h = makeApp(
+      {},
+      brittle(() => mode),
+    );
+    const { profile, token } = await recoverAndEnrol(h, "fail-write@example.com", "failwrite");
+
+    mode = "write";
+    const mark = disownOutcomes.length;
+    const res = await post(h.app, "/recovery/disown", { token });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal_error" });
+    expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed"]);
+    // The clear is the last statement of the four, so a batch that failed
+    // before it must leave the window standing.
+    expect((await stateOf(h, profile.accountId)).window).not.toBeNull();
+
+    mode = "none";
+    expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
+    expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed", "accepted"]);
+    expect((await stateOf(h, profile.accountId)).window).toBeNull();
   });
 });

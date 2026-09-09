@@ -190,17 +190,30 @@ Either window refuses; both are 72 hours (`RECOVERY_COOLDOWN_MS`).
 | Registration provenance | `passkeys.provenance_amr` + that row's `created_at` | a credential stamped `otp`, `totp` or `recovery`, inside its own window, acting on a credential **older than or the same age as** itself, or changing the email |
 | Recovery | `accounts.last_recovered_at` | an `otp`-factor step-up changing the email, and any post-recovery credential removing a pre-recovery one |
 
-Three details that are load-bearing rather than incidental:
+Four details that are load-bearing rather than incidental:
 
 - **A `webauthn` token carrying no provenance claims is refused.** Only the
   signing key can mint one, so it is not an attack path — but a rule that reads
   a missing claim as "unrestricted" is one forgotten mint site away from being
   no rule at all.
-- **The comparison is `<=` with an id guard, not `<`.** `passkeys.created_at` is
-  unix **seconds**, so two credentials registered back to back tie and a strict
-  comparison lets the second remove the first. The id guard is what still lets a
-  credential delete itself — so the account can never be trapped into keeping
-  the one a recovery enrolled.
+- **The registration-provenance comparison is `<=` with an id guard, not `<`.**
+  `passkeys.created_at` is unix **seconds**, so two credentials registered back
+  to back tie and a strict comparison lets the second remove the first. The id
+  guard is what still lets a credential delete itself — so the account can never
+  be trapped into keeping the one a recovery enrolled.
+- **The recovery window's comparison is `<`, and the asymmetry is deliberate.**
+  The two windows ask different questions. Registration provenance asks "is the
+  target at least as old as the credential asking" — a same-second tie means
+  their ages cannot be told apart, so the older must win. The recovery window
+  asks "does the target predate the recovery", and a credential stamped in the
+  recovery's own second does not. Widening it to `<=` buys nothing and costs the
+  owner: a target created in that second is at most a second old when the
+  recovery lands, so registration provenance already refuses every
+  weak-provenance credential against it, and the only asserter `<=` could newly
+  refuse is a post-recovery credential carrying `webauthn` — which by the
+  inheritance rule is one the owner derived from a passkey they still hold, and
+  is exactly the credential that has to be able to remove what the recovery
+  enrolled.
 - **Rename is gated on the same comparison as delete.** It shares the
   `passkey_delete` purpose claim, and a credential the rule stops from deleting
   an older one could otherwise relabel it, which is how a user is talked into
