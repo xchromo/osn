@@ -47,7 +47,7 @@ import {
 import { TOTP_ENROLL_TTL_MS, TOTP_LOCKOUT_THRESHOLD, TOTP_MAX_ENROLL_ATTEMPTS } from "./constants";
 import type { AuthContext } from "./context";
 import { AuthError, DatabaseError } from "./errors";
-import { genId } from "./helpers";
+import { genId, probeAccountId } from "./helpers";
 import type { SecurityEventsModule } from "./security-events";
 import type { StepUpModule } from "./step-up";
 import type { SessionMeta } from "./types";
@@ -226,6 +226,38 @@ export function createTotpModule(
       yield* Effect.promise(() => totpLockoutStore.reset(lockoutKey(accountId, scope)));
       metricTotpLockout("reset", scope);
       metricTotpVerified("ok");
+    });
+
+  /**
+   * Pay what {@link checkTotpCode} costs, against nothing.
+   *
+   * `completeTotpRecovery` runs this on the branch where the submitted
+   * identifier resolves to no account, so "nobody has this address" costs what
+   * "wrong code" costs. That route is unauthenticated and takes an EMAIL
+   * ADDRESS as readily as a handle, so a cheaper miss here is a way for a
+   * stranger to learn whether an address has an OSN account at all.
+   *
+   * It runs the same sequence the real check runs — the configuration check,
+   * the lockout lookup, the credential query, a verification against the dummy
+   * key — against a fresh probe id that matches nothing. The two are next to
+   * each other on purpose: a round trip added to one belongs in the other.
+   *
+   * Reads only. `checkTotpCode`'s last hop on a failure is `recordFailure`, a
+   * WRITE, and standing in for it with a second read is deliberate. What a
+   * caller can time is the number of round trips, not what each one did, and a
+   * write against a probe id would leave a counter key with a lockout-length
+   * TTL behind for every probe — unbounded key growth driven by an
+   * unauthenticated route. Same reasoning as {@link probeAccountId}.
+   */
+  const burnTotpCheckCost = (code: string): Effect.Effect<void, AuthError | DatabaseError, Db> =>
+    Effect.gen(function* () {
+      yield* encryptionKey();
+      const probe = probeAccountId();
+      const key = lockoutKey(probe, "recovery");
+      yield* Effect.promise(() => totpLockoutStore.isLocked(key));
+      yield* confirmedCredential(probe);
+      yield* Effect.promise(() => verifyTotpCode({ secret: new Uint8Array(0), code }));
+      yield* Effect.promise(() => totpLockoutStore.isLocked(key));
     });
 
   /**
@@ -487,6 +519,9 @@ export function createTotpModule(
     // re-deriving the check is what gives that route the lockout, the
     // single-use step consumption and the constant-cost not-enrolled branch.
     checkTotpCode,
+    // The cost of the above, against a probe id, for the branch that has no
+    // account to check. Exposed for the same reason and to the same caller.
+    burnTotpCheckCost,
   };
 }
 

@@ -17,6 +17,14 @@
  *   costs roughly the same either way. A uniform body is not enough on its own:
  *   the mail send is the oracle, so it is dispatched detached and both branches
  *   return at probe cost.
+ * - **Every branch of every route here makes the same number of store round
+ *   trips**, whichever way it ends. A uniform body and a detached send close the
+ *   oracle at `begin` and reopen it at `complete` if the branches there are left
+ *   to cost what they happen to cost: each store is an HTTP hop to Upstash in
+ *   every tier but `local`, so "how many hops did that take" is readable with a
+ *   stopwatch and separates a real account from a stranger's guess. Each route
+ *   below pins its own count, and the padding always matches the COSTLIEST
+ *   branch — padding to the cheapest is the same oracle upside down.
  * - **The recipient is the victim.** The address is the account holder's own, so
  *   the send is capped per resolved account as well as per IP.
  * - **Completion matches `consumeRecoveryCode`**: every session on the account
@@ -29,7 +37,6 @@
 import { securityEvents, sessions } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { timingSafeEqualString } from "@shared/crypto/timing-safe";
-import { verifyTotpCode } from "@shared/crypto/totp";
 import { commitBatch } from "@shared/db-utils";
 import { type EmailError, EmailService } from "@shared/email";
 import { eq } from "drizzle-orm";
@@ -95,7 +102,7 @@ export function createRecoveryFactorsModule(
   const { stores, hashIp, recoveryEmailBeginCap, recoveryOtpLockoutStore } = ctx;
   const { resolveIdentifier } = profiles;
   const { issueRecoverySession } = tokens;
-  const { checkTotpCode } = totp;
+  const { checkTotpCode, burnTotpCheckCost } = totp;
 
   const ACCEPTED: RecoveryEmailBeginResult = { status: "accepted" };
   const otpTtlMinutes = RECOVERY_OTP_TTL_MS / 60_000;
@@ -119,6 +126,20 @@ export function createRecoveryFactorsModule(
     Effect.promise(() => stores.pendingRecoveryOtp.get(probeAccountId())).pipe(Effect.asVoid);
 
   /**
+   * The same, one store along: burn a round trip on the lockout counter.
+   *
+   * `completeEmailRecovery` touches two stores, so equalising hops on one of
+   * them is not enough — the padding has to be able to reach both. `isLocked`
+   * is a read; `recordFailure`, the hop it usually stands in for, is a write.
+   * That substitution is deliberate and is the same trade {@link burnProbeRead}
+   * documents: what a caller can time is the number of round trips, not what
+   * each one did, and a write against a probe id leaves a counter key with a
+   * fifteen-minute TTL behind for every probe.
+   */
+  const burnLockoutRead = (): Effect.Effect<void> =>
+    Effect.promise(() => recoveryOtpLockoutStore.isLocked(probeAccountId())).pipe(Effect.asVoid);
+
+  /**
    * Send the recovery code, off the request's latency path.
    *
    * Forked detached with a timeout, the shape `notifyRecovery` uses. Awaiting it
@@ -130,11 +151,12 @@ export function createRecoveryFactorsModule(
    * The provider's response body — which can echo the recipient — is never
    * logged; only the bounded outcome metric is emitted.
    *
-   * A detached fibre is not currently guaranteed to run to completion on the
-   * deployed Worker: the request context is torn down once the response is
-   * returned, and nothing hands this fibre to `ExecutionContext.waitUntil`.
-   * Tracked in xchromo/osn#971, which covers all five detached sends in this
-   * service.
+   * `forkBackground`, not a bare `Effect.forkDetach`: it registers the fibre's
+   * completion with the request's sink, which the Worker entry hands to
+   * `ExecutionContext.waitUntil`. Detached alone would be orphaned on workerd —
+   * the request context is torn down once the response is returned — so the
+   * code would silently fail to send in the one tier that matters. See
+   * `lib/background.ts`.
    */
   const sendRecoveryOtp = (
     recipientEmail: string,
@@ -161,6 +183,9 @@ export function createRecoveryFactorsModule(
    * Always answers {@link ACCEPTED}. The caller cannot tell a delivered code
    * from an unknown address from an account that has hit its cap, and the three
    * branches are told apart only on a dashboard.
+   *
+   * **Two store round trips on all three**, which is what the sent branch costs
+   * (the cap check, then the entry write). The other two are padded up to it.
    *
    * The identifier must be an **email address**: this endpoint puts mail in
    * somebody's inbox, and a handle is public, so accepting one would turn a
@@ -203,6 +228,14 @@ export function createRecoveryFactorsModule(
         // Return WITHOUT parking a code. Parking one here would invalidate the
         // code the user is already holding from an earlier send — a denial of
         // service on the account holder, dressed as flood control.
+        //
+        // The probe read stands in for the entry write skipped just above, so
+        // this branch still costs two round trips. Without it, a fourth request
+        // for an address whose allowance is spent answers measurably sooner
+        // than one for an address that names nobody — which confirms the
+        // address is real, and the cap becomes the oracle the uniform 202 was
+        // there to prevent.
+        yield* burnProbeRead();
         metricRecoveryEmailBegin("capped");
         return ACCEPTED;
       }
@@ -288,8 +321,9 @@ export function createRecoveryFactorsModule(
 
       // The audit row is the primary signal and it is already committed; the
       // email is the confirmation, so user-visible latency must not track
-      // mailer health. Same detached-with-timeout shape as every other notice,
-      // and the same caveat — see xchromo/osn#971.
+      // mailer health. Same shape as every other notice: forked with a timeout
+      // and registered with the request's `waitUntil` sink, so the isolate
+      // stays alive for it on workerd.
       yield* forkBackground(
         securityEventsModule
           .notifySecurityEventByAccountId(profile.accountId, "account_recovered", "recovery-used")
@@ -321,6 +355,19 @@ export function createRecoveryFactorsModule(
    * Accepts an email address or a handle. The email-only rule belongs to
    * `begin`, which sends mail; this route sends nothing, and answers the same
    * generic failure to anyone not holding the code.
+   *
+   * **Four store round trips on every branch** — two on the pending-code store,
+   * two on the lockout counter — whether the identifier resolves, whether the
+   * account is locked, whether a code is pending and whether the code is right.
+   * That is what a wrong code against a live entry costs, and it is the most any
+   * branch costs, so every other branch is padded up to it.
+   *
+   * Uniform bodies are not the whole guard. `begin` answers 202 for an address
+   * that names nobody and parks a code for one that does; call it, then call
+   * this with a wrong code and time the answer. On unequal branches that reads
+   * out as "this address has an account", against no per-account cap and only a
+   * 10-per-minute per-IP limiter — which a rotating fleet already defeats at
+   * this issuer.
    */
   const completeEmailRecovery = (
     identifier: string,
@@ -340,7 +387,14 @@ export function createRecoveryFactorsModule(
       const codeHash = hashSessionToken(code);
 
       if (!profile) {
+        // The four hops the wrong-code branch makes, in the order it makes
+        // them: the lockout lookup, the entry read, the attempt write, the
+        // failure record. Two of the four are reads standing in for writes —
+        // see `burnLockoutRead`.
+        yield* burnLockoutRead();
         yield* burnProbeRead();
+        yield* burnProbeRead();
+        yield* burnLockoutRead();
         return yield* Effect.fail(new AuthError({ message: GENERIC_FAILURE }));
       }
 
@@ -352,10 +406,13 @@ export function createRecoveryFactorsModule(
         recoveryOtpLockoutStore.isLocked(profile.accountId),
       );
       if (locked) {
-        // Read anyway, for latency parity with the branch below, and answer the
-        // same generic failure: a locked account must be indistinguishable from
-        // a wrong code, or the lockout becomes its own oracle.
+        // Read anyway, and pad to four, and answer the same generic failure: a
+        // locked account must be indistinguishable from a wrong code, or the
+        // lockout becomes its own oracle — and one an attacker can create at
+        // will, by spending the account's attempts first.
         yield* Effect.promise(() => stores.pendingRecoveryOtp.get(profile.accountId));
+        yield* burnProbeRead();
+        yield* burnLockoutRead();
         metricRecoveryLockout("locked");
         return yield* Effect.fail(new AuthError({ message: GENERIC_FAILURE }));
       }
@@ -366,6 +423,13 @@ export function createRecoveryFactorsModule(
         // here, so this is not a guess against anything — and counting it would
         // hand anyone who knows the identifier a lever to lock the owner out of
         // their own recovery without ever guessing a digit.
+        //
+        // It still has to COST what counting one costs. Otherwise "no code
+        // pending" is timeable, and since `begin` parks a code only for an
+        // address that resolves, that is the account-existence oracle again by
+        // another route.
+        yield* burnProbeRead();
+        yield* burnLockoutRead();
         return yield* Effect.fail(new AuthError({ message: GENERIC_FAILURE }));
       }
 
@@ -457,6 +521,13 @@ export function createRecoveryFactorsModule(
    * The `"recovery"` scope is load-bearing: it keys the lockout separately from
    * `POST /step-up/totp/complete`, so failures at this unauthenticated route
    * cannot lock the authenticated ceremony for anyone who knows a handle.
+   *
+   * **The identifier may be an email address**, which is what makes the cost of
+   * the non-resolving branch a security property rather than a nicety: a
+   * cheaper miss here lets an unauthenticated caller ask "does this address
+   * have an OSN account", with no per-account cap in front of it. So that
+   * branch pays `burnTotpCheckCost` — the same lockout lookup, credential query
+   * and dummy-key verification a real unlocked account pays for.
    */
   const completeTotpRecovery = (
     identifier: string,
@@ -472,15 +543,12 @@ export function createRecoveryFactorsModule(
       const profile = yield* resolveIdentifier(normalised);
 
       if (!profile) {
-        // Mirror the cost of the branch `checkTotpCode` would have taken: one
-        // store read, then a full verification against an empty secret. That is
-        // the same trick `checkTotpCode` plays for an account with no
-        // credential — it derives and compares the same number of candidates
-        // against a dummy key — extended to the case where the IDENTIFIER, not
-        // the credential, is what is missing. No counter is touched: a probe id
-        // must not leave a lockout key behind.
-        yield* burnProbeRead();
-        yield* Effect.promise(() => verifyTotpCode({ secret: new Uint8Array(0), code }));
+        // Mirror the cost of the branch `checkTotpCode` would have taken —
+        // written next to that function rather than here, so the two cannot
+        // drift. It runs the lockout lookup, the credential query and the
+        // dummy-key verification against a probe id; no counter is written,
+        // because a probe must not leave a lockout key behind.
+        yield* burnTotpCheckCost(code);
         return yield* Effect.fail(new AuthError({ message: GENERIC_FAILURE }));
       }
 
