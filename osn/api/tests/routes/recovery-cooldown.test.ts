@@ -552,11 +552,31 @@ describe("POST /recovery/disown", () => {
     const { profile, token } = await recoverAndEnrol(h, "dis-once@example.com", "disonce");
 
     expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
-    const survivors = await passkeyIds(h, profile.accountId);
 
-    // Second presentation: accepted-looking, and inert.
+    // The replay has to be measured against state the FIRST call did not
+    // already reach. Asserting "the passkey count is unchanged" proves nothing:
+    // the credential is gone, so a second run is a no-op whether or not the
+    // token was consumed. So recover again — which the first disown made
+    // possible by clearing the window — and then replay the spent token. It
+    // carries the OLD `recoveredAt`, so a token that still worked would revoke
+    // the new recovery's credential and clear the new window with it.
+    const code = await requestCode(h.app, h.recorded, "dis-once@example.com");
+    const again = await post(h.app, "/login/recovery/email/complete", {
+      identifier: "dis-once@example.com",
+      code,
+    });
+    expect(again.status).toBe(200);
+
     expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
-    expect(await passkeyIds(h, profile.accountId)).toHaveLength(survivors.length);
+    const [row] = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+          .from(accounts)
+          .where(eq(accounts.id, profile.accountId)),
+      ),
+    );
+    expect(row!.lastRecoveredAt).not.toBeNull();
 
     // A wrong secret against a real lookup id.
     const h2 = makeApp();
