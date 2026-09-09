@@ -28,6 +28,12 @@ export function createPasskeyEnrollRoutes(ctx: AuthRouteContext) {
       // authenticator. First-passkey enrollment (bootstrap) bypasses the
       // gate because no step-up ceremony is reachable before the account
       // has any credentials.
+      //
+      // These two routes also accept a restricted recovery session's token
+      // (`aud: "osn-recovery"`), which no other route in this service does,
+      // and such a caller bypasses the step-up gate as well — losing the
+      // device does not delete its passkey row, so the gate would otherwise
+      // block the common recovery case. See `resolvePasskeyEnrollPrincipal`.
       // -------------------------------------------------------------------------
       .post(
         "/passkey/register/begin",
@@ -51,7 +57,9 @@ export function createPasskeyEnrollRoutes(ctx: AuthRouteContext) {
             const headerToken = headers["x-step-up-token"];
             const stepUpToken = body.step_up_token ?? headerToken;
             const result = await run(
-              auth.beginPasskeyRegistration(principal.accountId, stepUpToken),
+              auth.beginPasskeyRegistration(principal.accountId, stepUpToken, {
+                viaRecoverySession: principal.restricted,
+              }),
             );
             return result.options;
           } catch (e) {

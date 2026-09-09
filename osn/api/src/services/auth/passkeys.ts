@@ -68,7 +68,7 @@ export function createPasskeysModule(
 ) {
   const { config, stores, hashIp } = ctx;
   const { resolveIdentifier, findDefaultProfile } = profiles;
-  const { issueTokens } = tokens;
+  const { issueTokens, liftSessionRestriction } = tokens;
   const { invalidateOtherAccountSessions } = sessions_;
   const { verifyStepUpForPasskeyRegister } = stepUp;
   /** See {@link SecurityEventsModule.notifySecurityEventByAccountId}. */
@@ -88,6 +88,23 @@ export function createPasskeysModule(
      * Verified below after the existingPasskeys read.
      */
     stepUpToken?: string,
+    /**
+     * Set only when the caller authenticated with a **restricted recovery
+     * session** — i.e. `resolvePasskeyEnrollPrincipal` accepted the
+     * `osn-recovery` audience. It skips the step-up gate below, deliberately:
+     * losing a phone does not delete its passkey row, so the account almost
+     * always still has ≥1 credential and the gate would make recovery
+     * impossible in exactly the case recovery is for. The email OTP or TOTP
+     * code that minted the session already was a ceremony, at an AMR strength
+     * `passkeyRegisterAllowedAmr` accepts.
+     *
+     * The alternative — letting a restricted session mint step-up tokens —
+     * would open `/recovery/generate`, `DELETE /account`, `GET /account/export`
+     * and `/account/email/complete` along with it.
+     *
+     * The per-account passkey cap is NOT skipped.
+     */
+    caller?: { readonly viaRecoverySession?: boolean },
   ): Effect.Effect<
     { options: PublicKeyCredentialCreationOptionsJSON },
     AuthError | DatabaseError,
@@ -130,8 +147,9 @@ export function createPasskeysModule(
 
       // Once the account has any passkey, adding another requires a
       // fresh step-up token. A stolen access token alone cannot bind a
-      // new authenticator.
-      if (existingPasskeys.length > 0) {
+      // new authenticator. A restricted recovery session is the one
+      // exception — see `caller.viaRecoverySession` above.
+      if (existingPasskeys.length > 0 && !caller?.viaRecoverySession) {
         if (!stepUpToken) {
           return yield* Effect.fail(new AuthError({ message: "Step-up required" }));
         }
@@ -303,6 +321,14 @@ export function createPasskeysModule(
       // row, and otherwise from the access token's `osn_sid` binding — a
       // cross-origin Bearer call, a cookie-stripping proxy or a native client
       // all land on the second path and must NOT be treated as sessionless.
+      // Enrolling a passkey is the one thing a restricted recovery session can
+      // do, and the user has just done it — so the restriction is lifted here
+      // and the caller's session becomes an ordinary one. A no-op on every
+      // other session, and on the branch below where there is no caller session
+      // to keep. From the next `/token` grant onward the access token carries
+      // the ordinary audience again.
+      yield* liftSessionRestriction(callerSessionHash);
+
       if (callerSessionHash) {
         yield* invalidateOtherAccountSessions(accountId, callerSessionHash);
       } else {

@@ -5,6 +5,8 @@ related:
   - "[[identity-model]]"
   - "[[step-up]]"
   - "[[passkey-primary]]"
+  - "[[oidc-provider]]"
+  - "[[account-recovery-factors]]"
 last-reviewed: 2026-09-09
 ---
 
@@ -139,6 +141,38 @@ With neither a live cookie nor a resolvable `osn_sid` there is genuinely no self
 
 Refresh-token rotation (Copenhagen Book C2) deletes the old session row and inserts a new one with a rotated session token. We copy the old row's `ua_label` and `ip_hash` onto the new row so Settings continues to show the same "Firefox on macOS" entry instead of flipping to a new device. The `last_used_at` timestamp is set to the rotation moment.
 
+## The restricted recovery session
+
+Account recovery has to end in something that lets the user enrol a fresh passkey and do **nothing else**. That session exists as of `sessions.restricted_until`, and the restriction is carried by a **distinct token audience**, not by a flag.
+
+The obvious design — a `restricted` boolean checked in "the access-token guard" — has no place to live. There is no single guard: four entry points in `@osn/api` verify access tokens, and three services outside this repo (`pulse/api`, `zap/api`, `cire/api`, all through `@shared/osn-auth-client`) verify the same token over JWKS with no access to OSN's D1. A column is invisible to those three, so a "restricted" session would still read and write Pulse events and Zap chats.
+
+So the access token is minted with `aud: "osn-recovery"` instead of `"osn-access"`. Every one of those seven verifiers **already** pins `osn-access`, so all seven reject it with no change to any of them. That is the whole argument for an audience over a claim: it is fail-closed by construction, and it does not wait on three other services deploying anything. `osn-recovery` is also on the reserved OIDC client-id deny-list, so no relying party can ever register under a name that collides with the pin.
+
+| Property | Ordinary session | Restricted recovery session |
+|---|---|---|
+| Access-token `aud` | `osn-access` | `osn-recovery` |
+| `sessions.restricted_until` | `NULL` | Unix seconds, = `expires_at` |
+| Lifetime | 30 days, sliding | **15 minutes, absolute — never slides** |
+| Accepted by | every verifier | `resolvePasskeyEnrollPrincipal` only |
+| Counts against `MAX_SESSIONS_PER_ACCOUNT` | yes | yes |
+
+**`restricted_until` is the source of truth for rotation, not for request-time authorisation.** Request-time is the audience's job. The column exists because `refreshTokens` deletes the old row and inserts a new one: without it the restriction would die on the first silent refresh, five minutes in. Rotation copies the value forward, re-mints on the recovery audience while it is set, and pins the new row's `expires_at` to the **original** deadline rather than `now + TTL`.
+
+Two guards are load-bearing and neither is emergent:
+
+- **The sliding window is switched off explicitly.** `shouldExtend` is `expires_at - now < halfTtl`, and a restricted session's whole 15-minute life sits far inside half of a 30-day TTL — so the comparison alone is *always* true, and without a `restricted_until === null` term the one session that must expire on schedule is the one that gets extended to a month.
+- **`verifyRefreshToken` rejects a restricted session by default**, and `refreshTokens` is the only caller that opts in. This matters because `GET /authorize` resolves the signed-in user from the **session cookie**, not from an access token — see [[oidc-provider]]. A restricted session sets that cookie (it must; see below), so without the default it would complete an OIDC authorization and sign the user into every relying party: full access at a different service, from a session that has none here.
+
+**The enrolment gate is bypassed on purpose.** `beginPasskeyRegistration` refuses without a `passkey_register` step-up once the account holds ≥1 passkey — and losing a phone does not delete its passkey row, so that is the *common* recovery case, not an edge. A recovery-audience caller therefore skips that gate. The OTP or TOTP code that minted the session already was a ceremony at an AMR strength `passkeyRegisterAllowedAmr` accepts. The alternative — letting a restricted session mint step-up tokens — would hand it `/recovery/generate`, `DELETE /account`, `GET /account/export` and `/account/email/complete` along with it, which is everything the restriction exists to prevent. The per-account passkey cap is *not* bypassed, and an account already at the cap is currently unrecoverable (`xchromo/osn#970`).
+
+**Whatever issues one must set the session cookie**, exactly as `POST /login/recovery/complete` does. `completePasskeyRegistration`'s other-session sweep derives the caller from that cookie (or from the token's `osn_sid`) and answers `session_stale` (409) when it can do neither — so a recovery route that forgets `buildSessionCookies` produces a session that cannot finish the one thing it exists for.
+
+**Enrolling the passkey lifts the restriction.** `completePasskeyRegistration` clears `restricted_until` and replaces the absolute deadline with an ordinary sliding TTL, so the user is not signed out minutes after recovering. The write is conditional on `restricted_until IS NOT NULL`, so an everyday passkey add does not have its session clock quietly reset. From the next `/token` grant the access token carries `osn-access` again.
+
+> [!note] No route mints one yet
+> The primitive ships ahead of the endpoints that use it. `POST /login/recovery/email/complete` and `POST /login/recovery/totp/complete` are separate work — see `wiki/architecture/account-recovery-factors.md` §B.
+
 ## Rotation grace window (concurrency tolerance)
 
 Rotation is single-use, but legitimate clients produce concurrent or retried grants of the **same current token**: two browser tabs bootstrapping on reload, a cold-start bootstrap racing a 401-refresh in one tab, or a grant retried after a lost response. Treating every such replay as C2 reuse revoked the whole family and logged the user out across every device — the "logs out sometimes" bug. Two guards now distinguish benign concurrency from genuine reuse, WITHOUT weakening detection of a real replay:
@@ -167,7 +201,7 @@ Failure modes fail **open**: `check` returns `null` on Redis error (so an outage
 ## Observability
 
 - `osn.auth.session.operations{action, result}` — one per `list` / `revoke` / `revoke_all` call
-- Spans: `auth.session.list`, `auth.session.revoke`, `auth.session.revoke_all`, `auth.session.resolve_binding` (the `osn_sid` lookup), `auth.session.resolve_caller` (cookie-or-binding "who is calling")
+- Spans: `auth.session.list`, `auth.session.revoke`, `auth.session.revoke_all`, `auth.session.resolve_binding` (the `osn_sid` lookup), `auth.session.resolve_caller` (cookie-or-binding "who is calling"), `auth.session.lift_restriction` (a recovery session becoming an ordinary one)
 - `SecurityInvalidationTrigger` union extended with `session_revoke`, `session_revoke_all`, and `passkey_delete` so the H1 dashboard picks up user-initiated revocations alongside passkey-register, passkey-delete, recovery-code, and email-change triggers
 - `osn.auth.session.rotated_store.operations{action, result, backend}` — counter for every rotated-session store call. `action` ∈ `track` / `check` / `revoke_family`; `result` ∈ `ok` / `hit` / `miss` / `error`; `backend` ∈ `memory` / `redis`. Error rate by backend is the primary Redis-health signal for the reuse detector.
 - `osn.auth.session.reuse_detected` / `osn.auth.session.family_revoked` — genuine C2 reuse caught (replay outside the grace window) and the resulting whole-family revocations. A spike is a real security signal (token theft) — distinct from the benign metric below.

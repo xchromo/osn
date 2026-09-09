@@ -84,6 +84,22 @@ The restriction is a **distinct token audience**, not a flag:
 - `/login/recovery/email/complete` sets the session cookie exactly as
   `/login/recovery/complete` does, or `completePasskeyRegistration`'s
   other-session sweep cannot resolve the caller and returns `session_stale`.
+- **The cookie is also a way out, and it is closed.** Setting that cookie is
+  not free: `GET /authorize` resolves the signed-in user from the session
+  cookie, not from an access token, so the audience — which stops every
+  access-token verifier — does not reach that decision at all. A restricted
+  session would have completed an OIDC authorization and signed the user into
+  pulse, cire and zap: full access at another service, from a session that has
+  none at the issuer, and the same laundering the cross-device rule exists to
+  stop. So `verifyRefreshToken` **rejects a restricted session by default**,
+  and token refresh is the only caller that opts in. Found while building
+  issue 3, closed there; a `/authorize` check alone would not have covered the
+  next consumer of that function. See [[oidc-provider]].
+- The per-account passkey cap is **not** bypassed, and an account already at it
+  cannot recover: enrolment refuses before the step-up gate, and a restricted
+  session cannot mint the step-up a deletion needs. Tracked as
+  `xchromo/osn#970`, to be decided with the provenance work in issue 5, since
+  both turn on when a recovery-enrolled credential may remove an older one.
 
 **The enrolment gate.** `beginPasskeyRegistration` refuses without a
 `passkey_register` step-up whenever the account has ≥1 passkey — which is the

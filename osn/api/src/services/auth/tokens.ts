@@ -6,7 +6,7 @@
 import { sessions } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { rowsChanged } from "@shared/db-utils";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { ROTATION_RACE_MESSAGE } from "../../lib/grant-failure";
@@ -20,7 +20,14 @@ import {
   withAuthTokenRefresh,
   withSessionRotation,
 } from "../../metrics";
-import { LAST_USED_AT_COALESCE_MS, MAX_SESSIONS_PER_ACCOUNT, ROTATION_GRACE_MS } from "./constants";
+import {
+  ACCESS_TOKEN_AUDIENCE,
+  LAST_USED_AT_COALESCE_MS,
+  MAX_SESSIONS_PER_ACCOUNT,
+  RECOVERY_SESSION_TTL_SEC,
+  RECOVERY_TOKEN_AUDIENCE,
+  ROTATION_GRACE_MS,
+} from "./constants";
 import type { AuthContext } from "./context";
 import { AuthError, DatabaseError } from "./errors";
 import {
@@ -50,15 +57,13 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
   // Token issuance
   // -------------------------------------------------------------------------
 
-  // Access-token audience (S-M2). Asserted in `verifyAccessToken` so an
-  // ES256 token signed with the same key but minted for a different
-  // audience (step-up, or any future type) cannot authenticate access-
-  // token routes. Mirrors STEP_UP_AUDIENCE below.
-  const ACCESS_TOKEN_AUDIENCE = "osn-access";
-
   /**
    * Signs a short-lived ES256 access token JWT. Used by both initial login
    * (via `issueTokens`) and token refresh / profile switch (standalone).
+   *
+   * `audience` decides what the token can reach. It defaults to
+   * {@link ACCESS_TOKEN_AUDIENCE}; the only other value it is ever given is
+   * {@link RECOVERY_TOKEN_AUDIENCE}, for a restricted recovery session.
    */
   const issueAccessToken = (
     profileId: string,
@@ -66,6 +71,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
     handle: string,
     displayName: string | null,
     sessionBinding?: string | null,
+    audience: string = ACCESS_TOKEN_AUDIENCE,
   ) =>
     Effect.tryPromise({
       try: () => {
@@ -78,7 +84,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         // back to the calling service over an ARC-authenticated channel.
         const payload: AccessTokenClaims = {
           sub: profileId,
-          aud: ACCESS_TOKEN_AUDIENCE,
+          aud: audience,
           email,
           handle,
           scope: "openid profile",
@@ -110,14 +116,15 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
    * On initial login it is generated fresh; on rotation it is propagated
    * from the previous session so reuse detection can revoke the entire family.
    */
-  const issueTokens = (
+  const issueSession = (
     profileId: string,
     accountId: string,
     email: string,
     handle: string,
     displayName: string | null,
-    familyId?: string,
-    sessionMeta?: SessionMeta,
+    familyId: string | undefined,
+    sessionMeta: SessionMeta | undefined,
+    restricted: boolean,
   ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
     Effect.gen(function* () {
       // Generate opaque session token + store SHA-256 hash in DB. This runs
@@ -131,9 +138,14 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         handle,
         displayName,
         deriveSessionBinding(sessionId, profileId),
+        restricted ? RECOVERY_TOKEN_AUDIENCE : ACCESS_TOKEN_AUDIENCE,
       );
       const nowSec = Math.floor(Date.now() / 1000);
       const fam = familyId ?? genId("sfam_");
+      // A restricted session's deadline is absolute: the row's `expiresAt` IS
+      // its `restrictedUntil`, and neither the sliding window in
+      // `verifyRefreshToken` nor rotation in `refreshTokens` moves it.
+      const restrictedUntil = restricted ? nowSec + RECOVERY_SESSION_TTL_SEC : null;
 
       const { db } = yield* Db;
 
@@ -164,7 +176,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             id: sessionId,
             accountId,
             familyId: fam,
-            expiresAt: nowSec + refreshTokenTtl,
+            expiresAt: restrictedUntil ?? nowSec + refreshTokenTtl,
             createdAt: nowSec,
             // First authentication on this device. Copied forward on every
             // rotation so `auth_time`/`max_age` stay honest across silent refresh.
@@ -172,12 +184,51 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             uaLabel: sessionMeta?.uaLabel ?? null,
             ipHash: sessionMeta?.ip ? hashIp(sessionMeta.ip) : null,
             lastUsedAt: nowSec,
+            restrictedUntil,
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
 
       return { accessToken, refreshToken: sessionToken, expiresIn: accessTokenTtl };
     });
+
+  /** Ordinary, unrestricted session issuance. See {@link issueSession}. */
+  const issueTokens = (
+    profileId: string,
+    accountId: string,
+    email: string,
+    handle: string,
+    displayName: string | null,
+    familyId?: string,
+    sessionMeta?: SessionMeta,
+  ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
+    issueSession(profileId, accountId, email, handle, displayName, familyId, sessionMeta, false);
+
+  /**
+   * Issues a **restricted recovery session**: the session account recovery
+   * hands out once an email OTP or a TOTP code has proved the user is who they
+   * say. Its access token carries {@link RECOVERY_TOKEN_AUDIENCE}, so it is
+   * rejected by every verifier in this service and in the three downstream
+   * services except `resolvePasskeyEnrollPrincipal`. Enrolling a passkey is the
+   * only thing it can do, and doing so lifts the restriction.
+   *
+   * Always a fresh family: a recovery session is a new chain, never a
+   * continuation of whatever the user held before.
+   *
+   * The caller must set the session cookie exactly as `/login/recovery/complete`
+   * does. `completePasskeyRegistration`'s other-session sweep resolves the
+   * caller from that cookie (or from the token's `osn_sid`), and answers
+   * `session_stale` when it can resolve neither.
+   */
+  const issueRecoverySession = (
+    profileId: string,
+    accountId: string,
+    email: string,
+    handle: string,
+    displayName: string | null,
+    sessionMeta?: SessionMeta,
+  ): Effect.Effect<TokenSet, AuthError | DatabaseError, Db> =>
+    issueSession(profileId, accountId, email, handle, displayName, undefined, sessionMeta, true);
 
   // -------------------------------------------------------------------------
   // Token refresh (server-side sessions — Copenhagen Book C1)
@@ -195,10 +246,22 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
    * `refreshTokens` can carry it onto the rotated-in row without re-reading
    * the same row by primary key (P-W1).
    *
-   * Shared by `refreshTokens`, `switchProfile`, and `listAccountProfiles`.
+   * Two callers: `refreshTokens` here, and the OIDC provider's `resolveSession`
+   * (`routes/auth/oidc.ts`), which is how `/authorize` learns whether this
+   * browser is signed in.
+   *
+   * **A restricted recovery session is rejected unless `allowRestricted` is
+   * set.** That default is the point: this function answers "is this cookie a
+   * live session", and a restricted session is not one for any purpose except
+   * rotating itself. Without the default, a recovery cookie would complete an
+   * OIDC authorization and sign the user into every relying party — laundering
+   * a restricted session into full access at a different service, which is
+   * exactly what the audience exists to prevent. `refreshTokens` is the only
+   * caller that opts in.
    */
   const verifyRefreshToken = (
     token: string,
+    options?: { readonly allowRestricted?: boolean },
   ): Effect.Effect<
     {
       accountId: string;
@@ -208,6 +271,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
       createdAt: number;
       uaLabel: string | null;
       ipHash: string | null;
+      restrictedUntil: number | null;
     },
     AuthError | DatabaseError,
     Db
@@ -240,13 +304,27 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         return yield* Effect.fail(new AuthError({ message: "Invalid or expired session" }));
       }
 
+      // A restricted recovery session is not a session for anything but its
+      // own rotation. Same error as an expired or unknown token, so a caller
+      // cannot tell "restricted" from "gone".
+      if (session.restrictedUntil !== null && !options?.allowRestricted) {
+        return yield* Effect.fail(new AuthError({ message: "Invalid or expired session" }));
+      }
+
       // Sliding window: extend when less than half the TTL remains.
       // `last_used_at` is coalesced (P-W4) — writing it on every verify
       // would add a DB round-trip per refresh. The Sessions UI doesn't
       // need sub-second accuracy; 60 s granularity shrinks writes by
       // roughly the refresh cadence.
+      //
+      // A restricted session never slides, and the guard has to be explicit:
+      // its whole 15-minute life is far inside half of a 30-day TTL, so the
+      // comparison alone is ALWAYS true and would extend the one session that
+      // must expire on schedule. `last_used_at` is still touched — it is what
+      // `liveSessionIds` orders by, and the enrolment sweep resolves the
+      // caller's own session through that list.
       const halfTtl = Math.floor(refreshTokenTtl / 2);
-      const shouldExtend = session.expiresAt - nowSec < halfTtl;
+      const shouldExtend = session.restrictedUntil === null && session.expiresAt - nowSec < halfTtl;
       const lastUsedMs = (session.lastUsedAt ?? session.createdAt) * 1000;
       const shouldTouchLastUsed = Date.now() - lastUsedMs >= LAST_USED_AT_COALESCE_MS;
 
@@ -274,6 +352,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         createdAt: session.createdAt,
         uaLabel: session.uaLabel,
         ipHash: session.ipHash,
+        restrictedUntil: session.restrictedUntil,
       };
     });
 
@@ -474,7 +553,10 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         authenticatedAt,
         uaLabel,
         ipHash,
-      } = yield* verifyRefreshToken(sessionToken);
+        restrictedUntil,
+        // The one caller allowed to rotate a restricted session — rotating it
+        // is the only thing a restricted session is for.
+      } = yield* verifyRefreshToken(sessionToken, { allowRestricted: true });
       const profile = yield* findDefaultProfile(accountId);
       if (!profile) {
         return yield* Effect.fail(new AuthError({ message: "Profile not found" }));
@@ -488,12 +570,15 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
       const newSessionToken = generateSessionToken();
       const newSessionId = hashSessionToken(newSessionToken);
 
+      // The restriction rides the SESSION ROW, not the token, so it survives
+      // the silent refresh that would otherwise retire it five minutes in.
       const accessToken = yield* issueAccessToken(
         profile.id,
         profile.email,
         profile.handle,
         profile.displayName,
         deriveSessionBinding(newSessionId, profile.id),
+        restrictedUntil === null ? ACCESS_TOKEN_AUDIENCE : RECOVERY_TOKEN_AUDIENCE,
       );
       const nowSec = Math.floor(Date.now() / 1000);
 
@@ -551,7 +636,11 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             id: newSessionId,
             accountId,
             familyId,
-            expiresAt: nowSec + refreshTokenTtl,
+            // A restricted session keeps its ORIGINAL absolute deadline across
+            // every rotation. `nowSec + refreshTokenTtl` here would hand a
+            // 30-day life to the session that must die in fifteen minutes, and
+            // the client refreshes silently, so it would happen on its own.
+            expiresAt: restrictedUntil ?? nowSec + refreshTokenTtl,
             createdAt: nowSec,
             // Preserve the device's original authentication time across the
             // rotation. `createdAt` is the new row's insert time (this grant),
@@ -565,6 +654,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
             uaLabel,
             ipHash,
             lastUsedAt: nowSec,
+            restrictedUntil,
           }),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -579,8 +669,18 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
   // Verify access token (for protected routes)
   // -------------------------------------------------------------------------
 
-  const verifyAccessToken = (
+  /**
+   * Verifies an access-shaped JWT and pins its `aud` to `audience`.
+   *
+   * **Deliberately private.** Only two bindings exist — {@link verifyAccessToken}
+   * and {@link verifyRecoveryAccessToken} — and neither is parameterised on the
+   * service surface. A public "verify with whatever audience you like" is one
+   * careless call away from a caller accepting the recovery audience at a route
+   * the restriction exists to keep it out of.
+   */
+  const verifyTokenWithAudience = (
     token: string,
+    audience: string,
   ): Effect.Effect<
     {
       profileId: string;
@@ -600,7 +700,7 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
         typeof payload["sub"] !== "string" ||
         typeof payload["email"] !== "string" ||
         typeof payload["handle"] !== "string" ||
-        payload["aud"] !== ACCESS_TOKEN_AUDIENCE
+        payload["aud"] !== audience
       ) {
         // S-M2: `aud` pinning ensures only tokens explicitly issued as
         // access tokens authenticate these routes. Without it any ES256
@@ -619,12 +719,60 @@ export function createTokensModule(ctx: AuthContext, profiles: ProfilesModule) {
       };
     });
 
+  /** The ordinary access-token verifier. Every route but passkey enrolment. */
+  const verifyAccessToken = (token: string) =>
+    verifyTokenWithAudience(token, ACCESS_TOKEN_AUDIENCE);
+
+  /**
+   * Verifies a restricted recovery session's access token.
+   *
+   * `resolvePasskeyEnrollPrincipal` is the only caller, and it tries
+   * {@link verifyAccessToken} first — so an ordinary token never reaches here,
+   * and a route that adopts this by mistake gets a token that can do exactly
+   * one thing rather than one that can do everything.
+   */
+  const verifyRecoveryAccessToken = (token: string) =>
+    verifyTokenWithAudience(token, RECOVERY_TOKEN_AUDIENCE);
+
+  /**
+   * Lifts the restriction from a recovery session, turning it into an ordinary
+   * one: `restrictedUntil` is cleared and the absolute 15-minute deadline is
+   * replaced by a normal sliding TTL. Called by `completePasskeyRegistration`,
+   * because enrolling a passkey is the one thing a restricted session exists to
+   * do and the user has just done it.
+   *
+   * `WHERE restricted_until IS NOT NULL` keeps this off the ordinary path: an
+   * everyday passkey add must not have its session's expiry quietly reset. A
+   * `null` hash is a no-op — that caller had no identifiable session, and
+   * `completePasskeyRegistration` has already revoked every session on the
+   * account, restricted one included.
+   */
+  const liftSessionRestriction = (
+    sessionHash: string | null,
+  ): Effect.Effect<void, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      if (!sessionHash) return;
+      const { db } = yield* Db;
+      const nowSec = Math.floor(Date.now() / 1000);
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .update(sessions)
+            .set({ restrictedUntil: null, expiresAt: nowSec + refreshTokenTtl })
+            .where(and(eq(sessions.id, sessionHash), isNotNull(sessions.restrictedUntil))),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+    }).pipe(Effect.withSpan("auth.session.lift_restriction"));
+
   return {
     issueAccessToken,
     issueTokens,
+    issueRecoverySession,
     verifyRefreshToken,
     refreshTokens,
     verifyAccessToken,
+    verifyRecoveryAccessToken,
+    liftSessionRestriction,
   };
 }
 

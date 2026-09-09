@@ -273,6 +273,27 @@ export const sessions = sqliteTable(
     ipHash: text("ip_hash"),
     /** Unix seconds. Updated on every successful refresh/verify hit. */
     lastUsedAt: integer("last_used_at"),
+    /**
+     * Unix seconds, non-null only on a **restricted recovery session** — the
+     * session account recovery hands out, which may enrol a passkey and do
+     * nothing else.
+     *
+     * It is the source of truth for **rotation**, not for request-time
+     * authorisation. Request-time restriction is carried by the access token's
+     * `aud: "osn-recovery"`, which every verifier — including the three
+     * services outside this repo that check the token over JWKS — already
+     * rejects. This column exists because `refreshTokens` deletes the old row
+     * and inserts a new one: without it the restriction would die on the first
+     * silent refresh, five minutes in. `refreshTokens` copies it forward and
+     * re-mints with the recovery audience while it is set.
+     *
+     * It also pins the session's absolute expiry: a restricted row is inserted
+     * with `expiresAt === restrictedUntil` and never slides, so a credential
+     * with exactly one purpose cannot outlive the window in which that purpose
+     * is plausible. `completePasskeyRegistration` clears it, which is what
+     * lifts the restriction. NULL on every ordinary session.
+     */
+    restrictedUntil: integer("restricted_until"),
   },
   (t) => [
     index("sessions_account_idx").on(t.accountId),
