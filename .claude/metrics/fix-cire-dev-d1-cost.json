@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "pr": {
-    "number": 973,
-    "branch": "chore/backfill-metrics-cards",
-    "base_sha": "495ac60d479588f0aca2c38612c7880d45ae3f2f",
-    "head_sha": "f89331e80741ec70642d9f05a86bdfb07bb0e64a",
-    "generated_at": "2026-09-10T04:14:09.027Z",
-    "merged_at": "2026-09-09T06:37:16Z",
+    "number": 982,
+    "branch": "fix/cire-dev-d1-cost",
+    "base_sha": "0e16137099a315501b2b9b902ba1aafb89640729",
+    "head_sha": "c1e1493d9a6af0f660e0dd054e3fbc48549f1acd",
+    "generated_at": "2026-09-10T04:14:09.021Z",
+    "merged_at": "2026-09-10T04:10:24Z",
     "phase": "at-merge"
   },
   "issue": {
-    "number": null,
+    "number": 979,
     "type": null,
     "labels": []
   },
@@ -19,49 +19,49 @@
     "method": "none"
   },
   "window": {
-    "sessions": 5,
-    "first_ts": "2026-09-09T06:25:11.310Z",
-    "last_ts": "2026-09-09T06:32:28.406Z",
-    "span_seconds": 437,
+    "sessions": 2,
+    "first_ts": "2026-09-10T03:36:39.237Z",
+    "last_ts": "2026-09-10T03:39:01.129Z",
+    "span_seconds": 142,
     "active_seconds": 188,
     "compactions": 0
   },
   "spend": {
-    "usd_equivalent": 1.7845034999999998,
+    "usd_equivalent": 1.23577025,
     "tokens": {
-      "input": 45,
-      "output": 9894,
+      "input": 24,
+      "output": 12399,
       "thinking": 0,
-      "cache_write_5m": 187702,
+      "cache_write_5m": 105279,
       "cache_write_1h": 0,
-      "cache_read": 727582
+      "cache_read": 535363
     },
     "by_model": {
       "claude-opus-4-7": {
         "tokens": {
-          "input": 45,
-          "output": 9894,
+          "input": 24,
+          "output": 12399,
           "thinking": 0,
-          "cache_write_5m": 187702,
+          "cache_write_5m": 105279,
           "cache_write_1h": 0,
-          "cache_read": 727582
+          "cache_read": 535363
         },
-        "usd_equivalent": 1.7845034999999998,
-        "messages": 20
+        "usd_equivalent": 1.23577025,
+        "messages": 14
       }
     },
     "by_actor": {
       "main": {
         "tokens": {
-          "input": 45,
-          "output": 9894,
+          "input": 24,
+          "output": 12399,
           "thinking": 0,
-          "cache_write_5m": 187702,
+          "cache_write_5m": 105279,
           "cache_write_1h": 0,
-          "cache_read": 727582
+          "cache_read": 535363
         },
-        "usd_equivalent": 1.7845034999999998,
-        "messages": 20
+        "usd_equivalent": 1.23577025,
+        "messages": 14
       },
       "subagent": {
         "tokens": {
@@ -82,46 +82,46 @@
   "diff": {
     "files": {
       "generated": 1,
-      "test": 1,
-      "docs": 0,
-      "config": 74,
-      "source": 1
+      "test": 0,
+      "docs": 3,
+      "config": 2,
+      "source": 2
     },
     "loc": {
       "generated": {
-        "added": 8,
+        "added": 20,
         "deleted": 0
       },
       "test": {
-        "added": 17,
-        "deleted": 0
-      },
-      "docs": {
         "added": 0,
         "deleted": 0
       },
+      "docs": {
+        "added": 89,
+        "deleted": 18
+      },
       "config": {
-        "added": 6210,
-        "deleted": 1157
+        "added": 123,
+        "deleted": 27
       },
       "source": {
-        "added": 19,
-        "deleted": 4
+        "added": 10,
+        "deleted": 5
       }
     },
     "packages": [
-      "tools/pr-metrics"
+      "cire/db"
     ],
     "touches_migration": false,
-    "commits": 3
+    "commits": 1
   },
   "interaction": {
-    "user_turns": 5,
+    "user_turns": 2,
     "corrective_turns": 0,
     "tokens_before_first_edit": null,
     "sessions_with_observed_edit": 0,
     "tool_calls": {
-      "Read": 3,
+      "Read": 5,
       "Bash": 1
     },
     "edit_churn": {
