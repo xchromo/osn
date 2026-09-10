@@ -23,23 +23,30 @@
  * reports all-clear when it is broken is worse than no watcher.
  */
 
-// The Cloudflare free-tier ceilings. Every one is account-wide, across every
-// Worker and every database on the account; the three daily ones reset at UTC
-// midnight and storage is a running total.
+// The Cloudflare free-tier ceilings. The first three are daily and reset at UTC
+// midnight; the last two are running totals. Four are account-wide, across every
+// Worker and every database. `d1DatabaseBytes` is the exception — it binds one
+// database on its own, and it is the storage ceiling that arrives first: at
+// 480 MB a database has stopped taking writes while the account total is still
+// a tenth of its 5 GB.
 //
 // These are the documented limits as of 2026-09-10 and they WILL drift.
 // Re-read Cloudflare's own pages before acting on a figure here —
-// https://developers.cloudflare.com/workers/platform/pricing/ and
-// https://developers.cloudflare.com/d1/platform/pricing/. The same numbers are
-// in `wiki/runbooks/free-tier-limits.md` and have to move with these.
+// https://developers.cloudflare.com/workers/platform/pricing/,
+// https://developers.cloudflare.com/d1/platform/pricing/ and
+// https://developers.cloudflare.com/d1/platform/limits/ (which is where the
+// two storage figures live). The same numbers are in
+// `wiki/runbooks/free-tier-limits.md` and have to move with these.
 //
-// Storage uses a decimal gigabyte, which is how Cloudflare prices it. Were it
-// binary the true ceiling would be larger, so this errs toward warning early.
+// Storage uses decimal megabytes and gigabytes, which is how Cloudflare prices
+// it. Were they binary the true ceilings would be larger, so this errs toward
+// warning early.
 export const CEILINGS = {
   d1RowsWritten: 100_000,
   d1RowsRead: 5_000_000,
   workersRequests: 100_000,
   d1StorageBytes: 5_000_000_000,
+  d1DatabaseBytes: 500_000_000,
 } as const;
 
 /** Report a counter once it reaches this share of its ceiling. */
@@ -194,9 +201,10 @@ function latestDay(groups: readonly StorageGroup[]): string | undefined {
 /**
  * Every counter at or above the warning share of its ceiling, worst first.
  *
- * Each daily counter is account-wide, so the total it compares is the sum
- * across every database or script for that day; the contributors are what
- * makes the figure actionable.
+ * All but one are account-wide, so the total compared is the sum across every
+ * database or script for that day, and the contributors are what makes the
+ * figure actionable. The exception is a single database's size, which binds
+ * each database on its own and so is checked once per database.
  */
 export function findBreaches(usage: Usage, names: ReadonlyMap<string, string>): readonly Breach[] {
   const written = accumulate(
@@ -224,14 +232,25 @@ export function findBreaches(usage: Usage, names: ReadonlyMap<string, string>): 
   );
 
   const newest = latestDay(usage.storage);
-  const storage = accumulate(
-    usage.storage
-      .filter((g) => g.dimensions.date === newest)
-      .map((g) => ({
-        day: g.dimensions.date,
-        name: databaseName(g.dimensions.databaseId, names),
-        amount: g.max.databaseSizeBytes,
-      })),
+  const sizes = usage.storage
+    .filter((g) => g.dimensions.date === newest)
+    .map((g) => ({
+      day: g.dimensions.date,
+      name: databaseName(g.dimensions.databaseId, names),
+      amount: g.max.databaseSizeBytes,
+    }));
+
+  // Two ceilings over the same rows. The account one sums them; the per-database
+  // one weighs each alone, so its counter carries the database's name — the
+  // heading has to say which database, not that one of seven is full.
+  const storage = accumulate(sizes);
+  const perDatabase = sizes.flatMap((size) =>
+    breachesFor(
+      `D1 database size: ${size.name}`,
+      CEILINGS.d1DatabaseBytes,
+      "bytes",
+      accumulate([size]),
+    ),
   );
 
   return [
@@ -239,6 +258,7 @@ export function findBreaches(usage: Usage, names: ReadonlyMap<string, string>): 
     ...breachesFor("D1 rows read", CEILINGS.d1RowsRead, "count", read, "Read queries"),
     ...breachesFor("Workers requests", CEILINGS.workersRequests, "count", requests),
     ...breachesFor("D1 storage", CEILINGS.d1StorageBytes, "bytes", storage),
+    ...perDatabase,
     // Worst first, and the newer day first where two are equally bad — which
     // is what two runs of the same over-budget job in a week look like.
   ].toSorted((a, b) => fraction(b) - fraction(a) || b.day.localeCompare(a.day));
@@ -294,10 +314,12 @@ export function renderIssueBody(breaches: readonly Breach[], window: Window, now
   }
 
   lines.push(
-    "Every ceiling here is account-wide, across every Worker and every database.",
-    "The three daily ones reset at UTC midnight; storage is a running total.",
+    "The row and request ceilings are daily and account-wide, across every Worker",
+    "and every database; they reset at UTC midnight. Storage is a running total,",
+    "and has two lines — 5 GB across the account, and 500 MB for any one database.",
     "Past a daily ceiling, D1 queries error and Workers return 429 from the edge,",
-    "so both APIs go to 503 or 429 for the rest of the day.",
+    "so both APIs go to 503 or 429 for the rest of the day. A full database stops",
+    "taking writes on its own, whatever the account total says.",
     "",
     "What to do: find which job or route spent the rows, and either cut it or move",
     "to Workers Paid. For D1, `bunx wrangler d1 insights <db> --time-period=7d",

@@ -140,12 +140,55 @@ test("storage reads the newest day only, so yesterday's size is not added to tod
     ],
   };
 
+  const account = findBreaches(usage, NAMES).find((b) => b.counter === "D1 storage");
+
+  expect(account).toBeDefined();
+  expect(account!.day).toBe("2026-09-10");
+  // 3 GB + 1.1 GB from the newest day, not 6 GB + 1.1 GB across both days.
+  expect(account!.used).toBe(4_100_000_000);
+});
+
+test("one database over its own 500 MB line fires while the account total is quiet", () => {
+  const usage: Usage = { ...EMPTY, storage: [storage("6e835474", "2026-09-10", 480_000_000)] };
+
   const breaches = findBreaches(usage, NAMES);
 
+  // 480 MB is 9.6% of the account's 5 GB and 96% of one database's 500 MB.
   expect(breaches).toHaveLength(1);
-  expect(breaches[0]!.counter).toBe("D1 storage");
+  expect(breaches[0]!.counter).toBe("D1 database size: cire-db");
   expect(breaches[0]!.day).toBe("2026-09-10");
-  expect(breaches[0]!.used).toBe(4_100_000_000);
+  expect(breaches[0]!.used).toBe(480_000_000);
+});
+
+test("a database at 79% of its own line is not reported", () => {
+  const usage: Usage = { ...EMPTY, storage: [storage("6e835474", "2026-09-10", 399_000_000)] };
+  expect(findBreaches(usage, NAMES)).toHaveLength(0);
+});
+
+test("each database is weighed on its own, so only the full one is named", () => {
+  const usage: Usage = {
+    ...EMPTY,
+    storage: [
+      storage("bf0510eb", "2026-09-10", 450_000_000),
+      storage("6e835474", "2026-09-10", 1_000_000),
+      storage("1c1425e1", "2026-09-10", 1_000_000),
+    ],
+  };
+
+  const breaches = findBreaches(usage, NAMES);
+
+  expect(breaches.map((b) => b.counter)).toEqual(["D1 database size: cire-db-dev"]);
+});
+
+test("the body names the database in the heading of a per-database breach", () => {
+  const usage: Usage = { ...EMPTY, storage: [storage("bf0510eb", "2026-09-10", 480_000_000)] };
+  const body = renderIssueBody(
+    findBreaches(usage, NAMES),
+    { start: "2026-09-10", end: "2026-09-10" },
+    "2026-09-10T08:00:00Z",
+  );
+  expect(body).toContain("## D1 database size: cire-db-dev — 2026-09-10");
+  expect(body).toContain("480.0 MB of 500.0 MB (96%)");
 });
 
 test("worst counter first", () => {
