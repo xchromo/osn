@@ -13,7 +13,7 @@ import {
 import { rowsChanged } from "@shared/db-utils";
 import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
-import { Cause, Data, Effect, Option } from "effect";
+import { Cause, Data, Effect } from "effect";
 
 import { commitGroupedBatches, DbService, dbQuery } from "../db";
 import { metricGuestDataSwept } from "../metrics";
@@ -325,7 +325,7 @@ export const retentionService = {
               // notifier whose error channel says it has none — are worth
               // telling apart, and neither name carries data.
               Effect.annotateLogs({
-                reason: Option.isSome(Cause.findErrorOption(cause)) ? "timeout" : "defect",
+                reason: Cause.hasFails(cause) ? "timeout" : "defect",
                 weddings: notices.length,
               }),
             ),
