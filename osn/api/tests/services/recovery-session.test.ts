@@ -499,6 +499,94 @@ describe("restricted recovery session — rotation and expiry", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  /**
+   * The row's deadline caps the token, not only the other way round.
+   *
+   * A restricted session does not extend on rotation, so a grant late in the
+   * window would otherwise hand out a full-length access token that outlives
+   * the row authorising it. Nothing is *granted* by such a token — the
+   * enrolment bypass tests the row, not the token — but the browser holding it
+   * is told a deadline the server will not honour, and a screen built on that
+   * promise keeps a live button every request refuses.
+   *
+   * Red without the cap: `expiresIn` and the JWT's lifetime are both 300.
+   */
+  it.effect("a rotation late in the window mints a token that dies with the row", () => {
+    const { layer } = makeHarness();
+    return Effect.gen(function* () {
+      const user = yield* auth.registerProfile("rs-cap@example.com", "rscap");
+      const restricted = yield* auth.issueRecoverySession(
+        user.id,
+        user.accountId,
+        user.email,
+        user.handle,
+        user.displayName,
+        "otp",
+      );
+
+      // Thirty seconds short of the deadline — the last grant the screen makes.
+      const remaining = 30;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(Date.now() + (RECOVERY_SESSION_TTL_SEC - remaining) * 1000));
+
+      const rotated = yield* auth.refreshTokens(restricted.refreshToken);
+
+      expect(rotated.expiresIn).toBe(remaining);
+      const payload = payloadOf(rotated.accessToken);
+      expect((payload["exp"] as number) - (payload["iat"] as number)).toBe(remaining);
+      // Still restricted: the cap shortens the token, it does not quietly
+      // promote the session.
+      expect(payload["aud"]).toBe(RECOVERY_TOKEN_AUDIENCE);
+    }).pipe(Effect.provide(layer));
+  });
+
+  /**
+   * The same rule at mint, where it bites only if an operator sets
+   * `OSN_ACCESS_TOKEN_TTL` above the recovery window. Both halves matter: the
+   * restricted session is capped to its window, and an ordinary one from the
+   * identical config still gets the full configured lifetime — which is what
+   * separates "the cap works" from "the TTL is broken for everybody".
+   */
+  it.effect(
+    "a configured TTL above the window is capped at mint, and only for the restricted session",
+    () => {
+      const { layer } = makeHarness();
+      return Effect.gen(function* () {
+        const longTtl = RECOVERY_SESSION_TTL_SEC * 2;
+        const generous = createAuthService({ ...config, accessTokenTtl: longTtl });
+
+        const user = yield* generous.registerProfile("rs-capmint@example.com", "rscapmint");
+        const restricted = yield* generous.issueRecoverySession(
+          user.id,
+          user.accountId,
+          user.email,
+          user.handle,
+          user.displayName,
+          "otp",
+        );
+        const ordinary = yield* generous.issueTokens(
+          user.id,
+          user.accountId,
+          user.email,
+          user.handle,
+          user.displayName,
+        );
+
+        const restrictedPayload = payloadOf(restricted.accessToken);
+        expect(restricted.expiresIn).toBe(RECOVERY_SESSION_TTL_SEC);
+        expect((restrictedPayload["exp"] as number) - (restrictedPayload["iat"] as number)).toBe(
+          RECOVERY_SESSION_TTL_SEC,
+        );
+
+        const ordinaryPayload = payloadOf(ordinary.accessToken);
+        expect(ordinary.expiresIn).toBe(longTtl);
+        expect((ordinaryPayload["exp"] as number) - (ordinaryPayload["iat"] as number)).toBe(
+          longTtl,
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("verifyRefreshToken refuses a restricted session unless asked", () => {
     const { layer } = makeHarness();
     return Effect.gen(function* () {
