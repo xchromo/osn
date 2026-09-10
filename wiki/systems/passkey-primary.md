@@ -220,10 +220,13 @@ The gate has a third outcome, and it is the only one that changes which cap
 applies. A caller on a **restricted recovery session** whose recorded factor
 `passkeyRegisterAllowedAmr` admits enrols past the step-up gate — losing a phone
 does not delete its passkey row, so the gate would otherwise block the common
-recovery case — and is held to `RECOVERY_ENROLMENT_PASSKEY_CEILING`, one
-credential above `MAX_PASSKEYS_PER_ACCOUNT`. At that ceiling the enrolment
-reclaims `recovery`-provenance credentials newest first to pay for its slot.
-Every other caller is refused at the cap unchanged. See
+recovery case — and is not refused at `MAX_PASSKEYS_PER_ACCOUNT`, or at any
+count: a refusal there is an account nobody can reach again. Above
+`RECOVERY_ENROLMENT_PASSKEY_CEILING`, one credential over the cap, the enrolment
+instead reclaims the slots **this same recovery episode lent**, and nothing that
+predates the recovery. Where there is nothing of its own to take back, the
+threshold gives way and the account ends a credential above it. Every other
+caller is refused at the cap unchanged. See
 [[account-recovery-factors#E. The passkey ceiling, and the slot it lends]].
 
 `/passkey/register/complete` additionally:

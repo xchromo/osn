@@ -228,20 +228,26 @@ export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
 /**
  * How an enrolment from a restricted recovery session fared against the passkey
  * ceiling. Emitted once per completed enrolment, from the `complete` side only —
- * `begin` reaches the same decision on an older count read, and counting both
- * would double every ceremony.
+ * `begin` no longer reaches this decision at all, and counting both would double
+ * every ceremony.
+ *
+ * None of the three is a refusal. A recovery enrolment is never refused for want
+ * of a slot; the three values say what it cost.
  */
 export type RecoveryPasskeyReclaimResult =
-  // Below the ceiling: the headroom credential was simply added and nothing was
+  // At or below the ceiling: the credential was simply added and nothing was
   // reclaimed. The ordinary shape of a first recovery at the cap.
   | "headroom_used"
-  // At or above the ceiling: one or more `recovery`-provenance credentials were
-  // deleted, newest first, to pay for the new one.
+  // Above the ceiling, and every credential of surplus was paid for by
+  // reclaiming one this same recovery episode lent.
   | "reclaimed"
-  // At the ceiling with no `recovery`-provenance credential to reclaim, so the
-  // enrolment was refused. This is the residual lockout, and the one worth an
-  // alert: the account is unreachable by this path.
-  | "no_candidate";
+  // Above the ceiling with nothing of this episode's own left to reclaim, so
+  // the ceiling gave way and the account ends above it. Nothing that predates
+  // the recovery is ever taken, because it may be the only credential the owner
+  // can still use. The value to alert on — not for a lockout, which no longer
+  // happens here, but because an account reaching it repeatedly is accumulating
+  // credentials nobody prunes.
+  | "ceiling_yielded";
 
 /**
  * Out-of-band security event kinds (M-PK1b). Mirrors the `kind` column on

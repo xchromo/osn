@@ -131,19 +131,24 @@ export const ROTATION_GRACE_MS = 10_000;
 export const MAX_PASSKEYS_PER_ACCOUNT = 10;
 
 /**
- * The cap an enrolment from a restricted recovery session is held to instead of
- * {@link MAX_PASSKEYS_PER_ACCOUNT}.
+ * The count above which an enrolment from a restricted recovery session starts
+ * reclaiming, one credential above {@link MAX_PASSKEYS_PER_ACCOUNT}.
  *
- * One credential of headroom, because without it an account at the cap that has
- * lost every device is permanently unreachable: it cannot enrol past the cap,
- * and it cannot delete to make room, since `passkeyDeleteAllowedAmr` is
- * WebAuthn-only and a restricted session cannot mint a step-up at all.
+ * The headroom exists because without it an account at the cap that has lost
+ * every device is permanently unreachable: it cannot enrol past the cap, and it
+ * cannot delete to make room, since `passkeyDeleteAllowedAmr` is WebAuthn-only
+ * and a restricted session cannot mint a step-up at all.
  *
- * The headroom is a **loan, not a ratchet**. At this ceiling the enrolment is
- * still admitted, by reclaiming `recovery`-provenance credentials newest first —
- * so a second recovery on an account that never pruned is not refused the way a
- * bare "cap + 1" would refuse it. `MAX_PASSKEYS_PER_ACCOUNT` alone still governs
- * every ordinary enrolment.
+ * **This is a threshold, not a limit.** It decides when the reclaim runs, never
+ * whether the enrolment is admitted — a recovery enrolment is admitted at any
+ * count. What it may reclaim is only what its own recovery episode lent, and
+ * that set is usually empty by the time a second recovery is permitted, so the
+ * threshold gives way rather than the credential. An account that recovers and
+ * never prunes therefore gains one credential per recovery, and recoveries are
+ * {@link RECOVERY_COOLDOWN_MS} apart.
+ *
+ * `MAX_PASSKEYS_PER_ACCOUNT` alone still governs every ordinary enrolment, which
+ * is still refused at the cap.
  *
  * @see wiki/architecture/account-recovery-factors.md
  */

@@ -69,15 +69,15 @@ export interface RegistrationChallengeEntry extends ChallengeEntry {
   provenanceAmr: PasskeyProvenance;
   /**
    * Whether `begin` granted the restricted-recovery-session bypass, and so
-   * whether `complete` holds this ceremony to the recovery ceiling rather than
-   * to `MAX_PASSKEYS_PER_ACCOUNT`.
+   * whether `complete` exempts this ceremony from `MAX_PASSKEYS_PER_ACCOUNT`
+   * and runs the reclaim in its place.
    *
    * A separate field rather than `provenanceAmr === "recovery"`, because that
    * value is NOT unique to the bypass: `verifyStepUpForPasskeyRegister` also
    * returns it for a `webauthn` step-up carrying no provenance claim and for an
-   * AMR its map does not name. Reading the ceiling off the provenance would hand
-   * the extra credential to an ordinary step-up enrolment, which is the one
-   * thing the cap has to keep refusing.
+   * AMR its map does not name. Reading the exemption off the provenance would
+   * hand it to an ordinary step-up enrolment, which is the one thing the cap has
+   * to keep refusing.
    */
   recoveryEnrolment: boolean;
 }

@@ -730,8 +730,10 @@ export const metricRecoveryDisown = (result: RecoveryDisownResult): void =>
 
 /**
  * How a restricted recovery session's enrolment fared against the passkey
- * ceiling. `no_candidate` is the one to alert on: it is the account that is
- * still unreachable, which is the whole failure this ceiling exists to remove.
+ * ceiling. None of the three values is a refusal — a recovery is never refused
+ * for want of a slot. `ceiling_yielded` is the one to alert on: the account
+ * ended above the ceiling because it held nothing this episode had lent, and an
+ * account reaching it repeatedly is accumulating credentials nobody prunes.
  */
 const authRecoveryPasskeyReclaim = createCounter<{ result: RecoveryPasskeyReclaimResult }>({
   name: OSN_METRICS.authRecoveryPasskeyReclaim,
