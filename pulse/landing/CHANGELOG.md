@@ -1,5 +1,106 @@
 # @pulse/landing
 
+## 0.1.13
+
+### Patch Changes
+
+- 59ad324: Move the root `svgo` override from `^4.0.2` to `^4.1.0`, clearing
+  GHSA-w27v-7q3p-w38r. `svgo` reaches these packages through Astro, which runs it
+  over SVG assets at build time, so the optimiser they build with changes.
+
+  The version-less `@cire/*` Astro packages take the same upgrade and are not
+  named here, because a changeset may not mix versioned and version-less
+  packages.
+
+## 0.1.12
+
+### Patch Changes
+
+- b78deb7: Rewrite every private-tracker comment reference in these packages to state the durable constraint directly (xchromo/osn#924's highest-priority batch).
+
+  A comment citing `osn-tracker#N` (or the shorter `tracker#N` spelling, also found live and now caught by `house/no-tracker-ref-in-comment` too) means nothing to a reader who cannot open the private tracker, and stops resolving once the finding closes — this repo is public, the tracker is not, so the number was a disclosure as well as a dead end. Every citation is now the fact it stood for: which D1 bind-parameter cap a query respects and why, which cookie-scoping attack a `__Host-` prefix defeats, which reflow guard a `resize-none` textarea keeps sound, why a response is never cached. One citation (`#130`) is to a finding that is still **open** — its replacement states the constraint as a live rule rather than implying a fix that hasn't happened, and links nothing.
+
+  Nineteen of the twenty tracker issues behind these citations are closed and fixed; none of that fix history is repeated here — only the fact that survives it. No behavior changed anywhere in this changeset: every edit is comment text.
+
+  Every rewrite was independently adversarially verified against the real diff and the current code (not the original finding's problem description) before being accepted; two of thirty-seven were caught wrong on the first pass — one a factual overstatement carried over from the finding's language rather than the code as implemented, one a bare `#N` left behind by an earlier pass — and both were corrected.
+
+## 0.1.11
+
+### Patch Changes
+
+- 7212689: P-I8 (tracker #619) — split from the cire-side changeset because `@osn/landing`
+  and `@pulse/landing` are versioned packages and changesets refuses to mix a
+  versioned package with the unversioned `@cire/*` apps in one file.
+
+  Both apps' `build` script now chains `scripts/guard-bundle-size.sh . static
+<threshold>` (previously bare `astro build`, no guard at all), and `ci.yml`
+  carries an explicit per-app step for the same reason cire/invites' own guard
+  does: a Turborepo cache replay of `build` never runs the chained script. See
+  `wiki/conventions/bundle-size-guards.md` for the measured baseline and
+  threshold each app was set from.
+
+## 0.1.10
+
+### Patch Changes
+
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- 39ee28c: Take jsdom 30.0.1 (from 29.1.1). It is a test-only dependency — the environment the Astro landing sites' unit tests parse HTML in.
+
+  Note what the root `undici` override does to this bump: jsdom 30 declares `undici ^8.9.0`, and the override pins `^7.29.0`, so jsdom runs against an HTTP stack one major older than the one it was written for. That is a floor being used as a ceiling, and it is tracked separately — it is not a property of jsdom 30 and is not fixed here. Reachability is test-only: no deployed Worker or shipped bundle contains undici from this path.
+
+- effefd7: Take motion 13.1.1 (from 12.43.0). The bundled `framer-motion` alias moves to 13.1.1 with it. The four landing and invite surfaces use only `animate`, `stagger` and `inView`, none of which changed signature. Verified through the real-Chromium browser tier rather than the mocked unit tests — see the accompanying `@cire/*` changeset for why that distinction matters here.
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [00ed19f]
+  - @shared/legal@0.0.2
+
+## 0.1.9
+
+### Patch Changes
+
+- 853367f: Pin browserslist to ^4.28.8 via a root override, clearing two high-severity advisories (GHSA-c83g-rgw3-j3cx unbounded query-cache growth, GHSA-73wf-gq98-2v4g crash and prototype write on untrusted browserslist-stats.json). Both affect <= 4.28.6, and the tree resolved 4.28.2 transitively through the @babel/core that vite-plugin-solid and @astrojs/solid-js pull in. Every package listed here sits on that chain. Build output is byte-identical.
+
+## 0.1.8
+
+### Patch Changes
+
+- 981ea54: Move every remaining colocated test file into its package's `tests/` tree, the
+  layout `wiki/conventions/testing-patterns.md` has documented all along.
+
+  `osn/landing` and `pulse/landing` kept their suites beside the source in `src/`
+  (and `pulse/landing` a third under `functions/`); those now mirror `src/` under
+  `tests/`. The three API packages' Miniflare-backed D1 suites move from
+  `src/d1-integration.test.ts` to `tests/d1/d1-integration.test.ts` — they used to
+  sit outside the vitest `include` glob by accident of living in `src/`, and are
+  now excluded from it explicitly by path, so `bun run test:d1` stays the only
+  thing that runs them. `tsconfig.json` gains `tests/**/*` wherever the tests were
+  previously type-checked only because they lived under `src/`.
+
+  No test bodies changed; only their location and the relative paths inside them.
+
+## 0.1.7
+
+### Patch Changes
+
+- 70ac0f3: Drop the unused `@testing-library/jest-dom` devDependency from every package that declared it but imports no matcher, now that `vite-plugin-solid` no longer injects its setup file. Guard the suppression markers in CI, and list the marker file under turbo's `globalDependencies` so an edit to it can no longer be served from cache.
+
 ## 0.1.6
 
 ### Patch Changes
@@ -22,10 +123,7 @@
   takes the extra fields the page publishes on top:
 
   ```ts
-  const draft = draftPending(
-    LEGAL_ENTITY.merchantOfRecord,
-    LEGAL_ENTITY.accountDataRetention
-  );
+  const draft = draftPending(LEGAL_ENTITY.merchantOfRecord, LEGAL_ENTITY.accountDataRetention);
   ```
 
   All thirteen pages pass every field they name, so no page can go un-flagged for

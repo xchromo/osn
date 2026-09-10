@@ -321,6 +321,14 @@ export interface AppOptions {
   images?: ImagesBindingLike;
   /** JWKS endpoint of the OSN issuer that signs organiser access tokens. */
   osnJwksUrl?: string;
+  /**
+   * Expected `iss` on organiser access tokens — the issuer's origin, exactly
+   * as osn-api mints it. The JWKS says a key is genuine; this says the token
+   * was minted by the deployment we expect rather than another OSN install
+   * sharing the curve. `index.ts` supplies it from `OSN_ISSUER_URL`, which
+   * must equal osn-api's own value byte for byte.
+   */
+  osnIssuerUrl?: string;
   /** Expected `aud` claim on organiser access tokens. */
   osnAudience?: string;
   /** Test-only: inject the verifying key and skip the JWKS fetch. */
@@ -514,6 +522,8 @@ export function createApp(db: Db, options: AppOptions = {}) {
     assets,
     images,
     osnJwksUrl = "http://localhost:4000/.well-known/jwks.json",
+    // Matches osn-api's own local default (`osn/api/src/build-deps.ts`).
+    osnIssuerUrl = "http://localhost:4000",
     osnAudience = "osn-access",
     osnTestKey,
     oidc = null,
@@ -572,13 +582,13 @@ export function createApp(db: Db, options: AppOptions = {}) {
     EmailService.pipe(
       Effect.flatMap((email) => email.send(msg)),
       Effect.provide(enquiryEmailLayer),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.logWarning("[enquiries] email send failed — swallowing", {
           template: msg.template,
           reason: error.reason,
         }),
       ),
-      Effect.catchAllDefect((cause) =>
+      Effect.catchDefect((cause) =>
         Effect.logWarning("[enquiries] email send defected — swallowing", {
           template: msg.template,
           reason: String(cause),
@@ -598,6 +608,7 @@ export function createApp(db: Db, options: AppOptions = {}) {
   // browser authenticates now that the passkey ceremony lives on musubi.social.
   const osnAuthOptions = {
     jwksUrl: osnJwksUrl,
+    issuer: osnIssuerUrl,
     audience: osnAudience,
     _testKey: osnTestKey,
     db,

@@ -12,11 +12,130 @@ packages:
   - "@osn/api"
   - "@osn/client"
   - "@osn/ui"
-last-reviewed: 2026-08-24
+last-reviewed: 2026-09-10
 ---
 # Recovery Codes
 
-Copenhagen Book **M2** — single-use, high-entropy, account-scoped recovery tokens. They're the "my device is gone" escape hatch in the passkey-primary model (`[[passkey-primary]]`). They are **not** a substitute credential: `deletePasskey` refuses to drop the account below 1 passkey regardless of recovery-code state.
+Copenhagen Book **M2** — single-use, high-entropy, account-scoped recovery tokens. They're the original "my device is gone" escape hatch in the passkey-primary model (`[[passkey-primary]]`). They are **not** a substitute credential: `deletePasskey` refuses to drop the account below 1 passkey regardless of recovery-code state.
+
+## The three ways back in
+
+Recovery codes are no longer the only one. This page is still the recovery-code
+page; the other two are designed in [[account-recovery-factors]] and the TOTP
+credential itself is [[totp]].
+
+| Path | Endpoint | Ends in |
+|---|---|---|
+| Recovery code | `POST /login/recovery/complete` | an **ordinary** session |
+| Emailed code | `POST /login/recovery/email/{begin,complete}` | a **restricted** recovery session |
+| Authenticator app | `POST /login/recovery/totp/complete` | a **restricted** recovery session |
+
+The split matters. A recovery code is a 64-bit secret the user was handed once
+and told to keep, so presenting one is strong evidence and it mints a full
+session. The other two rest on the mailbox or on a seed, so they mint a session
+whose access token carries `aud: "osn-recovery"` — refused by every verifier in
+osn-api and by `pulse/api`, `zap/api` and `cire/api` — which expires in fifteen
+minutes and can do exactly one thing: enrol a passkey. Doing so lifts the
+restriction.
+
+All three behave identically once the factor is accepted: every session on the
+account is revoked, `accounts.last_recovered_at` is stamped, and an audit row is
+written **in the same batch**, before the new session exists, then a notice is
+detached. `consumeRecoveryCode` is the reference implementation and the other two
+match it deliberately — a second recovery ceremony that revoked less, or
+recorded less, would be a quieter way into the same account. The audit rows
+differ only in `kind` (`recovery_code_consume` vs `account_recovered`).
+
+## The cooldown, and the one path exempt from it
+
+`accounts.last_recovered_at` opens a 72-hour window in which two things are
+refused: changing the account email on a step-up whose factor was an emailed OTP
+— the reason that factor is admitted at all is that it proves control of the
+*current* mailbox, which is exactly what a recovery calls into question — and
+completing a **second** email or TOTP recovery.
+
+**The recovery-code path stamps the window and is never refused by it.** A
+recovery code is a 64-bit secret handed to the user once and told to keep;
+capping that path would shut the owner's only unauthenticated door for three
+days, and it is the one door a mailbox holder cannot open. The cap is on the two
+factor paths a mailbox or a stolen seed re-opens at will.
+
+The refusal happens at `complete`, the single point both factor paths pass
+through, and answers the same generic failure everything else there answers.
+`begin` is unchanged and still answers 202 on every branch — a cooldown that
+announced itself would be an account-existence oracle.
+
+> [!warning] What the window does not cover
+> `POST /recovery/generate` sits outside it. An attacker holding the mailbox can
+> still replace the owner's unused codes during the cooldown, and can dismiss
+> the security banner and remove TOTP the same way. Gating recovery generation
+> would stop an honest user replacing the codes a recovery has just spent —
+> which [[musubi-identity-migration]] prescribes as the immediate next step — so
+> the trade was made the other way. All three actions stay audited and notified.
+
+## `POST /recovery/disown` — "this wasn't me"
+
+The `recovery-used` notice carries a single-use token, valid 72 hours, in the
+URL **fragment**: mail scanners prefetch links, and a token in the query string
+would be spent by a security appliance before the recipient read the message.
+Unauthenticated, because the person who needs it has just been signed out of
+everything.
+
+It revokes the credentials that recovery enrolled — filtered on
+`provenance_amr` as well as time, so a credential the owner added afterwards
+with a passkey they still held survives — every session on the account, and
+`last_recovered_at` itself. Clearing the window is what stops one click becoming
+a three-day lockout: "this wasn't me" is by definition a request to be allowed
+to recover again.
+
+**A token names one recovery, and reaches no further than that recovery.** It
+freezes `recovered_at` when it is minted and lives 72 hours, but the
+recovery-**code** path is exempt from the one-recovery-per-72-hours cap and
+re-stamps `last_recovered_at` on every use — so a second, legitimate recovery
+can land while an earlier token is still live. Two bounds keep the older token
+inside its own era:
+
+| Bound | Effect |
+|---|---|
+| The revocation stops at the later recovery | Credentials the second recovery produced are not deleted by the first recovery's token |
+| The clear is a compare-and-set on the token's own `recovered_at` | A later recovery keeps its window, so disowning an old recovery cannot re-open the second-recovery cap or the email-change gate early |
+
+Every branch answers `202 {"status":"accepted"}` — a good token, a wrong one, a
+spent one, an expired one, an account that would be left with no passkey at all,
+and a token-store outage. The last-passkey invariant wins over the revocation;
+in that case the sessions still go and only the outcome counter says so.
+
+**One branch does not.** If the token matches and the *database* then refuses
+the revocation, the route answers `500` and the counter records
+`revoke_failed`. Reporting "accepted" there would claim the only lever the owner
+has had fired when nothing was revoked, and the counter that exists to tell a
+real revocation from a no-op would agree. Nothing is enumerable by that point —
+the writes sit behind a 256-bit secret that has already matched — so the loud
+answer costs no privacy, and the token is put back so the owner's second click
+works.
+
+The token is claimed **atomically** (`CeremonyStore.consume`, the same
+first-consumer-wins guarantee `StepUpJtiStore.consume` gives a step-up `jti`),
+so two concurrent presentations cannot both pass the check and both revoke.
+
+> [!note] It arrives in the mailbox
+> Which, in the case the cooldown is written for, is the attacker's. The lever is
+> real for a TOTP recovery with the mailbox intact and for an owner who also
+> reads the mail. What protects an owner whose inbox is lost is the asymmetry:
+> a passkey that predates the recovery acts immediately. See
+> [[step-up#Credential provenance]].
+
+> [!warning] The email path is the one that sends mail to somebody who did not ask
+> `POST /login/recovery/email/begin` is unauthenticated and takes an **email
+> address, not a handle** — `/login/passkey/begin` may take a handle because it
+> sends nothing. It answers the same `202 {"status":"accepted"}` whether the
+> address resolves, does not resolve, or belongs to an account that has hit its
+> cap, and it **dispatches the send detached** so the branches also cost the
+> same: awaiting a provider round trip is an account-existence oracle that no
+> amount of body uniformity closes. The flood control is per **resolved account**
+> (3 per 24 h) as well as per IP, keyed on the `accountId` and never on the
+> submitted identifier. See [[account-recovery-factors]]
+> §"Enumeration, timing and flood control".
 
 ## Shape
 
@@ -102,7 +221,7 @@ Step-up gates `/recovery/generate`, but a compromised session with inbox access 
 
 1. **Audit row — generate.** Every `generateRecoveryCodesForAccount` call inserts a `security_events` row (kind `"recovery_code_generate"`) in the same transaction as the code swap. If the audit write fails, the codes don't commit either.
 2. **Audit row — consume (S-H1).** Every successful `consumeRecoveryCode` inserts a `security_events` row (kind `"recovery_code_consume"`) in the same transaction as the sessions wipe. Failed consume attempts (wrong code, unknown identifier) do NOT record — only genuine takeovers.
-3. **Email notification.** Both kinds fire a best-effort email (S-L5 framed, codes never included). Dispatch runs under `Effect.forkDaemon` with a 10 s `Effect.timeout`, so mailer health does not affect user-visible request latency (P-W2). Failure is reported via `osn.auth.security_event.notified{result=failed}` and never rolls back the primary action.
+3. **Email notification.** Both kinds fire a best-effort email (S-L5 framed, codes never included). Dispatch runs through `forkBackground` (`osn/api/src/lib/background.ts`) with a 10 s `Effect.timeout`, so mailer health does not affect user-visible request latency (P-W2). `forkBackground`, not a bare `Effect.forkDetach`: on workerd a promise never handed to `ExecutionContext.waitUntil` may not run at all once the response is returned — see [[backend-patterns#Background work must reach waitUntil]]. Failure is reported via `osn.auth.security_event.notified{result=failed}` and never rolls back the primary action.
 4. **Settings banner.** `GET /account/security-events` surfaces still-unacknowledged rows (newest first, `limit 50`, backed by a partial index over `WHERE acknowledged_at IS NULL` — P-W1). Dismissal happens via `POST /account/security-events/:id/ack` or the bulk `POST /account/security-events/ack-all`, **both gated by a fresh step-up token (S-M1)** — an XSS-captured access token cannot silently clear the banner, because the banner exists to warn about that compromise. Ack is idempotent; ack-all returns the number of rows dismissed. UI in `@osn/ui/auth/SecurityEventsBanner` (opens `StepUpDialog` on "Acknowledge", then POSTs to `ack-all`); SDK in `@osn/client/security-events.ts`.
 
 Schema lives in `osn/db/src/schema/index.ts` → `securityEvents`. Columns: `id` (`sev_` + 12 hex), `account_id`, `kind` (bounded string literal enforced at service boundary, not the column), `created_at`, `acknowledged_at`, `ip_hash`, `ua_label`. Index: `security_events_unacked_idx (account_id, created_at) WHERE acknowledged_at IS NULL`.
@@ -136,7 +255,7 @@ Props: `client`, `stepUpClient`, `accessToken`, plus optional `runPasskeyCeremon
 
 Mounted in:
 
-- `osn/social/src/components/SecuritySection.tsx` — Settings → Security, under the passkey list.
+- `musubi/social/src/components/SecuritySection.tsx` — Settings → Security, under the passkey list.
 - `cire/host/src/components/SecurityPanel.tsx` — same position, `passkeyOnly` forced (that deployment's OTP factor can't be relied on).
 
 `RecoveryLoginForm` is the redemption side, mounted in `@osn/ui/auth/SignIn`.

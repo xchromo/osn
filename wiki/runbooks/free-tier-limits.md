@@ -12,7 +12,7 @@ related:
   - "[[observability-setup]]"
   - "[[cire-auth]]"
   - "[[dev-environment]]"
-last-reviewed: 2026-08-17
+last-reviewed: 2026-09-10
 ---
 
 # Free-Tier Limits & Unavailability Runbook
@@ -28,6 +28,11 @@ last-reviewed: 2026-08-17
 > **All numbers below are the documented limits as of `last-reviewed` and
 > WILL drift — re-verify against the provider's own pricing page before
 > acting on a quota decision.** Each section links its source page.
+>
+> That covers the ceilings. A figure of **ours** — one only a command here can
+> produce — carries that command and the date it was run, in italics under it.
+> Re-run it rather than trusting `last-reviewed`, which says someone read the
+> page and nothing about whether its numbers are still true.
 
 ## Dependency → service map (who depends on what)
 
@@ -36,7 +41,7 @@ last-reviewed: 2026-08-17
 | **Upstash Redis** | `@osn/api` (rate limiters + the stateful auth stores: step-up JTI, rotated-session, recovery lockout, ceremonies) when `REDIS_URL` / `UPSTASH_*` is set | **cire-api** (no Redis at all — see below), Pulse/Zap client apps |
 | **Cloudflare Workers** | `osn-api`, **cire-api** (both are Workers) | static Pages sites |
 | **Cloudflare D1** | `osn-db-prod` (osn-api), `cire-db` (cire-api) | — |
-| **Cloudflare Pages** | `cire/invites` (guest), `cire/host`, `@osn/social`, `@osn/landing` | the Worker APIs |
+| **Cloudflare Pages** | `cire/invites` (guest), `cire/host`, `@musubi/social`, `@musubi/landing` | the Worker APIs |
 | **Cloudflare Rate Limiting binding** (Workers, not WAF) | **cire-api** `CLAIM_RATE_LIMITER` (the pre-auth `/api/claim` edge limiter) | osn-api (uses Upstash) |
 | **Turnstile** (widget live; the cire gate is inert — see the 2026-07-20 incident below) | osn-api register + passkey-login, cire-api guest claim + RSVP — gated only while the Worker secret is set | — |
 
@@ -193,14 +198,54 @@ DB-touching route** — i.e. effectively the whole app, since auth, claims, RSVP
 graph all read D1. Note the daily counters are **shared across every DB on the
 one account** (5 GB storage and the day's read/write counts are account-wide).
 
-**Dev's share.** The account holds **7 of 10** databases: `cire-db`,
-`osn-db-prod`, `zap-db-prod`, `cire-db-dev`, `osn-db-dev`, plus the unused
-`osn-db-staging` and `osn-db`. The two unused ones are the obvious reclaim if a
-new tier ever needs a slot. The dev tier's write cost is not zero: every merge
-that touches cire drops and re-seeds `cire-db-dev`, so it spends rows-written
-from the same **100K/day** budget production draws on. A seed is on the order of
-tens of rows, so this only matters if deploys ever run in a tight loop.
+**Dev's share — and the 2026-09 overrun.** The account holds **7 of 10**
+databases: `cire-db`, `osn-db-prod`, `zap-db-prod`, `cire-db-dev`, `osn-db-dev`,
+plus the unused `osn-db-staging` and `osn-db`. The two unused ones are the
+obvious reclaim if a new tier ever needs a slot.
+
+**Dev, not production, is what nearly all D1 usage on this account has been.**
+Until 2026-09-10 every merge touching cire dropped `cire-db-dev`, replayed all
+57 migrations from `0001` and re-seeded it. That is **8,007 rows written and
+about 22,630 read per deploy** — so 13 merges on 2026-09-09 spent 104,091 rows
+written and went over the 100K/day ceiling, as did 2026-08-30. Production wrote
+between 3 and 116 rows a day over the same window.
+
+*Measured 2026-09-10 — per-day, per-database totals from the Cloudflare GraphQL
+`d1AnalyticsAdaptiveGroups` dataset, dimensions `databaseId` and `date`, summing
+`rowsRead` and `rowsWritten`.*
+
+An earlier version of this page said a seed was "on the order of tens of rows".
+That was wrong by three orders of magnitude, and it blamed the wrong step. The
+seed is about 2,060 rows; the cost is the **migration replay**. SQLite rebuilds
+the whole table for every `ALTER TABLE ... DROP COLUMN`, and D1 bills that
+schema churn even when the table is empty — one such statement on
+`wedding_invite_customisations` costs 54 rows written and 421 read against no
+data at all. Of the 200 heaviest queries on `cire-db-dev` in the week to
+2026-09-10, DDL was 89% of rows written and 99.7% of rows read.
+
+*Measured 2026-09-10 — `bunx wrangler d1 insights cire-db-dev --time-period=7d --sort-by=writes`, and the same with `--sort-by=reads`.*
+
+Fixed in xchromo/osn#979 and #980: the per-merge dev deploy now applies
+migrations forward like production, the full rebuild runs nightly in
+`.github/workflows/cire-dev-db-rebuild.yml`, and the dev job supersedes queued
+runs. Budget after: one rebuild a day, 8% of the write ceiling.
 [[dev-environment]]
+
+**The number to watch is per-deploy, not per-day.** Any job that rebuilds a
+database from zero costs rows in proportion to the *number of migrations*, not
+the amount of data, and that number only grows. Before adding one, work out its
+cost against 100K/day. `scripts/guard-d1-migration-cost.ts` works the cire chain
+out on every pull request — replaying it offline into an in-memory SQLite and
+failing when the estimate passes the budget in
+`scripts/d1-migration-cost-budgets.txt`. The chain is **68 schema writes**
+against a line at 137; priced at 27 rows each that is about 1,800 written and
+roughly 54 replays a day, but the price per schema write is only pinned to
+about 22–27, so read the row figure as indicative and the schema-write count as
+exact. Method, calibration and how to re-baseline: [[bundle-size-guards]], which
+also sets out why the "89% / 11%" split above cannot be read as a share of one
+rebuild.
+*Measured 2026-09-10 — `bun run scripts/guard-d1-migration-cost.ts --all`.*
+
 
 **User-visible symptom:** 503 / "service unavailable" across the app until the
 daily counter resets at **UTC midnight**, or storage is freed.
@@ -208,6 +253,16 @@ daily counter resets at **UTC midnight**, or storage is freed.
 **How to detect:** CF dashboard → Workers & Pages → D1 → database → metrics
 (rows read/written vs the daily line, storage vs 5 GB); Workers Logs error
 lines from the D1 query path.
+
+For per-day, per-database numbers without the dashboard, query the GraphQL
+analytics API — `d1AnalyticsAdaptiveGroups`, dimensions `databaseId` and `date`,
+sum `rowsRead`/`rowsWritten`/`readQueries`/`writeQueries`. To find *which query*
+is spending them:
+
+```bash
+bunx wrangler d1 insights <db> --time-period=7d --sort-by=writes --limit=20 --json
+bunx wrangler d1 insights <db> --time-period=7d --sort-by=reads  --limit=20 --json
+```
 
 **Upgrade path:** **Workers Paid** unlocks the D1 paid tier — 25B rows
 read/mo + 50M rows written/mo included, 10 GB max DB size, 50K databases, 1 TB
@@ -217,7 +272,7 @@ storage; overage is cheap ($0.001/M read, $1/M written, $0.75/GB-mo). Re-verify.
 
 ## Cloudflare Pages (Free)
 
-**Source:** [pages limits](https://developers.cloudflare.com/pages/platform/limits/) — re-verify. Hosts `cire/invites`, `cire/host`, `@osn/social`, `@osn/landing`.
+**Source:** [pages limits](https://developers.cloudflare.com/pages/platform/limits/) — re-verify. Hosts `cire/invites`, `cire/host`, `@musubi/social`, `@musubi/landing`.
 
 | Limit | Free value (re-verify) |
 |---|---|
@@ -356,6 +411,27 @@ records persist for **7 days** and are viewable in the CF dashboard.
     failures.
   - Recurring `exceededResources` / `exceededCpu` invocation statuses → a heavy
     request path (e.g. spreadsheet import) bumping the Free CPU/subrequest caps.
+
+**The first two of those are watched for you; the rest are read by eye.**
+`.github/workflows/free-tier-ceiling-alert.yml` runs
+`scripts/check-free-tier-ceilings.ts` at 22:00 UTC daily, and on demand through
+`workflow_dispatch` (with `end` and `days` inputs, so a past day can be
+replayed). It reads per-day totals per database and per Worker script from
+Cloudflare's GraphQL analytics API and files one issue, titled "Cloudflare free
+tier: a daily counter is near its ceiling", when any counter reaches **80%** of
+its line. It reopens and edits that one issue rather than opening another, so a
+week near the line is one thread, and the body names the database and the day.
+
+Five ceilings: rows written, rows read and Workers requests per day, plus both
+storage lines — 5 GB across the account and **500 MB for any one database**. The
+per-database line is checked per database, not summed, because it is the storage
+failure that arrives first: a 480 MB database has stopped taking writes while the
+account total is still a tenth of its 5 GB.
+
+Two things to know before trusting it. The ceilings are the `CEILINGS` constant
+at the top of that script, and they have to move whenever the tables above do.
+And it fails loudly: a bad API response exits non-zero and fails the run, rather
+than reporting all-clear.
 
 ---
 

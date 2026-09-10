@@ -1,5 +1,253 @@
 # @osn/db
 
+## 0.24.0
+
+### Minor Changes
+
+- 46023fa: Gate passkey deletion and email change on credential provenance, not on wall clock alone
+
+  A passkey registered a minute ago under an emailed code minted a step-up token indistinguishable from one the user had held for a year, so the narrow allow-lists on `passkey_delete` and `email_change` constrained only the direct path. Registering a credential and asserting it reached both gates in two hops.
+
+  `passkeys.provenance_amr` now records the effective strength of the ceremony chain behind each credential, inherited so the pivot cannot be laundered by another hop, and `accounts.last_recovered_at` opens a 72-hour window after any recovery. A credential that predates the recovery acts immediately; one the recovery produced waits. Adds `POST /recovery/disown`, the single-use "this wasn't me" lever carried by the recovery notice, which revokes the credentials that recovery enrolled, every session on the account, and the window itself.
+
+  The disown route answers the same `202` on every branch a caller without the token can reach, and a `500` on one they cannot: a database failure after the token has matched. That branch is the difference between the lever having fired and not, so it is reported rather than hidden, and the token is put back for a second attempt. A token reaches only the recovery it was minted for — a later recovery keeps its own credentials and its own window.
+
+## 0.23.0
+
+### Minor Changes
+
+- 2aedc02: The `osn-recovery` token audience, for restricted recovery sessions
+
+  Account recovery has to end in a session that can enrol a fresh passkey and do
+  nothing else. This adds that primitive. **No route mints one yet** — the
+  recovery endpoints are separate work, and the tests are this change's reader.
+
+  The restriction is a distinct access-token audience, `osn-recovery`, not a
+  column. There is no single guard a column could be checked in: four entry points
+  in osn-api verify access tokens, and `pulse/api`, `zap/api` and `cire/api` verify
+  the same token over JWKS with no access to OSN's database. All seven already pin
+  `osn-access`, so all seven reject the new audience with **no change to any of
+  them** — fail-closed by construction, and not waiting on three other services to
+  deploy. `resolvePasskeyEnrollPrincipal` is the only resolver taught to accept it,
+  which makes `/passkey/register/begin` and `/complete` the only two routes it
+  reaches.
+
+  `sessions.restricted_until` (new column, migration `0008`) is the source of truth
+  for **rotation**, not for request-time authorisation: `refreshTokens` copies it
+  forward and re-mints on the recovery audience, or the restriction would die on
+  the first silent refresh five minutes in. It also pins an absolute 15-minute
+  expiry that never slides — and that guard has to be explicit, because a
+  restricted session's whole life sits inside half of a 30-day TTL, so the sliding
+  window's own condition is always true for exactly the session that must expire on
+  schedule. `completePasskeyRegistration` clears the column and restores an
+  ordinary TTL, which is what lifts the restriction.
+
+  A recovery-audience caller **bypasses the passkey step-up gate**, deliberately:
+  losing a phone does not delete its passkey row, so the gate would otherwise block
+  the common recovery case. The alternative — letting a restricted session mint
+  step-up tokens — would hand it `/recovery/generate`, `DELETE /account`,
+  `GET /account/export` and `/account/email/complete` as well.
+
+  That bypass is the one grant of privilege here, and it is priced rather than
+  assumed. `issueRecoverySession` takes a **required** `amr` — `"otp"`, `"totp"` or
+  `"webauthn"` — refuses at mint time anything `passkeyRegisterAllowedAmr` does not
+  admit, and records it in `sessions.restricted_amr` (new column, migration
+  `0009`), which rotation carries forward alongside the deadline.
+  `beginPasskeyRegistration` reads that column back off the caller's own session
+  row, so its `caller` argument is now the session's hash
+  (`{ recoverySessionHash }`) rather than a boolean the route asserted from the
+  token's audience: no route can mint a session whose factor the gate would have
+  refused, and narrowing the allow-list withdraws the bypass from sessions already
+  issued.
+
+  Two predicates were added to the write that lifts the restriction, which is the
+  one place a restricted session becomes a full one. It is now scoped to the
+  caller's `account_id`, like the two sibling session writes that take the same
+  server-derived hash, and to `expires_at > now` — `liveSessionIds` has no expiry
+  term, so an expired restricted row still classified as the caller's own and
+  enrolment converted it into an ordinary 30-day session, making the real bound the
+  15-minute deadline plus one access-token TTL rather than 15 minutes.
+
+  Two behaviour changes beyond the issue, both closing ways the restriction would
+  have failed open:
+
+  - `verifyRefreshToken` now **rejects a restricted session unless the caller opts
+    in**, and `refreshTokens` is the only caller that does. `GET /authorize`
+    resolves the signed-in user from the session cookie rather than an access
+    token, so without this a recovery session would have completed an OIDC
+    authorization and signed the user into every relying party.
+  - `ACCESS_TOKEN_AUDIENCE` moves into `constants.ts` beside the new one, and the
+    reserved OIDC client-id deny-list references both by name instead of repeating
+    the literals — the deny-list can no longer drift from the audiences it guards.
+
+## 0.22.0
+
+### Minor Changes
+
+- d287d72: TOTP enrolment, verification and disable on osn-api
+
+  An account can now enrol an authenticator app, use it to satisfy a step-up
+  ceremony, and remove it. TOTP is a step-up factor only — it is not a login
+  factor, and passkeys remain the sole primary one.
+
+  The shared secret is the one credential in the schema that cannot be hashed,
+  because RFC 6238 verification needs the raw HMAC key back. It is AES-256-GCM
+  encrypted under a new `OSN_TOTP_ENCRYPTION_KEY` Worker secret, with the account
+  id as additional authenticated data. **osn-api refuses to boot in a deployed
+  tier without that secret**, so it has to be provisioned before this ships;
+  local dev generates an ephemeral key, exactly as the JWT signing pair does.
+  That key **cannot be rotated**: rows carry a `key_version` and the service holds
+  exactly one key, so installing a new one makes every enrolled credential
+  unverifiable. The column is there so adding rotation later needs no migration.
+
+  `verifyTotpCode` in `@shared/crypto/totp` now returns the step it matched
+  (`{ step } | null`) rather than a boolean. RFC 6238 §5.2 single use is not
+  enforceable without it, and the alternative — refusing every code for the rest
+  of the drift window after a success — would fail a legitimate second ceremony
+  ninety seconds later. Breaking, and free: nothing outside its own test consumed
+  it.
+
+  Also: a `totp` AMR value, `totp_enroll` and `totp_disable` step-up purposes,
+  `totp_enrolled` / `totp_disabled` security events and notification emails, five
+  new rate-limiter slots, a `TotpClient` in `@osn/client`, and a `totp` section in
+  the DSAR export.
+
+  `passkeyDeleteAllowedAmr` stays WebAuthn-only and the email-change gate keeps an
+  allow-list of its own, so neither admits a `totp` AMR **directly**. Neither is a
+  boundary against a TOTP seed, and neither was one before this branch: any factor
+  those gates' sibling `passkeyRegisterAllowedAmr` admits can register a passkey
+  and assert it, arriving with the `webauthn` AMR both lists accept. Closing that
+  needs credential provenance and is tracked separately.
+
+## 0.21.2
+
+### Patch Changes
+
+- b2b6b70: Clean up the `house/no-tracker-ref-in-comment` mechanical majority (xchromo/osn#924).
+
+  Every finding-tag, phase-code, and narrative-phrase reference flagged by the rule in a short comment block is now gone from these packages: a bare parenthetical tag deleted, a leading label stripped and the remainder capitalized into its own sentence, or a "used to be" narration rewritten forward to state the current, still-true fact. No behavior changes anywhere — every edit is comment text.
+
+  A handful of leftover `osn-tracker#N` citations that predated both this batch and the separate tracker-number-refs cleanup (xchromo/osn#930) are also gone from `@osn/api` and `@pulse/api`, using the same treatment established there.
+
+## 0.21.1
+
+### Patch Changes
+
+- Updated dependencies [6474854]
+  - @shared/db-utils@0.7.1
+
+## 0.21.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @shared/db-utils@0.7.0
+
+## 0.20.13
+
+### Patch Changes
+
+- Updated dependencies [613c916]
+  - @shared/db-utils@0.6.6
+
+## 0.20.12
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- 01437b3: Take better-sqlite3 13.0.3 (from 12.11.1) and @types/better-sqlite3 9.6.0 (from 7.6.13). Nothing in `src/` imports either — the real consumer is drizzle-kit, which resolves better-sqlite3 dynamically to back `db:migrate`, `db:push`, `db:studio` and `db:reset`. Verified by running `drizzle-kit generate` against 13.0.3 in all three packages. The two packages move together because the type definitions had drifted two majors behind the runtime.
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [00ed19f]
+  - @shared/db-utils@0.6.5
+
+## 0.20.11
+
+### Patch Changes
+
+- 981ea54: Move every remaining colocated test file into its package's `tests/` tree, the
+  layout `wiki/conventions/testing-patterns.md` has documented all along.
+
+  `osn/landing` and `pulse/landing` kept their suites beside the source in `src/`
+  (and `pulse/landing` a third under `functions/`); those now mirror `src/` under
+  `tests/`. The three API packages' Miniflare-backed D1 suites move from
+  `src/d1-integration.test.ts` to `tests/d1/d1-integration.test.ts` — they used to
+  sit outside the vitest `include` glob by accident of living in `src/`, and are
+  now excluded from it explicitly by path, so `bun run test:d1` stays the only
+  thing that runs them. `tsconfig.json` gains `tests/**/*` wherever the tests were
+  previously type-checked only because they lived under `src/`.
+
+  No test bodies changed; only their location and the relative paths inside them.
+
+## 0.20.10
+
+### Patch Changes
+
+- e38d6de: Email change and registration now correctly tell a real database fault apart from a genuine duplicate-address conflict, and a rate-capped account can no longer learn whether an email address is taken by watching which check fails first.
+
+## 0.20.9
+
+### Patch Changes
+
+- 5c51a23: Enforce foreign keys on `bun:sqlite`, and fix the two erasure bugs that were hiding behind it.
+
+  SQLite defaults `PRAGMA foreign_keys` to **OFF** while D1 enforces them, so every local run and every test accepted writes production rejects. The cheap, fast environment was the permissive one, which is the worst way round: a statement that orphans a row, or deletes a parent before its children, passed the whole suite and would have failed on deploy.
+
+  Turning it on found `hardDeleteAccount` broken in two ways, both of which would make GDPR Art. 17 erasure throw rather than complete. It deletes the `accounts` row while deliberately keeping `security_events` and `email_changes` under Art. 6(1)(c) — but both declared a foreign key to `accounts`, so a column documented to outlive its parent referenced it. Those two constraints are dropped. It also deleted `users` before the `oauth_consents` and `oauth_authorization_codes` rows that carry a `profile_id` referencing them; those deletes now run first.
+
+  `dev-login`'s provisioning batch declared itself infallible through `Effect.promise` while being a chain of inserts that reference rows an earlier `onConflictDoNothing` may have skipped. With foreign keys on, that arrived as a defect and escaped the route's own error handling, answering 400 where the contract says 500 `provisioning_failed`.
+
+- Updated dependencies [5c51a23]
+  - @shared/db-utils@0.6.4
+
+## 0.20.8
+
+### Patch Changes
+
+- Updated dependencies [518bc7d]
+  - @shared/db-utils@0.6.3
+
 ## 0.20.7
 
 ### Patch Changes

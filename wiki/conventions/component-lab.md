@@ -7,7 +7,7 @@ related:
   - "[[frontend-patterns]]"
   - "[[commands]]"
   - "[[devloop-urls]]"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-09-09
 ---
 
 # Component Lab
@@ -43,7 +43,7 @@ What is left over is exactly what a bench is for: whether a drag tracks the
 pointer, whether the rows between it and the target shift aside to preview the
 drop, whether the grip is findable on hover and visible on focus, and whether a
 toast reads on the surface it lands on. The **light · dark** toggle is part of
-the toast bench, not chrome around it — the lab borrows `@osn/social`'s
+the toast bench, not chrome around it — the lab borrows `@musubi/social`'s
 stylesheet, which is what maps the shadcn ramp onto the `--toast-*` contract, so
 the toggle re-themes toasts exactly as the app does. See [[toast]] and
 [[drag-and-drop]].
@@ -55,7 +55,7 @@ the toggle re-themes toasts exactly as the app does. See [[toast]] and
 > that in a second; no assertion we had could.
 
 App-level components — `pulse/web/src/components`, `cire/invites`,
-`osn/social` — are **not** catalogued. They read from an API client, a router
+`musubi/social` — are **not** catalogued. They read from an API client, a router
 and an auth session; standing those up in a story means fixtures the repo
 deliberately keeps out of app source — see [[component-library]]. The path is
 open where a component needs no such context: `pulse/Icon` is catalogued from
@@ -94,7 +94,7 @@ component under any workspace's `src/` (permanent bench). Both are found.
 
 ## Decisions worth keeping
 
-**The lab imports `osn/social/src/App.css` rather than copying tokens.** That
+**The lab imports `musubi/social/src/App.css` rather than copying tokens.** That
 file is the source of truth for `--background`, the `.dark` block and the `base:`
 variant every `@osn/ui` class is written against. A second copy drifts. The cost
 is that the OSN look is the lab's default; a story with its own design language
@@ -119,18 +119,45 @@ import into the lab depends on this.
 `export const Thing = () => <div />` work with no config. It also means an
 exported helper shows up in the sidebar — keep helpers unexported.
 
-**Stories are not tests and carry no gate.** Nothing in CI renders a story.
-`check` typechecks the lab, `lint` and `fmt:check` cover it. A component whose
-behaviour matters still needs a real test — see [[testing-patterns]].
+**Stories are not tests, but they do carry a gate.** `tools/lab/tests/stories.test.tsx`
+imports every file the registry globs match and renders every story that can run
+headless, asserting only that nothing throws and `loadRegistry()` reports no
+failures. It says nothing about how a story looks — that is the thing a bench
+exists for and the thing no assertion can reach. A component whose *behaviour*
+matters still needs a real test — see [[testing-patterns]].
 
-The `test` script that does exist covers two pure helpers, `titleFromPath` and
+The gate exists because a bench that has silently stopped mounting is worse than
+no bench: you reach for it precisely when you are changing what it exercises,
+and a story that throws on import becomes a `LoadFailure` row in the sidebar
+rather than a red build. `@shared/toast` and `@shared/sortable` are the case
+that made it necessary — their co-located benches are the only coverage of drag
+feel, the shift/settle animation and toast enter/leave.
+
+**A story that cannot run headless opts out**, in its own `meta`:
+
+```tsx
+export const meta = { layout: "fullscreen" as const, headless: false };
+```
+
+The smoke test then imports the file and stops there. `headless` defaults to
+`true`, so a new story is gated unless its author says why it cannot be, and
+opting out is a statement about the story's dependencies — a `WebGLRenderer`
+needs a GPU context no headless DOM provides — not about how finished it is.
+Both three.js stories in `src/stories/` carry it.
+
+The `test` script also covers two pure helpers, `titleFromPath` and
 `inferControl`, because both fail quietly: a wrong title still renders a row, a
-wrong control still accepts input. Its config leaves out `vite-plugin-solid`,
-which every other Solid package here uses. The plugin adds a
-`@testing-library/jest-dom` setup file to any test run and the run dies without
-that dependency, which a tool testing two pure functions should not carry. The
-price is that no test here can import a `.tsx` file, and it is why
-`inferControl` sits in `infer-control.ts` rather than beside the panel it feeds.
+wrong control still accepts input.
+
+Rendering `.tsx` needs `vite-plugin-solid`, which every other Solid package here
+uses and which the lab's config used to leave out. The plugin prepends a
+`@testing-library/jest-dom` setup file to any test run unless an existing
+`setupFiles` entry already has `jest-dom` in its path; `shared/test-config/no-jest-dom.ts`
+is that entry — the same marker every other Solid package uses, see
+[[testing-patterns]]. The DOM itself is per-file: the config's `environment`
+stays `node`, and `stories.test.tsx` asks for `happy-dom` with a first-line
+`// @vitest-environment happy-dom` pragma, so the pure-helper tests keep paying
+nothing for a DOM they never touch.
 
 ## HTML in canvas
 
@@ -148,9 +175,11 @@ Both limits belong to the technique, not the helper.
 
 ## Gates
 
-`tools/lab` is a workspace (`tools/lab` in the root `workspaces` array, not
-`tools/*` — `tools/oxlint` holds vendored plugin source and no package.json).
+`tools/lab` is a workspace, and the root `workspaces` array names each one in
+`tools/` by path (`tools/lab`, `tools/oxlint/house`) rather than globbing
+`tools/*`. The glob would sweep in `tools/oxlint/anti-slop`, which is vendored
+upstream source with no package.json of its own.
 `scripts/validate-changesets.sh` scans `tools/` alongside the product directories
-so a changeset naming `@tools/lab` validates; `fmt` and `fmt:check` list
-`tools/lab` explicitly, so the vendored `tools/oxlint/anti-slop` is never
+so a changeset naming `@tools/lab` validates; `fmt` and `fmt:check` list the two
+workspace paths explicitly, for the same reason, so the vendored tree is never
 reformatted.

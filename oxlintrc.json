@@ -8,7 +8,8 @@
     "promise",
     "vitest",
     "node",
-    "jsx-a11y"
+    "jsx-a11y",
+    "jsdoc"
   ],
   "categories": {
     "correctness": "error",
@@ -51,12 +52,12 @@
 
     "vitest/no-standalone-expect": [
       "error",
-      { "additionalTestBlockFunctions": ["it.effect", "effectIt.effect"] }
+      { "additionalTestBlockFunctions": ["it.effect", "effectIt.effect", "it.live"] }
     ],
     "vitest/expect-expect": [
       "error",
       {
-        "additionalTestBlockFunctions": ["it.effect", "effectIt.effect"],
+        "additionalTestBlockFunctions": ["it.effect", "effectIt.effect", "it.live"],
         "assertFunctionNames": ["expect", "expectFailsWith", "assertNoAccountId"]
       }
     ],
@@ -139,9 +140,94 @@
     // to silence it are both worse: a `type Unparsed = unknown` alias launders
     // the rule while changing nothing, and a real `JsonValue` union converts
     // ~149 lint hits into ~149 call-site assertions feeding the backlog above.
-    "anti-slop/no-unknown-parameters": "off"
+    "anti-slop/no-unknown-parameters": "off",
+
+    // house — rules written here, in tools/oxlint/house, for a bug class this
+    // repo has hit and no published rule covers.
+    //
+    // A guard that narrows to a map's key type must test Object.hasOwn, never
+    // `key in MAP`: `in` walks the prototype chain, so `constructor`,
+    // `toString` and `__proto__` satisfy the guard and the predicate then
+    // claims an inherited Object.prototype member is a real entry.
+    "house/no-in-operator-key-guard": "error",
+
+    // A comment must not carry work-tracking state — a tracker issue number, a
+    // review finding tag, a phase or plan code — or narrate how the code got
+    // here. Each stops resolving once the issue closes or the plan ships, and
+    // this repo is public, so a comment naming a private finding is itself a
+    // disclosure. At "warn" until the existing references are cleaned up
+    // (issue #924 does that, then raises this to "error"): `bun run lint` runs
+    // unscoped over the whole tree, so "error" today would fail every PR.
+    "house/no-tracker-ref-in-comment": "warn",
+
+    // Only the last doc block in front of a declaration is attached to it, so
+    // a stack means an editor shows the reader the wrong text and whatever the
+    // earlier block described has quietly lost its comment. Raised to "error"
+    // by xchromo/osn#926, which cleared every existing site.
+    "house/no-stacked-doc-block": "error",
+
+    // jsdoc — a tag you write must carry content. Every rule here measured
+    // zero hits across the tree when it was turned on, so each one only ever
+    // fires on new drift.
+    //
+    // require-param and require-returns are deliberately absent: they would
+    // add 1624 and 1934 warnings, every one asking for a restatement of a
+    // signature TypeScript already carries.
+    //
+    // check-tag-names is what makes the closed tag set in
+    // wiki/conventions/code-comments.md a gate rather than a preference: it
+    // denies any tag it does not know, which covers every TSDoc-only spelling
+    // (@remarks, @defaultValue, @typeParam, @inheritDoc, @packageDocumentation,
+    // @alpha, @beta) and anything invented. `typed` additionally rejects tags
+    // that duplicate what TypeScript already states, and costs nothing here —
+    // measured, it adds no diagnostics beyond what the rule already reports.
+    // It does NOT reject the classic-JSDoc spellings (@example, @throws,
+    // @internal, @since, @public, @override); keeping those out is convention.
+    //
+    // require-yields stays off. Listing the plugin turns on its whole rule set
+    // and it sits in the correctness category this file treats as an error, so
+    // its default fails lint: it wants a @yields tag on every generator, which
+    // in this repo means every Effect.gen.
+    "jsdoc/require-yields": "off",
+    "jsdoc/check-tag-names": ["error", { "typed": true }],
+    "jsdoc/empty-tags": "warn",
+    "jsdoc/require-param-description": "warn",
+    "jsdoc/require-returns-description": "warn",
+    "jsdoc/no-defaults": "warn",
+    "jsdoc/implements-on-classes": "warn"
+
+    // house/no-non-subscribing-store-read is scoped to cire/**/*-store.ts in
+    // the "overrides" block below, not turned on here — the pattern it flags
+    // (`cache.get(id)?.accessor()`) is a cire-specific organiser-cache
+    // convention, not a general one, so the rule stays confined to that tree
+    // rather than matching a bare `cache` identifier anywhere in the repo.
   },
   "overrides": [
+    {
+      // The `weddingId`-keyed organiser caches under cire/ — the eight in
+      // cire/host/src/lib plus enquiries-store.ts and vendor-store.ts in
+      // cire/vendor/src/lib. Each exposes a subscribing read
+      // (`entryFor(id).accessor()`, which mints the cache entry) and a
+      // deliberately non-subscribing one confined to its
+      // `peekCachedXxx`/`hasCachedXxx` functions (`cache.get(id)?.accessor()`,
+      // which does not). Outside those two shapes the non-minting form is a
+      // reactivity bug: see tools/oxlint/house/rules/no-non-subscribing-store-read.ts.
+      //
+      // Scoped to cire/ rather than left unscoped: the review that widened
+      // this glob from the too-narrow `cire/host/src/lib/*-store.ts` (which
+      // missed nested paths, and never matched at all when oxlint was handed
+      // an absolute path) measured the rule enabled repo-wide across all
+      // 1529 files and got zero diagnostics — the false-positive fear behind
+      // the original narrow scope didn't hold up. `cire/**/*-store.ts` is
+      // chosen over a fully unscoped `**/*-store.ts` anyway, to hold the
+      // blast radius to the one product whose organiser-cache convention
+      // this rule actually encodes; a `*-store.ts` in another product is
+      // free to mean something else entirely.
+      "files": ["cire/**/*-store.ts"],
+      "rules": {
+        "house/no-non-subscribing-store-read": "error"
+      }
+    },
     {
       // Tests: sequential awaits in loops are usually the point
       // (rate-limit windows, ordered seeding).
@@ -190,7 +276,10 @@
       }
     }
   ],
-  "jsPlugins": [{ "name": "anti-slop", "specifier": "./tools/oxlint/anti-slop/index.ts" }],
+  "jsPlugins": [
+    { "name": "anti-slop", "specifier": "./tools/oxlint/anti-slop/index.ts" },
+    { "name": "house", "specifier": "./tools/oxlint/house/index.ts" }
+  ],
   "ignorePatterns": [
     "node_modules",
     "dist",
@@ -198,6 +287,10 @@
     "*.gen.ts",
     "*.astro",
     // Vendored upstream source — linted by its own repo, not ours.
-    "tools/oxlint/anti-slop"
+    "tools/oxlint/anti-slop",
+    // Shallow checkouts of an upstream repo, cloned as reference material and
+    // gitignored (the Effect v4 migration's two lived here). Not our source,
+    // and linting them buries real findings in someone else's warnings.
+    ".repos"
   ]
 }

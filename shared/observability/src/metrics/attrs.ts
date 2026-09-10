@@ -10,19 +10,38 @@
  * existing union without thinking about cardinality impact.
  */
 
-/** Generic outcome for any operation. Keep the set small. */
-export type Result =
-  | "ok"
-  | "error"
-  | "unauthorized"
-  | "forbidden"
-  | "not_found"
-  | "rate_limited"
-  | "validation_error"
-  | "conflict";
+export const RESULT_VALUES = [
+  "ok",
+  "error",
+  "unauthorized",
+  "forbidden",
+  "not_found",
+  "rate_limited",
+  "validation_error",
+  "conflict",
+] as const;
 
-/** Auth methods supported by OSN Core. Passkey (incl. security keys) is the only primary login factor; recovery_code is the "lost device" escape hatch; refresh tracks token refresh cycles. */
-export type AuthMethod = "passkey" | "recovery_code" | "refresh";
+/** Generic outcome for any operation. Keep the set small. */
+export type Result = (typeof RESULT_VALUES)[number];
+
+/**
+ * Auth methods supported by OSN Core. Passkey (incl. security keys) is the only
+ * primary login factor; refresh tracks token refresh cycles. The other three are
+ * account recovery, and none of them is a login factor.
+ *
+ * `recovery_code` mints an ordinary session. `email_recovery` and
+ * `totp_recovery` mint a **restricted** one — `aud: "osn-recovery"`, 15-minute
+ * absolute lifetime, rejected by every verifier in this service and in the three
+ * downstream services, and able to do exactly one thing: enrol a passkey. So
+ * neither reinstates the OTP primary login `[[passkey-primary]]` removed; see
+ * `wiki/architecture/account-recovery-factors.md` §B.
+ */
+export type AuthMethod =
+  | "passkey"
+  | "recovery_code"
+  | "email_recovery"
+  | "totp_recovery"
+  | "refresh";
 
 /** Registration funnel steps. */
 export type RegisterStep = "begin" | "otp_verify" | "passkey_enroll" | "complete";
@@ -33,7 +52,7 @@ export type ArcVerifyResult =
   | "expired"
   | "bad_signature"
   | "unknown_issuer"
-  | "revoked_key" // kid known but revoked (or its registration expired) — distinguishable from unknown_issuer on dashboards (S-L6)
+  | "revoked_key" // kid known but revoked (or its registration expired) — distinguishable from unknown_issuer on dashboards
   | "scope_denied"
   | "audience_mismatch"
   | "malformed";
@@ -69,11 +88,32 @@ export type SecurityInvalidationTrigger =
   | "email_change"
   | "recovery_code_generate"
   | "recovery_code_consume"
+  // Email-OTP or TOTP recovery completed: every session on the account is
+  // wiped and a restricted recovery session replaces them.
+  | "account_recovered"
+  // A `POST /recovery/disown` was accepted: the recovery-enrolled credentials
+  // and every session on the account go, and the recovery window is cleared.
+  | "recovery_disowned"
   | "session_revoke"
   | "session_revoke_all";
 
 /** Step-up (sudo mode) factor presented by the caller. */
-export type StepUpFactor = "passkey" | "otp" | "recovery_code";
+export type StepUpFactor = "passkey" | "otp" | "totp" | "recovery_code";
+
+/**
+ * TOTP (RFC 6238) operations, for the operation counter and the span name.
+ * `verify` covers every code check — step-up today, recovery once that lands —
+ * so the funnel does not have to grow a value per entry point.
+ */
+export type TotpOp = "enroll_begin" | "enroll_complete" | "disable" | "status" | "verify";
+
+/**
+ * Outcome of a TOTP code check. The route answers the same generic error for
+ * every failure — which one it was must be visible on a dashboard and nowhere
+ * on the wire, or the response becomes an oracle for whether an account has a
+ * second factor.
+ */
+export type TotpVerifyResult = "ok" | "invalid" | "replayed" | "not_enrolled" | "locked_out";
 
 /** Step-up ceremony steps, for attempt funnel counters. */
 export type StepUpStep = "begin" | "complete";
@@ -92,6 +132,8 @@ export type StepUpPurpose =
   | "security_event_ack"
   | "account_delete"
   | "account_export"
+  | "totp_enroll"
+  | "totp_disable"
   | "pulse_app_delete"
   | "zap_app_delete";
 
@@ -105,7 +147,13 @@ export type StepUpVerifyResult =
   | "wrong_subject"
   | "wrong_purpose"
   | "jti_replay"
-  | "amr_not_allowed";
+  | "amr_not_allowed"
+  // The factor was permitted but the credential behind it was not: a passkey
+  // registered under a weaker AMR, inside its 72-hour window, asked to delete
+  // an older credential or change the account email. Distinct from
+  // `amr_not_allowed` so a dashboard separates "wrong factor" from "right
+  // factor, wrong provenance" — those need different answers from the user.
+  | "provenance_blocked";
 
 /** Session-management actions initiated by the caller. */
 export type SessionAction = "list" | "revoke" | "revoke_all";
@@ -122,11 +170,84 @@ export type RotatedStoreBackend = "memory" | "redis";
 /** Email-change ceremony steps, for funnel counters. */
 export type EmailChangeStep = "begin" | "complete";
 
-/** Recovery code (Copenhagen Book M2) operation steps. */
-export type RecoveryCodeStep = "generate" | "consume";
+/**
+ * Account-recovery operation steps. The first two are the recovery-code
+ * ceremony (Copenhagen Book M2); the other three are the email-OTP and TOTP
+ * factors that mint a restricted recovery session.
+ */
+export type RecoveryCodeStep =
+  | "generate"
+  | "consume"
+  | "email_begin"
+  | "email_complete"
+  | "totp_complete"
+  // `POST /recovery/disown` — the "this wasn't me" lever in the recovery notice.
+  | "disown";
+
+/**
+ * Why the post-recovery cooldown refused an action. Every one of these answers
+ * the caller with the same generic error, so the dashboard is the only place
+ * the three are told apart.
+ */
+export type RecoveryCooldownOutcome =
+  | "second_recovery_refused"
+  | "passkey_mutation_refused"
+  | "email_change_refused";
+
+/**
+ * Outcome of `POST /recovery/disown`. Every one answers 202 except
+ * `revoke_failed`, including `store_error` — a token that cannot be read
+ * revokes nothing, and the caller must not be able to tell that apart from a
+ * token that was simply wrong.
+ *
+ * `accepted` and `kept_last_passkey` are the only two that mean the writes
+ * landed. Nothing else may be counted as the lever having fired: this is the
+ * one signal that separates a real revocation from a no-op, and a disown that
+ * revoked nothing while reporting success is indistinguishable from one that
+ * was never needed.
+ */
+export type RecoveryDisownResult =
+  | "accepted"
+  // Bad, spent, or expired token — one bucket, because the route cannot tell
+  // them apart without leaking which. A token whose single-use claim another
+  // caller won lands here too: to this caller it was already spent.
+  | "invalid"
+  // The credentials the disown would revoke are the account's only ones. The
+  // sessions still go; the last-passkey invariant wins over the revocation.
+  | "kept_last_passkey"
+  // The token store could not be read or claimed. Revokes nothing, answers 202.
+  | "store_error"
+  // The token matched and was spent, but the database refused the revocation.
+  // The ONLY outcome that answers 5xx: the caller is told the lever did not
+  // fire, because they are the one who can pull it again.
+  | "revoke_failed";
 
 /** Recovery code consume outcomes. */
 export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
+
+/**
+ * How an enrolment from a restricted recovery session fared against the passkey
+ * ceiling. Emitted once per completed enrolment, from the `complete` side only —
+ * `begin` no longer reaches this decision at all, and counting both would double
+ * every ceremony.
+ *
+ * None of the three is a refusal. A recovery enrolment is never refused for want
+ * of a slot; the three values say what it cost.
+ */
+export type RecoveryPasskeyReclaimResult =
+  // At or below the ceiling: the credential was simply added and nothing was
+  // reclaimed. The ordinary shape of a first recovery at the cap.
+  | "headroom_used"
+  // Above the ceiling, and every credential of surplus was paid for by
+  // reclaiming one this same recovery episode lent.
+  | "reclaimed"
+  // Above the ceiling with nothing of this episode's own left to reclaim, so
+  // the ceiling gave way and the account ends above it. Nothing that predates
+  // the recovery is ever taken, because it may be the only credential the owner
+  // can still use. The value to alert on — not for a lockout, which no longer
+  // happens here, but because an account reaching it repeatedly is accumulating
+  // credentials nobody prunes.
+  | "ceiling_yielded";
 
 /**
  * Out-of-band security event kinds (M-PK1b). Mirrors the `kind` column on
@@ -137,11 +258,29 @@ export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
 export type SecurityEventKind =
   | "recovery_code_generate"
   | "recovery_code_consume"
-  // O2: emitted when an account crosses the recovery-code failed-attempt
+  // Emitted when an account crosses the recovery-code failed-attempt
   // lockout threshold (per-account, keyed on the resolved accountId).
   | "recovery_code_lockout"
+  // A recovery factor (email OTP or TOTP) was accepted and a restricted
+  // recovery session issued. Written in the same batch as the session wipe, so
+  // the banner shows it even when the notice email is never read.
+  | "account_recovered"
+  // Emitted when an account crosses the failed-attempt threshold on the
+  // email-OTP recovery path. Keyed on the resolved accountId, like its
+  // recovery-code sibling.
+  | "recovery_otp_lockout"
   | "passkey_register"
   | "passkey_delete"
+  // A credential was deleted to pay for one a recovery session enrolled at the
+  // passkey ceiling. Distinct from `passkey_delete` because the account holder
+  // did not ask for it: the row is the only record that a credential vanished
+  // through a path nobody drove.
+  | "passkey_reclaimed"
+  // A recovery was disowned from the notice email: the credentials it enrolled
+  // and every session on the account were revoked.
+  | "recovery_disowned"
+  | "totp_enrolled"
+  | "totp_disabled"
   | "cross_device_login"
   | "account_deletion_scheduled"
   | "account_deletion_cancelled"
@@ -211,7 +350,7 @@ export type OidcTokenResult = "ok" | "invalid_grant" | "invalid_client" | "inval
 /** Whether the relying party belongs to us. Two values — safe to dimension by. */
 export type OidcClientKind = "first_party" | "third_party";
 
-/** Auth endpoints subject to IP-based rate limiting (S-H1). */
+/** Auth endpoints subject to IP-based rate limiting. */
 export type AuthRateLimitedEndpoint =
   | "register_begin"
   | "register_complete"
@@ -228,10 +367,19 @@ export type AuthRateLimitedEndpoint =
   | "recovery_generate"
   | "recovery_status"
   | "recovery_complete"
+  | "recovery_email_begin"
+  | "recovery_email_complete"
+  | "recovery_totp_complete"
+  | "recovery_disown"
   | "step_up_passkey_begin"
   | "step_up_passkey_complete"
   | "step_up_otp_begin"
   | "step_up_otp_complete"
+  | "step_up_totp_complete"
+  | "totp_enroll_begin"
+  | "totp_enroll_complete"
+  | "totp_disable"
+  | "totp_status"
   | "session_list"
   | "session_revoke"
   | "email_change_begin"

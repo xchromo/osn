@@ -59,7 +59,7 @@ export interface RegistryItem {
  * shows the as-given figure as the headline with the primary line underneath.
  *
  * `note`, `displayName` and `familyName` are GUEST-AUTHORED. Every renderer must
- * put them in a text node (S-L3).
+ * put them in a text node — never `innerHTML`.
  */
 export interface GiftLogEntry {
   kind: "claim" | "contribution";
@@ -141,32 +141,62 @@ export function registryAccessor(weddingId: string): Accessor<RegistrySnapshot |
   return entryFor(weddingId).snapshot;
 }
 
+/** Subscribes only when the entry already exists — a read from a cold cache
+ *  registers no dependency. Never use it for a value a view must track; use
+ *  the accessor for that. */
 export function hasCachedRegistry(weddingId: string): boolean {
-  return cache.get(weddingId)?.snapshot() != null;
+  return !stale.has(weddingId) && cache.get(weddingId)?.snapshot() != null;
 }
 
 export function setCachedRegistry(weddingId: string, snapshot: RegistrySnapshot): void {
   entryFor(weddingId).setSnapshot(snapshot);
 }
 
+/** Subscribes only when the entry already exists — a read from a cold cache
+ *  registers no dependency. Never use it for a value a view must track; use
+ *  the accessor for that. */
 export function peekCachedRegistry(weddingId: string): RegistrySnapshot | null {
   return cache.get(weddingId)?.snapshot() ?? null;
 }
 
 /**
- * Drop the cached snapshot, keeping the SIGNAL.
+ * Mark the cached snapshot stale, keeping both the SIGNAL and its VALUE.
  *
  * Deleting the map entry would mint a fresh signal on the next `entryFor`, and
  * every view that captured the old accessor at mount would then read a signal
- * nothing writes to again — a dead view with stale content. The sibling stores
- * (`vendors-store`, `budget-store`, `events-store`, `enquiries-store`) still
- * delete; this is the repo-wide `P-W2` in `[[cire/wiki/todo/perf]]`, fixed here
- * because `RegistryView` is the first consumer to invalidate on several write
- * paths rather than only on unmount.
+ * nothing writes to again — a dead view with stale content. Every sibling
+ * cache (`vendors-store`, `budget-store`, `tasks-store`, `enquiries-store`,
+ * `events-store`, `guests-store`, `households-store`) notifies the same way.
+ * The VALUE is kept as well: nulling it would flash the gift list and log
+ * through a loading state on every organiser edit, so the snapshot stays and
+ * the wedding is marked `stale` instead. `hasCachedRegistry`
+ * treats a stale id as a miss, which is what makes the next
+ * `ensureRegistryLoaded` actually refetch rather than short-circuiting on the
+ * (still-present) cached value.
+ *
+ * A load already in flight was issued against PRE-invalidation state, so its
+ * snapshot describes state that has since been mutated: the wedding's
+ * GENERATION is bumped too, and a resolving fetch from an older generation
+ * discards its result instead of caching it. Dropping the in-flight slot here
+ * (not just bumping the generation) means the next `ensureRegistryLoaded`
+ * does not join that doomed fetch — it starts a new one, at the cost of one
+ * extra request. That is the right trade: joining would await a promise
+ * whose result the generation guard is about to discard, leaving the caller
+ * with `false` and the view unrefreshed until whatever call comes next.
  */
 export function invalidateRegistry(weddingId: string): void {
-  entryFor(weddingId).setSnapshot(null);
+  stale.add(weddingId);
+  inflight.delete(weddingId);
+  generation.set(weddingId, generationOf(weddingId) + 1);
 }
+
+/** Monotonic per-wedding load generation, bumped by every invalidation. */
+const generation = new Map<string, number>();
+const generationOf = (weddingId: string) => generation.get(weddingId) ?? 0;
+
+/** Wedding ids whose cached snapshot is known out of date but still worth
+ *  showing while the refetch is in flight. */
+const stale = new Set<string>();
 
 /** How many of an item's wanted quantity are still unspoken for. Never negative
  *  — a race can land one claim past the wanted count, and a negative "still
@@ -175,7 +205,7 @@ export function stillWanted(item: RegistryItem): number {
   return Math.max(0, item.quantityWanted - item.quantityClaimed);
 }
 
-const inflight = new Map<string, Promise<void>>();
+const inflight = new Map<string, Promise<boolean>>();
 
 /**
  * Weddings whose Stripe capability has already been re-read this page load.
@@ -199,16 +229,42 @@ export function claimStripeCheck(weddingId: string): boolean {
 export function ensureRegistryLoaded(
   weddingId: string,
   fetcher: () => Promise<RegistrySnapshot>,
-): Promise<void> {
-  if (hasCachedRegistry(weddingId)) return Promise.resolve();
+): Promise<boolean> {
+  if (hasCachedRegistry(weddingId)) return Promise.resolve(true);
   let pending = inflight.get(weddingId);
   if (!pending) {
-    pending = fetcher()
-      .then((snap) => {
-        setCachedRegistry(weddingId, snap);
-        return undefined;
-      })
-      .finally(() => inflight.delete(weddingId));
+    const startedAt = generationOf(weddingId);
+    const load = fetcher()
+      .then(
+        (snap) => {
+          // A newer invalidation landed while this was in flight — its snapshot
+          // describes state that has since been mutated, so drop it rather than
+          // cache it.
+          if (generationOf(weddingId) !== startedAt) return false;
+          setCachedRegistry(weddingId, snap);
+          stale.delete(weddingId);
+          return true;
+        },
+        (err: unknown) => {
+          // The refetch was refused or failed. The snapshot still on screen was
+          // fetched under an authorisation this request could not confirm, so
+          // it stops being shown: a demoted organiser must not keep reading
+          // registry detail behind an error banner. Same generation guard — if
+          // a newer invalidation has landed, a newer load owns the entry and
+          // this one touches nothing.
+          if (generationOf(weddingId) === startedAt) {
+            entryFor(weddingId).setSnapshot(null);
+            stale.delete(weddingId);
+          }
+          throw err;
+        },
+      )
+      .finally(() => {
+        // Only clear the slot if it is still OURS: an invalidation may already
+        // have replaced it with a newer load.
+        if (inflight.get(weddingId) === load) inflight.delete(weddingId);
+      });
+    pending = load;
     inflight.set(weddingId, pending);
   }
   return pending;
@@ -219,4 +275,6 @@ export function __resetRegistryCache(): void {
   cache.clear();
   inflight.clear();
   stripeChecked.clear();
+  generation.clear();
+  stale.clear();
 }

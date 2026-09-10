@@ -12,7 +12,7 @@ import {
 } from "@pulse/db/schema";
 import type { PulseDeletionJob } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
-import { commitBatch } from "@shared/db-utils";
+import { commitBatch, jsonEachIn } from "@shared/db-utils";
 import type {
   DeletionCompletedResult,
   DeletionCompletedSource,
@@ -324,7 +324,7 @@ export const runHardDeleteSweep = (
               ),
             db.delete(eventComms).where(eq(eventComms.sentByProfileId, row.profileId)),
             db.delete(pulseUsers).where(eq(pulseUsers.profileId, row.profileId)),
-            // C-H1 (re-review): onboarding state is Pulse-scoped personal
+            // Onboarding state is Pulse-scoped personal
             // data (interests, opt-ins) and must go with the leave. The
             // profileId→accountId cache row goes too — keeping it would
             // preserve the exact account↔profile correlation the P6
@@ -405,7 +405,7 @@ export const purgeAccount = (
   Effect.gen(function* () {
     const { db } = yield* Db;
 
-    // S-H1: replay-protection ledger. The first call for an accountId
+    // Replay-protection ledger. The first call for an accountId
     // commits the work + ledger row in one tx; subsequent calls find the
     // row and return a no-op response. This prevents a captured
     // `account:erase` ARC token from being replayed against arbitrary
@@ -451,7 +451,7 @@ export const purgeAccount = (
       catch: (cause) => new PulseErasureDbError({ cause }),
     })).map((r) => r.id);
 
-    // P-W2: bulk DELETEs via inArray instead of looping per profile/event.
+    // Bulk DELETEs via inArray instead of looping per profile/event.
     // Three statements per child table regardless of profile count, which
     // keeps the batch's write-lock window bounded and well under
     // FANOUT_TIMEOUT_MS = 10s as the host-event count grows.
@@ -473,7 +473,7 @@ export const purgeAccount = (
           db.delete(eventComms).where(inArray(eventComms.sentByProfileId, profileIds)),
           db.delete(pulseUsers).where(inArray(pulseUsers.profileId, profileIds)),
 
-          // C-H1 (re-review): Pulse-scoped personal data added by the
+          // Pulse-scoped personal data added by the
           // onboarding feature — interests/opt-ins keyed by accountId, and
           // the profileId→accountId cache rows whose survival would
           // preserve the exact correlation the P6 invariant prevents.
@@ -483,12 +483,29 @@ export const purgeAccount = (
             .where(inArray(pulseProfileAccounts.profileId, profileIds)),
 
           // Drop hosted events + their cascading rows for the deleted profiles.
+          //
+          // GDPR Art. 17: `hostedEventIds` is unbounded, so this binds it via
+          // `jsonEachIn` as a single JSON parameter per statement rather
+          // than one bound parameter per id — binding per-id would hit D1's
+          // 100-parameter cap for a host with 101+ hosted events, failing
+          // every statement in this atomic batch (one failing statement
+          // rolls back the lot) and leaving exactly the accounts with the
+          // most data unable to ever complete a purge. The
+          // batch stays one atomic commit per the note above this block —
+          // splitting it would reopen the exact half-purged-account risk
+          // the single-batch design exists to close.
           ...(hostedEventIds.length > 0
             ? [
-                db.delete(eventRsvps).where(inArray(eventRsvps.eventId, hostedEventIds)),
-                db.delete(eventComms).where(inArray(eventComms.eventId, hostedEventIds)),
-                db.delete(eventLineup).where(inArray(eventLineup.eventId, hostedEventIds)),
-                db.delete(events).where(inArray(events.id, hostedEventIds)),
+                db
+                  .delete(eventRsvps)
+                  .where(inArray(eventRsvps.eventId, jsonEachIn(hostedEventIds))),
+                db
+                  .delete(eventComms)
+                  .where(inArray(eventComms.eventId, jsonEachIn(hostedEventIds))),
+                db
+                  .delete(eventLineup)
+                  .where(inArray(eventLineup.eventId, jsonEachIn(hostedEventIds))),
+                db.delete(events).where(inArray(events.id, jsonEachIn(hostedEventIds))),
               ]
             : []),
 

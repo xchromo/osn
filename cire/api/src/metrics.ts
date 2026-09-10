@@ -84,7 +84,7 @@ export const CIRE_METRICS = {
   accountLinkRequests: "cire.account_link.requests",
   accountLinkUnlinks: "cire.account_link.unlinks",
   accountLinkResolveDuration: "cire.account_link.resolve.duration",
-  // CSRF origin guard (C5 / S-L3).
+  // CSRF origin guard (C5).
   originGuardRejections: "cire.origin_guard.rejections",
   // Per-family claim-code regeneration (C2).
   familyCodeRegenerated: "cire.family_code.regenerated",
@@ -169,7 +169,7 @@ export type AccountLinkResult =
 /** Outcome of the S2S osn-api profile→account resolve. */
 export type ResolveResult = "ok" | "not_found" | "error";
 
-/** Why the origin guard rejected a state-changing request (C5 / S-L3). */
+/** Why the origin guard rejected a state-changing request (C5). */
 export type OriginRejectReason = "missing" | "mismatch";
 
 /** Outcome of a per-family claim-code regeneration (C2). */
@@ -195,14 +195,6 @@ export type WeddingCreatedResult = "ok" | "error";
 /** Outcome of a wedding-profile (Settings) save. Validation rejections are the
  *  schema's 400 upstream; `error` is a write failure. */
 export type WeddingSettingsSavedResult = "ok" | "error";
-
-/** A settings save refused by the field-level owner check — a non-owner patch
- *  that reached past the RSVP-by deadline. Deliberately ATTRIBUTE-FREE: the
- *  refused field names are a closed set, but putting them on a metric would
- *  still multiply series for no operational gain, and the log line beside it
- *  already carries them (third observability rule — no unbounded attributes).
- *  The portal only ever sends the deadline pair, so a nonzero count means a
- *  stale tab or a hand-crafted call. */
 
 /** Outcome of adding a co-host by handle. Mirrors the route's response branches. */
 export type HostAddResult =
@@ -846,6 +838,13 @@ export const metricWeddingCreated = (result: WeddingCreatedResult): void =>
 export const metricWeddingSettingsSaved = (result: WeddingSettingsSavedResult): void =>
   weddingSettingsSaved.inc({ result });
 
+/** A settings save refused by the field-level owner check — a non-owner patch
+ *  that reached past the RSVP-by deadline. Deliberately ATTRIBUTE-FREE: the
+ *  refused field names are a closed set, but putting them on a metric would
+ *  still multiply series for no operational gain, and the log line beside it
+ *  already carries them (third observability rule — no unbounded attributes).
+ *  The portal only ever sends the deadline pair, so a nonzero count means a
+ *  stale tab or a hand-crafted call. */
 export const metricSettingsOwnerOnlyRefused = (): void => settingsOwnerOnlyRefused.inc({});
 
 export const metricHostAdded = (result: HostAddResult): void => hostAdded.inc({ result });

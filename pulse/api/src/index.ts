@@ -6,6 +6,7 @@ import { Effect } from "effect";
 
 import { createApp, type App, type AppOptions } from "./app";
 import { assertCorsOriginsConfigured, resolveCorsOrigins } from "./lib/cors-config";
+import { DEFAULT_ISSUER_URL, DEFAULT_JWKS_URL } from "./lib/jwks";
 import { buildPulseOidcConfig } from "./lib/oidc";
 import { makeMemoryRateLimiters, type PulseRateLimiters } from "./redis";
 
@@ -29,7 +30,7 @@ export interface Env {
   OSN_JWKS_URL?: string;
   /** CORS allowlist (P3), comma-separated. */
   PULSE_CORS_ORIGIN?: string;
-  /** Number of trusted reverse proxies in front of the Worker (S-M34). */
+  /** Number of trusted reverse proxies in front of the Worker. */
   PULSE_TRUSTED_PROXY_COUNT?: string;
   /** Environment discriminator — `local` vs anything else. */
   OSN_ENV?: string;
@@ -51,7 +52,7 @@ export interface Env {
 }
 
 /**
- * Client-IP trust policy (S-M34) for the per-IP limiters on the unauthenticated
+ * Client-IP trust policy for the per-IP limiters on the unauthenticated
  * discover / share / exposure surfaces. `PULSE_TRUSTED_PROXY_COUNT` is the
  * number of trusted reverse proxies in front of the Worker: the keying IP is
  * taken that many hops from the right of `x-forwarded-for` (the only
@@ -98,6 +99,21 @@ function buildApp(env: Env): App {
     throw new Error("OSN_JWKS_URL must be set and use HTTPS in non-local environments");
   }
 
+  // The JWKS proves a key is genuine; `iss` proves the token was minted for
+  // this deployment rather than another OSN install. Required in a deployed
+  // env for the same reason the JWKS URL is: an unset expected issuer is not
+  // a soft default, it is the check not running. It must equal osn-api's own
+  // `OSN_ISSUER_URL` byte for byte, so the two flip in the same deploy.
+  // `||`, not `??`: an empty `OSN_ISSUER_URL` var is a misconfiguration, and
+  // `??` would carry the empty string straight through to the verifier. The
+  // presence check is ungated for the same reason as zap's — a tier that
+  // reads as local because its env block is incomplete must still not run
+  // with the check off.
+  const issuerUrl = env.OSN_ISSUER_URL || DEFAULT_ISSUER_URL;
+  if (secure && (!env.OSN_ISSUER_URL || issuerUrl.startsWith("http://"))) {
+    throw new Error("OSN_ISSUER_URL must be set and use HTTPS in non-local environments");
+  }
+
   // CORS allowlist — fail closed in non-local envs where PULSE_CORS_ORIGIN is
   // unset (an empty allowlist in a secure env is a misconfiguration).
   const corsOrigins = resolveCorsOrigins({ PULSE_CORS_ORIGIN: env.PULSE_CORS_ORIGIN }, secure);
@@ -120,7 +136,7 @@ function buildApp(env: Env): App {
 
   const options: AppOptions = {
     dbLayer: makeDbD1Live(env.DB as D1Database),
-    jwksUrl,
+    verification: { jwksUrl: jwksUrl || DEFAULT_JWKS_URL, issuer: issuerUrl },
     rateLimiters,
     clientIpConfig: resolveClientIpConfig(env),
     corsOrigins,

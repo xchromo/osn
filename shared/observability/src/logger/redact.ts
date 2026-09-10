@@ -64,6 +64,23 @@
 export const REDACTION_PLACEHOLDER = "[REDACTED]";
 
 /**
+ * Stand-in for a value the walk has already visited on the way down.
+ *
+ * `redact` runs inside the logger on every tier (see `./layer.ts`), so it is
+ * not a place that may throw: `Effect.logError("...", err)` on an error whose
+ * `cause` chain loops back on itself would take out the fiber that logged it,
+ * turning a diagnostic into an outage. A marker in the output is strictly more
+ * useful than that, and it still makes the cycle visible to whoever reads the
+ * line.
+ *
+ * The `seen` set is an ancestor set that is never pruned, so a value reached
+ * twice by different paths — a DAG, not a cycle — also renders as
+ * `[Circular]`. That is deliberate: pruning would make the walk re-enter shared
+ * subtrees, and a log payload is not worth an exponential blow-up.
+ */
+export const CIRCULAR_PLACEHOLDER = "[Circular]";
+
+/**
  * Case-insensitive deny-list of object keys. Each entry maps to a real
  * field that exists somewhere in the codebase as of this commit; see the
  * file header for the criteria.
@@ -125,6 +142,24 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
     // gated action inside the 5-minute window.
     "stepUpToken",
     "step_up_token",
+
+    // --- TOTP shared secrets (RFC 6238) ---
+    // Unlike recovery codes and session tokens, a TOTP secret cannot be stored
+    // as a hash — verification needs the raw HMAC key — so the plaintext exists
+    // in the process on every enrolment and every verify. `totpSecret` and
+    // `otpauthUri` are the wire fields of POST /totp/enroll/begin, which is the
+    // one response that carries either; the URI is the worse of the two,
+    // because it embeds the whole secret in the shape most likely to be logged.
+    // `secretCiphertext` is the column, redacted with them: it is useless
+    // without OSN_TOTP_ENCRYPTION_KEY, but the point of encrypting at rest is
+    // that the Worker's secrets and its database stay separate trust domains,
+    // and a log sink holding both collapses them.
+    "totpSecret",
+    "totp_secret",
+    "otpauthUri",
+    "otpauth_uri",
+    "secretCiphertext",
+    "secret_ciphertext",
 
     // --- Session metadata ---
     // `ipHash` is HMAC-peppered but still a privacy signal — operators
@@ -251,9 +286,11 @@ export const REDACT_KEYS: ReadonlySet<string> = new Set(
  *
  * - scalars and functions pass through untouched (`typeof !== "object"`),
  * - `Date` is preserved by identity so serializers keep its fidelity,
+ * - `Error` becomes a *new* `Error` carrying the original's name, message and
+ *   stack, with its own enumerable fields scrubbed,
  * - arrays become arrays of scrubbed values,
- * - everything else — plain objects and `Error`s alike — becomes a plain
- *   record whose denied keys hold {@link REDACTION_PLACEHOLDER}.
+ * - everything else becomes a plain record whose denied keys hold
+ *   {@link REDACTION_PLACEHOLDER}.
  *
  * `RedactedFunction` is here because a function reaching a log annotation is
  * returned as-is; it is not a shape worth encouraging, just one the walk does
@@ -270,6 +307,7 @@ export type RedactedValue =
   | null
   | undefined
   | Date
+  | Error
   | RedactedFunction
   | readonly RedactedValue[]
   | { readonly [key: string]: RedactedValue };
@@ -308,13 +346,15 @@ const asScalar = (value: unknown): RedactedValue => {
  * replaced by `REDACTION_PLACEHOLDER`. Handles nested objects and arrays.
  * Primitives and non-object values pass through unchanged.
  *
- * Intentionally does not follow cycles — throws on cyclic input. Log
- * entries should never contain cycles; if one shows up, that's a bug.
+ * Does not follow cycles: a value already on the path down is replaced with
+ * {@link CIRCULAR_PLACEHOLDER} rather than walked again. It does not throw —
+ * a cyclic log entry is a bug, but this function runs *inside the logger*,
+ * where a throw kills the fiber that was only trying to log. Marking the
+ * cycle reports the same bug without the outage.
  *
- * Fast path (P-I1): primitives return immediately without allocating
- * a new WeakSet or walking anything. Hot log paths (per-request,
- * per-metric) stay allocation-free for the common case of scalar
- * messages and annotations.
+ * Fast path: a primitive returns immediately, allocating no WeakSet and
+ * walking nothing, so the hot per-request and per-metric log paths stay
+ * allocation-free for scalar messages and annotations.
  */
 export const redact = (value: unknown): RedactedValue => {
   // Primitive fast path — no allocation, no walk.
@@ -331,7 +371,7 @@ const redactInner = (value: unknown, seen: WeakSet<object>): RedactedValue => {
   if (typeof value !== "object") return asScalar(value);
 
   if (seen.has(value as object)) {
-    throw new Error("redact: cyclic value");
+    return CIRCULAR_PLACEHOLDER;
   }
   seen.add(value as object);
 
@@ -343,22 +383,40 @@ const redactInner = (value: unknown, seen: WeakSet<object>): RedactedValue => {
   // deep-copying them would lose fidelity).
   if (value instanceof Date) return value;
   if (value instanceof Error) {
-    // Errors get their `message` preserved but any custom fields are
-    // redacted. This covers Effect tagged errors with { _tag, cause }.
-    const out: Record<string, RedactedValue> = {};
-    out.name = value.name;
-    out.message = value.message;
-    // `Object.entries` reads the same own enumerable keys the old `Object.keys`
-    // + index-read did; `name`/`message`/`stack` are non-enumerable, so they
-    // stay out of the walk and only the two copied above survive.
+    // A real `Error` back, not a record of its fields. The pretty logger prints
+    // an Error with its stack, and local stack traces are most of what that
+    // logger is wanted for; a `{ name, message }` record loses every frame.
+    // Nothing serialized changes: on the JSON path `Logger.formatStructured`
+    // has already flattened the value through Effect's own `structuredMessage`
+    // before `redact` ever sees it, and the Elysia plugin only reads `.name` /
+    // `.message`, which a real Error still answers.
+    const out = new Error(value.message);
+    // `name` and `stack` are non-enumerable on a native Error. Defining them
+    // the same way keeps the clone out of its own `Object.entries` walk, and
+    // stops console output growing a spurious `{ name: "Error" }` field.
+    Object.defineProperty(out, "name", {
+      value: value.name,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    out.stack = value.stack;
+    // Own enumerable fields only — the same keys the old `Object.keys` +
+    // index-read walked, and what covers an Effect tagged error's `{ _tag, … }`
+    // payload. `Object.assign` writes through `[[Set]]`, so a field that
+    // shadows `message` lands on the clone's existing non-enumerable slot
+    // rather than being printed twice. A `cause` passed as
+    // `new Error(msg, { cause })` is non-enumerable and is dropped here,
+    // exactly as it always has been.
+    const fields: Record<string, RedactedValue> = {};
     for (const [k, v] of Object.entries(value)) {
       if (REDACT_KEYS.has(k.toLowerCase())) {
-        out[k] = REDACTION_PLACEHOLDER;
+        fields[k] = REDACTION_PLACEHOLDER;
       } else {
-        out[k] = redactInner(v, seen);
+        fields[k] = redactInner(v, seen);
       }
     }
-    return out;
+    return Object.assign(out, fields);
   }
 
   const out: Record<string, RedactedValue> = {};

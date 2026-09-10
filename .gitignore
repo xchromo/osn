@@ -225,6 +225,10 @@ wiki/business/
 # block in `project.yml`, same as it writes the `.xcodeproj` — the committed
 # source of truth is the YAML, not the generated plist.
 */ios/*.entitlements
+# Same deal for the Info.plist: XcodeGen writes it from the `info.properties`
+# block in `project.yml`, which is where the per-configuration tier and hosts
+# are declared. Committing the output would let it drift from that source.
+*/ios/*-Info.plist
 .build/
 DerivedData/
 .swiftpm/
@@ -235,3 +239,32 @@ DerivedData/
 .migration/manifest.json
 # Shards handed to the disclosure audit, regenerated from the manifest.
 .migration/audit/
+
+# Shallow checkouts of an upstream repo, cloned as reference material by a
+# migration or a skill that needs to read someone else's source. Never ours,
+# and never committed — the Effect v4 migration's two clones lived here.
+.repos/
+
+# Scratch written by the agent skills and read back after a compaction, never
+# committed: `new-feat` writes the branch's plan and gate state, `stress-plan`
+# the attack on that plan, `prep-pr` the PR body and its report, and each
+# `review-*` skill its own report — `prep-pr` dispatches three of those on every
+# run, so they land at the checkout root where a careless `git add -A` would take
+# them. They are per-branch working notes, not repository documentation; what
+# belongs to the repo goes in the wiki or the PR body.
+#
+# `orchestrate`'s own `ORCHESTRATE.md` is deliberately absent: it is written at
+# the bare repo's root, outside every worktree, so nothing here governs it and no
+# worktree can stage it.
+NEW-FEAT.md
+PLAN-REVIEW.md
+PR-BODY.md
+PREP-PR-REPORT.md
+DOCS-REVIEW.md
+TEST-REVIEW.md
+PERFORMANCE-REVIEW.md
+SECURITY-REVIEW.md
+DEPS-REVIEW.md
+# A one-off evaluation a workflow wrote for the owner to decide from. Same kind
+# of thing: what survives the decision goes to the wiki, not to the root.
+TSDOC-EVALUATION.md

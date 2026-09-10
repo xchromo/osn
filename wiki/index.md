@@ -5,9 +5,10 @@ tags: [index]
 related:
   - "[[TODO]]"
   - "[[deferred-decisions]]"
+  - "[[osn-and-musubi]]"
   - "[[monorepo-structure]]"
   - "[[compliance/index]]"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-09-09
 ---
 
 # OSN Wiki
@@ -22,17 +23,20 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 
 ## Architecture
 
+- [[osn-and-musubi]] — OSN the system vs Musubi our implementation; the rule that decides which name anything takes
 - [[monorepo-structure]] — workspace layout, domain prefixes, directory tree
 - [[backend-patterns]] — Elysia route factories, Effect pipelines, service layer
 - [[schema-layers]] — Elysia TypeBox (HTTP) vs Effect Schema (domain)
+- [[effect-v4-api]] — the v3 forms that no longer compile, and the v4 form to write instead
 - [[s2s-patterns]] — graphBridge, cross-package calls, ARC token flow
 - [[frontend-patterns]] — SolidJS, shared UI tokens, lazy loading
 - [[component-library]] — Zaidan/shadcn-style components, Kobalte primitives, CVA variants
 - [[drag-and-drop]] — `@shared/sortable` for drag-to-reorder, multi-container lists, and the keyboard + announcement path it owns
+- [[account-recovery-factors]] — TOTP and email-verified recovery: the restricted `osn-recovery` session, the step-up allow-lists, the provenance cooldown, and the six issues they split into
 - [[cire-platform-plan]] — cire's build plan from digital invite to wedding-management platform
 - [[cire-invite-builder]] — organiser-editable invite images + copy (slots, storage, API, guest rendering)
 - [[cire-guest-event-editor]] — the interactive events + guests editor alongside the CSV schema
-- [[cire-consent]] — cire's site-wide cookie/third-party consent: categories, vendor registry, the `cire_consent` record
+- [[cire-consent]] — cire's site-wide cookie/third-party consent: categories, vendor registry, the `__Host-cire_consent` record
 - [[cire-host-portal-layout]] — how the organiser portal decides widths: `page-frame`, `auto-grid`, named container queries
 
 ## Systems
@@ -44,6 +48,7 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[passkey-primary]] — passkey-only login contract (the only primary factor)
 - [[recovery-codes]] — single-use account-recovery tokens (Copenhagen Book M2)
 - [[step-up]] — short-lived sudo tokens gating sensitive endpoints (M-PK1)
+- [[totp]] — RFC 6238 authenticator-app second factor: the encrypted secret, single use, the per-account lockout
 - [[sessions]] — session introspection, per-device revocation, "sign out everywhere else", device/passkey management UI
 - [[oidc-provider]] — OpenID Connect provider: how other apps recognise an OSN account without holding a passkey
 - [[turnstile]] — Cloudflare Turnstile bot protection (key-optional, fail-closed; shipped inert)
@@ -62,6 +67,8 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[feature-flags]] — GrowthBook flags via `@shared/feature-flags`, key-optional and fail-safe
 - [[event-access]] — loadVisibleEvent, public/private visibility gate
 - [[venues]] — org-scoped venues, event lineups, venue detail page + Explore map layer
+- [[d1-limits]] — D1's 100 bound parameters and 5 compound-select terms, and why `bun:sqlite` never sees either
+- [[d1-read-replication]] — the Sessions API, why every request opens one `first-primary` session, and how to turn replicas on
 - [[platform-limits]] — MAX_EVENT_GUESTS and other caps
 - [[redis]] — Redis-backed rate limiters + cluster-safe auth state stores
 - [[toast]] — `@shared/toast`, the `--toast-*` theming contract, and contrast on the surface a toast actually sits on
@@ -75,19 +82,20 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[metrics]] — naming convention, typed attributes, cardinality enforcement
 - [[feature-checklist]] — per-feature observability checklist
 - [[cire-workerd]] — what cire does differently on workerd (no OTel SDK, deferred export)
+- [[session-metrics]] — per-PR agent cost cards: schema, the declared-complexity comparison, DuckDB queries
 
 ## Apps
 
 - [[osn-core]] — identity / auth stack (`@osn/api` + SDK + UI)
-- [[social]] — identity & social-graph management UI (`@osn/social`)
-- [[social-mobile-ux]] — mobile UX audit + phased responsive-shell plan for `@osn/social`
-- [[authorize-ui]] — the OIDC consent screen (`/authorize` in `@osn/social`)
+- [[social]] — identity & social-graph management UI (`@musubi/social`)
+- [[social-mobile-ux]] — mobile UX audit + phased responsive-shell plan for `@musubi/social`
+- [[authorize-ui]] — the OIDC consent screen (`/authorize` in `@musubi/social`)
 - [[pulse]] — events app (`@pulse/web` + `@pulse/api` + `@pulse/db`)
 - [[zap]] — messaging app (`@zap/api` + `@zap/db` scaffolded; client app planned)
 - [[cire]] — wedding-invite stack (`@cire/invites` + `@cire/host` + `@cire/api` + `@cire/db`)
 - [[cire-development]] — cire's own build conventions: backend patterns, the two test tiers, its commands
 - [[cire-landing]] — marketing site for the apex `cireweddings.com` (`@cire/landing`) + domain-migration / platform roadmap
-- [[osn-landing]] — marketing site for OSN (`@osn/landing`) — dark/dotted, connections-led
+- [[osn-landing]] — marketing site for OSN (`@musubi/landing`) — dark/dotted, connections-led
 - [[pulse-landing]] — marketing site for Pulse events (`@pulse/landing`) — colourful + fun
 
 ## Conventions
@@ -97,9 +105,12 @@ Map of Content for the OSN monorepo knowledge graph. Open this vault in Obsidian
 - [[commands]] — CLI commands reference
 - [[devloop-urls]] — named HTTPS hosts per app, one dev stack per worktree
 - [[review-findings]] — finding ID format (S-H1, P-W2, T-M1)
+- [[code-comments]] — what a comment is for, the four references that rot, the TSDoc tags to use
 - [[contributing]] — PR workflow, changesets, branching
 - [[stacked-prs]] — basing one PR on another with the gh CLI, and merging the stack
 - [[component-lab]] — the in-repo Storybook replacement: prototyping components, three.js and canvas
+- [[bundle-size-guards]] — per-app Astro bundle-size guard + the src/pages test-route check, across all six apps
+- [[wiki-search]] — the three ways to search this vault, which exist where, and the guard that stops a branch reading stale
 
 ## Compliance
 

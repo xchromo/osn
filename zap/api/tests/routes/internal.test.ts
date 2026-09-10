@@ -1,9 +1,9 @@
 import { exportKeyToJwk, generateArcKeyPair, signArcToken } from "@shared/crypto/jwk";
-import type { Chat } from "@zap/db/schema";
 import { Effect } from "effect";
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
 import { _resetServiceKeysForTests } from "../../src/lib/arc-middleware";
+import { MAX_EXPORT_PROFILE_IDS } from "../../src/lib/limits";
 import { createInternalRoutes } from "../../src/routes/internal";
 import {
   createTestLayer,
@@ -16,7 +16,7 @@ import {
 
 /**
  * Route-level coverage for the `/internal` group: the shared-secret
- * registration gate and the ARC-gated `account-export` DSAR endpoint (C-H1).
+ * registration gate and the ARC-gated `account-export` DSAR endpoint.
  * Message content is never read — only chat-membership metadata is emitted.
  */
 
@@ -339,6 +339,78 @@ describe("zap internal routes — ARC-gated account-export", () => {
     expect(firstRecord.body).toBe("msg-newest");
     expect(firstRecord.createdAt).toBe(t2.toISOString());
   });
+
+  it("rejects profile_ids over the export cap with 400", async () => {
+    const app = createInternalRoutes(createTestLayer());
+    await post(app, "/internal/register-service", registerBody(), `Bearer ${SECRET}`);
+
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const overCap = Array.from({ length: MAX_EXPORT_PROFILE_IDS + 1 }, (_, i) => `usr_${i}`);
+    const res = await post(
+      app,
+      "/internal/account-export",
+      { account_id: "acc_x", profile_ids: overCap },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: `profile_ids exceeds max of ${MAX_EXPORT_PROFILE_IDS}`,
+    });
+  });
+
+  it("keeps two distinct c2b messages that share a body and same-second createdAt (groupBy, not DISTINCT)", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+    await post(app, "/internal/register-service", registerBody(), `Bearer ${SECRET}`);
+
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_dup", "member").pipe(Effect.provide(layer)),
+    );
+
+    // Both timestamps round to the same integer second once stored (the
+    // `createdAt` column is second-resolution) — two genuinely different
+    // messages, same body, same stored second.
+    const first = new Date("2024-06-01T12:00:00.100Z");
+    const second = new Date("2024-06-01T12:00:00.900Z");
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_dup", "same body text", first).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedC2bMessage(c2bChat.id, "usr_dup", "same body text", second).pipe(Effect.provide(layer)),
+    );
+
+    const arc = await signArcToken(privateKey, {
+      iss: "osn-api",
+      aud: "zap-api",
+      scope: "account:export",
+      kid: KID,
+    });
+    const res = await post(
+      app,
+      "/internal/account-export",
+      { account_id: "acc_dup", profile_ids: ["usr_dup"] },
+      `ARC ${arc}`,
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const c2bLines = text
+      .split("\n")
+      .filter(Boolean)
+      .filter((l) => (JSON.parse(l) as { section: string }).section === "zap.c2b_messages");
+
+    // A `.distinct()` on the projected {chatId, body, createdAt} columns
+    // would collapse these into one row, silently dropping a message from
+    // the DSAR export. `.groupBy(messages.id)` must keep both.
+    expect(c2bLines).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -554,6 +626,40 @@ describe("zap internal routes — ARC-gated /internal/chats (chat:c2b)", () => {
     expect(listed.messages[0]!.id).toBe(sent.messageId);
     expect(listed.messages[0]!.body).toBe("Hello from host!");
     expect(listed.messages[0]!.senderProfileId).toBe("usr_host");
+    // The wire-level half of the `storedNow` contract: the timestamp the POST
+    // reports and the one the GET reports are the same string. Untruncated,
+    // the write would answer "…:00.123Z" and every later read "…:00.000Z".
+    expect(listed.messages[0]!.createdAt).toBe(sent.createdAt);
+  });
+
+  // ── unknown cursor ───────────────────────────────────────────────────────
+
+  it("GET messages with an unknown before cursor → 400", async () => {
+    const layer = createTestLayer();
+    const app = createInternalRoutes(layer);
+    const arc = await registerC2bAndMintToken(app, privateKey, publicKeyJwk);
+
+    const provRes = await post(
+      app,
+      "/internal/chats",
+      { memberProfileIds: ["usr_guest", "usr_host"], createdByProfileId: "usr_host" },
+      `ARC ${arc}`,
+    );
+    const { chatId } = (await provRes.json()) as { chatId: string };
+    await post(
+      app,
+      `/internal/chats/${chatId}/messages`,
+      { senderProfileId: "usr_host", body: "Hello" },
+      `ARC ${arc}`,
+    );
+
+    // Previously this answered 200 with page 1, so a caller paginating with a
+    // stale cursor looped over the newest page instead of being told.
+    const res = await get(app, `/internal/chats/${chatId}/messages`, `ARC ${arc}`, {
+      before: "msg_nonexistent",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toEqual({ error: "Invalid cursor" });
   });
 
   // ── 409 on c2c chat ──────────────────────────────────────────────────────

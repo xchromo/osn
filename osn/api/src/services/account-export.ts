@@ -42,6 +42,7 @@ const {
   recoveryCodes,
   securityEvents,
   sessions,
+  totpCredentials,
   users,
 } = schema;
 
@@ -143,17 +144,19 @@ async function* fanOutSection(
       yield jsonLine({ degraded: ds.namespace, reason: `http_${res.status}` });
       return;
     }
-    const reader = res.body?.getReader();
-    if (!reader) {
+    const body = res.body;
+    if (!body) {
       yield jsonLine({ degraded: ds.namespace, reason: "no_response_body" });
       return;
     }
     const decoder = new TextDecoder();
     let buf = "";
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop -- streaming read loop
-      const { done, value } = await reader.read();
-      if (done) break;
+    // Async iteration rather than a reader loop: a stream arrives one chunk at
+    // a time, so there is no set of promises to run together here. Leaving the
+    // loop — by a throw, or by the consumer abandoning this generator — runs
+    // the iterator's `return()`, which cancels the stream and stops the
+    // downstream sending the rest of a bundle nobody is reading.
+    for await (const value of body) {
       buf += decoder.decode(value, { stream: true });
       let nl: number;
       while ((nl = buf.indexOf("\n")) >= 0) {
@@ -248,6 +251,31 @@ export async function* exportLines(opts: {
     const { _cursor, ...record } = row;
     void _cursor;
     yield jsonLine({ section: "passkeys", record });
+  }
+
+  // totp — metadata only. The shared secret and its ciphertext are never
+  // exported: a DSAR response is a document the subject may forward anywhere,
+  // and the secret is a live credential, not a record about them. `lastUsedAt`
+  // sits on the same footing as `passkeys.last_used_at`, and `lastUsedStep` is
+  // replay state rather than personal data, so it stays out too.
+  for await (const row of keyset(async (cursor) =>
+    db
+      .select({
+        _cursor: totpCredentials.id,
+        id: totpCredentials.id,
+        label: totpCredentials.label,
+        confirmedAt: totpCredentials.confirmedAt,
+        lastUsedAt: totpCredentials.lastUsedAt,
+        createdAt: totpCredentials.createdAt,
+      })
+      .from(totpCredentials)
+      .where(and(eq(totpCredentials.accountId, accountId), gt(totpCredentials.id, cursor)))
+      .orderBy(asc(totpCredentials.id))
+      .limit(PAGE_SIZE),
+  )) {
+    const { _cursor, ...record } = row;
+    void _cursor;
+    yield jsonLine({ section: "totp", record });
   }
 
   // sessions — coarse device metadata; ip_hash is HMAC-peppered (irreversible).

@@ -15,7 +15,8 @@ related:
   - "[[schema-layers]]"
   - "[[monorepo-structure]]"
   - "[[dev-environment]]"
-last-reviewed: 2026-08-13
+  - "[[d1-read-replication]]"
+last-reviewed: 2026-09-01
 ---
 
 # Database Environments
@@ -131,7 +132,10 @@ CI deploys it. See [[musubi-identity-migration]] and [[dev-environment]].
 
 **Databases and region.** All D1 databases are in **`oc` (Oceania / Sydney)** and
 both Upstash Redis databases are in **`ap-southeast-2` (Sydney)** — co-located for
-low AU latency (the project is AU-centric).
+low AU latency (the project is AU-centric). One region means one **primary**: a
+request served from a colo outside Oceania pays a round trip to Sydney for every
+query it makes, which is what read replication and the D1 Sessions API address —
+see [[d1-read-replication]].
 
 | Database | Environment | Id |
 |---|---|---|
@@ -169,11 +173,12 @@ Worker build: `bun run --cwd <pkg> build` (= `wrangler deploy --dry-run`).
 
 Unit tests use `createTestLayer()` / bun:sqlite `:memory:` exactly as before —
 see [[testing-patterns]]. The async D1 driver path gets one Miniflare-backed
-integration test per service, co-located in `src/` so the vitest unit run
-(globbing `tests/**`) skips it; run it explicitly:
+integration test per service, at `tests/d1/d1-integration.test.ts` (cire's at
+`tests/db/d1-integration.test.ts`). The vitest configs exclude that path, so the
+unit run skips it; run it explicitly:
 
 ```bash
-bun run --cwd zap/api test:d1     # bun test src/d1-integration.test.ts
+bun run --cwd zap/api test:d1     # bun test tests/d1/d1-integration.test.ts
 ```
 
 `@shared/db-utils` has direct unit tests for the `commitBatch` driver split

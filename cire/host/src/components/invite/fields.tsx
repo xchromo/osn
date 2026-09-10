@@ -100,6 +100,12 @@ export function TextAreaField(props: {
         value={props.value}
         maxlength={props.maxLength}
         onInput={(e) => props.onInput(e.currentTarget.value)}
+        // The invite builder is a module view, and every module view renders
+        // inside `ModuleShell`'s auto-sized frame, whose reflow guard keys
+        // on width only — a user-resizable textarea in here would have a
+        // height-only drag misread as a content swap and trigger continuous
+        // relayout, so this must stay resize-none.
+        resize="none"
       />
       <Show when={props.hint}>
         <span class="font-body text-text-muted text-[0.72rem] italic">{props.hint}</span>

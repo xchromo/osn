@@ -1,10 +1,3 @@
-import { Data, Effect } from "effect";
-
-import { getWaitUntil } from "../lib/execution-ctx";
-import { metricImageTransform } from "../metrics";
-import { fetchAsset, fetchAssetStream } from "./invite-assets";
-import type { AssetR2Error, AssetsR2Service, StoredAsset } from "./invite-assets";
-
 /**
  * On-the-fly responsive/optimised image transforms for invite assets, run
  * through the Cloudflare Workers Images binding (`env.IMAGES`) against the R2
@@ -15,6 +8,12 @@ import type { AssetR2Error, AssetsR2Service, StoredAsset } from "./invite-assets
  * keep the pure, testable pieces (variant resolution, format negotiation) plus
  * the thin Effect wrapper around the binding.
  */
+import { Data, Effect } from "effect";
+
+import { getWaitUntil } from "../lib/execution-ctx";
+import { metricImageTransform } from "../metrics";
+import { fetchAsset, fetchAssetStream } from "./invite-assets";
+import type { AssetR2Error, AssetsR2Service, StoredAsset } from "./invite-assets";
 
 // ── Variant scheme ────────────────────────────────────────────────────────────
 
@@ -432,7 +431,7 @@ export function serveTransformedImage(args: {
         // A refused put is a missed cache, not a failed request — but silence here
         // is what let the refusal go unnoticed in the first place, and off the
         // request's own promise chain it would surface as an unhandled rejection.
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           Effect.logWarning("image cache put failed", {
             cacheSlot,
             variant,

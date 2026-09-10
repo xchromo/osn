@@ -3,7 +3,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
 import { makeCallerResolver } from "../lib/caller";
-import { DEFAULT_JWKS_URL } from "../lib/jwks";
+import { DEFAULT_VERIFICATION, type OsnTokenVerification } from "../lib/jwks";
 import { notifyAppLeft, verifyStepUp } from "../lib/osn-bridge";
 import {
   metricPulseAccountDeletionRequested,
@@ -30,12 +30,12 @@ import * as accountErasure from "../services/accountErasure";
  */
 export const createAccountRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
-  jwksUrl: string = DEFAULT_JWKS_URL,
+  verification: OsnTokenVerification = DEFAULT_VERIFICATION,
   _testKey?: CryptoKey,
 ) => {
   // Layer graph built once per factory (convention: see osn/api/src/lib/route-runtime.ts) — not per request.
   const runtime = ManagedRuntime.make(dbLayer);
-  const resolveCaller = makeCallerResolver({ runtime, jwksUrl, testKey: _testKey });
+  const resolveCaller = makeCallerResolver({ runtime, verification, testKey: _testKey });
   return new Elysia({ prefix: "/account" })
     .delete(
       "",
@@ -54,14 +54,14 @@ export const createAccountRoutes = (
           return { error: "step_up_required" } as const;
         }
 
-        // S-H2: pulse-api derives the accountId server-to-server from
+        // pulse-api derives the accountId server-to-server from
         // osn-api's verified `sub` claim on the step-up token rather than
         // accepting one in the request body. The accountId is never
         // visible client-side (P6 invariant — no external observer can
         // correlate two profiles to the same account).
         const verify = await Effect.runPromise(
           verifyStepUp(stepUpToken, "pulse_app_delete").pipe(
-            Effect.catchAll(() => Effect.succeed({ ok: false } as const)),
+            Effect.catch(() => Effect.succeed({ ok: false } as const)),
           ),
         );
         if (!verify.ok) {
@@ -97,7 +97,7 @@ export const createAccountRoutes = (
             .runPromise(
               notifyAppLeft(accountId).pipe(
                 Effect.tap(() => Effect.sync(() => metricPulseEnrollmentNotify("ok"))),
-                Effect.catchAll(() => {
+                Effect.catch(() => {
                   metricPulseEnrollmentNotify("error");
                   return Effect.void;
                 }),
@@ -127,7 +127,7 @@ export const createAccountRoutes = (
       {
         parse: "application/json",
         // accountId is derived server-to-server from the step-up verify
-        // response's verified `sub` claim (S-H2); it is intentionally
+        // response's verified `sub` claim; it is intentionally
         // absent from access tokens (P6) and from this request body.
         body: t.Object({
           step_up_token: t.Optional(t.String()),

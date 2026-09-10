@@ -20,12 +20,12 @@ const manualParse = { parse: () => ({}) };
 
 /** POST /enquiries/:id/messages — reply. */
 const ReplyBody = Schema.Struct({
-  message: Schema.String.pipe(Schema.minLength(1)),
+  message: Schema.String.check(Schema.isMinLength(1)),
 });
 
 /** POST /enquiries/:id/quote — structured quote. */
 const QuoteBody = Schema.Struct({
-  amountMinor: Schema.Number.pipe(Schema.int(), Schema.greaterThan(0)),
+  amountMinor: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
   note: Schema.optional(Schema.String),
 });
 
@@ -211,7 +211,7 @@ export function createVendorEnquiriesRoutes(
             return { enquiries };
           }).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -228,7 +228,7 @@ export function createVendorEnquiriesRoutes(
           }).pipe(
             Effect.provideService(DbService, db),
             Effect.catchTags(catchEnquiryTags(set)),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       })
@@ -242,7 +242,7 @@ export function createVendorEnquiriesRoutes(
 
           return runCire(
             Effect.gen(function* () {
-              const body = yield* Schema.decodeUnknown(ReplyBody)(raw);
+              const body = yield* Schema.decodeUnknownEffect(ReplyBody)(raw);
               const enquiry = yield* loadEnquiryForVendor(db, orgMembership, params.id, profileId);
               if (!enquiry) return yield* notFound(set);
               const message = yield* enquiryService.reply({
@@ -260,9 +260,9 @@ export function createVendorEnquiriesRoutes(
               return { message };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("ParseError", () => badRequest(set)),
+              Effect.catchTag("SchemaError", () => badRequest(set)),
               Effect.catchTags(catchEnquiryTags(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },
@@ -276,28 +276,35 @@ export function createVendorEnquiriesRoutes(
 
           return runCire(
             Effect.gen(function* () {
-              const body = yield* Schema.decodeUnknown(QuoteBody)(raw);
+              const body = yield* Schema.decodeUnknownEffect(QuoteBody)(raw);
               const enquiry = yield* loadEnquiryForVendor(db, orgMembership, params.id, profileId);
               if (!enquiry) return yield* notFound(set);
-              // Resolve the CRM vendor's name for the quote email/chat body.
-              const [vendorRow] = yield* dbQuery(() =>
-                db
-                  .select({ name: vendors.name })
-                  .from(vendors)
-                  .where(eq(vendors.id, enquiry.vendorId))
-                  .all(),
+              // The vendor name and the wedding currency are independent single-row
+              // lookups — run them together instead of two serial round trips.
+              const [[vendorRow], [weddingRow]] = yield* Effect.all(
+                [
+                  // Resolve the CRM vendor's name for the quote email/chat body.
+                  dbQuery(() =>
+                    db
+                      .select({ name: vendors.name })
+                      .from(vendors)
+                      .where(eq(vendors.id, enquiry.vendorId))
+                      .all(),
+                  ),
+                  // The quote is formatted in the wedding's own currency (NOT NULL,
+                  // default 'AUD'); only the display string is affected — stored
+                  // `quoted_minor` is currency-agnostic integer cents.
+                  dbQuery(() =>
+                    db
+                      .select({ currency: weddings.currency })
+                      .from(weddings)
+                      .where(eq(weddings.id, enquiry.weddingId))
+                      .all(),
+                  ),
+                ],
+                { concurrency: "unbounded" },
               );
               const vendorName = (vendorRow as { name: string } | undefined)?.name ?? "Vendor";
-              // The quote is formatted in the wedding's own currency (NOT NULL,
-              // default 'AUD'); only the display string is affected — stored
-              // `quoted_minor` is currency-agnostic integer cents.
-              const [weddingRow] = yield* dbQuery(() =>
-                db
-                  .select({ currency: weddings.currency })
-                  .from(weddings)
-                  .where(eq(weddings.id, enquiry.weddingId))
-                  .all(),
-              );
               const currency = (weddingRow as { currency: string } | undefined)?.currency ?? "AUD";
               const quoteInput: QuoteEnquiryInput = {
                 enquiry,
@@ -314,9 +321,9 @@ export function createVendorEnquiriesRoutes(
               return { enquiry: enquiryDto };
             }).pipe(
               Effect.provideService(DbService, db),
-              Effect.catchTag("ParseError", () => badRequest(set)),
+              Effect.catchTag("SchemaError", () => badRequest(set)),
               Effect.catchTags(catchEnquiryTags(set)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         },

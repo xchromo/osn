@@ -98,7 +98,7 @@ export function sendGiftSummaryEmails(
           .pipe(
             // Caught per wedding, so one bounced address does not cost the
             // rest of the cohort their summaries.
-            Effect.catchAllCause(() =>
+            Effect.catchCause(() =>
               Effect.logWarning("[gift-summary-email] send failed — continuing").pipe(
                 Effect.annotateLogs({
                   template: "registry-gift-summary",
@@ -111,7 +111,7 @@ export function sendGiftSummaryEmails(
       { concurrency: 4, discard: true },
     );
   }).pipe(
-    Effect.catchAllCause(() =>
+    Effect.catchCause(() =>
       Effect.logWarning("[gift-summary-email] summary delivery failed — sweep unaffected").pipe(
         Effect.annotateLogs({ reason: "lookup_or_transport_error" }),
       ),

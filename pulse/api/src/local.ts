@@ -1,7 +1,7 @@
 import { DbLive } from "@pulse/db/service";
-import { initObservability } from "@shared/observability";
+import { initObservability, PrettyLoggerLive } from "@shared/observability";
 import type { ClientIpOptions } from "@shared/rate-limit";
-import { Effect, Logger } from "effect";
+import { Effect } from "effect";
 
 import { createApp, SERVICE_NAME, type AppOptions } from "./app";
 import { assertCorsOriginsConfigured, resolveCorsOrigins } from "./lib/cors-config";
@@ -21,11 +21,19 @@ const { layer: observabilityLayer } = initObservability({ serviceName: SERVICE_N
 
 const nonLocal = process.env.OSN_ENV && process.env.OSN_ENV !== "local";
 
-// S-H3: fetching public keys over plaintext HTTP in a deployed env allows
+// Fetching public keys over plaintext HTTP in a deployed env allows
 // any process with network access to serve a forged JWK set. Fail fast.
 const jwksUrl = process.env.OSN_JWKS_URL ?? "http://localhost:4000/.well-known/jwks.json";
 if (nonLocal && jwksUrl.startsWith("http://")) {
   throw new Error("OSN_JWKS_URL must use HTTPS in non-local environments");
+}
+
+// Same treatment for the expected `iss`: pinning it is what stops a token
+// from another OSN deployment verifying here, and a plaintext issuer in a
+// deployed tier is the same misconfiguration as a plaintext JWKS URL.
+const issuerUrl = process.env.OSN_ISSUER_URL ?? "http://localhost:4000";
+if (nonLocal && issuerUrl.startsWith("http://")) {
+  throw new Error("OSN_ISSUER_URL must use HTTPS in non-local environments");
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +52,7 @@ const redisClient = await initRedisClient({
 const rateLimiters = makeRateLimiters(redisClient);
 
 // ---------------------------------------------------------------------------
-// Client-IP trust policy (S-M34) for the per-IP limiters on the
+// Client-IP trust policy for the per-IP limiters on the
 // unauthenticated discover / share / exposure surfaces.
 // `PULSE_TRUSTED_PROXY_COUNT` is the number of trusted reverse proxies: the
 // keying IP is taken that many hops from the right of `x-forwarded-for`.
@@ -86,12 +94,12 @@ if (nonLocal && !oidc) {
   void Effect.runPromise(
     Effect.logError(
       "pulse-api: OIDC sign-in disabled — set OSN_ISSUER_URL, OSN_JWKS_URL, PULSE_API_ORIGIN, OSN_OIDC_CLIENT_ID and OSN_OIDC_CLIENT_SECRET to enable it",
-    ).pipe(Effect.provide(Logger.pretty), Effect.provide(observabilityLayer)),
+    ).pipe(Effect.provide(PrettyLoggerLive), Effect.provide(observabilityLayer)),
   ).catch(() => undefined);
 }
 
 const appOptions: AppOptions = {
-  jwksUrl,
+  verification: { jwksUrl, issuer: issuerUrl },
   rateLimiters,
   clientIpConfig,
   corsOrigins,
@@ -104,7 +112,7 @@ const app = createApp(appOptions);
 
 const port = process.env.PORT || 3001;
 
-// S-M34: warn when running non-local without an explicit proxy count — the
+// Warn when running non-local without an explicit proxy count — the
 // per-IP limiters then key off the socket peer (direct mode). Behind a load
 // balancer that means everyone shares the LB's IP; set
 // PULSE_TRUSTED_PROXY_COUNT to the number of trusted hops.
@@ -112,7 +120,7 @@ if (nonLocal && trustedProxyCountUnconfigured) {
   void Effect.runPromise(
     Effect.logWarning(
       "PULSE_TRUSTED_PROXY_COUNT is unset — per-IP rate limiting will key off the socket peer (direct mode). If @pulse/api sits behind a reverse proxy / load balancer, set PULSE_TRUSTED_PROXY_COUNT to the number of trusted hops so x-forwarded-for is honoured spoof-safely.",
-    ).pipe(Effect.provide(Logger.pretty), Effect.provide(observabilityLayer)),
+    ).pipe(Effect.provide(PrettyLoggerLive), Effect.provide(observabilityLayer)),
   ).catch(() => undefined);
 }
 
@@ -137,7 +145,7 @@ void startKeyRotation()
     return Effect.runPromise(
       Effect.logWarning(warning).pipe(
         Effect.annotateLogs({ service: SERVICE_NAME }),
-        Effect.provide(Logger.pretty),
+        Effect.provide(PrettyLoggerLive),
         Effect.provide(observabilityLayer),
       ),
     ).catch(() => undefined);
@@ -146,7 +154,7 @@ void startKeyRotation()
     void Effect.runPromise(
       Effect.logError("pulse-api: failed to start ARC key rotation", err).pipe(
         Effect.annotateLogs({ service: SERVICE_NAME }),
-        Effect.provide(Logger.pretty),
+        Effect.provide(PrettyLoggerLive),
         Effect.provide(observabilityLayer),
       ),
     )
@@ -159,7 +167,7 @@ void startKeyRotation()
 void Effect.runPromise(
   Effect.logInfo("pulse-api listening (local / bun:sqlite)").pipe(
     Effect.annotateLogs({ port: String(port), service: SERVICE_NAME }),
-    Effect.provide(Logger.pretty),
+    Effect.provide(PrettyLoggerLive),
     Effect.provide(observabilityLayer),
   ),
 );

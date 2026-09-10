@@ -18,7 +18,7 @@ import {
   tokensPrefixName,
 } from "@shared/db-utils/search";
 import { and, asc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
-import { alias, type SQLiteColumn } from "drizzle-orm/sqlite-core";
+import { alias, unionAll, type SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { Data, Effect } from "effect";
 
 // ---------------------------------------------------------------------------
@@ -40,8 +40,17 @@ export class DatabaseError extends Data.TaggedError("DatabaseError")<{
 /**
  * Caller's connection list is capped before we expand to friends-of-friends.
  * Prevents a hub user with thousands of connections from producing an
- * unbounded FOF fan-out (P-C1). Tuned for the "enough candidates to produce
+ * unbounded FOF fan-out. Tuned for the "enough candidates to produce
  * a good top-N list" sweet spot.
+ *
+ * Bounds two things that must stay in lockstep: the size of `myConnectionIds`
+ * below (which step 3 uses to tell "one of my connections" from "a
+ * candidate") and the seed subquery the FOF query filters against — see that
+ * query for the subquery form it uses, which binds `profileId` a fixed number
+ * of times and never binds `myConnectionIds` itself. Raising this constant is
+ * therefore purely a decision about read cost and recall; it cannot overflow
+ * D1's 100-bound-parameter-per-query cap, because the bind count does not
+ * grow with it.
  */
 const MAX_MY_CONNECTIONS_FOR_FOF = 500;
 
@@ -68,8 +77,61 @@ const MAX_FOF_FANOUT_ROWS = 10_000;
  * Cap on the co-member fan-out from the caller's organisations. Same shape of
  * defence as MAX_FOF_FANOUT_ROWS: membership of one very large organisation
  * must not turn a suggestion request into an unbounded read.
+ *
+ * This is the *total* budget across all of the caller's organisations, split
+ * evenly — see the query that reads it, below — so each organisation's actual
+ * share is `MAX_ORG_COMEMBER_ROWS / (number of the caller's organisations)`.
+ *
+ * The split is per-organisation on purpose: one global `ORDER BY
+ * (organisation_id, profile_id) LIMIT` spends the whole budget on the
+ * lowest-id organisations the caller belongs to, and organisation ids are
+ * random and fixed per caller, so the same few win every request. Do not
+ * revert it.
  */
 const MAX_ORG_COMEMBER_ROWS = 2_000;
+
+/**
+ * Arms per `UNION ALL` batch in the co-member fan-out query, below.
+ *
+ * D1 does not run on `bun:sqlite`, which is what this repo's local/test
+ * engine uses and where a compound `SELECT` may carry up to SQLite's own
+ * default of 500 terms. D1 runs on workerd's embedded SQLite, and workerd
+ * calls `sqlite3_limit(db, SQLITE_LIMIT_COMPOUND_SELECT, 5)` when it opens a
+ * connection (cloudflare/workerd#795, landed in #796) — a deliberate,
+ * compiled-in ceiling, not a measured-under-load estimate. Confirmed three
+ * ways rather than taken on any one of them: bisected against this repo's
+ * pinned Miniflare version (a 5-arm `UNION ALL` succeeds, 6 throws
+ * `D1_ERROR: too many terms in compound SELECT`); read directly out of
+ * workerd's own `src/workerd/api/tests/sql-test.js` at HEAD, which asserts
+ * that exact 5/6 boundary; and read out of the PR that set the limit.
+ * Cloudflare's D1 limits page documents no compound-select limit at all, so
+ * there is no published figure to reconcile this against — the workerd
+ * source is the ground truth, and Miniflare reproduces it exactly.
+ *
+ * No margin taken below 5: unlike a heuristic threshold, this number cannot
+ * drift request to request, so shaving it further would only shrink the
+ * common single-query case for no safety gained.
+ */
+const MAX_ORG_COMEMBER_ARMS_PER_QUERY = 5;
+
+/**
+ * The organisation label on a suggestion card, or `null`.
+ *
+ * `null` for a candidate with no shared organisation, and also for one whose
+ * organisation row is missing — an organisation deleted between the fan-out
+ * and the hydration. Dropping the label is the right answer there: the
+ * suggestion itself still stands on its mutual connections, and a card that
+ * names an organisation that no longer exists is worse than one that names
+ * none.
+ */
+function hydrateOrganisation(
+  organisationId: string | null,
+  organisationMap: Map<string, { handle: string; name: string }>,
+): { handle: string; name: string } | null {
+  if (organisationId === null) return null;
+  const organisation = organisationMap.get(organisationId);
+  return organisation ? { handle: organisation.handle, name: organisation.name } : null;
+}
 
 /**
  * Minimum query length for search, full stop. One character is enough because
@@ -291,8 +353,8 @@ const LEXICAL_SCORE = {
  * signal Facebook's own ranking uses. Nothing in OSN exposes another profile's
  * connection list, so a mutual-connection boost would make result *ordering* an
  * oracle for "is this arbitrary handle a friend-of-a-friend?" — the same
- * disclosure that keeps `mutualCount` out of the search payload (see
- * `S-L4` in `xchromo/osn-tracker`). Ordering leaks as readily as a field does.
+ * disclosure risk that keeps `mutualCount` out of the search payload
+ * entirely. Ordering leaks as readily as a field does.
  *
  * [fb]: https://engineering.fb.com/2010/05/17/web/the-life-of-a-typeahead-query/
  */
@@ -441,6 +503,30 @@ export function createRecommendationService() {
       // Accepted edges seed the FOF fan-out; *every* edge (pending included)
       // is an exclusion, so someone with a request already in flight is never
       // re-suggested — connecting to them would fail with "already exists".
+      //
+      // This is no longer bound into the FOF query below — see that query
+      // for why — but step 3 still uses it (as `myConnectionIdSet`) to tell
+      // "one of my connections" from "a candidate" on each fan-out row, so
+      // this slice has to describe the same cap the query's own seed
+      // subquery applies. They read the caller's edges independently and
+      // SQLite gives no ordering guarantee over an unindexed `LIMIT`, so for
+      // a caller past MAX_MY_CONNECTIONS_FOR_FOF accepted connections the
+      // two reads can choose slightly different subsets of the *same*
+      // snapshot. `myEdgeRows` is capped too (`MAX_MY_EDGE_ROWS`, 1 000),
+      // not uncapped, so `excludeIds` below cannot be assumed to catch
+      // whatever this slice misses on ordering grounds alone. Measured
+      // instead of assumed: for a caller with 500–1,000 accepted
+      // connections, both this `LIMIT` and the seed subquery's `LIMIT`
+      // compile to the same `MULTI-INDEX OR` plan over the same two
+      // indexes and select the identical subset, so that ordering
+      // divergence does not in practice produce a wrong suggestion.
+      //
+      // A second, unrelated divergence is real, though: the seed subquery
+      // runs later than this read, in its own D1 round trip, so it can see
+      // a connection accepted for the caller *after* this snapshot was
+      // taken — a temporal gap this slice cannot close no matter how it is
+      // capped. See the fresh re-check before hydration, below, which is
+      // what actually closes that one.
       const myConnectionIds = myEdgeRows
         .filter((r) => r.status === "accepted")
         .map(counterpartOf)
@@ -451,7 +537,7 @@ export function createRecommendationService() {
       );
       const myOrgIds = myOrgRows.map((r) => r.organisationId);
 
-      // Set for O(1) membership lookup in the aggregation loop (P-W2).
+      // Set for O(1) membership lookup in the aggregation loop.
       const myConnectionIdSet = new Set(myConnectionIds);
       const excludeIds = new Set<string>([
         profileId,
@@ -468,8 +554,57 @@ export function createRecommendationService() {
           myConnectionIds.length === 0
             ? Effect.succeed([] as { requesterId: string; addresseeId: string }[])
             : Effect.tryPromise({
-                try: () =>
-                  db
+                try: () => {
+                  // The old shape bound `myConnectionIds` into two `inArray`
+                  // calls — once per edge direction — so the bind count grew
+                  // with the caller's connection count and D1's 100-bound-
+                  // parameter cap turned into a production 500 past 50
+                  // accepted connections. This binds only `profileId`, a
+                  // fixed number of times, however large `myConnectionIds`
+                  // is.
+                  //
+                  // `IN (<subquery>)` rather than `IN (<literal list>)`: the
+                  // subquery re-reads the caller's own accepted edges inside
+                  // the database instead of round-tripping them through this
+                  // process as bound parameters. `.limit()` mirrors the JS
+                  // slice above and for the same reason — see
+                  // MAX_MY_CONNECTIONS_FOR_FOF — not to stay under any bind
+                  // cap, since none applies here.
+                  //
+                  // A correlated `EXISTS` was measured and rejected: on real
+                  // (Miniflare/workerd) D1, `EXPLAIN QUERY PLAN` showed it as
+                  // `SCAN c` with a `CORRELATED SCALAR SUBQUERY` run once per
+                  // row of the outer table — a full scan of every accepted
+                  // connection *in the system*, 1,000 rows read on a fixture
+                  // where this shape reads 484, for the identical result.
+                  // That cost grows with the whole table, not with the
+                  // caller's own graph, which is the wrong axis. This shape
+                  // instead gets flattened by SQLite into a `LIST SUBQUERY` —
+                  // one pass over `connections_requester_idx` /
+                  // `connections_addressee_idx` to build a Bloom filter, then
+                  // the same `MULTI-INDEX OR` seek over those two indexes the
+                  // old query got. 484 rows read against the old query's 400,
+                  // for a caller with 40 accepted connections against the
+                  // identical 240-row result — the cost of materialising the
+                  // seed set once rather than pasting it in as literals, and
+                  // it does not grow with the size of the table.
+                  const myConnectionsSeed = db
+                    .select({
+                      counterpart: sql<string>`(CASE WHEN ${connections.requesterId} = ${profileId} THEN ${connections.addresseeId} ELSE ${connections.requesterId} END)`,
+                    })
+                    .from(connections)
+                    .where(
+                      and(
+                        eq(connections.status, "accepted"),
+                        or(
+                          eq(connections.requesterId, profileId),
+                          eq(connections.addresseeId, profileId),
+                        ),
+                      ),
+                    )
+                    .limit(MAX_MY_CONNECTIONS_FOR_FOF);
+
+                  return db
                     .select({
                       requesterId: connections.requesterId,
                       addresseeId: connections.addresseeId,
@@ -479,34 +614,147 @@ export function createRecommendationService() {
                       and(
                         eq(connections.status, "accepted"),
                         or(
-                          inArray(connections.requesterId, myConnectionIds),
-                          inArray(connections.addresseeId, myConnectionIds),
+                          inArray(connections.requesterId, myConnectionsSeed),
+                          inArray(connections.addresseeId, myConnectionsSeed),
                         ),
                       ),
                     )
-                    .limit(MAX_FOF_FANOUT_ROWS),
+                    .limit(MAX_FOF_FANOUT_ROWS);
+                },
                 catch: (cause) => new DatabaseError({ cause }),
               }),
           myOrgIds.length === 0
-            ? Effect.succeed(
-                [] as { profileId: string; organisationHandle: string; organisationName: string }[],
-              )
-            : Effect.tryPromise({
-                try: () =>
-                  db
-                    .select({
-                      profileId: organisationMembers.profileId,
-                      organisationHandle: organisations.handle,
-                      organisationName: organisations.name,
-                    })
-                    .from(organisationMembers)
-                    .innerJoin(
-                      organisations,
-                      eq(organisations.id, organisationMembers.organisationId),
-                    )
-                    .where(inArray(organisationMembers.organisationId, myOrgIds))
-                    .limit(MAX_ORG_COMEMBER_ROWS),
-                catch: (cause) => new DatabaseError({ cause }),
+            ? Effect.succeed([] as { profileId: string; organisationId: string }[])
+            : Effect.gen(function* () {
+                // Ids only. This reads at most MAX_ORG_COMEMBER_ROWS rows and at
+                // most `safeLimit` candidates survive ranking, so joining
+                // `organisations` here re-serialised a handle and a name for
+                // every row to throw away roughly forty out of forty-one of
+                // them. The surviving organisations are hydrated in step 5,
+                // alongside the profiles, from a set that is already small.
+                //
+                // Batched `UNION ALL`: one statement per group of up to
+                // MAX_ORG_COMEMBER_ARMS_PER_QUERY (5) of the caller's
+                // organisations, the batches run concurrently and merged here
+                // in application code — see `MAX_ORG_COMEMBER_ARMS_PER_QUERY`'s
+                // comment for why 5, not the 50 this originally unioned in one
+                // statement. The query both versions replaced gave the whole
+                // budget to one global `ORDER BY (organisation_id, profile_id)
+                // LIMIT MAX_ORG_COMEMBER_ROWS`.
+                // Splitting the budget per organisation, with its own `ORDER
+                // BY profile_id LIMIT <share>`, is what fixes it: every
+                // organisation the caller belongs to contributes candidates,
+                // not just whichever one sorts first — batching changes how
+                // many round trips that takes, not which organisations
+                // contribute.
+                //
+                // The issue that reported the starvation proposed a window
+                // function (`ROW_NUMBER() OVER (PARTITION BY organisation_id
+                // ORDER BY profile_id)`, filtered to `rn <= share`) instead.
+                // That is still the wrong fix: a window function's `PARTITION
+                // BY` filters *after* the window scan, so it still reads
+                // every membership row of every organisation the caller
+                // belongs to — exactly the unbounded read
+                // MAX_ORG_COMEMBER_ROWS exists to prevent. `json_each()` was
+                // also considered, for a single statement carrying the whole
+                // organisation list as one bound JSON array — D1 does expose
+                // that function, confirmed against Miniflare, but it does
+                // not fit this shape: giving each organisation its own
+                // `ORDER BY … LIMIT <share>` needs a per-row-correlated
+                // subquery in the `FROM` clause, and this SQLite build has no
+                // implicit `LATERAL` (`no such column: je.value` — confirmed
+                // against Miniflare rather than assumed). It stays useful
+                // elsewhere for a flat `IN`-style list past the
+                // 100-bound-parameter cap; it does not replace a per-group
+                // `LIMIT`.
+                //
+                // Measured on real (Miniflare/workerd) D1, three organisations
+                // of 600/300/100 members, cap 150, share 50: the single
+                // global query read 151 rows for 150 results, and the window
+                // function read 2,860 for the same 150. Both the single-
+                // statement `UNION ALL` this batching replaces and the
+                // batched form read exactly 150 — batching changes round-trip
+                // count, not rows read. A single organisation with 50,000
+                // members would still cost the window function 50,000+ rows
+                // read on every request, forever — the same failure this
+                // constant was added to stop.
+                //
+                // The share is MAX_ORG_COMEMBER_ROWS divided evenly by the
+                // caller's actual organisation count, not by the 50-org cap or
+                // the batch size — a caller in one organisation gets the whole
+                // budget (same as the query this replaces did), a caller in
+                // three splits it three ways, and a caller at the
+                // 50-organisation cap gets the same 40-per-organisation worst
+                // case a fixed division would have given throughout. Integer
+                // division: the remainder — at most `myOrgIds.length - 1` rows
+                // of budget — goes to no organisation. Handing it to whichever
+                // organisation sorts first would reintroduce, in miniature,
+                // the exact bias this change exists to remove.
+                //
+                // Each arm is wrapped as a subquery (`.as(...)` then an outer
+                // `.select().from(...)`) because SQLite's compound-select
+                // grammar does not give a non-final arm of a UNION its own
+                // ORDER BY/LIMIT — only a derived-table subquery gets one.
+                // Confirmed against a real SQLite engine: the unwrapped form
+                // (`... LIMIT ? UNION ALL SELECT ...`) is a syntax error
+                // ("ORDER BY clause should come after UNION ALL not before"),
+                // not merely unidiomatic.
+                //
+                // `myOrgIds` is sorted once, up front, and cut into batches in
+                // that order, so the merged result reproduces the old query's
+                // `(organisation_id, profile_id)` order: batch 0's rows are
+                // fully emitted before batch 1's, arm N's rows before arm
+                // N+1's within a batch, and each arm is itself ordered by
+                // `profile_id`. `Effect.all` returns results in input order
+                // regardless of which batch's query resolves first, so that
+                // order survives the concurrency below. That keeps "first
+                // organisation wins the label" in step 3 deterministic across
+                // requests, same as the comment there has always promised.
+                const orgComemberShare = Math.floor(MAX_ORG_COMEMBER_ROWS / myOrgIds.length);
+                const sortedOrgIds = [...myOrgIds].toSorted();
+                const batches: string[][] = [];
+                for (let i = 0; i < sortedOrgIds.length; i += MAX_ORG_COMEMBER_ARMS_PER_QUERY) {
+                  batches.push(sortedOrgIds.slice(i, i + MAX_ORG_COMEMBER_ARMS_PER_QUERY));
+                }
+
+                const batchResults = yield* Effect.all(
+                  batches.map((batchOrgIds) =>
+                    Effect.tryPromise({
+                      try: () => {
+                        const arms = batchOrgIds.map((organisationId, index) => {
+                          const capped = db
+                            .select({
+                              profileId: organisationMembers.profileId,
+                              organisationId: organisationMembers.organisationId,
+                            })
+                            .from(organisationMembers)
+                            .where(eq(organisationMembers.organisationId, organisationId))
+                            .orderBy(asc(organisationMembers.profileId))
+                            .limit(orgComemberShare)
+                            .as(`org_share_${index}`);
+                          return db
+                            .select({
+                              profileId: capped.profileId,
+                              organisationId: capped.organisationId,
+                            })
+                            .from(capped);
+                        });
+                        return arms.length === 1
+                          ? arms[0]!
+                          : unionAll(arms[0]!, arms[1]!, ...arms.slice(2));
+                      },
+                      catch: (cause) => new DatabaseError({ cause }),
+                    }),
+                  ),
+                  // Bounded, not "unbounded": at the 50-organisation cap this
+                  // is 10 batches, and the same care that caps one query's
+                  // arms at 5 caps how many of those queries run at once,
+                  // rather than opening 10 concurrent D1 round trips for a
+                  // single request.
+                  { concurrency: MAX_ORG_COMEMBER_ARMS_PER_QUERY },
+                );
+
+                return batchResults.flat();
               }),
         ],
         { concurrency: "unbounded" },
@@ -516,7 +764,8 @@ export function createRecommendationService() {
       interface Candidate {
         mutualCount: number;
         organisationCount: number;
-        sharedOrganisation: { handle: string; name: string } | null;
+        /** Hydrated to a handle and a name in step 5, for survivors only. */
+        sharedOrganisationId: string | null;
       }
       const candidates = new Map<string, Candidate>();
       const candidateFor = (id: string): Candidate => {
@@ -525,7 +774,7 @@ export function createRecommendationService() {
         const fresh: Candidate = {
           mutualCount: 0,
           organisationCount: 0,
-          sharedOrganisation: null,
+          sharedOrganisationId: null,
         };
         candidates.set(id, fresh);
         return fresh;
@@ -551,16 +800,18 @@ export function createRecommendationService() {
         candidate.organisationCount += 1;
         // First organisation wins as the label — one is all a card can show,
         // and `organisationCount` already carries the "how many" signal.
-        candidate.sharedOrganisation ??= {
-          handle: row.organisationHandle,
-          name: row.organisationName,
-        };
+        // "First" is now well defined: the fan-out is ordered by
+        // (organisation_id, profile_id), so the same caller gets the same
+        // organisation on the card every time.
+        candidate.sharedOrganisationId ??= row.organisationId;
       }
 
       if (candidates.size === 0) return [];
 
-      // Step 4: rank. Mutual connections outrank shared organisations; handle
-      // breaks ties so the list is stable between requests.
+      // Step 4: rank. Mutual connections outrank shared organisations; the
+      // profile id breaks ties so the list is stable between requests. The id,
+      // not the handle — ids are unique outright, and the comparison below has
+      // always used them whatever this comment said.
       const sorted = [...candidates.entries()]
         .toSorted(
           ([idA, a], [idB, b]) =>
@@ -570,32 +821,205 @@ export function createRecommendationService() {
         )
         .slice(0, safeLimit);
 
-      const candidateIds = sorted.map(([id]) => id);
+      // Step 4.5: fresh re-check.
+      //
+      // Steps 1 and 2 are two separate, un-transacted D1 round trips — no
+      // `db.batch`/`db.transaction` joins them. Step 1 snapshots the
+      // caller's edges into `myEdgeRows`; step 2's FOF seed subquery
+      // re-reads `connections` live, at whatever the table holds when step
+      // 2 actually runs, not when step 1 ran. If a connection is accepted
+      // for the caller in that window — the same account, a second request
+      // in flight from another tab or device — its id was never seen by
+      // `myEdgeRows`, so it is in neither `myConnectionIdSet` nor
+      // `excludeIds`, but it IS inside the live seed subquery's result. The
+      // fan-out row for that edge is then misclassified in step 3: neither
+      // `isMutualRequester` nor `isMutualAddressee` is true (both compare
+      // against the stale set), so the code takes the "candidate" branch,
+      // and `excludeIds.has(candidateId)` misses it too. The caller's own
+      // brand-new connection would come back as "someone you may know."
+      // `profileId` is always the caller's own, so this can only misfile
+      // the owner's freshest edge against themselves — never leak or
+      // block-bypass another account's state.
+      //
+      // Fixed by re-reading, fresh, immediately before hydration, for just
+      // the ids that survived ranking — at most `safeLimit` (≤ 50), so this
+      // cannot reopen the 100-bound cap. That safety is measured, not
+      // asserted: naively filtering with `or(inArray(requesterId, ids),
+      // inArray(addresseeId, ids))` binds the id list TWICE, the same
+      // mistake this shape exists to avoid, and at safeLimit's ceiling of 50 that is 102
+      // params (`bun run` against `.toSQL()` — 2 profileId equality binds +
+      // 2 × 50-id `inArray`s — over D1's 100-per-statement cap). Each query
+      // below instead runs the id filter once, against a subquery that
+      // projects the counterpart id itself, so the id list is bound once:
+      // 3 profileId binds (one in the `CASE`, two in the seed `WHERE`) + up
+      // to 50 for the single `inArray` = 53 params, confirmed the same way.
+      // No status filter on the connections re-check — any row, pending or
+      // accepted, means "no longer a suggestion", same as `excludeIds`
+      // above already treats every edge, not just accepted ones.
+      //
+      // `db.batch()` across steps 1 and 2 was considered instead and
+      // rejected without running it: D1's docs do not state that a batch is
+      // snapshot-isolated against a concurrent write from a different
+      // request, and this repo has already been burned three times (see
+      // MAX_MY_CONNECTIONS_FOR_FOF and MAX_ORG_COMEMBER_ARMS_PER_QUERY,
+      // above) by taking an engine property on faith instead of measuring
+      // it. A bounded re-check needs no such assumption: it is correct
+      // whether or not D1 batches are isolated, so it costs one extra
+      // pair of round trips to avoid depending on an unverified guarantee.
+      //
+      // No backfill: a dropped candidate is not replaced from the next rank
+      // down. That would need re-ranking against a larger candidate pool,
+      // which is a recall decision, not this fix's job — the caller sees a
+      // list one entry shorter on the rare request that races its own
+      // second tab, never a wrong one.
+      const rankedIds = sorted.map(([id]) => id);
+      const recheckExcludedIds =
+        rankedIds.length === 0
+          ? new Set<string>()
+          : yield* Effect.tryPromise({
+              try: async () => {
+                const freshConnectionCounterparts = db
+                  .select({
+                    counterpart:
+                      sql<string>`(CASE WHEN ${connections.requesterId} = ${profileId} THEN ${connections.addresseeId} ELSE ${connections.requesterId} END)`.as(
+                        "counterpart",
+                      ),
+                  })
+                  .from(connections)
+                  .where(
+                    or(
+                      eq(connections.requesterId, profileId),
+                      eq(connections.addresseeId, profileId),
+                    ),
+                  )
+                  // Bounded, like every other read in this function. The
+                  // `IN (rankedIds)` that narrows this to the <=50 ids we
+                  // actually care about is applied in the OUTER query, so
+                  // without a limit here the inner read walks every edge the
+                  // caller has — 2,000 rows read to answer a question about
+                  // 50 — on a query that now runs on every request whether or
+                  // not anything raced. Same cap and same reasoning as step
+                  // 1's read of this table: a candidate that appears among
+                  // the caller's most recent MAX_MY_EDGE_ROWS edges is
+                  // caught, which is the approximation this file already
+                  // accepts everywhere else.
+                  .limit(MAX_MY_EDGE_ROWS)
+                  .as("fresh_connection_counterparts");
 
-      // Step 5: hydrate. The accounts join drops candidates whose account is
-      // tombstoned (Art. 17 erasure pending) so a mid-deletion profile is
-      // never suggested.
-      const profiles = yield* Effect.tryPromise({
-        try: () =>
-          db
-            .select({
-              id: users.id,
-              handle: users.handle,
-              displayName: users.displayName,
-              avatarUrl: users.avatarUrl,
-            })
-            .from(users)
-            .innerJoin(accounts, eq(users.accountId, accounts.id))
-            .where(and(inArray(users.id, candidateIds), isNull(accounts.deletedAt))),
-        catch: (cause) => new DatabaseError({ cause }),
-      });
+                const freshBlockCounterparts = db
+                  .select({
+                    counterpart:
+                      sql<string>`(CASE WHEN ${blocks.blockerId} = ${profileId} THEN ${blocks.blockedId} ELSE ${blocks.blockerId} END)`.as(
+                        "counterpart",
+                      ),
+                  })
+                  .from(blocks)
+                  .where(or(eq(blocks.blockerId, profileId), eq(blocks.blockedId, profileId)))
+                  // Same bound, same reason. Step 1's own block read is
+                  // uncapped, but it is one read per request against a table
+                  // that is small per caller by nature; this one sits on the
+                  // hot path beside the connections read above and should not
+                  // be the single place a caller's graph size is unbounded.
+                  .limit(MAX_MY_EDGE_ROWS)
+                  .as("fresh_block_counterparts");
+
+                const [freshEdges, freshBlocks] = await Promise.all([
+                  db
+                    .select({ counterpart: freshConnectionCounterparts.counterpart })
+                    .from(freshConnectionCounterparts)
+                    .where(inArray(freshConnectionCounterparts.counterpart, rankedIds)),
+                  db
+                    .select({ counterpart: freshBlockCounterparts.counterpart })
+                    .from(freshBlockCounterparts)
+                    .where(inArray(freshBlockCounterparts.counterpart, rankedIds)),
+                ]);
+
+                return new Set([
+                  ...freshEdges.map((r) => r.counterpart),
+                  ...freshBlocks.map((r) => r.counterpart),
+                ]);
+              },
+              catch: (cause) => new DatabaseError({ cause }),
+            });
+
+      const survivors =
+        recheckExcludedIds.size === 0
+          ? sorted
+          : sorted.filter(([id]) => !recheckExcludedIds.has(id));
+
+      if (survivors.length === 0) return [];
+
+      const candidateIds = survivors.map(([id]) => id);
+      const survivingOrgIds = [
+        ...new Set(survivors.map(([, c]) => c.sharedOrganisationId).filter((id) => id !== null)),
+      ];
+
+      // Step 5: hydrate the survivors — profiles and organisation labels.
+      //
+      // Both reads depend only on `sorted`, so they run concurrently. Running
+      // the organisations query after the profiles one would add a fourth
+      // serial wave: on D1 every statement is a network round trip, worth
+      // milliseconds, while the row-building this change avoids is worth tens
+      // of microseconds. A serial hydration would have spent the saving
+      // several times over on latency for every caller.
+      //
+      // The accounts join drops candidates whose account is tombstoned
+      // (Art. 17 erasure pending) so a mid-deletion profile is never
+      // suggested. At most `safeLimit` candidates reach here and they share
+      // organisations, so `survivingOrgIds` is a handful of ids — the set the
+      // fan-out used to read thousands of `organisations` rows to produce.
+      const [profiles, organisationRows] = yield* Effect.all(
+        [
+          Effect.tryPromise({
+            try: () =>
+              db
+                .select({
+                  id: users.id,
+                  handle: users.handle,
+                  displayName: users.displayName,
+                  avatarUrl: users.avatarUrl,
+                })
+                .from(users)
+                .innerJoin(accounts, eq(users.accountId, accounts.id))
+                .where(and(inArray(users.id, candidateIds), isNull(accounts.deletedAt))),
+            catch: (cause) => new DatabaseError({ cause }),
+          }),
+          survivingOrgIds.length === 0
+            ? Effect.succeed([] as { id: string; handle: string; name: string }[])
+            : Effect.tryPromise({
+                try: () =>
+                  db
+                    .select({
+                      id: organisations.id,
+                      handle: organisations.handle,
+                      name: organisations.name,
+                    })
+                    .from(organisations)
+                    .where(inArray(organisations.id, survivingOrgIds)),
+                catch: (cause) => new DatabaseError({ cause }),
+              }),
+        ],
+        { concurrency: "unbounded" },
+      );
 
       const profileMap = new Map(profiles.map((p) => [p.id, p]));
+      const organisationMap = new Map(organisationRows.map((o) => [o.id, o]));
 
-      return sorted
+      return survivors
         .map(([id, candidate]) => {
           const p = profileMap.get(id);
           if (!p) return null;
+          const sharedOrganisation = hydrateOrganisation(
+            candidate.sharedOrganisationId,
+            organisationMap,
+          );
+          // A candidate whose only basis was a shared organisation, and whose
+          // organisation no longer exists, has no basis left — drop them
+          // rather than assert `shared_organisation` and name nothing. This
+          // restores exactly what the fan-out's old inner join to
+          // `organisations` did, at the point where both facts are already in
+          // hand and without paying for the join.
+          if (candidate.mutualCount === 0 && sharedOrganisation === null) return null;
           return {
             handle: p.handle,
             displayName: p.displayName,
@@ -605,7 +1029,7 @@ export function createRecommendationService() {
               candidate.mutualCount > 0
                 ? ("mutual_connections" as const)
                 : ("shared_organisation" as const),
-            sharedOrganisation: candidate.sharedOrganisation,
+            sharedOrganisation,
           };
         })
         .filter((s): s is Suggestion => s !== null);

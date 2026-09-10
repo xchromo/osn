@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 
 import { createChatsRoutes } from "../../src/routes/chats";
 import { setConsentGate } from "../../src/services/consent";
-import { createTestLayer, seedChat, seedMember } from "../helpers/db";
+import { createTestLayer, seedC2bChat, seedChat, seedMember } from "../helpers/db";
 
 let signer: AccessTokenSigner;
 let testPublicKey: CryptoKey;
@@ -15,7 +15,14 @@ beforeAll(async () => {
   testPublicKey = signer.publicKey;
 });
 
-const makeToken = (profileId: string) => signer.sign(profileId);
+/**
+ * The issuer these tests mint with, and the one the routes are told to expect.
+ * Both halves have to name it: a token whose `iss` does not match is rejected,
+ * which is the point of pinning it.
+ */
+const TEST_ISSUER = "https://id.test.invalid";
+
+const makeToken = (profileId: string) => signer.sign(profileId, { issuer: TEST_ISSUER });
 
 const json = (body: unknown) => JSON.stringify(body);
 
@@ -30,7 +37,7 @@ function req(
       method,
       headers: {
         "Content-Type": "application/json",
-        // S-H1: write endpoints derive the rate-limit key from `cf-connecting-ip`
+        // Write endpoints derive the rate-limit key from `cf-connecting-ip`
         // (Zap runs behind Cloudflare) and fail closed (429) when it is
         // unresolved. Supply a stable test IP so the limiter buckets requests
         // deterministically instead of denying every header-less request.
@@ -57,7 +64,7 @@ describe("chats routes", () => {
     // (which has its own dedicated suite below). Each test resets it.
     setConsentGate(() => Promise.resolve(true));
     layer = createTestLayer();
-    app = createChatsRoutes(layer, "", testPublicKey);
+    app = createChatsRoutes(layer, { jwksUrl: "", issuer: TEST_ISSUER }, testPublicKey);
     aliceToken = await makeToken("usr_alice");
     bobToken = await makeToken("usr_bob");
   });
@@ -86,7 +93,7 @@ describe("chats routes", () => {
     expect(res.status).toBe(401);
   });
 
-  // ── Token verification (W1: ES256 / JWKS) ─────────────────────────────────
+  // ── Token verification (ES256 / JWKS) ─────────────────────────────────
 
   it("GET /chats returns 401 for a token signed with the wrong key", async () => {
     // A second, unrelated signer — correct shape, key the route never trusts.
@@ -102,6 +109,30 @@ describe("chats routes", () => {
       .setAudience("osn-access")
       .sign(new TextEncoder().encode("dev-secret-change-in-prod"));
     const res = await req(app, "GET", "/chats", { token: hs256 });
+    expect(res.status).toBe(401);
+  });
+
+  // The whole point of pinning `iss`. A different OSN deployment signs with a
+  // key its own JWKS vouches for, so the signature check passes and the
+  // audience matches — `iss` is the only claim that says which deployment
+  // minted it. Signed with THIS suite's key so nothing but the issuer differs.
+  it("GET /chats returns 401 for a token from a different issuer", async () => {
+    const otherIssuer = await signer.sign("usr_alice", { issuer: "https://id.evil.invalid" });
+    const res = await req(app, "GET", "/chats", { token: otherIssuer });
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /chats returns 401 for a token with no issuer at all", async () => {
+    // The pre-enforcement shape: tokens minted before osn-api stamped `iss`.
+    // Every one of those expired within five minutes of the rollout, so a
+    // token arriving without one today is not a legacy token, it is a forgery
+    // or a misconfiguration — either way, not ours.
+    const noIssuer = await new SignJWT({ sub: "usr_alice" })
+      .setProtectedHeader({ alg: "ES256", kid: "test-kid" })
+      .setAudience("osn-access")
+      .setExpirationTime("5m")
+      .sign(signer.privateKey);
+    const res = await req(app, "GET", "/chats", { token: noIssuer });
     expect(res.status).toBe(401);
   });
 
@@ -217,7 +248,7 @@ describe("chats routes", () => {
     expect(bobData.chats).toHaveLength(0);
   });
 
-  // ── List chats pagination (P-W1) ────────────────────────────────────────
+  // ── List chats pagination ────────────────────────────────────────
 
   it("GET /chats?limit=1 pages and ?cursor= continues from it", async () => {
     // Seed with controlled createdAt (second resolution in the schema) so the
@@ -354,7 +385,7 @@ describe("chats routes", () => {
     expect(data.members).toHaveLength(1);
   });
 
-  // ── Member pagination (P-W4) ────────────────────────────────────────────
+  // ── Member pagination ────────────────────────────────────────────
 
   it("GET /chats/:id/members pages with limit/offset", async () => {
     const createRes = await req(app, "POST", "/chats", {
@@ -555,6 +586,91 @@ describe("chats routes", () => {
       body: { ciphertext: "x", nonce: "y" },
     });
     expect(res.status).toBe(403);
+  });
+
+  // The public message route is the c2c one. Writing ciphertext into a c2b
+  // chat through it would produce a row the DSAR export drops and moderation
+  // cannot read, in the one class that promises both — so the class mismatch
+  // is a 409, even for a member.
+  it("POST /chats/:id/messages returns 409 on a c2b chat", async () => {
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_alice", "member").pipe(Effect.provide(layer)),
+    );
+
+    const res = await req(app, "POST", `/chats/${c2bChat.id}/messages`, {
+      token: aliceToken,
+      body: { ciphertext: "x", nonce: "y" },
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).message).toBe("Not a c2c chat");
+  });
+
+  // One per route that maps `NotC2cChat`. Without these, deleting a
+  // `catchTag` leaves the tagged error escaping `runPromise` and Elysia
+  // answering 500 — on a path cire depends on — with the whole suite still
+  // green. The service tests assert the `_tag`, which is exactly what stays
+  // right while the status silently becomes 500.
+  it("PATCH /chats/:id returns 409 on a c2b chat", async () => {
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_alice", "admin").pipe(Effect.provide(layer)),
+    );
+
+    const res = await req(app, "PATCH", `/chats/${c2bChat.id}`, {
+      token: aliceToken,
+      body: { title: "Nope" },
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).message).toBe("Not a c2c chat");
+  });
+
+  it("POST /chats/:id/members returns 409 on a c2b chat", async () => {
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_alice", "admin").pipe(Effect.provide(layer)),
+    );
+
+    const res = await req(app, "POST", `/chats/${c2bChat.id}/members`, {
+      token: aliceToken,
+      body: { profileId: "usr_carol" },
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).message).toBe("Not a c2c chat");
+  });
+
+  it("DELETE /chats/:id/members/:profileId returns 409 on a c2b chat", async () => {
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_alice", "member").pipe(Effect.provide(layer)),
+    );
+
+    const res = await req(app, "DELETE", `/chats/${c2bChat.id}/members/usr_alice`, {
+      token: aliceToken,
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).message).toBe("Not a c2c chat");
+  });
+
+  it("GET /chats/:id/messages returns 409 on a c2b chat", async () => {
+    const c2bChat = await Effect.runPromise(
+      seedC2bChat({ type: "group" }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(
+      seedMember(c2bChat.id, "usr_alice", "member").pipe(Effect.provide(layer)),
+    );
+
+    const res = await req(app, "GET", `/chats/${c2bChat.id}/messages`, { token: aliceToken });
+    expect(res.status).toBe(409);
+    expect((await body(res)).message).toBe("Not a c2c chat");
   });
 
   it("GET /chats/:id/messages returns messages for member", async () => {

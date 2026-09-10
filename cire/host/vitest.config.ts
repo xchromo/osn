@@ -1,10 +1,3 @@
-import tailwindcss from "@tailwindcss/vite";
-import { playwright } from "@vitest/browser-playwright";
-import solid from "vite-plugin-solid";
-import { defineConfig } from "vitest/config";
-
-import { emulateMedia } from "./src/test-support/browser-commands.ts";
-
 /**
  * Two test projects, deliberately separated — the same split `@cire/invites` runs,
  * and for the same reason.
@@ -21,6 +14,13 @@ import { emulateMedia } from "./src/test-support/browser-commands.ts";
  * Browser tests are named `*.browser.test.ts(x)` and are excluded from `unit` by
  * that name, so every file lands in exactly one project.
  */
+
+import tailwindcss from "@tailwindcss/vite";
+import { playwright } from "@vitest/browser-playwright";
+import solid from "vite-plugin-solid";
+import { defineConfig } from "vitest/config";
+
+import { emulateMedia } from "./tests/test-support/browser-commands.ts";
 
 /** Shared by both projects — same compiler, and the Tailwind build the app ships
  *  (the browser tier needs it: `global.css` is `@import "tailwindcss"`, and a
@@ -44,7 +44,7 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["src/**/*.test.{ts,tsx}"],
+          include: ["tests/**/*.test.{ts,tsx}"],
           exclude: ["**/node_modules/**", "**/dist/**", "**/*.browser.test.{ts,tsx}"],
           // A NON-UTC runner zone, deliberately. Several tests assert that a new
           // event is seeded with "the organiser's own zone" by comparing against
@@ -56,13 +56,14 @@ export default defineConfig({
           // NODE process, and a browser test's `Intl` reads the browser's zone,
           // not the runner's — see the note on the browser project below.
           env: { TZ: "Australia/Sydney" },
+          setupFiles: ["../../shared/test-config/no-jest-dom.ts"],
         },
       },
       {
         plugins: plugins(),
         test: {
           name: "browser",
-          include: ["src/**/*.browser.test.{ts,tsx}"],
+          include: ["tests/**/*.browser.test.{ts,tsx}"],
           passWithNoTests: true,
           browser: {
             enabled: true,

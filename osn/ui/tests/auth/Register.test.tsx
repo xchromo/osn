@@ -9,8 +9,8 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
  * and the adoptSession hand-off. None of those is covered anywhere else.
  *
  * Strategy: inject a stub RegistrationClient directly via the `client` prop,
- * mock @osn/client/solid (useAuth → adoptSession spy), and mock
- * @simplewebauthn/browser (toggleable support flag). The WebAuthn mock is
+ * mock `@osn/client/solid` (useAuth → adoptSession spy), and mock
+ * `@simplewebauthn/browser` (toggleable support flag). The WebAuthn mock is
  * hoisted via vi.hoisted() so tests can flip `webauthnSupported` between
  * renders before the component imports it.
  */
@@ -213,7 +213,7 @@ describe("Register component", () => {
       });
     });
 
-    // C-H8: the client mirrors the server's under-13 gate for immediate
+    // The client mirrors the server's under-13 gate for immediate
     // feedback — the submit button stays disabled and the copy explains why.
     it("keeps submit disabled and warns for an under-13 birthdate", async () => {
       stub.checkHandle.mockResolvedValue({ available: true });
@@ -287,9 +287,8 @@ describe("Register component", () => {
       expect(submit.disabled).toBe(false);
     });
 
-    // Regression guard for commit 0deb3fa: resend used to be gated on
-    // `otpStatus() === "error"` so users only saw it after a wrong code.
-    // Now it must render the moment the verify step mounts.
+    // The Resend code button renders the moment the verify step mounts,
+    // not only after a wrong code.
     it("renders the Resend code button as soon as the verify step mounts (no error required)", async () => {
       await advanceToVerify();
       expect(screen.getByRole("button", { name: /Resend code/i })).toBeTruthy();
@@ -361,7 +360,7 @@ describe("Register component", () => {
     // The passkey step is the whole reason this component holds `accessToken`
     // in a signal: enrollment is authenticated by that explicit bearer token,
     // not by an adopted session. Adopting early published a session to the
-    // app while the account still had zero passkeys — and in `@osn/social`
+    // app while the account still had zero passkeys — and in `@musubi/social`
     // that unmounted the dialog mid-flow, skipping enrollment entirely.
     it("does not adopt the session after OTP verify — enrollment carries its own token", async () => {
       await reachPasskey();
@@ -448,7 +447,7 @@ describe("Register component", () => {
       expect(screen.queryByRole("button", { name: /Skip/i })).toBeNull();
     });
 
-    // T-U1: onSuccess is the contract this prop exists for — consumers that
+    // onSuccess is the contract this prop exists for — consumers that
     // own navigation (cire's standalone login page) redirect from it. Pin
     // that it fires exactly once on the enrollment success path.
     it("fires onSuccess after a successful enrollment", async () => {
@@ -470,7 +469,7 @@ describe("Register component", () => {
       expect(stub.passkeyRegisterComplete).toHaveBeenCalled();
     });
 
-    // T-E1: the "every account has ≥1 passkey" invariant rests on onSuccess
+    // The "every account has ≥1 passkey" invariant rests on onSuccess
     // (and the redirect it drives) NOT firing until enrollment truly
     // succeeds. A failed ceremony must keep the user on the passkey step.
     it("does not fire onSuccess and surfaces an error when enrollment fails", async () => {
@@ -489,8 +488,8 @@ describe("Register component", () => {
       expect(screen.getByRole("button", { name: /Enroll credential/i })).toBeTruthy();
     });
 
-    // T-S1: onSuccess is optional — consumers that react to session()
-    // directly (osn/social) omit it. Omission must not break completion.
+    // onSuccess is optional — consumers that react to session()
+    // directly (musubi/social) omit it. Omission must not break completion.
     it("completes to the done step when onSuccess is omitted", async () => {
       await reachPasskey();
       stub.passkeyRegisterBegin.mockResolvedValue({ challenge: "ch" });

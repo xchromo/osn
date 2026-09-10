@@ -20,13 +20,22 @@ import {
   type EnquiryQuoteData,
 } from "./enquiry";
 import { renderRegistryGiftSummary, type RegistryGiftSummaryData } from "./gift-summary";
-import { renderEmailChangeOtp, renderRegistrationOtp, renderStepUpOtp } from "./otp";
 import {
+  renderEmailChangeOtp,
+  renderRecoveryOtp,
+  renderRegistrationOtp,
+  renderStepUpOtp,
+} from "./otp";
+import {
+  type RecoveryUsedData,
   renderCrossDeviceLogin,
   renderPasskeyAdded,
   renderPasskeyRemoved,
   renderRecoveryConsumed,
   renderRecoveryGenerated,
+  renderRecoveryUsed,
+  renderTotpDisabled,
+  renderTotpEnrolled,
 } from "./security";
 import { renderVendorClaimInvite, type VendorClaimInviteData } from "./vendor-claim";
 
@@ -38,10 +47,14 @@ export type EmailTemplate =
   | "otp-registration"
   | "otp-step-up"
   | "otp-email-change"
+  | "otp-recovery"
   | "recovery-generated"
   | "recovery-consumed"
+  | "recovery-used"
   | "passkey-added"
   | "passkey-removed"
+  | "totp-enrolled"
+  | "totp-disabled"
   | "cross-device-login"
   | "registry-gift-summary"
   | "vendor-claim-invite";
@@ -54,10 +67,14 @@ export interface EmailTemplateDataMap {
   "otp-registration": { code: string; ttlMinutes: number };
   "otp-step-up": { code: string; ttlMinutes: number };
   "otp-email-change": { code: string; ttlMinutes: number };
+  "otp-recovery": { code: string; ttlMinutes: number };
   "recovery-generated": Record<string, never>;
   "recovery-consumed": Record<string, never>;
+  "recovery-used": RecoveryUsedData;
   "passkey-added": Record<string, never>;
   "passkey-removed": Record<string, never>;
+  "totp-enrolled": Record<string, never>;
+  "totp-disabled": Record<string, never>;
   "cross-device-login": Record<string, never>;
   "registry-gift-summary": RegistryGiftSummaryData;
   "vendor-claim-invite": { claimUrl: string; vendorName: string };
@@ -94,14 +111,22 @@ export function renderTemplate<T extends EmailTemplate>(
       return renderStepUpOtp(data as EmailTemplateData<"otp-step-up">);
     case "otp-email-change":
       return renderEmailChangeOtp(data as EmailTemplateData<"otp-email-change">);
+    case "otp-recovery":
+      return renderRecoveryOtp(data as EmailTemplateData<"otp-recovery">);
     case "recovery-generated":
       return renderRecoveryGenerated();
     case "recovery-consumed":
       return renderRecoveryConsumed();
+    case "recovery-used":
+      return renderRecoveryUsed(data as EmailTemplateData<"recovery-used">);
     case "passkey-added":
       return renderPasskeyAdded();
     case "passkey-removed":
       return renderPasskeyRemoved();
+    case "totp-enrolled":
+      return renderTotpEnrolled();
+    case "totp-disabled":
+      return renderTotpDisabled();
     case "cross-device-login":
       return renderCrossDeviceLogin();
     case "registry-gift-summary":
@@ -121,10 +146,14 @@ export {
   renderRegistrationOtp,
   renderStepUpOtp,
   renderEmailChangeOtp,
+  renderRecoveryOtp,
   renderRecoveryGenerated,
   renderRecoveryConsumed,
+  renderRecoveryUsed,
   renderPasskeyAdded,
   renderPasskeyRemoved,
+  renderTotpEnrolled,
+  renderTotpDisabled,
   renderCrossDeviceLogin,
   renderRegistryGiftSummary,
   renderVendorClaimInvite,

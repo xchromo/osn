@@ -36,6 +36,48 @@
       "when": 1785198751565,
       "tag": "0004_little_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788097202987,
+      "tag": "0005_goofy_gwen_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788103572019,
+      "tag": "0006_burly_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788919915049,
+      "tag": "0007_tough_frog_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788932380056,
+      "tag": "0008_careless_the_enforcers",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788934467971,
+      "tag": "0009_recovery_factor_amr",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788954999881,
+      "tag": "0010_passkey_provenance",
+      "breakpoints": true
     }
   ]
 }

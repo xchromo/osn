@@ -57,18 +57,45 @@ export interface AuthConfig {
    */
   sessionIpPepper?: string;
   /**
-   * Permitted AMR ("authentication method reference") values for
-   * `/recovery/generate` step-up. The user explicitly wanted both passkey
-   * and OTP flows allowed; set narrower in production if desired.
+   * Permitted AMR ("authentication method reference") values for the
+   * `/recovery/generate` step-up gate.
+   *
+   * The name understates its reach: this one set is read by FIVE verifiers —
+   * `verifyStepUpForRecoveryGenerate`, `verifyStepUpForAccountDelete`
+   * (`DELETE /account`), `verifyStepUpForAccountExport` (the DSAR export),
+   * `verifyStepUpForExternalPurpose` (Pulse / Zap app deletion over
+   * `/internal/step-up/verify`) and both security-event acknowledge paths.
+   * Widening it widens all five. Defaults to passkey, OTP or TOTP.
    */
-  recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp")[];
+  recoveryGenerateAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
    * Permitted AMR values for `DELETE /passkeys/:id` step-up. Defaults to
    * passkey-only (`["webauthn"]`) — by construction the caller already
    * has at least one passkey (the last-passkey guard fires otherwise),
    * so accepting OTP would weaken the gate without UX gain (S-L4).
+   *
+   * TOTP is deliberately NOT admitted here, and the type permits it only so
+   * this array is assignable from the same literals as its two siblings.
+   *
+   * What this narrows is the **direct** path, and only that. A passkey
+   * registered a minute ago mints a `webauthn` AMR exactly like one the user
+   * has held for a year, so any factor admitted at
+   * {@link passkeyRegisterAllowedAmr} would otherwise reach passkey deletion in
+   * two hops: step up with that factor, register a credential of your own, then
+   * assert **it** to mint the `webauthn` step-up this list accepts.
+   *
+   * That second hop is closed by `passkeys.provenance_amr` rather than by this
+   * list. The verifier refuses a `passkey_delete` or `email_change` step-up
+   * asserted by a credential whose own registration ran under a weaker AMR,
+   * against anything older than itself, for 72 hours — so widening this list
+   * still does not buy a caller the deletion of a credential they did not
+   * already control. The rule and both its windows are in `step-up.ts`
+   * (`provenanceRefusal`).
+   *
+   * @see wiki/systems/step-up.md
+   * @see wiki/architecture/account-recovery-factors.md
    */
-  passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp")[];
+  passkeyDeleteAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
   /**
    * Permitted AMR values for `/passkey/register/{begin,complete}` step-up
    * when the account already has ≥1 passkey (S-H1). First-passkey
@@ -77,9 +104,19 @@ export interface AuthConfig {
    * `["webauthn", "otp"]` because a user who legitimately wants to add a
    * second device may be doing so precisely because the original is hard
    * to reach; forcing passkey-only step-up would create a chicken-and-
-   * egg.
+   * egg. TOTP is admitted for the same reason, and this set also gates TOTP's
+   * own enrol / disable ceremonies.
    */
-  passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp")[];
+  passkeyRegisterAllowedAmr?: readonly ("webauthn" | "otp" | "totp")[];
+  // A fourth AMR allow-list exists and has no field here on purpose:
+  // `emailChangeAllowedAmr` (`context.ts`) gates `/account/email/complete` at
+  // `["webauthn", "otp"]` and no deployment may widen it. Its `otp` arm proves
+  // control of the CURRENT mailbox, which a TOTP seed does not, and email
+  // change is the pivot to permanent takeover — so it is a property of the
+  // service rather than a knob. Like `passkeyDeleteAllowedAmr` above, it
+  // narrows the direct path only, and the register-then-assert pivot described
+  // there produces a `webauthn` AMR this list also accepts — which is what the
+  // credential-provenance rule in `step-up.ts` refuses, not this list.
   /**
    * Cluster-wide single-use guard for step-up token jtis (S-H1). Inject a
    * Redis-backed store in multi-pod deployments; otherwise the default
@@ -101,6 +138,34 @@ export interface AuthConfig {
    */
   recoveryLockoutStore?: RecoveryLockoutStore;
   /**
+   * Per-account TOTP failed-code lockout. Same shape as the recovery counter
+   * and the OPPOSITE outage posture — it fails closed. See
+   * `lib/recovery-lockout-store.ts`.
+   *
+   * Its keys are scoped by ceremony: `checkTotpCode` takes a `scope` and keys
+   * `recovery:<accountId>` for `POST /login/recovery/totp/complete`, so failures
+   * at that unauthenticated route cannot lock the authenticated step-up.
+   */
+  totpLockoutStore?: RecoveryLockoutStore;
+  /**
+   * Per-account lockout for the email-OTP recovery path. Its own instance
+   * rather than a share of {@link recoveryLockoutStore}: an attacker grinding
+   * 64-bit recovery codes must not deny the owner the email path, nor the
+   * reverse — the whole point of a second recovery factor is that it is
+   * independent of the first. Fails CLOSED, like {@link totpLockoutStore}.
+   */
+  recoveryOtpLockoutStore?: RecoveryLockoutStore;
+  /**
+   * AES-GCM key that TOTP shared secrets are encrypted under at rest, imported
+   * once at boot from `OSN_TOTP_ENCRYPTION_KEY`. `buildAppDeps` always supplies
+   * one — the real secret in a deployed tier, an ephemeral key in local dev.
+   *
+   * Optional here so every existing `AuthConfig` literal still type-checks.
+   * Absent does NOT mean "store the secret in plain text": the TOTP service has
+   * no plaintext path and fails closed when this is unset.
+   */
+  totpEncryptionKey?: CryptoKey;
+  /**
    * O3: injectable Redis-backed ceremony / pending-state stores. When omitted
    * each falls back to an in-memory `Map` (single-process only). Multi-pod
    * deployments MUST inject the Redis-backed variants so a ceremony `begin`
@@ -119,6 +184,14 @@ export interface AuthConfig {
    */
   profileSwitchCap?: AccountCapLimiter;
   emailChangeBeginCap?: AccountCapLimiter;
+  /**
+   * Per-account cap on `/login/recovery/email/begin` (3 per 24 h). Keyed on the
+   * resolved accountId — never on the submitted identifier, or an attacker
+   * could exhaust a victim's allowance by naming them, and the cap would double
+   * as an account-existence oracle. See
+   * {@link RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_MAX}.
+   */
+  recoveryEmailBeginCap?: AccountCapLimiter;
   /**
    * HMAC key for pairwise subject identifiers. Every relying party sees a
    * different `sub` for the same profile, derived from this key plus the

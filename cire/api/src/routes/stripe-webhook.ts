@@ -1,12 +1,3 @@
-import { Effect } from "effect";
-import { Elysia } from "elysia";
-
-import { DbService } from "../db";
-import type { Db } from "../db";
-import { runCire } from "../observability";
-import { registryService } from "../services/registry";
-import { verifyStripeWebhook } from "../services/stripe";
-
 /**
  * STRIPE'S SIDE OF THE CONVERSATION.
  *
@@ -74,6 +65,15 @@ import { verifyStripeWebhook } from "../services/stripe";
  * that reaches the PLATFORM's balance — Express leaves cire liable for a
  * connected account that goes negative — so a silent one is the expensive kind.
  */
+
+import { Effect } from "effect";
+import { Elysia } from "elysia";
+
+import { DbService } from "../db";
+import type { Db } from "../db";
+import { runCire } from "../observability";
+import { registryService } from "../services/registry";
+import { verifyStripeWebhook } from "../services/stripe";
 
 /**
  * The most a Stripe event can be, in bytes.
@@ -446,7 +446,7 @@ export const createStripeWebhookRoutes = (db: Db, deps: StripeWebhookDeps) =>
           // this is one of the few 500s in the codebase that is a request to be
           // called again rather than an apology.
           Effect.tapDefect((cause) => Effect.logError("stripe webhook defect", cause)),
-          Effect.catchAllDefect(() =>
+          Effect.catchDefect(() =>
             Effect.sync(() => {
               set.status = 500;
               return { error: "Internal error" };

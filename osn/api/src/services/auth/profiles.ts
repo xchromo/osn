@@ -30,7 +30,11 @@ export function createProfilesModule() {
       });
       const row = result[0];
       if (!row) return null;
-      return { ...row.profile, email: row.account.email };
+      return {
+        ...row.profile,
+        email: row.account.email,
+        lastRecoveredAt: row.account.lastRecoveredAt,
+      };
     });
 
   const findProfileByHandle = (
@@ -50,11 +54,15 @@ export function createProfilesModule() {
       });
       const row = result[0];
       if (!row) return null;
-      return { ...row.profile, email: row.account.email };
+      return {
+        ...row.profile,
+        email: row.account.email,
+        lastRecoveredAt: row.account.lastRecoveredAt,
+      };
     });
 
   /**
-   * S-H4: tombstoned accounts (`accounts.deleted_at IS NOT NULL`) return
+   * Tombstoned accounts (`accounts.deleted_at IS NOT NULL`) return
    * `null` so all authenticated routes that gate on this lookup refuse to
    * mutate state during the 7-day grace window. The cancellation /
    * deletion-status routes use {@link findProfileByIdIncludingTombstoned}
@@ -77,7 +85,11 @@ export function createProfilesModule() {
       });
       const row = result[0];
       if (!row) return null;
-      return { ...row.profile, email: row.account.email };
+      return {
+        ...row.profile,
+        email: row.account.email,
+        lastRecoveredAt: row.account.lastRecoveredAt,
+      };
     });
 
   /**
@@ -103,12 +115,16 @@ export function createProfilesModule() {
       });
       const row = result[0];
       if (!row) return null;
-      return { ...row.profile, email: row.account.email };
+      return {
+        ...row.profile,
+        email: row.account.email,
+        lastRecoveredAt: row.account.lastRecoveredAt,
+      };
     });
 
   /**
    * Looks up an account row by id. Used by the tombstone gate
-   * (S-H4 — `isAccountTombstoned`) to refuse mutating routes when
+   * (`isAccountTombstoned`) to refuse mutating routes when
    * `deletedAt` is set.
    */
   const findAccountById = (
@@ -168,7 +184,11 @@ export function createProfilesModule() {
       });
       const row = result[0];
       if (!row) return null;
-      return { ...row.profile, email: row.account.email };
+      return {
+        ...row.profile,
+        email: row.account.email,
+        lastRecoveredAt: row.account.lastRecoveredAt,
+      };
     });
 
   return {

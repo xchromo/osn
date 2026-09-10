@@ -18,6 +18,7 @@ import type { SecurityEventKind } from "@shared/observability/metrics";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
+import { forkBackground } from "../../lib/background";
 import { RECOVERY_LOCKOUT_THRESHOLD } from "../../lib/recovery-lockout-store";
 import {
   metricRecoveryCodeConsumed,
@@ -103,10 +104,10 @@ export function createRecoveryModule(
       // health. Fork onto the scheduler with a hard timeout so a slow
       // provider can't tie up the request handler. Failure is logged via
       // the metric branches inside `notifyRecovery`.
-      yield* Effect.forkDaemon(
+      yield* forkBackground(
         notifyRecoveryByAccountId(accountId, "recovery_code_generate").pipe(
           Effect.timeout("10 seconds"),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
 
@@ -118,7 +119,7 @@ export function createRecoveryModule(
    * accounts table and dispatches via `notifyRecovery`. Used by the
    * fire-and-forget paths in generate/consume which don't already hold the
    * profile row. Stays out of the user's latency path (called inside
-   * `Effect.forkDaemon`), so the extra round-trip is harmless.
+   * `Effect.forkDetach`), so the extra round-trip is harmless.
    */
   const notifyRecoveryByAccountId = (
     accountId: string,
@@ -213,7 +214,7 @@ export function createRecoveryModule(
         catch: (cause) => new DatabaseError({ cause }),
       }).pipe(
         Effect.tap(() => Effect.sync(() => metricSecurityEventRecorded("recovery_code_lockout"))),
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           Effect.logWarning("auth.recovery.lockout: audit write failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
           ),
@@ -388,6 +389,17 @@ export function createRecoveryModule(
           commitBatch(db, [
             db.delete(sessions).where(eq(sessions.accountId, profile.accountId)),
             db.insert(securityEvents).values(securityEventRow),
+            // Stamp the recovery window. This path is never REFUSED by the
+            // window it opens — a recovery code is a 64-bit secret the user was
+            // handed once, and capping it would shut the owner's only
+            // unauthenticated door for three days, which is the one door a
+            // mailbox holder cannot open. But the window still has to start
+            // here, or a recovery-code login would leave the email-change gate
+            // and the passkey-provenance comparison measuring from nothing.
+            db
+              .update(accounts)
+              .set({ lastRecoveredAt: nowSec })
+              .where(eq(accounts.id, profile.accountId)),
           ]),
         catch: (cause) => new DatabaseError({ cause }),
       });
@@ -405,10 +417,10 @@ export function createRecoveryModule(
       // so the login latency is decoupled from mailer health. The profile
       // is already loaded so we pass the email directly — no post-commit
       // accounts round-trip.
-      yield* Effect.forkDaemon(
+      yield* forkBackground(
         notifyRecovery(profile.email, "recovery_code_consume").pipe(
           Effect.timeout("10 seconds"),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
 

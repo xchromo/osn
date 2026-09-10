@@ -1,3 +1,4 @@
+import type { Result } from "@shared/observability/metrics";
 import { Data } from "effect";
 
 // ---------------------------------------------------------------------------
@@ -6,6 +7,12 @@ import { Data } from "effect";
 
 export class AuthError extends Data.TaggedError("AuthError")<{
   readonly message: string;
+  /**
+   * Overrides the metric bucket `classifyError` would infer from the
+   * message. Set it where the caller-facing message is deliberately
+   * vague and the true outcome would otherwise be unobservable.
+   */
+  readonly metricResult?: Result;
 }> {}
 
 export class DatabaseError extends Data.TaggedError("DatabaseError")<{
@@ -17,7 +24,7 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
 }> {}
 
 /**
- * COPPA under-13 registration rejection (C-H8). Distinct from ValidationError
+ * COPPA under-13 registration rejection. Distinct from ValidationError
  * so the route layer can map it to HTTP 422 with the fixed public message
  * "OSN is for users 13 and older" rather than a generic 400. See
  * [[compliance/coppa]].

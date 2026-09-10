@@ -1,5 +1,142 @@
 # @utils/db
 
+## 0.7.1
+
+### Patch Changes
+
+- 6474854: Fix every `house/no-stacked-doc-block` site in these packages (xchromo/osn#926).
+
+  A declaration with two or more leading doc blocks only has its last block attached — the earlier one silently documents nothing, and an editor hovering the declaration never shows it. Two shapes accounted for all 26 sites across these packages: a genuine module doc that had been placed after the file's `import` line rather than at line 1, which the rule's module-block exemption checks literally, and so read as stacked in front of whatever the doc block happened to precede — moved to line 1, restoring both blocks to their correct attachment; and two doc blocks that were both actually describing the same declaration, split apart for no good reason — merged into one, with content preserved and no duplication.
+
+  No prose was rewritten and no behavior changed. Every fix was spot-checked by an independent adversarial pass against the real diff before being applied, confirming no content was lost and every surviving block attaches to the declaration it actually describes.
+
+## 0.7.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- d3af349: Pin the search string-math with property tests, and let Effect own the Redis
+  startup deadline.
+
+  `search.ts` states its invariants in doc comments as facts — `handlePrefixRange`
+  claims to be _exactly equivalent_ to `handle LIKE 'q%'` — and an example-based
+  test can only check the cases someone thought of. Three properties now hold that
+  claim to account: range membership is exactly prefix matching, `escapeLike`
+  round-trips (and leaves no unescaped metacharacter behind), and `tokeniseQuery`
+  never drops a `%`, `_` or `\` before `escapeLike` can neutralise it. All three
+  were true. They are mutation-checked rather than assumed: each goes red against
+  a deliberately broken variant, including the closed-vs-half-open range mutant
+  that the first generator missed, because no generated handle could land exactly
+  on the bound.
+
+  No new dependency: `fast-check` already ships inside `effect`, reached via
+  `effect/testing`. The handle generator is derived with `Schema.toArbitrary` from
+  the same `^[a-z0-9_]+$` pattern the source constrains itself to, so it restates
+  the constraint instead of duplicating it.
+
+  `shared/redis/src/ioredis.ts` replaces a hand-rolled `Promise.race` deadline
+  with `Effect.timeoutOrElse` — `timeoutOrElse`, not plain `timeout`, because the
+  latter widens the error channel to `RedisError | TimeoutError` and fails the
+  layer's declared `Layer.Layer<Redis, RedisError>`. The failure mode is
+  byte-identical: one `Fail` carrying `RedisError { cause: "Redis startup ping
+timed out" }`. That matters more than it looks — the limiters fail closed, so a
+  changed timeout path surfaces as rejected requests rather than an obvious crash.
+
+  `health.ts` keeps its `Promise.race`: it is a bare `async function` on the
+  public barrel, awaited inside a `try/catch` by two composition roots that also
+  disconnect and rethrow, so converting it would either put a per-call
+  `Effect.runPromise` in a function with no `ManagedRuntime` — against the
+  build-the-layer-graph-once rule — or ripple through both `initRedisClient`
+  implementations and three test files.
+
+  Also adds the first test for `RedisLive` itself, which had none.
+
+## 0.6.6
+
+### Patch Changes
+
+- 613c916: Stop six pulse queries binding one parameter per element against D1's cap.
+
+  D1 allows 100 bound parameters per query. A `SELECT` binding an id list broke
+  past 50-100 items; a multi-row `INSERT`, which binds one parameter per column
+  per row, broke an order of magnitude sooner. Six sites were affected, and three
+  were live: recurring series failed to materialise past three instances, the RSVP
+  list broke for every viewer of a well-attended event, and a GDPR erasure could
+  never complete for an account that had hosted more than a hundred events.
+
+  `@shared/db-utils` gains `jsonEachIn` and `insertManyViaJsonEach`, which bind the
+  whole array as one JSON parameter and unpack it inside SQLite with `json_each`.
+  Both are verified against real Miniflare-backed D1 rather than bun:sqlite, which
+  enforces no such cap and so passes against every one of these bugs.
+
+## 0.6.5
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+## 0.6.4
+
+### Patch Changes
+
+- 5c51a23: Enforce foreign keys on `bun:sqlite`, and fix the two erasure bugs that were hiding behind it.
+
+  SQLite defaults `PRAGMA foreign_keys` to **OFF** while D1 enforces them, so every local run and every test accepted writes production rejects. The cheap, fast environment was the permissive one, which is the worst way round: a statement that orphans a row, or deletes a parent before its children, passed the whole suite and would have failed on deploy.
+
+  Turning it on found `hardDeleteAccount` broken in two ways, both of which would make GDPR Art. 17 erasure throw rather than complete. It deletes the `accounts` row while deliberately keeping `security_events` and `email_changes` under Art. 6(1)(c) — but both declared a foreign key to `accounts`, so a column documented to outlive its parent referenced it. Those two constraints are dropped. It also deleted `users` before the `oauth_consents` and `oauth_authorization_codes` rows that carry a `profile_id` referencing them; those deletes now run first.
+
+  `dev-login`'s provisioning batch declared itself infallible through `Effect.promise` while being a chain of inserts that reference rows an earlier `onConflictDoNothing` may have skipped. With foreign keys on, that arrived as a defect and escaped the route's own error handling, answering 400 where the contract says 500 `provisioning_failed`.
+
+## 0.6.3
+
+### Patch Changes
+
+- 518bc7d: Stop suppressing `no-await-in-loop` where the awaits do not actually need to be sequential.
+
+  `commitBatch` in `@shared/db-utils` chains its bun:sqlite fallback statements instead of looping over them, keeping the children-first ordering the caller built without disabling the rule.
+
+  In `@osn/api`, the outbound ARC key registration in `outbound-arc.ts` registered with each downstream one after the next; the downstreams are independent and registration is an idempotent upsert, so both calls now go out together and a failure on a configured stack still aborts boot. The NDJSON fan-out in `account-export.ts` reads its response with `for await` rather than a manual reader loop, which also means abandoning the generator cancels the stream instead of leaving the downstream sending a bundle nobody is reading.
+
+  No behaviour change. The one remaining disable is the keyset pagination generator, where each page's cursor comes from the page before it.
+
 ## 0.6.2
 
 ### Patch Changes

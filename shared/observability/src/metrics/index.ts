@@ -20,6 +20,8 @@ export {
   type HttpInFlightAttrs,
 } from "./http";
 
+export { RESULT_VALUES } from "./attrs";
+
 export {
   type Result,
   type AuthMethod,
@@ -38,9 +40,14 @@ export {
   type OriginGuardRejectionReason,
   type RecoveryCodeStep,
   type RecoveryCodeConsumeResult,
+  type RecoveryCooldownOutcome,
+  type RecoveryDisownResult,
+  type RecoveryPasskeyReclaimResult,
   type SecurityEventKind,
   type SecurityEventNotifyResult,
   type StepUpFactor,
+  type TotpOp,
+  type TotpVerifyResult,
   type StepUpPurpose,
   type StepUpStep,
   type StepUpVerifyResult,

@@ -1,6 +1,6 @@
 {
   "name": "@osn/ui",
-  "version": "1.10.1",
+  "version": "1.11.1",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,6 +11,7 @@
     "./auth/SessionsView": "./src/auth/SessionsView.tsx",
     "./auth/SignIn": "./src/auth/SignIn.tsx",
     "./auth/StepUpDialog": "./src/auth/StepUpDialog.tsx",
+    "./auth/TotpView": "./src/auth/TotpView.tsx",
     "./auth/CreateProfileForm": "./src/auth/CreateProfileForm.tsx",
     "./auth/PasskeysView": "./src/auth/PasskeysView.tsx",
     "./auth/ProfileOnboarding": "./src/auth/ProfileOnboarding.tsx",
@@ -29,6 +30,7 @@
     "./ui/otp-input": "./src/components/ui/otp-input.tsx",
     "./ui/label": "./src/components/ui/label.tsx",
     "./ui/popover": "./src/components/ui/popover.tsx",
+    "./ui/qr-code": "./src/components/ui/qr-code.tsx",
     "./ui/radio-group": "./src/components/ui/radio-group.tsx",
     "./ui/tabs": "./src/components/ui/tabs.tsx",
     "./ui/textarea": "./src/components/ui/textarea.tsx",
@@ -40,7 +42,7 @@
     "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
-    "@kobalte/core": "^0.13.12",
+    "@kobalte/core": "^0.13.13",
     "@osn/client": "workspace:*",
     "@shared/toast": "workspace:*",
     "@simplewebauthn/browser": "^13.3.0",
@@ -51,12 +53,11 @@
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
     "@solidjs/testing-library": "^0.8.10",
-    "@testing-library/jest-dom": "^6.10.0",
-    "happy-dom": "^20.11.1",
-    "solid-js": "^1.9.14",
-    "vite": "^8.1.5",
+    "happy-dom": "^20.12.2",
+    "solid-js": "^1.9.15",
+    "vite": "^8.2.2",
     "vite-plugin-solid": "^2.11.14",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "solid-js": ">=1.9"

@@ -1,5 +1,300 @@
 # @osn/crypto
 
+## 0.13.4
+
+### Patch Changes
+
+- Updated dependencies [f756993]
+  - @shared/observability@0.18.0
+
+## 0.13.3
+
+### Patch Changes
+
+- Updated dependencies [46023fa]
+  - @osn/db@0.24.0
+  - @shared/observability@0.17.0
+
+## 0.13.2
+
+### Patch Changes
+
+- Updated dependencies [5e47301]
+  - @shared/observability@0.16.0
+
+## 0.13.1
+
+### Patch Changes
+
+- Updated dependencies [2aedc02]
+  - @osn/db@0.23.0
+
+## 0.13.0
+
+### Minor Changes
+
+- d287d72: TOTP enrolment, verification and disable on osn-api
+
+  An account can now enrol an authenticator app, use it to satisfy a step-up
+  ceremony, and remove it. TOTP is a step-up factor only — it is not a login
+  factor, and passkeys remain the sole primary one.
+
+  The shared secret is the one credential in the schema that cannot be hashed,
+  because RFC 6238 verification needs the raw HMAC key back. It is AES-256-GCM
+  encrypted under a new `OSN_TOTP_ENCRYPTION_KEY` Worker secret, with the account
+  id as additional authenticated data. **osn-api refuses to boot in a deployed
+  tier without that secret**, so it has to be provisioned before this ships;
+  local dev generates an ephemeral key, exactly as the JWT signing pair does.
+  That key **cannot be rotated**: rows carry a `key_version` and the service holds
+  exactly one key, so installing a new one makes every enrolled credential
+  unverifiable. The column is there so adding rotation later needs no migration.
+
+  `verifyTotpCode` in `@shared/crypto/totp` now returns the step it matched
+  (`{ step } | null`) rather than a boolean. RFC 6238 §5.2 single use is not
+  enforceable without it, and the alternative — refusing every code for the rest
+  of the drift window after a success — would fail a legitimate second ceremony
+  ninety seconds later. Breaking, and free: nothing outside its own test consumed
+  it.
+
+  Also: a `totp` AMR value, `totp_enroll` and `totp_disable` step-up purposes,
+  `totp_enrolled` / `totp_disabled` security events and notification emails, five
+  new rate-limiter slots, a `TotpClient` in `@osn/client`, and a `totp` section in
+  the DSAR export.
+
+  `passkeyDeleteAllowedAmr` stays WebAuthn-only and the email-change gate keeps an
+  allow-list of its own, so neither admits a `totp` AMR **directly**. Neither is a
+  boundary against a TOTP seed, and neither was one before this branch: any factor
+  those gates' sibling `passkeyRegisterAllowedAmr` admits can register a passkey
+  and assert it, arriving with the `webauthn` AMR both lists accept. Closing that
+  needs credential provenance and is tracked separately.
+
+### Patch Changes
+
+- Updated dependencies [d287d72]
+  - @shared/observability@0.15.0
+  - @osn/db@0.22.0
+
+## 0.12.0
+
+### Minor Changes
+
+- 3447d5b: RFC 6238 TOTP primitives on a new `@shared/crypto/totp` subpath: secret
+  generation, RFC 4648 base32 both ways, `parseTotpSecret` for the base32 a user
+  types back, the `otpauth://` URI an authenticator app scans, code derivation
+  and verification. No new dependency — base32 is forty lines and HMAC-SHA-1 is
+  in WebCrypto, which Bun, Node and workerd all carry.
+
+  The subpath is the point. `src/index.ts` does not re-export any of it, because
+  the barrel reaches `@osn/db` and `drizzle-orm` through the ARC helpers, and a
+  caller deriving six digits should not load a database driver to do it. The
+  module imports `./timing-safe` and nothing else, and a test resolves
+  `@shared/crypto/totp` through the package's own `exports` map so a typo in that
+  map fails the suite rather than the first consumer.
+
+  Correctness rests on published vectors rather than on ones we chose: RFC 4226
+  Appendix D counters 0 to 9, all six SHA-1 rows of RFC 6238 Appendix B, and the
+  RFC 4648 §10 base32 strings in both directions. The base32 vectors earn their
+  place — a codec that is self-consistent but wrong, bits regrouped the wrong way
+  or the alphabet permuted, passes every round-trip test and is first noticed by
+  an authenticator app at enrolment.
+
+  `verifyTotpCode` derives every candidate in the drift window and compares all
+  of them with `timingSafeEqualString`, with no early return, so a valid and an
+  invalid six-digit code do the same work. It never throws: a malformed code, a
+  secret under RFC 4226's 128-bit floor, and an unusable date are all `false`,
+  and the drift window is clamped at both ends so a caller cannot choose how much
+  CPU one verification spends. A secret under the floor is run against a fixed
+  dummy secret rather than returned on, so `false` costs the same whether the
+  account has TOTP enrolled or not — "not enrolled" is an absent or empty secret
+  in every schema shape this sits behind, and the fast path would have answered
+  that question to anyone who could reach the route.
+
+  `base32Decode` validates before it case-folds — uppercasing maps `ß` to `SS`
+  and `ſ` to `S`, so the other order would admit characters that are not in the
+  alphabet — and its error message names no part of its input, which is a secret.
+  It refuses input over 512 characters before scanning it, since the length is an
+  unauthenticated caller's choice and decoding is linear in it. It stays a
+  general codec, returning whatever bytes the input carries: the 128-bit floor
+  lives in `parseTotpSecret`, which is what an enrolment route wants, because a
+  one-character input decodes to zero bytes without error. `totpUri` enforces the
+  same floor rather than committing an unusable secret to a QR code, and its
+  return value is documented as secret material — the shape most likely to be
+  logged carries the whole secret.
+
+## 0.11.3
+
+### Patch Changes
+
+- b2b6b70: Clean up the `house/no-tracker-ref-in-comment` mechanical majority (xchromo/osn#924).
+
+  Every finding-tag, phase-code, and narrative-phrase reference flagged by the rule in a short comment block is now gone from these packages: a bare parenthetical tag deleted, a leading label stripped and the remainder capitalized into its own sentence, or a "used to be" narration rewritten forward to state the current, still-true fact. No behavior changes anywhere — every edit is comment text.
+
+  A handful of leftover `osn-tracker#N` citations that predated both this batch and the separate tracker-number-refs cleanup (xchromo/osn#930) are also gone from `@osn/api` and `@pulse/api`, using the same treatment established there.
+
+- Updated dependencies [b2b6b70]
+  - @osn/db@0.21.2
+  - @shared/observability@0.14.3
+
+## 0.11.2
+
+### Patch Changes
+
+- Updated dependencies [b78deb7]
+  - @shared/observability@0.14.2
+
+## 0.11.1
+
+### Patch Changes
+
+- 6474854: Fix every `house/no-stacked-doc-block` site in these packages (xchromo/osn#926).
+
+  A declaration with two or more leading doc blocks only has its last block attached — the earlier one silently documents nothing, and an editor hovering the declaration never shows it. Two shapes accounted for all 26 sites across these packages: a genuine module doc that had been placed after the file's `import` line rather than at line 1, which the rule's module-block exemption checks literally, and so read as stacked in front of whatever the doc block happened to precede — moved to line 1, restoring both blocks to their correct attachment; and two doc blocks that were both actually describing the same declaration, split apart for no good reason — merged into one, with content preserved and no duplication.
+
+  No prose was rewritten and no behavior changed. Every fix was spot-checked by an independent adversarial pass against the real diff before being applied, confirming no content was lost and every surviving block attaches to the declaration it actually describes.
+
+- Updated dependencies [6474854]
+  - @shared/observability@0.14.1
+  - @osn/db@0.21.1
+
+## 0.11.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- d3af349: Apply the Effect v4 combinator renames and the Cause/Runtime rework.
+
+  Renames resolved from upstream's generated reference: `catchAllDefect` →
+  `catchDefect`, `catchAllCause` → `catchCause`, `catchAll` → `catch`, `either` →
+  `result`, `forkDaemon` → `forkDetach`, `zipRight` → `andThen`, `dieMessage` →
+  `die(new Error(…))`, `Layer.scoped` → `Layer.effect`, `Cause.failureOption` →
+  `Cause.findErrorOption`. The `Either` module became `Result`, whose variants are
+  tagged `Success`/`Failure` and carry `success`/`failure` rather than
+  `right`/`left`.
+
+  `Runtime.isFiberFailure` and `FiberFailureCauseId` are gone: v4's runner rejects
+  with `Cause.squash(cause)`, which is the typed failure itself, so the two
+  osn-api error-shaping helpers no longer unwrap anything. That changes one thing
+  on a security path — `Cause.squash` surfaces a _defect_ where v3's
+  `Cause.failureOption` returned `None` — and both helpers now document it.
+
+  Adds a test asserting the Redis layer's finalizer runs on scope close. The
+  `Layer.scoped` → `Layer.effect` rewrite would have leaked connections silently
+  if the scope had been dropped: it type-checks either way, and nothing covered it.
+
+  Second phase of the Effect v4 migration; the tree does not type-check until the
+  `Schema` work lands.
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @osn/db@0.21.0
+  - @shared/observability@0.14.0
+
+## 0.10.18
+
+### Patch Changes
+
+- Updated dependencies [8fca0c0]
+  - @shared/observability@0.13.8
+
+## 0.10.17
+
+### Patch Changes
+
+- @osn/db@0.20.13
+
+## 0.10.16
+
+### Patch Changes
+
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [01437b3]
+- Updated dependencies [00ed19f]
+  - @osn/db@0.20.12
+  - @shared/observability@0.13.7
+
+## 0.10.15
+
+### Patch Changes
+
+- 853367f: Take jose 6.2.10 (from 6.2.4). Releases 6.2.5 through 6.2.10 are all JOSE and JWT input-validation hardening: reject characters outside the Base64URL alphabet, reject invalid UTF-8 in JOSE headers and JWT claims sets, reject truncated ASN.1 key data, reject duplicate `crit` values, reject an unencoded payload in the JWS Compact Serialization, compare claim values correctly for falsy validation options, and enforce verification key metadata from a JWKS. jose sits under both the ARC service-to-service tokens and the five-minute osn-access JWTs, so this is parser hardening on the two token types where it matters most. No API change; the tightening only narrows what parses.
+
+## 0.10.14
+
+### Patch Changes
+
+- Updated dependencies [981ea54]
+  - @osn/db@0.20.11
+
+## 0.10.13
+
+### Patch Changes
+
+- Updated dependencies [e38d6de]
+  - @osn/db@0.20.10
+
+## 0.10.12
+
+### Patch Changes
+
+- Updated dependencies [5c51a23]
+  - @osn/db@0.20.9
+
+## 0.10.11
+
+### Patch Changes
+
+- Updated dependencies [965c2ee]
+  - @shared/observability@0.13.6
+
+## 0.10.10
+
+### Patch Changes
+
+- e382c40: Enforce the access-token `issuer` claim in every downstream verifier.
+
+  `@shared/osn-auth-client` has always accepted an expected `iss`, but every consumer left it unset — deliberately, because a verifier that pins the issuer rejects every token minted before osn-api started stamping one, and the rollout had to be verifier-first. Access tokens live five minutes, so that window closed long ago: every live token carries `iss`, and leaving the check off means a token from any other OSN deployment verifies here as long as it is signed by a key that deployment's JWKS vouches for.
+
+  `cire/api`, `pulse/api` and `zap/api` now pass the expected issuer on every `extractClaims` call. In pulse and zap the JWKS URL and the issuer travel as one `OsnTokenVerification` value rather than two loose strings, so a call site cannot supply one and silently forget the other — which is the failure mode that left this unenforced, since an unset expected issuer is not an error, it is simply no check.
+
+  `OSN_ISSUER_URL` is now required in a deployed tier and must equal osn-api's own value byte for byte; a mismatch 401s every authenticated request, so the two flip in the same deploy. `zap/api` gains the var, which it did not read before. `@shared/crypto/testing`'s signer stamps the local issuer by default, so a suite that injects a test key mints tokens its routes accept; pass a different origin, or `null`, to exercise the rejection paths.
+
+  Three things fell out of reviewing it. `extractClaims` now treats an expected issuer that is present but **empty** as a configuration failure rather than as "no issuer check" — an unset env var reaching the verifier was the one way this could look configured while checking nothing. The comparison normalises a trailing slash on both sides, since six hand-maintained `wrangler.toml` values feed it and `jose` compares byte for byte. And `zap/api` gains `OSN_ISSUER_URL`/`OSN_JWKS_URL` in the portless devloop, which it never had — every bearer-authenticated zap route was 401ing locally, and pinning the issuer is what made that visible.
+
+## 0.10.9
+
+### Patch Changes
+
+- @osn/db@0.20.8
+
 ## 0.10.8
 
 ### Patch Changes

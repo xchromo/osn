@@ -1,5 +1,6 @@
 import { pulseUsers, type PulseProfile } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
+import { jsonEachIn } from "@shared/db-utils";
 import { eq, inArray } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
@@ -20,7 +21,7 @@ export const DEFAULT_ATTENDANCE_VISIBILITY = "connections" as const;
 
 export type AttendanceVisibility = PulseProfile["attendanceVisibility"];
 
-const AttendanceVisibilitySchema = Schema.Literal("connections", "no_one");
+const AttendanceVisibilitySchema = Schema.Literals(["connections", "no_one"]);
 
 const UpdateSettingsSchema = Schema.Struct({
   attendanceVisibility: Schema.optional(AttendanceVisibilitySchema),
@@ -70,6 +71,12 @@ export const getAttendanceVisibility = (
  * collapses an N+1 ("yield* getAttendanceVisibility(id) in a for loop")
  * into a single SELECT, which matters for popular events where the
  * limit clause can return up to 200 rows per request.
+ *
+ * `listRsvps`' `filterByAttendeePrivacy` calls this with every distinct
+ * attendee on the page (up to 200 — see `rsvps.ts`'s `fetchLimit`), which
+ * would cross D1's 100-bound-parameter cap on a plain `inArray`. `jsonEachIn`
+ * binds the id list as one JSON parameter instead of one per id, so the same
+ * query works whether the page holds 20 attendees or 200.
  */
 export const getAttendanceVisibilityBatch = (
   profileIds: string[],
@@ -87,7 +94,7 @@ export const getAttendanceVisibilityBatch = (
             attendanceVisibility: pulseUsers.attendanceVisibility,
           })
           .from(pulseUsers)
-          .where(inArray(pulseUsers.profileId, profileIds)) as Promise<
+          .where(inArray(pulseUsers.profileId, jsonEachIn(profileIds))) as Promise<
           Pick<PulseProfile, "profileId" | "attendanceVisibility">[]
         >,
       catch: (cause) => new DatabaseError({ cause }),
@@ -127,7 +134,7 @@ export const updateSettings = (
   data: unknown,
 ): Effect.Effect<PulseProfile, ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
-    const validated = yield* Schema.decodeUnknown(UpdateSettingsSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(UpdateSettingsSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 

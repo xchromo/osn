@@ -13,7 +13,7 @@ related:
   - "[[social]]"
   - "[[recovery-codes]]"
   - "[[cire-auth]]"
-last-reviewed: 2026-08-17
+last-reviewed: 2026-09-10
 ---
 
 # Migrating OSN identity to musubi.social
@@ -24,7 +24,7 @@ consent screen. This is the "dedicated OSN domain" that
 `[[production-deploy]]` has carried as deferred since the first prod deploy.
 
 > **The move shipped on 2026-07-27, ahead of PR C, on purpose.** The end state
-> is live: `osn-api` on `id.musubi.social`, `@osn/social` on the **`musubi.social`
+> is live: `osn-api` on `id.musubi.social`, `@musubi/social` on the **`musubi.social`
 > apex**, `OSN_RP_ID = musubi.social`. What the plan below calls step 6 / PR C —
 > converting cire to the OIDC redirect flow — was **not** done first. The cost
 > was accepted knowingly and is stated plainly here so nobody reads a broken
@@ -52,7 +52,7 @@ They are kept as written because they explain the shape of what broke.
 
 ### Blocker 1 — the authorize UI ✅ cleared 2026-07-26
 
-The consent screen is built and deployed: `/authorize` in `@osn/social`, see
+The consent screen is built and deployed: `/authorize` in `@musubi/social`, see
 `[[authorize-ui]]`. The paragraphs below stay because they explain why this
 ordering is not optional.
 
@@ -66,7 +66,7 @@ page that does not exist.
 Flip the RP ID before that page ships and cire has neither mechanism: direct
 ceremonies are illegal, and the redirect flow dead-ends.
 
-### Blocker 2 — `@osn/social` is not deployed ✅ cleared 2026-07-26
+### Blocker 2 — `@musubi/social` is not deployed ✅ cleared 2026-07-26
 
 `deploy.yml` carries a `deploy-osn-social` job publishing the `osn-social`
 Pages project. It was written against `me.cireweddings.com` and **never served
@@ -144,6 +144,40 @@ inventory read `0` on both rows two days earlier.
 3. Enroll a fresh passkey under the new RP ID.
 4. `POST /recovery/generate` again — the consumed set is spent.
 
+> [!important] Do not add a fifth step deleting the old passkey rows
+> Re-checked against the credential-provenance cooldown, which ships with
+> `xchromo/osn#952`. This sequence still works exactly as written, and it is
+> worth being explicit about why, because the cooldown changes what the
+> credential from step 3 is allowed to do.
+>
+> The passkey enrolled at step 3 is registered under an **`otp`** step-up, so
+> `passkeys.provenance_amr` stamps it `otp`. For 72 hours it therefore cannot
+> delete a passkey older than itself, and cannot change the account email.
+> Step 1 also stamps `accounts.last_recovered_at`, which blocks the email change
+> independently for the same window. Neither affects steps 1–4.
+>
+> **The dead pre-cutover rows need no deletion.** An RP-ID flip does not migrate
+> a credential — the private half is bound to the old RP ID inside the
+> authenticator — so those rows are inert: no authenticator can assert them, and
+> `excludeCredentials` is the only place they still have an effect. Leaving them
+> costs nothing.
+>
+> If an operator wants them gone anyway, there are two ways and the second is
+> better:
+>
+> - Wait out the 72 hours from step 3, then delete them with a step-up asserting
+>   the new passkey.
+> - Better, when the flip is still ahead: enrol the replacement **before**
+>   changing `OSN_RP_ID`, while the original passkey can still be asserted. The
+>   registration then runs under a `webauthn` step-up, the new credential
+>   inherits the original's standing, and it can remove the old rows the moment
+>   the flip lands. This also removes the recovery-code round trip entirely.
+>
+> What does **not** work is asserting the step-3 passkey to delete the old rows
+> straight away. It fails with a step-up refusal, not a permissions error, and
+> that is the rule working rather than a bug. See
+> [[step-up#Credential provenance]].
+
 > `OSN_PAIRWISE_SALT` must be set on `osn-api-production` for **any** of this
 > to work. The boot check is fail-closed, so without it every route 503s
 > regardless of which domain it answers on. See `[[production-deploy]]`.
@@ -208,7 +242,7 @@ Out-of-band, not in the repo:
   **The domain list was only half the job, and the other half was missed.**
   osn-api's `TURNSTILE_SECRET_KEY` has been set since #160, so the gate is live,
   not inert. Before this migration the sitekey reached the ceremony forms through
-  the **cire/host** Astro build; moving the ceremonies to `@osn/social`
+  the **cire/host** Astro build; moving the ceremonies to `@musubi/social`
   (and stripping them from organiser in the OIDC swap) left the osn-social build
   with no sitekey and its `SignIn`/`Register` with no `turnstileSiteKey` prop —
   so every sign-in on the new apex returned `400 turnstile_failed` until
@@ -228,7 +262,7 @@ Out-of-band, not in the repo:
    2026-07-26 — both accounts.
 3. ✅ `musubi.social` is in the Cloudflare account. Resend sender **not** verified,
    and `OSN_EMAIL_FROM` stayed on cireweddings.com because of it.
-4. ✅ Build the `/authorize` page in `@osn/social` per `[[authorize-ui]]`
+4. ✅ Build the `/authorize` page in `@musubi/social` per `[[authorize-ui]]`
    (2026-07-26).
 5. ✅ Add an osn-social Pages job to `deploy.yml` (2026-07-26). Written for
    `me.cireweddings.com`, retargeted to the **`musubi.social` apex** before it ever
@@ -242,7 +276,9 @@ Out-of-band, not in the repo:
    verifiers (cire-api, zap-api) with them. The apex is attached to the
    `osn-social` Pages project and `musubi.social` is on the Turnstile widget,
    both done the same day.
-8. ⬜ Re-enroll passkeys under the new RP ID; regenerate recovery codes.
+8. ⬜ Re-enroll passkeys under the new RP ID; regenerate recovery codes. The
+   dead pre-cutover rows stay — see the callout under **Credential bridge** for
+   why, and for what to do if they must go.
    Unblocked once the merge deploy publishes the app to the apex and
    `https://id.musubi.social/health` answers 200.
 
@@ -255,8 +291,8 @@ explicit call, accepting that cire sign-in goes down in the gap. The reasoning
 stands and is left intact, because it is also the description of what the gap
 costs:
 
-- **A — the consent screen.** Done: `/authorize` in `@osn/social`.
-- **B — deploy `@osn/social`.** Done 2026-07-26. The plan was to serve it from
+- **A — the consent screen.** Done: `/authorize` in `@musubi/social`.
+- **B — deploy `@musubi/social`.** Done 2026-07-26. The plan was to serve it from
   `me.cireweddings.com` — a host under the **then-current** registrable domain,
   where the binding and session cookies already worked — and prove the
   authorize → consent → token round-trip before moving anything. In the event

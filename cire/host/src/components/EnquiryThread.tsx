@@ -3,7 +3,7 @@ import { createSignal, For, Show } from "solid-js";
 
 import type { EnquiryListItem, EnquiryMessage } from "../lib/enquiries-store";
 import { haptic } from "../lib/haptics";
-// ENQ-P-W3: shared, memoised formatters — see `lib/money.ts`.
+// Shared, memoised formatters — see `lib/money.ts`.
 import { formatMinor } from "../lib/money";
 import { categoryLabel } from "../lib/service-categories";
 import Button from "./ui/Button";
@@ -144,6 +144,11 @@ export default function EnquiryThread(props: EnquiryThreadProps) {
                 value={draft()}
                 onInput={(e) => setDraft(e.currentTarget.value)}
                 rows={3}
+                // Every module view renders inside `ModuleShell`'s
+                // auto-sized frame, whose reflow guard keys on width only.
+                // A `resize-y` grip changes height alone, which the guard
+                // misreads as a content swap — keep this one `resize="none"`.
+                resize="none"
               />
             )}
           </Field>

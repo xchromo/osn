@@ -31,7 +31,12 @@ import type {
   ParsedEvent,
   ParsedFamily,
 } from "../schemas/import";
-import { entitlementService, CapacityExceeded } from "./entitlements";
+import {
+  entitlementService,
+  CapacityExceeded,
+  BASE_GUEST_CAP,
+  CAPACITY_ENTITLEMENT_KEYS,
+} from "./entitlements";
 import { generateFamilyCode } from "./family-code";
 import type { CodeStyle } from "./family-code";
 import { resolvePinUrl } from "./pinterest-resolve";
@@ -211,7 +216,7 @@ export function diffAgainstDb(
     const manageEvents = scope !== "guests";
     const manageGuests = scope !== "events";
 
-    // C1: the wedding's claim-code tier drives every NEW family code minted by
+    // The wedding's claim-code tier drives every NEW family code minted by
     // this import. Read once; default to `secure` if the row is somehow absent
     // (defensive — `weddingId` is always a real, owned wedding here). Skipped
     // entirely when the guest half isn't managed: its only consumer is
@@ -714,24 +719,48 @@ export function diffAgainstDb(
     // block lives in applyImport — this warning lets the preview UI surface the
     // issue before the organiser commits. Host-preview families are excluded from
     // the current-guest count (same join + ne(kind,'host') as entitlementService).
+    //
+    // `derivedCap` rides on the returned plan so `applyImport` doesn't re-scan
+    // the SAME entitlement rows a second time in the SAME request — see
+    // `applyImport`'s call to `assertGuestCapacity`. It's set ONLY when this
+    // block actually ran the entitlement query below; the pre-check branch
+    // proves the cap can't matter without ever learning its real value,
+    // so it leaves `derivedCap` unset and `applyImport` falls back to its own
+    // (still cheap, still narrowed) query — correct either way, per
+    // `assertGuestCapacity`'s "never a way to skip the check" contract.
+    let derivedCap: number | undefined;
     if (guestCreates.length > 0) {
-      const entRows = yield* dbQuery(() =>
-        db
-          .select({ e: weddingEntitlements.entitlement })
-          .from(weddingEntitlements)
-          .where(eq(weddingEntitlements.weddingId, weddingId))
-          .all(),
-      );
-      const cap = entitlementService.deriveCap((entRows as { e: string }[]).map((r) => r.e));
       // `existingGuests` was already fetched above with ne(families.kind, 'host'),
       // so it already excludes host-preview guests. The resulting headcount after
       // this plan: current real guests minus removals plus new creates.
       const currentRealGuests = existingGuests.length;
       const resulting = currentRealGuests - guestRemoves.length + guestCreates.length;
-      if (resulting > cap) {
-        warnings.push(
-          `This import brings you to ${resulting} guests; your plan is capped at ${cap}. Upgrade to add more.`,
+      // `resulting` can only rise as far as `currentRealGuests +
+      // guestCreates.length` (removes only ever bring it DOWN), and the cap can
+      // never fall below `BASE_GUEST_CAP` — so once that upper bound sits at or
+      // under the floor, no entitlement row on earth could make this breach.
+      // Skip the query entirely rather than fetch rows whose answer is moot.
+      if (currentRealGuests + guestCreates.length > BASE_GUEST_CAP) {
+        // Only the two capacity keys can raise the cap above the floor —
+        // narrow the scan instead of pulling every entitlement row.
+        const entRows = yield* dbQuery(() =>
+          db
+            .select({ e: weddingEntitlements.entitlement })
+            .from(weddingEntitlements)
+            .where(
+              and(
+                eq(weddingEntitlements.weddingId, weddingId),
+                inArray(weddingEntitlements.entitlement, CAPACITY_ENTITLEMENT_KEYS),
+              ),
+            )
+            .all(),
         );
+        derivedCap = entitlementService.deriveCap((entRows as { e: string }[]).map((r) => r.e));
+        if (resulting > derivedCap) {
+          warnings.push(
+            `This import brings you to ${resulting} guests; your plan is capped at ${derivedCap}. Upgrade to add more.`,
+          );
+        }
       }
     }
 
@@ -748,6 +777,7 @@ export function diffAgainstDb(
       eventLinkCreates,
       eventLinkRemoves,
       warnings,
+      derivedCap,
     };
   }).pipe(Effect.withSpan("cire.import.diff"));
 }
@@ -787,8 +817,12 @@ const MAX_STATEMENTS_PER_BATCH = 50;
  */
 async function commitWriteSet(db: Db, statements: BatchItem<"sqlite">[]): Promise<void> {
   if (statements.length === 0) return;
+  // Bound and captured before the guard, so the narrowing survives into the
+  // chain below — a property read off a mutable object does not — and so the
+  // driver method keeps its receiver.
   const batchable = db as BatchableDb;
-  if (typeof batchable.batch === "function") {
+  const batch = typeof batchable.batch === "function" ? batchable.batch.bind(batchable) : null;
+  if (batch) {
     // INVARIANT (dependency ordering): `statements` is built in strict
     // FK-dependency order by applyImport (removes → event creates →
     // family creates → guest creates → link creates, etc.). Splitting that
@@ -807,17 +841,25 @@ async function commitWriteSet(db: Db, statements: BatchItem<"sqlite">[]): Promis
     // add cross-batch transaction machinery (it doesn't exist on D1); chunking
     // + revert is the tradeoff. Chunks stay small + the whole import is well
     // under the 30s wall-clock, so the partial-apply window is narrow.
+    const chunks: BatchStatements[] = [];
     for (let i = 0; i < statements.length; i += MAX_STATEMENTS_PER_BATCH) {
-      const chunk = statements.slice(i, i + MAX_STATEMENTS_PER_BATCH) as BatchStatements;
-      // eslint-disable-next-line no-await-in-loop -- chunks are dependency-ordered; they MUST run serially
-      await batchable.batch(chunk);
+      chunks.push(statements.slice(i, i + MAX_STATEMENTS_PER_BATCH) as BatchStatements);
     }
+    // Chained, never gathered: the ordering invariant above is the whole point,
+    // and `Promise.all` would dispatch a child's chunk alongside its parent's.
+    await chunks.reduce<Promise<unknown>>(
+      (chain, chunk) => chain.then(() => batch(chunk)),
+      Promise.resolve<unknown>(undefined),
+    );
     return;
   }
   // Sequential FK order is required and bun:sqlite has no batch; these run
-  // in-process (no network round-trip) so awaiting each in turn is fine.
-  // eslint-disable-next-line no-await-in-loop
-  for (const stmt of statements) await stmt;
+  // in-process (no network round-trip), and chaining them keeps the order the
+  // statement list was built in.
+  await statements.reduce<Promise<unknown>>(
+    (chain, stmt) => chain.then(() => stmt),
+    Promise.resolve<unknown>(undefined),
+  );
 }
 
 export function applyImport(
@@ -883,7 +925,7 @@ export function applyImport(
     // Slugs already taken by this wedding's surviving events, so fresh mints
     // can't collide on the (wedding_id, slug) unique index — within the sheet
     // ("Ceremony" + "Ceremony!") or against events this plan keeps. Skipped
-    // when the plan creates no events (P-I2) — the set is only consulted by
+    // when the plan creates no events — the set is only consulted by
     // mintUniqueEventSlug.
     const removedEventIds = new Set(plan.eventRemoves.map((er) => er.id));
     const existingSlugRows =
@@ -973,7 +1015,7 @@ export function applyImport(
     // The wedding conjunct is defence in depth: every plan reaching here today
     // is built from wedding-scoped reads, but that guarantee lives in
     // diffAgainstDb — this keeps the statement itself tenant-safe if a future
-    // caller ever hands applyImport a plan from elsewhere (S-L1).
+    // caller ever hands applyImport a plan from elsewhere.
     for (const fu of plan.familyUpdates) {
       statements.push(
         db
@@ -1045,7 +1087,15 @@ export function applyImport(
     // and a negative or zero incoming can never exceed.
     const netGuestDelta = plan.guestCreates.length - plan.guestRemoves.length;
     if (netGuestDelta > 0) {
-      yield* entitlementService.assertGuestCapacity(weddingId, netGuestDelta);
+      // `plan.derivedCap` — set by `diffAgainstDb` in the SAME request when its
+      // own preview warning already ran the entitlement query — lets
+      // this skip a second scan of the same rows. Absent (a plan built before
+      // this field existed, the pre-check branch that proved the cap
+      // couldn't matter without learning it, or any other caller of
+      // `applyImport`), `assertGuestCapacity` runs its own query and enforces
+      // exactly as it always has — a missing cap is never a reason to skip
+      // the check.
+      yield* entitlementService.assertGuestCapacity(weddingId, netGuestDelta, plan.derivedCap);
     }
 
     statements.push(...finalize);

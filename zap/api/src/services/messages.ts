@@ -1,7 +1,8 @@
+import { commitBatch } from "@shared/db-utils";
 import { chats, chatMembers, messages } from "@zap/db/schema";
-import type { Chat, ChatMember, Message } from "@zap/db/schema";
+import type { Chat, Message } from "@zap/db/schema";
 import { Db } from "@zap/db/service";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
 import {
@@ -11,8 +12,9 @@ import {
   MAX_MESSAGE_LIMIT,
   MAX_BODY_LENGTH,
 } from "../lib/limits";
+import { storedNow } from "../lib/storedNow";
 import { metricMessageSent, metricMessagesListed } from "../metrics";
-import { NotC2bChat } from "./chats";
+import { NotC2bChat, NotC2cChat } from "./chats";
 
 // ---------------------------------------------------------------------------
 // Tagged errors
@@ -38,8 +40,8 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
 // Effect schemas
 // ---------------------------------------------------------------------------
 
-const CiphertextString = Schema.String.pipe(Schema.maxLength(MAX_CIPHERTEXT_LENGTH));
-const NonceString = Schema.String.pipe(Schema.maxLength(MAX_NONCE_LENGTH));
+const CiphertextString = Schema.String.check(Schema.isMaxLength(MAX_CIPHERTEXT_LENGTH));
+const NonceString = Schema.String.check(Schema.isMaxLength(MAX_NONCE_LENGTH));
 
 const SendMessageSchema = Schema.Struct({
   ciphertext: CiphertextString,
@@ -47,7 +49,7 @@ const SendMessageSchema = Schema.Struct({
 });
 
 const SendC2bMessageSchema = Schema.Struct({
-  body: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(MAX_BODY_LENGTH)),
+  body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_BODY_LENGTH)),
 });
 
 // ---------------------------------------------------------------------------
@@ -58,81 +60,132 @@ export const sendMessage = (
   chatId: string,
   senderProfileId: string,
   data: unknown,
-): Effect.Effect<Message, ChatNotFound | NotChatMember | ValidationError | DatabaseError, Db> =>
+): Effect.Effect<
+  Message,
+  ChatNotFound | NotChatMember | NotC2cChat | ValidationError | DatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
-    // Verify chat exists.
-    const chatRows = yield* Effect.tryPromise({
-      try: (): Promise<Chat[]> =>
-        db.select().from(chats).where(eq(chats.id, chatId)).limit(1) as Promise<Chat[]>,
+    // Verify chat exists and sender is a member in one LEFT JOIN, in place of
+    // the separate SELECT + assertMember round trips this used to make.
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<{ chat: Chat; memberId: string | null }[]> =>
+        db
+          .select({ chat: chats, memberId: chatMembers.id })
+          .from(chats)
+          .leftJoin(
+            chatMembers,
+            and(eq(chatMembers.chatId, chats.id), eq(chatMembers.profileId, senderProfileId)),
+          )
+          .where(eq(chats.id, chatId))
+          .limit(1) as Promise<{ chat: Chat; memberId: string | null }[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
-    if (chatRows.length === 0) {
+    if (rows.length === 0) {
       return yield* Effect.fail(new ChatNotFound({ id: chatId }));
     }
-    const chat = chatRows[0]!;
+    const { chat, memberId } = rows[0]!;
+    if (memberId === null) {
+      return yield* Effect.fail(new NotChatMember({ chatId }));
+    }
 
-    // Verify sender is a member.
-    yield* assertMember(chatId, senderProfileId);
+    // Assert this is a c2c chat — the mirror of `sendC2bMessage`'s check.
+    // Without it a member of a c2b chat could write ciphertext into it through
+    // this route, producing a row that escapes both the DSAR export and every
+    // moderation path, in the one chat class that promises both.
+    //
+    // AFTER the membership check, unlike `sendC2bMessage`, and the difference
+    // is the audience. That one is ARC-gated and only cire calls it. This one
+    // is public, so a class check ahead of membership would answer 409 "not a
+    // c2c chat" to any authenticated stranger holding a chat id — telling them
+    // which ids are commercial. Members already know.
+    if (chat.class !== "c2c") {
+      return yield* Effect.fail(new NotC2cChat({ chatId }));
+    }
 
-    const validated = yield* Schema.decodeUnknown(SendMessageSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(SendMessageSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 
     const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const now = new Date();
+    const now = storedNow();
+
+    const row: Message = {
+      id,
+      chatId,
+      senderProfileId,
+      ciphertext: validated.ciphertext,
+      nonce: validated.nonce,
+      body: null,
+      createdAt: now,
+      expiresAt: null,
+    };
 
     yield* Effect.tryPromise({
-      try: () =>
-        db.insert(messages).values({
-          id,
-          chatId,
-          senderProfileId,
-          ciphertext: validated.ciphertext,
-          nonce: validated.nonce,
-          createdAt: now,
-        }),
+      try: () => db.insert(messages).values(row),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
     metricMessageSent(chat.type as "dm" | "group" | "event", validated.ciphertext.length, "ok");
 
-    const [msg] = yield* Effect.tryPromise({
-      try: (): Promise<Message[]> =>
-        db.select().from(messages).where(eq(messages.id, id)) as Promise<Message[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    return msg!;
+    // Returned from the values just written — see `sendC2bMessage`.
+    return row;
   }).pipe(Effect.withSpan("zap.messages.send"));
 
 export const listMessages = (
   chatId: string,
   profileId: string,
   opts: { limit?: number; cursor?: string } = {},
-): Effect.Effect<Message[], ChatNotFound | NotChatMember | ValidationError | DatabaseError, Db> =>
+): Effect.Effect<
+  Message[],
+  ChatNotFound | NotChatMember | NotC2cChat | ValidationError | DatabaseError,
+  Db
+> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
-    // Verify chat exists.
-    const chatRows = yield* Effect.tryPromise({
-      try: (): Promise<Chat[]> =>
-        db.select().from(chats).where(eq(chats.id, chatId)).limit(1) as Promise<Chat[]>,
+    // Verify chat exists and user is a member in one LEFT JOIN, in place of
+    // the separate SELECT + assertMember round trips this used to make.
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<{ chat: Chat; memberId: string | null }[]> =>
+        db
+          .select({ chat: chats, memberId: chatMembers.id })
+          .from(chats)
+          .leftJoin(
+            chatMembers,
+            and(eq(chatMembers.chatId, chats.id), eq(chatMembers.profileId, profileId)),
+          )
+          .where(eq(chats.id, chatId))
+          .limit(1) as Promise<{ chat: Chat; memberId: string | null }[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
-    if (chatRows.length === 0) {
+    if (rows.length === 0) {
       return yield* Effect.fail(new ChatNotFound({ id: chatId }));
     }
+    const { chat, memberId } = rows[0]!;
+    if (memberId === null) {
+      return yield* Effect.fail(new NotChatMember({ chatId }));
+    }
 
-    // Verify user is a member.
-    yield* assertMember(chatId, profileId);
+    // The read half of the same rule the write path enforces. Without it the
+    // public route serves a c2b chat's plaintext `body` column to any member,
+    // going round the ARC-gated, `chat:c2b`-scoped reader that is supposed to
+    // be the only way to it — and hands a client written to decrypt messages
+    // rows whose `ciphertext` and `nonce` are both null.
+    //
+    // After the membership check, for the reason `sendMessage` gives.
+    if (chat.class !== "c2c") {
+      return yield* Effect.fail(new NotC2cChat({ chatId }));
+    }
 
     const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_MESSAGE_LIMIT), MAX_MESSAGE_LIMIT);
 
     // Cursor-based pagination: fetch messages older than the cursor.
     const conditions = [eq(messages.chatId, chatId)];
     if (opts.cursor) {
-      // Z6: the cursor is a message ID. Scope the lookup to THIS chat so a
+      // The cursor is a message ID. Scope the lookup to THIS chat so a
       // cursor from another chat can't be used to probe message timing, and
       // reject an unknown/foreign cursor with a validation error instead of
       // silently falling back to page 1 (which masks a malformed client or a
@@ -149,7 +202,18 @@ export const listMessages = (
       if (cursorRows.length === 0) {
         return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this chat" }));
       }
-      conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
+      // Composite keyset (createdAt, id): created_at has SECOND resolution and
+      // is not unique, so a strict `createdAt <` alone silently skips every
+      // message sharing the cursor's second — the ordinary case for a burst of
+      // replies, and unreachable for ever once the page moves past it. Same
+      // pattern as `listChats` and `getChatMembers`.
+      const cursor = cursorRows[0]!;
+      conditions.push(
+        or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )!,
+      );
     }
 
     const results = yield* Effect.tryPromise({
@@ -158,7 +222,7 @@ export const listMessages = (
           .select()
           .from(messages)
           .where(and(...conditions))
-          .orderBy(desc(messages.createdAt))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(limit) as Promise<Message[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
@@ -179,64 +243,84 @@ export const sendC2bMessage = (
   Effect.gen(function* () {
     const { db } = yield* Db;
 
-    // Verify chat exists.
-    const chatRows = yield* Effect.tryPromise({
-      try: (): Promise<Chat[]> =>
-        db.select().from(chats).where(eq(chats.id, chatId)).limit(1) as Promise<Chat[]>,
+    // Verify chat exists and sender is a member in one LEFT JOIN, in place of
+    // the separate SELECT + assertMember round trips this used to make.
+    const rows = yield* Effect.tryPromise({
+      try: (): Promise<{ chat: Chat; memberId: string | null }[]> =>
+        db
+          .select({ chat: chats, memberId: chatMembers.id })
+          .from(chats)
+          .leftJoin(
+            chatMembers,
+            and(eq(chatMembers.chatId, chats.id), eq(chatMembers.profileId, senderProfileId)),
+          )
+          .where(eq(chats.id, chatId))
+          .limit(1) as Promise<{ chat: Chat; memberId: string | null }[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
-    if (chatRows.length === 0) {
+    if (rows.length === 0) {
       return yield* Effect.fail(new ChatNotFound({ id: chatId }));
     }
-    const chat = chatRows[0]!;
+    const { chat, memberId } = rows[0]!;
 
-    // Assert this is a c2b chat.
+    // Assert this is a c2b chat — BEFORE the membership check, the mirror
+    // image of `sendMessage`'s ordering. That route is public, so membership
+    // has to come first there or a stranger holding a chat id could tell a
+    // c2c chat from a c2b one. This route is ARC-gated and only cire calls
+    // it — there's no untrusted caller to withhold class from — so checking
+    // class first means a c2c chat id passed here by mistake comes back
+    // `NotC2bChat`, the real reason, instead of a manufactured `NotChatMember`
+    // that would send an integrator debugging the wrong thing.
     if (chat.class !== "c2b") {
       return yield* Effect.fail(new NotC2bChat({ chatId }));
     }
 
-    // Verify sender is a member.
-    yield* assertMember(chatId, senderProfileId);
+    if (memberId === null) {
+      return yield* Effect.fail(new NotChatMember({ chatId }));
+    }
 
-    const validated = yield* Schema.decodeUnknown(SendC2bMessageSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(SendC2bMessageSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
 
     const id = "msg_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const now = new Date();
+    const now = storedNow();
 
+    const row: Message = {
+      id,
+      chatId,
+      senderProfileId,
+      ciphertext: null,
+      nonce: null,
+      body: validated.body,
+      createdAt: now,
+      expiresAt: null,
+    };
+
+    // One hop instead of two sequential writes. Atomic on D1 (`db.batch`); on
+    // bun:sqlite `commitBatch` chains the statements sequentially with no
+    // rollback, which is not a regression versus the two separate awaits this
+    // replaces — no test may assert joint rollback there.
     yield* Effect.tryPromise({
       try: () =>
-        db.insert(messages).values({
-          id,
-          chatId,
-          senderProfileId,
-          ciphertext: null,
-          nonce: null,
-          body: validated.body,
-          createdAt: now,
-        }),
+        commitBatch(db, [
+          db.insert(messages).values(row),
+          db.update(chats).set({ updatedAt: now }).where(eq(chats.id, chatId)),
+        ]),
       catch: (cause) => new DatabaseError({ cause }),
     });
 
-    // Bump chat's updatedAt.
-    yield* Effect.tryPromise({
-      try: () => db.update(chats).set({ updatedAt: now }).where(eq(chats.id, chatId)),
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-
-    const [msg] = yield* Effect.tryPromise({
-      try: (): Promise<Message[]> =>
-        db.select().from(messages).where(eq(messages.id, id)) as Promise<Message[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    return msg!;
+    // Returned from the values just written rather than read back. Every
+    // column is known here — nothing is defaulted or computed by the database
+    // — so the read was a third sequential round-trip that could only return
+    // what we already had.
+    return row;
   }).pipe(Effect.withSpan("zap.messages.send_c2b"));
 
 export const listC2bMessages = (
   chatId: string,
   opts: { limit?: number; before?: string } = {},
-): Effect.Effect<Message[], ChatNotFound | NotC2bChat | DatabaseError, Db> =>
+): Effect.Effect<Message[], ChatNotFound | NotC2bChat | ValidationError | DatabaseError, Db> =>
   Effect.gen(function* () {
     const { db } = yield* Db;
 
@@ -270,9 +354,24 @@ export const listC2bMessages = (
             .limit(1) as Promise<Message[]>,
         catch: (cause) => new DatabaseError({ cause }),
       });
-      if (cursorRows.length > 0) {
-        conditions.push(lt(messages.createdAt, cursorRows[0]!.createdAt));
+      // Same contract as `listMessages`: an unknown cursor is a caller bug,
+      // not page 1. Silently restarting sends the caller round the same page
+      // for ever, and it cannot tell that from a genuinely short history.
+      if (cursorRows.length === 0) {
+        return yield* Effect.fail(new ValidationError({ cause: "Unknown cursor for this chat" }));
       }
+      // Composite keyset (createdAt, id): created_at has SECOND resolution and
+      // is not unique, so a strict `createdAt <` alone silently skips every
+      // message sharing the cursor's second — the ordinary case for a burst of
+      // replies, and unreachable for ever once the page moves past it. Same
+      // pattern as `listChats` and `getChatMembers`.
+      const cursor = cursorRows[0]!;
+      conditions.push(
+        or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )!,
+      );
     }
 
     const results = yield* Effect.tryPromise({
@@ -281,7 +380,7 @@ export const listC2bMessages = (
           .select()
           .from(messages)
           .where(and(...conditions))
-          .orderBy(desc(messages.createdAt))
+          .orderBy(desc(messages.createdAt), desc(messages.id))
           .limit(limit) as Promise<Message[]>,
       catch: (cause) => new DatabaseError({ cause }),
     });
@@ -289,27 +388,3 @@ export const listC2bMessages = (
     metricMessagesListed(results.length);
     return results;
   }).pipe(Effect.withSpan("zap.messages.list_c2b"));
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-const assertMember = (
-  chatId: string,
-  profileId: string,
-): Effect.Effect<void, NotChatMember | DatabaseError, Db> =>
-  Effect.gen(function* () {
-    const { db } = yield* Db;
-    const rows = yield* Effect.tryPromise({
-      try: (): Promise<ChatMember[]> =>
-        db
-          .select()
-          .from(chatMembers)
-          .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.profileId, profileId)))
-          .limit(1) as Promise<ChatMember[]>,
-      catch: (cause) => new DatabaseError({ cause }),
-    });
-    if (rows.length === 0) {
-      return yield* Effect.fail(new NotChatMember({ chatId }));
-    }
-  });

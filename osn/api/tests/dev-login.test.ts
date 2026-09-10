@@ -15,7 +15,7 @@ import { createTestLayerWithSqlite } from "./helpers/db";
  * makes a seeded fixture account unreachable: nobody can enrol a WebAuthn
  * credential for a row a seed script wrote. `GET|POST /dev/login` mints a real
  * OSN session for that fixture so the whole OIDC chain downstream (organiser
- * portal, vendor portal, `@osn/social`) runs untouched.
+ * portal, vendor portal, `@musubi/social`) runs untouched.
  *
  * It is gated twice and both gates must hold:
  *  - tier — `local` or `dev` only, derived from the request-scoped env record
@@ -58,6 +58,7 @@ const deployedEnv = (osnEnv: string): Record<string, string> => ({
   OSN_JWT_PUBLIC_KEY: pubB64,
   OSN_SESSION_IP_PEPPER: "x".repeat(32),
   OSN_PAIRWISE_SALT: "p".repeat(32),
+  OSN_TOTP_ENCRYPTION_KEY: Buffer.from("t".repeat(32)).toString("base64"),
 });
 
 async function build(env: Record<string, string | undefined>) {
@@ -163,7 +164,7 @@ describe("dev-login", () => {
     expect(body.profile.handle).toBe(DEV_PRINCIPAL.handle);
     expect(body.session.token_type).toBe("Bearer");
     expect(body.session.access_token.length).toBeGreaterThan(0);
-    // The refresh token stays out of the body (S-M2) — cookie only.
+    // The refresh token stays out of the body — cookie only.
     expect(JSON.stringify(body.session)).not.toContain("refresh");
 
     const cookie = res.headers.get("set-cookie") ?? "";

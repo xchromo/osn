@@ -1,5 +1,910 @@
 # @osn/osn
 
+## 3.26.0
+
+### Minor Changes
+
+- f756993: Let an account at the passkey cap complete a recovery.
+
+  An account holding `MAX_PASSKEYS_PER_ACCOUNT` credentials that lost its last
+  device was unreachable: it could not enrol another, and it could not delete one
+  to make room, because deleting needs a WebAuthn step-up and a restricted
+  recovery session cannot mint a step-up at all.
+
+  An enrolment from a restricted recovery session is no longer refused at the cap,
+  or at any count — a count-based refusal there is an account nobody can reach
+  again. What keeps the count from ratcheting instead is a reclaim, one credential
+  above the cap, and it can only take back the slots that same recovery lent:
+  `recovery` provenance _and_ created at or after the account's recorded recovery
+  instant, deleted in the same batch as the insert that replaces them.
+
+  Nothing that predates the recovery is ever taken. That bound is the point rather
+  than a detail: passkey provenance is stamped once and never updated, so a
+  credential an earlier recovery lent still reads `recovery` long after it has
+  become the account's real, daily device — and the cooldown puts the earliest
+  second recovery at the moment that credential matures. Where there is nothing of
+  its own to reclaim, the enrolment still happens and the account ends a credential
+  above the ceiling.
+
+  An ordinary enrolment at the cap is refused exactly as before, and no credential
+  the account established for itself can be reclaimed.
+
+  Adds the `passkey_reclaimed` security-event kind and the
+  `osn.auth.recovery.passkey_reclaim` counter (`headroom_used`, `reclaimed`,
+  `ceiling_yielded`).
+
+### Patch Changes
+
+- Updated dependencies [f756993]
+  - @shared/observability@0.18.0
+  - @shared/crypto@0.13.4
+  - @shared/email@0.8.1
+  - @shared/turnstile@0.2.23
+
+## 3.25.0
+
+### Minor Changes
+
+- 46023fa: Gate passkey deletion and email change on credential provenance, not on wall clock alone
+
+  A passkey registered a minute ago under an emailed code minted a step-up token indistinguishable from one the user had held for a year, so the narrow allow-lists on `passkey_delete` and `email_change` constrained only the direct path. Registering a credential and asserting it reached both gates in two hops.
+
+  `passkeys.provenance_amr` now records the effective strength of the ceremony chain behind each credential, inherited so the pivot cannot be laundered by another hop, and `accounts.last_recovered_at` opens a 72-hour window after any recovery. A credential that predates the recovery acts immediately; one the recovery produced waits. Adds `POST /recovery/disown`, the single-use "this wasn't me" lever carried by the recovery notice, which revokes the credentials that recovery enrolled, every session on the account, and the window itself.
+
+  The disown route answers the same `202` on every branch a caller without the token can reach, and a `500` on one they cannot: a database failure after the token has matched. That branch is the difference between the lever having fired and not, so it is reported rather than hidden, and the token is put back for a second attempt. A token reaches only the recovery it was minted for — a later recovery keeps its own credentials and its own window.
+
+### Patch Changes
+
+- Updated dependencies [46023fa]
+  - @osn/db@0.24.0
+  - @shared/email@0.8.0
+  - @shared/observability@0.17.0
+  - @shared/redis@0.8.0
+  - @shared/crypto@0.13.3
+  - @shared/turnstile@0.2.22
+
+## 3.24.0
+
+### Minor Changes
+
+- 5e47301: Email and TOTP account recovery routes
+
+  The three public endpoints that let a locked-out user back in, each ending in the
+  restricted recovery session the audience work built:
+  `POST /login/recovery/email/{begin,complete}` and
+  `POST /login/recovery/totp/complete`. Neither factor is a login factor and
+  neither mints an ordinary session — both produce an `osn-recovery` token that
+  can enrol a passkey and nothing else, and enrolling one is what lifts the
+  restriction.
+
+  `begin` takes an **email address, not a handle**. `/login/passkey/begin` accepts
+  a handle because it sends nothing; this endpoint puts mail in somebody's inbox,
+  and a handle is public, so accepting one would turn a public identifier into a
+  way to mail a stranger. The check is syntactic and never touches the database,
+  so refusing a handle discloses nothing.
+
+  **A uniform 202 is not enough, because the send is the oracle.** Every existing
+  OTP send awaits the provider, and a Resend round trip is hundreds of
+  milliseconds against a sub-millisecond database probe — so response latency
+  separates a resolving identifier from a non-resolving one however identical the
+  body is. The send is dispatched detached with a timeout, and the non-resolving
+  branch makes the same number of store round trips, so both return at probe cost.
+  A test parks the transport on a gate, asserts the response returns anyway, then
+  releases it and asserts the mail actually went — the second half is what stops a
+  fibre that never runs from passing like one that works.
+
+  **And closing that at `begin` alone would only move it to `complete`.** `begin`
+  answers 202 either way but parks a code only for an address that resolves, so
+  the attack is two calls: `begin` for a candidate address, then `complete` with a
+  wrong code, timed. Every store here is an HTTP hop to Upstash in each tier but
+  `local`, so a branch that makes two hops answers measurably sooner than one that
+  makes four. All three routes therefore pin a fixed count on every branch —
+  `begin` two, `/login/recovery/email/complete` four, and
+  `/login/recovery/totp/complete` whatever `checkTotpCode` costs — padded to the
+  costliest real branch rather than the cheapest, since padding down is the same
+  oracle upside down. The TOTP route matters most: it takes an email address as
+  readily as a handle, so a cheap non-resolving branch there lets a stranger ask
+  whether an address has an OSN account at all. Its padding lives beside
+  `checkTotpCode` as `burnTotpCheckCost`, so a round trip added to one is added
+  where the other will be read. The padding is reads even where it stands in for a
+  write — what a caller can time is the number of hops, and a probe write would
+  leave a counter key behind per request. Wall-clock assertions would be flaky and
+  would pin nothing against an in-memory store, so the guard counts calls: the
+  stores are wrapped and every branch is asserted to make the same number.
+
+  **The recipient is the victim**, so the flood control is per resolved account (3
+  per 24 h) as well as per IP: the address is the account holder's own, a rotating
+  fleet already defeats per-IP keys at this issuer, and an endpoint that trains a
+  user to expect unsolicited recovery mail is doing a phisher's groundwork. The
+  cap is keyed on the resolved `accountId` and never on the submitted identifier,
+  or it would double as an existence oracle, and a capped call returns without
+  parking a code — replacing the code the user is holding would be a denial of
+  service dressed as flood control.
+
+  Completion matches `consumeRecoveryCode` rather than inventing a second, quieter
+  ceremony: every session on the account is revoked and an `account_recovered`
+  audit row is written in the same batch, before the new session exists, and a
+  `recovery-used` notice is detached afterwards.
+
+  Two things beyond the issue, both found by attacking the plan before writing it:
+
+  - **The TOTP lockout counter is now scoped by ceremony.** `checkTotpCode` is
+    shared with `POST /step-up/totp/complete`, which is authenticated; the new
+    recovery route is not, and it accepts a public handle. On a shared counter,
+    five requests from anyone who knew a handle would have locked that account's
+    step-up for fifteen minutes — taking `passkey_register`, `recovery_generate`,
+    `totp_enroll`, `totp_disable`, `account_delete` and `account_export` with it
+    for any user whose only non-passkey factor is TOTP — repeatedly and
+    indefinitely. `checkTotpCode` now takes a required `scope` and keys the two
+    surfaces apart; the lockout metric gains a bounded `scope` attribute so a
+    dashboard can tell which surface is under attack.
+  - **A failed `complete` with no pending code does not move the lockout
+    counter.** It is not a guess against anything, and counting it would hand
+    anyone who knows the identifier a lever to lock the owner out of their own
+    recovery without ever trying a digit.
+
+  `AuthMethod` gains `email_recovery` and `totp_recovery`. That union is pinned by
+  a test whose whole purpose is to stop OTP primary login creeping back, so the
+  pin now carries the argument rather than just the members: what separates these
+  from the factor `[[passkey-primary]]` removed is not the name but the audience —
+  a restricted session refused by all seven verifiers, accepted by one resolver,
+  and dead in fifteen minutes.
+
+### Patch Changes
+
+- Updated dependencies [5e47301]
+  - @shared/observability@0.16.0
+  - @shared/email@0.7.0
+  - @shared/redis@0.7.0
+  - @shared/crypto@0.13.2
+  - @shared/turnstile@0.2.21
+
+## 3.23.1
+
+### Patch Changes
+
+- 6bb25f2: Route every detached background send through a per-request sink that the Worker
+  entry hands to `ExecutionContext.waitUntil`.
+
+  On workerd a promise never passed to `waitUntil` may not run once the response
+  is returned, so all seven `Effect.forkDetach` notification sites could silently
+  drop their outbound email on the deployed Worker. It diverges only there — on
+  the Bun dev server the fibre completes, so no unit test, local run or
+  `wrangler deploy --dry-run` could observe it.
+
+## 3.23.0
+
+### Minor Changes
+
+- 2aedc02: The `osn-recovery` token audience, for restricted recovery sessions
+
+  Account recovery has to end in a session that can enrol a fresh passkey and do
+  nothing else. This adds that primitive. **No route mints one yet** — the
+  recovery endpoints are separate work, and the tests are this change's reader.
+
+  The restriction is a distinct access-token audience, `osn-recovery`, not a
+  column. There is no single guard a column could be checked in: four entry points
+  in osn-api verify access tokens, and `pulse/api`, `zap/api` and `cire/api` verify
+  the same token over JWKS with no access to OSN's database. All seven already pin
+  `osn-access`, so all seven reject the new audience with **no change to any of
+  them** — fail-closed by construction, and not waiting on three other services to
+  deploy. `resolvePasskeyEnrollPrincipal` is the only resolver taught to accept it,
+  which makes `/passkey/register/begin` and `/complete` the only two routes it
+  reaches.
+
+  `sessions.restricted_until` (new column, migration `0008`) is the source of truth
+  for **rotation**, not for request-time authorisation: `refreshTokens` copies it
+  forward and re-mints on the recovery audience, or the restriction would die on
+  the first silent refresh five minutes in. It also pins an absolute 15-minute
+  expiry that never slides — and that guard has to be explicit, because a
+  restricted session's whole life sits inside half of a 30-day TTL, so the sliding
+  window's own condition is always true for exactly the session that must expire on
+  schedule. `completePasskeyRegistration` clears the column and restores an
+  ordinary TTL, which is what lifts the restriction.
+
+  A recovery-audience caller **bypasses the passkey step-up gate**, deliberately:
+  losing a phone does not delete its passkey row, so the gate would otherwise block
+  the common recovery case. The alternative — letting a restricted session mint
+  step-up tokens — would hand it `/recovery/generate`, `DELETE /account`,
+  `GET /account/export` and `/account/email/complete` as well.
+
+  That bypass is the one grant of privilege here, and it is priced rather than
+  assumed. `issueRecoverySession` takes a **required** `amr` — `"otp"`, `"totp"` or
+  `"webauthn"` — refuses at mint time anything `passkeyRegisterAllowedAmr` does not
+  admit, and records it in `sessions.restricted_amr` (new column, migration
+  `0009`), which rotation carries forward alongside the deadline.
+  `beginPasskeyRegistration` reads that column back off the caller's own session
+  row, so its `caller` argument is now the session's hash
+  (`{ recoverySessionHash }`) rather than a boolean the route asserted from the
+  token's audience: no route can mint a session whose factor the gate would have
+  refused, and narrowing the allow-list withdraws the bypass from sessions already
+  issued.
+
+  Two predicates were added to the write that lifts the restriction, which is the
+  one place a restricted session becomes a full one. It is now scoped to the
+  caller's `account_id`, like the two sibling session writes that take the same
+  server-derived hash, and to `expires_at > now` — `liveSessionIds` has no expiry
+  term, so an expired restricted row still classified as the caller's own and
+  enrolment converted it into an ordinary 30-day session, making the real bound the
+  15-minute deadline plus one access-token TTL rather than 15 minutes.
+
+  Two behaviour changes beyond the issue, both closing ways the restriction would
+  have failed open:
+
+  - `verifyRefreshToken` now **rejects a restricted session unless the caller opts
+    in**, and `refreshTokens` is the only caller that does. `GET /authorize`
+    resolves the signed-in user from the session cookie rather than an access
+    token, so without this a recovery session would have completed an OIDC
+    authorization and signed the user into every relying party.
+  - `ACCESS_TOKEN_AUDIENCE` moves into `constants.ts` beside the new one, and the
+    reserved OIDC client-id deny-list references both by name instead of repeating
+    the literals — the deny-list can no longer drift from the audiences it guards.
+
+### Patch Changes
+
+- Updated dependencies [2aedc02]
+  - @osn/db@0.23.0
+  - @shared/crypto@0.13.1
+
+## 3.22.0
+
+### Minor Changes
+
+- d287d72: TOTP enrolment, verification and disable on osn-api
+
+  An account can now enrol an authenticator app, use it to satisfy a step-up
+  ceremony, and remove it. TOTP is a step-up factor only — it is not a login
+  factor, and passkeys remain the sole primary one.
+
+  The shared secret is the one credential in the schema that cannot be hashed,
+  because RFC 6238 verification needs the raw HMAC key back. It is AES-256-GCM
+  encrypted under a new `OSN_TOTP_ENCRYPTION_KEY` Worker secret, with the account
+  id as additional authenticated data. **osn-api refuses to boot in a deployed
+  tier without that secret**, so it has to be provisioned before this ships;
+  local dev generates an ephemeral key, exactly as the JWT signing pair does.
+  That key **cannot be rotated**: rows carry a `key_version` and the service holds
+  exactly one key, so installing a new one makes every enrolled credential
+  unverifiable. The column is there so adding rotation later needs no migration.
+
+  `verifyTotpCode` in `@shared/crypto/totp` now returns the step it matched
+  (`{ step } | null`) rather than a boolean. RFC 6238 §5.2 single use is not
+  enforceable without it, and the alternative — refusing every code for the rest
+  of the drift window after a success — would fail a legitimate second ceremony
+  ninety seconds later. Breaking, and free: nothing outside its own test consumed
+  it.
+
+  Also: a `totp` AMR value, `totp_enroll` and `totp_disable` step-up purposes,
+  `totp_enrolled` / `totp_disabled` security events and notification emails, five
+  new rate-limiter slots, a `TotpClient` in `@osn/client`, and a `totp` section in
+  the DSAR export.
+
+  `passkeyDeleteAllowedAmr` stays WebAuthn-only and the email-change gate keeps an
+  allow-list of its own, so neither admits a `totp` AMR **directly**. Neither is a
+  boundary against a TOTP seed, and neither was one before this branch: any factor
+  those gates' sibling `passkeyRegisterAllowedAmr` admits can register a passkey
+  and assert it, arriving with the `webauthn` AMR both lists accept. Closing that
+  needs credential provenance and is tracked separately.
+
+### Patch Changes
+
+- Updated dependencies [d287d72]
+  - @shared/crypto@0.13.0
+  - @shared/observability@0.15.0
+  - @shared/redis@0.6.0
+  - @shared/email@0.6.0
+  - @osn/db@0.22.0
+  - @shared/turnstile@0.2.20
+
+## 3.21.5
+
+### Patch Changes
+
+- 13d8ee3: Separate OSN, the system, from Musubi, our implementation of it.
+
+  OSN is now the headless core — identity, the social graph, authorisation and
+  the OpenID Connect issuer — with no user interface, runnable by anyone for
+  their own private social graph. Musubi is our implementation and the product
+  built on it: the social app, its marketing site, the brand, and the
+  `musubi.social` instance we host.
+
+  `@osn/social` becomes `@musubi/social` and `@osn/landing` becomes
+  `@musubi/landing`, both moving to a new top-level `musubi/` workspace
+  directory. The backend packages, `@osn/ui`, the shared packages and every
+  wire-level identifier — the `osn-access` and `osn-step-up` token audiences,
+  `/.well-known/jwks.json`, claim names, the pairwise subject derivation and the
+  ARC token format — keep the OSN name, because an independent implementation has
+  to match them to interoperate. That is the rule the split now runs on: if
+  another implementation must use the same string, it is OSN; otherwise it is
+  Musubi.
+
+  The remaining packages change only in the references they carry. Two of them
+  were resolving the moved package by filesystem path rather than by package name
+  — `tools/lab/src/lab.css` and `tools/metrics/src/metrics.css` both `@import`
+  the social app's stylesheet — and would have failed to build without the
+  update.
+
+  Two repository guards learned about the new directory: `fmt` and `fmt:check`
+  hardcode the list of workspace directories oxfmt walks, and
+  `scripts/validate-changesets.sh` builds its known-workspace-name set from a
+  hardcoded `find`. Neither would have reported anything unusual; the format
+  check would simply have stopped covering two packages.
+
+  Cloudflare Pages project names (`osn-social`, `osn-social-dev`, `osn-landing`)
+  are deliberately unchanged — renaming a Pages project attached to a live apex
+  is a deploy operation, not a rename.
+
+## 3.21.4
+
+### Patch Changes
+
+- Updated dependencies [3447d5b]
+  - @shared/crypto@0.12.0
+
+## 3.21.3
+
+### Patch Changes
+
+- b2b6b70: Clean up the `house/no-tracker-ref-in-comment` mechanical majority (xchromo/osn#924).
+
+  Every finding-tag, phase-code, and narrative-phrase reference flagged by the rule in a short comment block is now gone from these packages: a bare parenthetical tag deleted, a leading label stripped and the remainder capitalized into its own sentence, or a "used to be" narration rewritten forward to state the current, still-true fact. No behavior changes anywhere — every edit is comment text.
+
+  A handful of leftover `osn-tracker#N` citations that predated both this batch and the separate tracker-number-refs cleanup (xchromo/osn#930) are also gone from `@osn/api` and `@pulse/api`, using the same treatment established there.
+
+- Updated dependencies [b2b6b70]
+  - @osn/db@0.21.2
+  - @shared/crypto@0.11.3
+  - @shared/email@0.5.3
+  - @shared/observability@0.14.3
+  - @shared/redis@0.5.1
+  - @shared/turnstile@0.2.19
+
+## 3.21.2
+
+### Patch Changes
+
+- b78deb7: State four comment constraints directly instead of citing a tracker finding.
+
+  `recommendations.ts` carried D1's 100-bound-parameter cap as a tracker citation
+  three times over; each now states the constraint, and a claim the old text made
+  about the query binding `profileId` "once" is corrected — it binds a fixed
+  number of times, which is what the file's own measurement a few hundred lines
+  down already said. `d1ParamCounts.test.ts` loses five tracker numbers that its
+  own six-site index already covers, and `redact.ts` loses a finding tag from its
+  fast-path note. The deny-list's three-part admission test is untouched.
+
+  No behavior changes; every edit is comment text.
+
+- b78deb7: Rewrite every private-tracker comment reference in these packages to state the durable constraint directly (xchromo/osn#924's highest-priority batch).
+
+  A comment citing `osn-tracker#N` (or the shorter `tracker#N` spelling, also found live and now caught by `house/no-tracker-ref-in-comment` too) means nothing to a reader who cannot open the private tracker, and stops resolving once the finding closes — this repo is public, the tracker is not, so the number was a disclosure as well as a dead end. Every citation is now the fact it stood for: which D1 bind-parameter cap a query respects and why, which cookie-scoping attack a `__Host-` prefix defeats, which reflow guard a `resize-none` textarea keeps sound, why a response is never cached. One citation (`#130`) is to a finding that is still **open** — its replacement states the constraint as a live rule rather than implying a fix that hasn't happened, and links nothing.
+
+  Nineteen of the twenty tracker issues behind these citations are closed and fixed; none of that fix history is repeated here — only the fact that survives it. No behavior changed anywhere in this changeset: every edit is comment text.
+
+  Every rewrite was independently adversarially verified against the real diff and the current code (not the original finding's problem description) before being accepted; two of thirty-seven were caught wrong on the first pass — one a factual overstatement carried over from the finding's language rather than the code as implemented, one a bare `#N` left behind by an earlier pass — and both were corrected.
+
+- Updated dependencies [b78deb7]
+  - @shared/observability@0.14.2
+  - @shared/crypto@0.11.2
+  - @shared/email@0.5.2
+  - @shared/turnstile@0.2.18
+
+## 3.21.1
+
+### Patch Changes
+
+- 6474854: Fix every `house/no-stacked-doc-block` site in these packages (xchromo/osn#926).
+
+  A declaration with two or more leading doc blocks only has its last block attached — the earlier one silently documents nothing, and an editor hovering the declaration never shows it. Two shapes accounted for all 26 sites across these packages: a genuine module doc that had been placed after the file's `import` line rather than at line 1, which the rule's module-block exemption checks literally, and so read as stacked in front of whatever the doc block happened to precede — moved to line 1, restoring both blocks to their correct attachment; and two doc blocks that were both actually describing the same declaration, split apart for no good reason — merged into one, with content preserved and no duplication.
+
+  No prose was rewritten and no behavior changed. Every fix was spot-checked by an independent adversarial pass against the real diff before being applied, confirming no content was lost and every surviving block attaches to the declaration it actually describes.
+
+- Updated dependencies [6474854]
+  - @shared/crypto@0.11.1
+  - @shared/db-utils@0.7.1
+  - @shared/observability@0.14.1
+  - @osn/db@0.21.1
+  - @shared/email@0.5.1
+  - @shared/turnstile@0.2.17
+
+## 3.21.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+- d3af349: OTLP trace export now works on Cloudflare Workers. Both deployed Workers
+  (`id.musubi.social`, `api.cireweddings.com`) had `Effect.withSpan` at 177 call
+  sites and exported nothing: `shared/observability/src/tracing/layer.ts` builds
+  `NodeSdk.layer(...)`, and `@effect/opentelemetry` ships only `NodeSdk`/`WebSdk`,
+  neither of which runs on workerd.
+
+  New `shared/observability/src/tracing/otlp.ts` — `makeOtlpTracing(config)` —
+  builds a tracing layer on Effect v4's own `effect/unstable/observability`
+  (`OtlpTracer` + `OtlpSerialization.layerJson`) over `FetchHttpClient`, so the
+  whole path is `globalThis.fetch` and has no Node dependency. It returns
+  `{ layer, flush, enabled }`; the layer is a `Layer.Layer<never>` (the
+  `Tracer.Tracer` reference is erased from a layer's output type) so it drops
+  straight into the existing layer graphs and no route factory or `AppDeps`
+  signature changed.
+
+  The background export interval is deliberately pushed 24h out: on workerd no
+  fiber survives between requests, and a failed background export disables the
+  exporter — dropping spans — for 60 seconds. `flush` inside `ctx.waitUntil(...)`,
+  after the response is produced, is the only sound drain, and it drains every
+  live exporter (a `Layer` is memoized per `MemoMap`, so osn/api's two long-lived
+  runtimes each hold one). `config.traceSampleRatio` is applied as a head-based,
+  parent-respecting sampler, matching what the Bun path gets from
+  `ParentBasedSampler`.
+
+  Inert unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set: the layer is `Layer.empty`,
+  `flush` is a no-op, and nothing is ever POSTed.
+
+  `osn/api`:
+
+  - `osnLoggerLayer` now carries the tracer as well as the redacting logger, and
+    `build-deps.ts` already merges it into the shared `appRuntime` every route
+    runs on — so the route spans are exported without touching a route.
+  - `runOsn`/`runOsnSync` moved onto a module-scope `ManagedRuntime` (mirroring
+    cire/api). `Effect.provide` opens _and closes_ a layer's scope per call, which
+    with an exporter attached meant building and tearing one down per call.
+  - `OsnWorkerHandler.fetch` gained an **optional** third `ctx: ExecutionContext`
+    parameter, needed for `ctx.waitUntil(flushOsnTelemetry())`. Optional so every
+    existing two-argument caller keeps compiling and behaving identically (they
+    just skip the flush); a deployed Worker always receives the context.
+
+  `shared/observability`:
+
+  - `otlpExporterUrl` moved to `src/tracing/url.ts` (re-exported from
+    `src/tracing/layer.ts`, so its import path is unchanged) — the workerd
+    exporter needs it and must not reach the NodeSdk module.
+  - `src/tracing/index.ts` is now the workerd-safe barrel and no longer
+    re-exports `./layer`; `makeTracingLayer` is still exported from the package
+    root, which is Bun-only by construction.
+  - `tests/tracing/workerd-safety.test.ts` walks the static import graph of every
+    subpath the two Workers import and fails on a Node-only dependency, including
+    a not-vacuous check that the detector still fires on the Bun-only root barrel.
+
+  Traces only. Metric export stays deferred: `src/metrics/factory.ts` builds its
+  instruments from the raw `@opentelemetry/api` meter rather than Effect's
+  `Metric`, so `OtlpMetrics` cannot see any of them.
+
+  Known limitation, documented in the code: `src/fetch/instrument.ts` and
+  `src/tracing/propagation.ts` use the raw `@opentelemetry/api` registry, which
+  nothing bridges to Effect's tracer. An inbound `traceparent` does not become the
+  parent of these spans and `instrumentedFetch`'s client spans are not their
+  children, so what is exported is a correctly attributed root span per fiber root
+  rather than one joined request trace — which is already the shape of the data,
+  since the repo makes 244 separate `runCire()`/`runOsn()`/`run()` calls.
+
+### Patch Changes
+
+- d3af349: Apply the Effect v4 combinator renames and the Cause/Runtime rework.
+
+  Renames resolved from upstream's generated reference: `catchAllDefect` →
+  `catchDefect`, `catchAllCause` → `catchCause`, `catchAll` → `catch`, `either` →
+  `result`, `forkDaemon` → `forkDetach`, `zipRight` → `andThen`, `dieMessage` →
+  `die(new Error(…))`, `Layer.scoped` → `Layer.effect`, `Cause.failureOption` →
+  `Cause.findErrorOption`. The `Either` module became `Result`, whose variants are
+  tagged `Success`/`Failure` and carry `success`/`failure` rather than
+  `right`/`left`.
+
+  `Runtime.isFiberFailure` and `FiberFailureCauseId` are gone: v4's runner rejects
+  with `Cause.squash(cause)`, which is the typed failure itself, so the two
+  osn-api error-shaping helpers no longer unwrap anything. That changes one thing
+  on a security path — `Cause.squash` surfaces a _defect_ where v3's
+  `Cause.failureOption` returned `None` — and both helpers now document it.
+
+  Adds a test asserting the Redis layer's finalizer runs on scope close. The
+  `Layer.scoped` → `Layer.effect` rewrite would have leaked connections silently
+  if the scope had been dropped: it type-checks either way, and nothing covered it.
+
+  Second phase of the Effect v4 migration; the tree does not type-check until the
+  `Schema` work lands.
+
+- d3af349: Rebuild the logger for Effect v4, and fix a secret leak in annotation redaction.
+
+  `redact()` matches the deny-list against an object's **keys**, and the v3 logger
+  mapped over each annotation **value** — so it only ever saw a bare scalar with no
+  key attached and passed it through. `Effect.annotateLogs({ accessToken })`
+  reached the sink in clear, along with every other deny-listed key, on every tier.
+  The record is now passed whole.
+
+  v4 moved annotations off the logger's `Options` and onto the fiber, so redaction
+  moves to the output side, wrapping `Logger.formatStructured`. `Logger.layer`
+  replaces the whole active set, so `Logger.tracerLogger` is listed explicitly —
+  omitting it drops log-to-span correlation silently. `LogLevel` is now string
+  literals (`"Warn"`, not v3's `"Warning"`), and the minimum level is a
+  `References.MinimumLogLevel` service rather than `Logger.minimumLogLevel`.
+
+  Adds `PrettyLoggerLive` for the dev-server entrypoints, replacing v3's
+  `Logger.pretty`. It exists as one export rather than eleven inline
+  `Logger.layer([…])` arrays so `tracerLogger` has a single place to be got right.
+
+  Local output loses ANSI colour for an indented structured rendering:
+  `consolePretty` is opaque, so there is no seam to redact through it, and one
+  redaction point covering every tier is the better trade.
+
+  **The JSON severity field is now `level`, not `logLevel`.** Grafana queries,
+  panels and alerts filtering on the old name match nothing and must be updated in
+  Grafana Cloud by hand.
+
+- d3af349: Migrate the Effect Schema surface of the four service packages to v4.
+
+  v3's constraint combinators are v4 _checks_, applied through a schema's
+  `.check(...)` rather than `.pipe(...)`: `maxLength`/`minLength`/`minItems`/
+  `maxItems` collapse onto `isMaxLength`/`isMinLength`, `int` becomes `isInt`, and
+  `between(a, b)` becomes `isBetween({ minimum, maximum })` — still inclusive at
+  both ends, so no range moved. `Schema.filter` becomes
+  `Schema.check(Schema.makeFilter(…))`, and because a v4 filter carries its own
+  failure message in its return value, the `{ message: () => "…" }` option becomes
+  the predicate returning that string; every validator keeps its exact wording.
+  `Schema.Literal` takes a single literal, so enums (and the spreads over
+  `SUPPORTED_CURRENCIES`, `SHARE_SOURCES` and `INTEREST_CATEGORIES`) become
+  `Schema.Literals([…])`. `Schema.decodeUnknown` becomes
+  `Schema.decodeUnknownEffect`, and `Schema.Record` takes its key and value
+  positionally.
+
+  Three copies of a workaround are deleted rather than ported. `@pulse/api`'s
+  events, series and discovery services each carried a hand-rolled "validate the
+  string, then transform to a Date" pair because v3's `DateFromString` accepted a
+  string that parses to an Invalid Date. v4's rejects it, so all three are now
+  `Schema.DateFromString`.
+
+  `@osn/client`'s `isAuthExpiredError` keeps all three of its arms, but the
+  comments no longer claim a `FiberFailure` is what arrives: v4 removed the
+  wrapper and `runPromise` rejects with the squashed error itself, so `instanceof`
+  now carries the common path. The printout arm stays for a consumer bundle built
+  against v3, and for any boundary that strips both the prototype and the `_tag`.
+
+  Every migrated check was verified to still _reject_, not merely type-check.
+
+- d3af349: Drop five `Logger` imports left dead by the v4 logger rework, and finish the
+  Effect v4 migration: with `@cire/api` moved off v3 in the same change, the
+  whole monorepo type-checks and passes its tests under Effect v4.
+
+  The observability change is the test-only one: `Logger.layer` replaces the
+  whole active logger set, so the default logger that used to emit a separate
+  "Fiber terminated…" stack dump is gone, and a capture is now exactly the
+  entry under test.
+
+- d3af349: Stop a defect carrying an allow-listed tag from reaching a client.
+
+  Effect v4 removed `FiberFailure`. `ManagedRuntime.runPromise` rejects with
+  `Cause.squash(cause)`, and `squash` returns the **defect object** when the cause
+  carries no `Fail` — where v3's `Cause.failureOption` returned `None` and the
+  helper answered `null`. A `Data.TaggedError` IS an `Error` carrying a `_tag`, so
+  `Effect.die`, `Effect.orDie` and a bare `throw` inside `Effect.sync` all put an
+  allow-listed tag straight in front of `makeSafeError`'s allowlist, which then
+  returns the defect's message. `Effect.orDie` is already an established pattern
+  here (`routes/graph.ts`, `recommendations.ts`, `organisation.ts`).
+
+  Nothing was leaking: every construction site of the three allow-listed tags uses
+  `Effect.fail`. But that is a convention with no enforcement, and the doc comments
+  asserted it as a structural guarantee. Now it is one.
+
+  `makeAppRunner` goes through `runPromiseExit` and inspects the `Exit`: a `Fail`
+  is rethrown via `Cause.findErrorOption` (unchanged for all 136 call sites, and
+  `run` keeps its `Promise<A>` signature), anything else becomes an `OpaqueDefect`
+  that deliberately carries no `_tag`. Both the shared-runtime and test-layer
+  branches funnel through the same path, so a test cannot observe error handling
+  the routes do not have.
+
+  `OpaqueDefect` exposes its `Cause` through a prototype getter over the native
+  non-enumerable `Error.cause`, not an own field: a constructor parameter property
+  is enumerable, and `JSON.stringify` would then serialise the whole `Cause` —
+  re-opening the leak through any structured logger that walks enumerable keys.
+  `JSON.stringify(defect)` is `{"name":"OpaqueDefect"}`.
+
+  `public-error.ts` needed no behaviour change but its comments were stale: the
+  `FiberFailure → Cause → Fail` justification is dead, and the symbol-key
+  rationale was wrong (v4 brands `Cause` with _string_ keys). What `Reflect.ownKeys`
+  actually buys now is reaching the **non-enumerable** `Error.cause`, which is the
+  only route to a defect's `Cause` — pinned by a test.
+
+  Also fixes a latent flaw in both old test harnesses: `throw new Error("expected
+rejection")` sat inside the `try`, so its own rejection became the value under
+  test and a generic-message assertion could pass vacuously.
+
+  osn/api: 1141 -> 1153.
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @osn/db@0.21.0
+  - @shared/crypto@0.11.0
+  - @shared/db-utils@0.7.0
+  - @shared/email@0.5.0
+  - @shared/observability@0.14.0
+  - @shared/redis@0.5.0
+  - @shared/turnstile@0.2.16
+
+## 3.20.34
+
+### Patch Changes
+
+- Updated dependencies [8fca0c0]
+  - @shared/observability@0.13.8
+  - @shared/crypto@0.10.18
+  - @shared/email@0.4.12
+  - @shared/turnstile@0.2.15
+
+## 3.20.33
+
+### Patch Changes
+
+- Updated dependencies [613c916]
+  - @shared/db-utils@0.6.6
+  - @osn/db@0.20.13
+  - @shared/crypto@0.10.17
+
+## 3.20.32
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- afa5920: Take ioredis 6.0.0 (from 5.11.1). This is not a dev-only bump: `osn/api/src/index.ts` and `pulse/api/src/index.ts` both statically import `./redis`, which statically imports `@shared/redis/ioredis`, so ioredis is compiled into both deployed Worker bundles and its module body runs at isolate startup. v6 drops the `redis-parser` package for an in-tree RESP decoder — confirmed, `redis-parser` is gone from the lockfile.
+
+  Verified by booting the real built bundle on workerd (`wrangler dev --local`), not by a dry run: `osn-api` starts clean and serves 200 on `/health`, `/.well-known/jwks.json` and `/`, with no errors in the log. The Worker bundle grows 4594.90 KiB to 4716.41 KiB.
+
+  One thing the bundle growth understates, found while reviewing this bump and filed separately: the ioredis in these Worker bundles can never execute. `osn/api/src/index.ts` reaches it only through `initRedisClientFromEnv`, which on workerd selects Upstash-over-HTTP or the in-memory store; the socket-opening `createClientFromUrl` is reached solely from `osn/api/src/local.ts`. Stubbing that one import out and rebuilding puts ioredis at 449.58 KiB raw / 72.50 KiB gzip in `osn-api`, about 8.8% of the compressed script, parsed on every cold isolate start. That is pre-existing — it was 337.98 / 61.75 KiB gzip on ioredis 5 — and this bump adds 111.60 / 10.75 to it. The fix is a module split in `@shared/redis`, not a change to this bump.
+
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [afa5920]
+- Updated dependencies [01437b3]
+- Updated dependencies [00ed19f]
+  - @osn/db@0.20.12
+  - @shared/db-utils@0.6.5
+  - @shared/redis@0.4.7
+  - @shared/crypto@0.10.16
+  - @shared/email@0.4.11
+  - @shared/observability@0.13.7
+  - @shared/openapi-tools@0.1.2
+  - @shared/rate-limit@0.3.3
+  - @shared/turnstile@0.2.14
+
+## 3.20.31
+
+### Patch Changes
+
+- 853367f: Take jose 6.2.10 (from 6.2.4). Releases 6.2.5 through 6.2.10 are all JOSE and JWT input-validation hardening: reject characters outside the Base64URL alphabet, reject invalid UTF-8 in JOSE headers and JWT claims sets, reject truncated ASN.1 key data, reject duplicate `crit` values, reject an unencoded payload in the JWS Compact Serialization, compare claim values correctly for falsy validation options, and enforce verification key metadata from a JWKS. jose sits under both the ARC service-to-service tokens and the five-minute osn-access JWTs, so this is parser hardening on the two token types where it matters most. No API change; the tightening only narrows what parses.
+- Updated dependencies [853367f]
+  - @shared/crypto@0.10.15
+
+## 3.20.30
+
+### Patch Changes
+
+- 981ea54: Move every remaining colocated test file into its package's `tests/` tree, the
+  layout `wiki/conventions/testing-patterns.md` has documented all along.
+
+  `osn/landing` and `pulse/landing` kept their suites beside the source in `src/`
+  (and `pulse/landing` a third under `functions/`); those now mirror `src/` under
+  `tests/`. The three API packages' Miniflare-backed D1 suites move from
+  `src/d1-integration.test.ts` to `tests/d1/d1-integration.test.ts` — they used to
+  sit outside the vitest `include` glob by accident of living in `src/`, and are
+  now excluded from it explicitly by path, so `bun run test:d1` stays the only
+  thing that runs them. `tsconfig.json` gains `tests/**/*` wherever the tests were
+  previously type-checked only because they lived under `src/`.
+
+  No test bodies changed; only their location and the relative paths inside them.
+
+- Updated dependencies [981ea54]
+  - @osn/db@0.20.11
+  - @shared/crypto@0.10.14
+
+## 3.20.29
+
+### Patch Changes
+
+- 3b668c4: P-C1 (osn-tracker#589) — `GET /recommendations/connections` threw for any
+  caller with more than 50 accepted connections. The friends-of-friends fan-out
+  bound the caller's connection ids twice, once per edge direction, and D1 caps
+  a query at 100 bound parameters — 51 accepted connections already produced
+  102 binds and threw `D1_ERROR: too many SQL variables` in production.
+
+  Fixed by binding `profileId` instead of the id list: the fan-out now reads
+  the caller's own accepted edges through a correlated `IN (<subquery>)`
+  rather than pasting them in as literals, so the bind count is fixed
+  regardless of how many connections the caller has. Measured on real
+  (Miniflare/workerd) D1: a correlated `EXISTS` was tried first and rejected
+  (it planned as a full scan of the whole `connections` table); the
+  `IN (<subquery>)` shape uses the same indexes the original query did and
+  reads 484 rows against the old shape's 400 for an identical 40-connection
+  result set.
+
+  `osn/api/src/d1-integration.test.ts` had a characterisation test pinning the
+  broken behaviour (added on the parent branch); it now asserts the call
+  succeeds with a connection count well past the old cliff and returns the
+  correct friend-of-friend candidates.
+
+  Security review of that fix found a regression it introduced (S-H1): the
+  fan-out's new seed subquery reads `connections` live, in its own D1 round
+  trip, separate from the earlier snapshot `suggestConnections` takes of the
+  caller's own edges — a window the old, single-snapshot query could not open.
+  A connection the caller accepted from a second in-flight request, in that
+  window, was misclassified as a suggestion candidate rather than a mutual
+  connection, so the caller's own brand-new connection could come back as
+  "someone you may know." Fixed by re-checking, fresh, against `connections`
+  and `blocks` immediately before hydration, for just the ids that survived
+  ranking (at most 50) — bound once per query via the same `IN (<subquery>)`
+  shape, 53 params measured against real D1, not the 102 a naive two-sided
+  `inArray` would cost at that size.
+
+- 423dbd5: Connection recommendations (`GET /recommendations/connections`):
+
+  - **Fixed** (osn-tracker#574): the organisation co-member fan-out was one query
+    bounded by a single global row cap, ordered by organisation id — so whichever
+    organisation the caller happened to belong to sorted first absorbed the whole
+    budget, and every other organisation contributed nothing, permanently (50
+    organisations of 250 members each, only ~8 ever won). The fan-out is now a
+    `UNION ALL` of a per-organisation subselect each bounded by its own share of
+    the budget, so every organisation the caller belongs to contributes
+    candidates.
+  - **Fixed** (osn-tracker#589, P-C1 — the fix above's own regression): that
+    `UNION ALL` was one statement for up to 50 organisations, which throws on
+    real D1 for any caller in 6 or more — D1 runs on workerd's embedded SQLite,
+    capped at 5 terms in a compound `SELECT`, not the 500-term default
+    `bun:sqlite` (and the original comment) assumed. The fan-out now runs in
+    batches of at most 5 organisations per statement, executed concurrently and
+    merged in application code, so a caller in any number of organisations up to
+    the 50-organisation cap gets a result instead of a 500.
+  - Added `generatedAt` (ISO 8601) to the response, alongside `suggestions`, so a
+    client can tell how fresh a list is (osn-tracker#311, timestamp half only —
+    the cache half is a separate, undecided change). `@osn/client`'s
+    `suggestConnections` return type carries the new field.
+
+## 3.20.28
+
+### Patch Changes
+
+- e38d6de: Email change and registration now correctly tell a real database fault apart from a genuine duplicate-address conflict, and a rate-capped account can no longer learn whether an email address is taken by watching which check fails first.
+- Updated dependencies [e38d6de]
+- Updated dependencies [e9ba055]
+  - @osn/db@0.20.10
+  - @shared/redis@0.4.6
+  - @shared/crypto@0.10.13
+
+## 3.20.27
+
+### Patch Changes
+
+- 5c51a23: Enforce foreign keys on `bun:sqlite`, and fix the two erasure bugs that were hiding behind it.
+
+  SQLite defaults `PRAGMA foreign_keys` to **OFF** while D1 enforces them, so every local run and every test accepted writes production rejects. The cheap, fast environment was the permissive one, which is the worst way round: a statement that orphans a row, or deletes a parent before its children, passed the whole suite and would have failed on deploy.
+
+  Turning it on found `hardDeleteAccount` broken in two ways, both of which would make GDPR Art. 17 erasure throw rather than complete. It deletes the `accounts` row while deliberately keeping `security_events` and `email_changes` under Art. 6(1)(c) — but both declared a foreign key to `accounts`, so a column documented to outlive its parent referenced it. Those two constraints are dropped. It also deleted `users` before the `oauth_consents` and `oauth_authorization_codes` rows that carry a `profile_id` referencing them; those deletes now run first.
+
+  `dev-login`'s provisioning batch declared itself infallible through `Effect.promise` while being a chain of inserts that reference rows an earlier `onConflictDoNothing` may have skipped. With foreign keys on, that arrived as a defect and escaped the route's own error handling, answering 400 where the contract says 500 `provisioning_failed`.
+
+- Updated dependencies [5c51a23]
+  - @shared/db-utils@0.6.4
+  - @osn/db@0.20.9
+  - @shared/crypto@0.10.12
+
+## 3.20.26
+
+### Patch Changes
+
+- 965c2ee: Hardened the email-change ceremony against a race where two accounts complete
+  a change to the same address at once. The database-uniqueness check now only
+  catches a genuine UNIQUE-constraint violation, so any other write failure
+  correctly surfaces as a database error instead of being folded into the same
+  generic message. When a change loses that race, its now-stale pending entry
+  is deleted rather than left behind. The write path's pre-check now reads
+  only the one column it needs from the account.
+
+  Metrics gained a `metricResult` override: an error can now name its own
+  outcome bucket directly, taking precedence over the usual message-keyword
+  classification. This lets the email-change conflict path report as
+  `conflict` instead of `validation_error`. `@shared/observability` exports its
+  `RESULT_VALUES` runtime tuple alongside the existing `Result` type so
+  downstream packages can build this kind of override without redefining the
+  set of allowed outcomes.
+
+- Updated dependencies [965c2ee]
+  - @shared/observability@0.13.6
+  - @shared/crypto@0.10.11
+  - @shared/email@0.4.10
+  - @shared/turnstile@0.2.13
+
+## 3.20.25
+
+### Patch Changes
+
+- Updated dependencies [e382c40]
+  - @shared/crypto@0.10.10
+
+## 3.20.24
+
+### Patch Changes
+
+- 0f7d0e1: Halve the rows the connection-suggestion fan-out reads, and stop it labelling a suggestion with an organisation that no longer exists.
+
+  `suggestConnections` fanned out to up to 2,000 organisation co-members and joined `organisations` on each row — a primary-key probe per membership row, so roughly 4,000 rows read where the query needed 2,000. D1 bills rows read. The fan-out now selects ids only, and the organisations that survive ranking (at most 50, usually far fewer) are hydrated in the same concurrent step as the profiles, so the request costs no extra round trip.
+
+  The fan-out also gains `ORDER BY (organisation_id, profile_id)`. That pins what was left to the planner rather than fixing an observed problem: SQLite already walked `org_members_pair_idx` in exactly this order, so the plan is identical either way and no behaviour changes today. The index is UNIQUE on those two columns, so the ordering is its own and adds no sort.
+
+  A candidate whose only basis was a shared organisation, and whose organisation has since been deleted, is now dropped rather than returned claiming `shared_organisation` with nothing to name — which is what the removed inner join used to do.
+
+## 3.20.23
+
+### Patch Changes
+
+- 31008a2: Cover the `/authorize` error page's copy and its own-property guard with
+  tests: each known error code now has its rendered wording pinned, an
+  unrecognised code is checked against its fallback text, a code named after a
+  built-in `Object.prototype` member (`constructor`) is checked against
+  leaking that built-in's own string form, a property planted on
+  `Object.prototype` is checked against being read as copy, and the
+  `rate_limited` variant is now exercised end to end through the route when
+  its rate limiter denies a request. `renderAuthorizeErrorPage` is exported
+  from `oidc.ts` so the unit-level cases can call it directly; its behaviour
+  is unchanged.
+
+## 3.20.22
+
+### Patch Changes
+
+- 93b8474: Fix `publicError`'s `_tag` walk to stop charging the 512-node traversal budget for primitive property values, so a wide chain of string fields no longer exhausts the budget before a real tagged error is found and misreported as a 400. Also replace the queue's `Array#shift()` with a read cursor, so the walk is linear in the number of nodes visited instead of quadratic.
+
+## 3.20.21
+
+### Patch Changes
+
+- 518bc7d: Stop suppressing `no-await-in-loop` where the awaits do not actually need to be sequential.
+
+  `commitBatch` in `@shared/db-utils` chains its bun:sqlite fallback statements instead of looping over them, keeping the children-first ordering the caller built without disabling the rule.
+
+  In `@osn/api`, the outbound ARC key registration in `outbound-arc.ts` registered with each downstream one after the next; the downstreams are independent and registration is an idempotent upsert, so both calls now go out together and a failure on a configured stack still aborts boot. The NDJSON fan-out in `account-export.ts` reads its response with `for await` rather than a manual reader loop, which also means abandoning the generator cancels the stream instead of leaving the downstream sending a bundle nobody is reading.
+
+  No behaviour change. The one remaining disable is the keyset pagination generator, where each page's cursor comes from the page before it.
+
+- Updated dependencies [518bc7d]
+  - @shared/db-utils@0.6.3
+  - @osn/db@0.20.8
+  - @shared/crypto@0.10.9
+
 ## 3.20.20
 
 ### Patch Changes

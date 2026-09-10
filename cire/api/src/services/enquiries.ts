@@ -211,7 +211,7 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
       })
       .pipe(
         Effect.map((v) => v.id),
-        Effect.catchAllDefect(() =>
+        Effect.catchDefect(() =>
           Effect.gen(function* () {
             const db = yield* DbService;
             const [existing] = yield* dbQuery(() =>
@@ -229,8 +229,8 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
             if (!existing) {
               // The insert failed for a reason other than the dedup index —
               // re-raise as a defect so it surfaces rather than silently vanishing.
-              return yield* Effect.dieMessage(
-                "vendors.create failed and no existing row to fall back to",
+              return yield* Effect.die(
+                new Error("vendors.create failed and no existing row to fall back to"),
               );
             }
             return (existing as { id: string }).id;
@@ -393,7 +393,7 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
           if (!deps.zap) return yield* Effect.fail(new ZapUnavailable());
           const zap = deps.zap;
           const chatId = enquiry.zapChatId;
-          // Cap the fetch (P-W2): an unbounded thread could blow the Workers 6MB
+          // Cap the fetch: an unbounded thread could blow the Workers 6MB
           // response wall. v1 has no cursor UI — just the ceiling.
           const { messages } = yield* Effect.promise(() =>
             zap.listC2bMessages(chatId, { limit: 50 }),
@@ -613,12 +613,12 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
           }).pipe(
             Effect.provideService(DbService, db),
             // Best-effort: a single enquiry's failure must not abort the claim.
-            Effect.catchAll((cause) =>
+            Effect.catch((cause) =>
               Effect.logError("[enquiries] flush-on-claim failed for one enquiry").pipe(
                 Effect.annotateLogs({ enquiryId: enq.id, reason: String(cause) }),
               ),
             ),
-            Effect.catchAllDefect((cause) =>
+            Effect.catchDefect((cause) =>
               Effect.logError("[enquiries] flush-on-claim defected for one enquiry").pipe(
                 Effect.annotateLogs({ enquiryId: enq.id, reason: String(cause) }),
               ),
@@ -626,7 +626,7 @@ export function createEnquiryService(deps: EnquiryServiceDeps) {
           );
         };
 
-        // Bounded-concurrency flush (P-W3): don't block the claim response
+        // Bounded-concurrency flush: don't block the claim response
         // linearly in N. Each flush is self-isolating (never-fails), so the pool
         // drains every buffered enquiry regardless of individual outcomes.
         yield* Effect.all((buffered as EnquiryRow[]).map(flushOne), { concurrency: 5 });

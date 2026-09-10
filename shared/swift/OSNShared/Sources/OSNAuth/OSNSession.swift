@@ -60,6 +60,12 @@ public final class OSNSession {
 
     public private(set) var state: SessionState = .restoring
 
+    /// The identity host this session talks to. Held so a caller building
+    /// its own OSNAuth client (e.g. Musubi's passkey list) uses the same one
+    /// rather than reaching for a literal — `MusubiAccountView` hardcoded
+    /// `.local` before this existed.
+    public let environment: Environment
+
     /// Shared cookie-jar-backed session and token refresher — every
     /// app-specific API client (e.g. `makePulseClient`) is built from these
     /// so it shares the same cookie jar and refresh-in-flight coalescing.
@@ -72,17 +78,22 @@ public final class OSNSession {
     /// `containerURLProvider` parameter: the public initializer always builds
     /// real dependencies from `environment`, and there is no way to swap in
     /// a mock `URLSession` through it. This lets `OSNAuthTests` construct an
-    /// `OSNSession` wired to `LoginMockURLProtocol` and assert deterministically
+    /// `OSNSession` wired to `OSNTesting`'s `MockURLProtocol` and assert deterministically
     /// on its behaviour instead of depending on a real network call failing.
-    init(urlSession: URLSession, tokenRefresher: TokenRefresher, loginClient: PasskeyLoginClient) {
+    init(
+        environment: Environment,
+        urlSession: URLSession,
+        tokenRefresher: TokenRefresher,
+        loginClient: PasskeyLoginClient
+    ) {
+        self.environment = environment
         self.urlSession = urlSession
         self.tokenRefresher = tokenRefresher
         self.loginClient = loginClient
     }
 
     /// - Parameter environment: identity host for passkey ceremonies + token
-    ///   refresh. Defaults to `.local` — no deployed Pulse API host exists
-    ///   yet, so this is development-oriented, not a hardcoded prod value.
+    ///   refresh.
     /// - Throws: whatever `SharedCookieJar.makeSession()` throws
     ///   (`OSNKitError.appGroupContainerUnavailable` when the App Group
     ///   container doesn't resolve — the group is registered, so this means
@@ -90,11 +101,24 @@ public final class OSNSession {
     ///   see `pulse/ios/project.yml`). That is an infrastructure/build-config
     ///   failure, not a session state — there is no working `URLSession` to
     ///   hand out if it happens, so it isn't folded into `SessionState`.
-    public convenience init(environment: Environment = .local) throws {
+    ///
+    /// `environment` has no default. It defaulted to `.local`, which meant a
+    /// release build silently talked to `localhost`; app targets now derive it
+    /// from the build configuration via `Environment.resolve(info:)`.
+    public convenience init(environment: Environment) throws {
+        // Before anything reads the Keychain: move a pre-group item into the
+        // shared access group, so an app updating from an older build keeps
+        // its signed-in state. A no-op on every later launch, and off iOS.
+        try? KeychainAccessTokenStore.migrateToSharedAccessGroup()
         let session = try SharedCookieJar.makeSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
         let loginClient = PasskeyLoginClient(session: session, environment: environment)
-        self.init(urlSession: session, tokenRefresher: tokenRefresher, loginClient: loginClient)
+        self.init(
+            environment: environment,
+            urlSession: session,
+            tokenRefresher: tokenRefresher,
+            loginClient: loginClient
+        )
     }
 
     /// Silent restore on launch. A throw from `TokenRefresher.refresh()`
@@ -106,9 +130,9 @@ public final class OSNSession {
     public func restore() async {
         state = .restoring
         do {
-            try await tokenRefresher.refresh()
+            let grant = try await tokenRefresher.refresh()
             state = .signedIn(nil)
-            reconcileIdentity()
+            reconcileIdentity(token: grant.accessToken)
         } catch {
             state = .signedOut
         }
@@ -153,43 +177,84 @@ public final class OSNSession {
         }
     }
 
+    /// Ends the session everywhere it is recorded: on the server, in the
+    /// Keychain, and in the shared cookie jar.
+    ///
     /// `TokenRefresher.logout()` already deletes the Keychain access token
     /// internally on every path (even a failed network call). The explicit
     /// `KeychainAccessTokenStore.delete()` here is defensive — `delete()`
     /// treats "already gone" as success (`errSecItemNotFound`), so calling
     /// it after `logout()` is a no-op, not a race.
+    ///
+    /// The cookie needs clearing by hand for a reason worth stating: the
+    /// server ends a session by returning clearing cookies from `POST
+    /// /logout`, so a request that never *reached* the server clears nothing.
+    /// The jar is shared across every OSN app in the App Group, so a stale
+    /// cookie left there is not just this app's problem — the next sibling to
+    /// foreground would present it and look signed in.
     public func signOut() async {
         try? await tokenRefresher.logout()
         try? KeychainAccessTokenStore.delete()
+        clearSessionCookie()
         state = .signedOut
     }
 
-    /// Loads the Keychain-stored access token and refreshes it if it's
-    /// missing or expires within the next 30 seconds; otherwise does
-    /// nothing. `RequestHelpers.applyBearerAccessToken` pastes whatever
-    /// token is currently in the Keychain onto a request with no expiry
-    /// check and no 401-retry, so a caller that skips this and waits out
-    /// the 5-minute access-token TTL (`wiki/systems/identity-model.md`)
-    /// 401s on its next request — e.g. the Musubi account screen's
-    /// `PasskeyManagementClient.list()`. `TokenRefresher.refresh()` already
-    /// persists the refreshed token to the Keychain; this method never
-    /// writes to it directly.
-    public func ensureFreshAccessToken() async throws {
-        let stored = try KeychainAccessTokenStore.load()
-        let isFresh = stored.map { $0.expiresAt.timeIntervalSinceNow > 30 } ?? false
-        guard !isFresh else {
-            reconcileIdentity()
-            return
+    /// Removes the session cookie for this environment from the shared jar.
+    /// The name is derived exactly as the server derives it — see
+    /// `sessionCookieName(for:)`, which is the one place that decides between
+    /// the `__Host-` and bare spellings.
+    private func clearSessionCookie() {
+        guard let storage = urlSession.configuration.httpCookieStorage else { return }
+        let name = sessionCookieName(for: environment)
+        for cookie in storage.cookies(for: environment.baseURL) ?? [] where cookie.name == name {
+            storage.deleteCookie(cookie)
         }
-        try await tokenRefresher.refresh()
-        reconcileIdentity()
     }
 
-    /// S-H1: every authenticated call goes through `ensureFreshAccessToken()`,
-    /// so reconciling here on both the already-fresh and just-refreshed paths
-    /// closes the hole — a sibling app rotating the shared Keychain token to a
-    /// different user's is caught on the very next call this app makes, not
-    /// just at launch.
+    /// Reconciles the on-screen identity against the access token in the
+    /// Keychain, refreshing that token first when it is missing or within
+    /// `AccessTokenProvider.expirySkew` of expiry.
+    ///
+    /// This is the S-H1 hook, not the request-auth hook: the `OSNAuth`
+    /// clients go through `AuthenticatedTransport`, which resolves and
+    /// refreshes a token of its own and retries a 401, so no call site has
+    /// to remember to call this first to make its request authenticate. What
+    /// it still owns is the identity check — a sibling app sharing this
+    /// Keychain slot may have rotated the token to a *different* user's, and
+    /// a screen about to show or act on identity-bearing data wants that
+    /// caught before it renders.
+    ///
+    /// One Keychain read on both paths: the loaded token is handed straight
+    /// to `reconcileIdentity(token:)` rather than read a second time, and on
+    /// the refresh path the grant's own token is used.
+    /// `TokenRefresher.refresh()` persists it to the Keychain; this method
+    /// never writes there directly.
+    public func ensureFreshAccessToken() async throws {
+        // `AccessTokenProvider.storedAccessToken()` rather than
+        // `KeychainAccessTokenStore.load()` directly: this class is
+        // `@MainActor`, and the load is a synchronous IPC to `securityd`.
+        // The provider's accessor is `@concurrent`, so the read runs on the
+        // cooperative pool and only the state write below lands back here.
+        let stored = try await AccessTokenProvider.storedAccessToken()
+        if let stored, stored.expiresAt.timeIntervalSinceNow > AccessTokenProvider.expirySkew {
+            reconcileIdentity(token: stored.token)
+            return
+        }
+        let grant = try await tokenRefresher.refresh()
+        reconcileIdentity(token: grant.accessToken)
+    }
+
+    /// S-H1: reconciling on both the already-fresh and the just-refreshed
+    /// path means a sibling app rotating the shared Keychain token to a
+    /// different user's is caught on the next call that goes through
+    /// `ensureFreshAccessToken()`, not just at launch.
+    ///
+    /// `AuthenticatedTransport` resolves its own token and does *not*
+    /// reconcile — it is a transport, and it has no view of `state`. So a
+    /// screen that shows or acts on identity still calls
+    /// `ensureFreshAccessToken()` first; dropping that call now costs the
+    /// identity check rather than the request's authentication, which is a
+    /// quieter failure and worth knowing before deleting one.
     ///
     /// Loads whatever access token is in the Keychain right now, decodes its
     /// claims (`AccessTokenClaims`, not signature-verified — see its doc),
@@ -201,9 +266,17 @@ public final class OSNSession {
     /// when the reconciled profile equals the cached one, so `@Observable`
     /// doesn't churn on every call.
     private func reconcileIdentity() {
+        reconcileIdentity(token: (try? KeychainAccessTokenStore.load())?.token)
+    }
+
+    /// The same reconciliation against a token the caller already holds, so
+    /// a call that has just read or just been handed one does not pay for a
+    /// second `SecItemCopyMatching` — a synchronous IPC to `securityd`, and
+    /// a hitch when it happens on the main actor. `nil` means "no token",
+    /// which `reconciledProfile` fails closed on.
+    private func reconcileIdentity(token: String?) {
         guard case .signedIn(let cached) = state else { return }
-        let stored = try? KeychainAccessTokenStore.load()
-        let claims = stored.flatMap { AccessTokenClaims(jwt: $0.token) }
+        let claims = token.flatMap { AccessTokenClaims(jwt: $0) }
         let reconciled = reconciledProfile(cached: cached, claims: claims)
         guard reconciled != cached else { return }
         state = .signedIn(reconciled)

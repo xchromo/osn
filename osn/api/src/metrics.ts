@@ -13,6 +13,7 @@ import {
   createHistogram,
   createUpDownCounter,
   LATENCY_BUCKETS_SECONDS,
+  RESULT_VALUES,
 } from "@shared/observability/metrics";
 import type {
   AppEnrollmentApp,
@@ -39,6 +40,9 @@ import type {
   ProfileSwitchAction,
   RecoveryCodeConsumeResult,
   RecoveryCodeStep,
+  RecoveryCooldownOutcome,
+  RecoveryDisownResult,
+  RecoveryPasskeyReclaimResult,
   RegisterStep,
   Result,
   RotatedStoreAction,
@@ -50,6 +54,8 @@ import type {
   SessionAction,
   StepUpFactor,
   StepUpStep,
+  TotpOp,
+  TotpVerifyResult,
   StepUpVerifyResult,
 } from "@shared/observability/metrics";
 import type { RedisNamespace } from "@shared/redis";
@@ -78,10 +84,18 @@ export const OSN_METRICS = {
   authCeremonyStoreEntries: "osn.auth.ceremony_store.entries",
   authSessionSecurityInvalidation: "osn.auth.session.security_invalidation",
   authRecoveryLockout: "osn.auth.recovery.lockout",
+  authRecoveryEmailBegin: "osn.auth.recovery.email_begin",
+  authRecoveryCooldown: "osn.auth.recovery.cooldown",
+  authRecoveryDisown: "osn.auth.recovery.disown",
+  authRecoveryPasskeyReclaim: "osn.auth.recovery.passkey_reclaim",
   authRecoveryCodesGenerated: "osn.auth.recovery.codes_generated",
   authRecoveryCodeConsumed: "osn.auth.recovery.code_consumed",
   authRecoveryDuration: "osn.auth.recovery.duration",
   authStepUpIssued: "osn.auth.step_up.issued",
+  authTotpOps: "osn.auth.totp.operations",
+  authTotpDuration: "osn.auth.totp.duration",
+  authTotpVerified: "osn.auth.totp.verified",
+  authTotpLockout: "osn.auth.totp.lockout",
   authStepUpVerified: "osn.auth.step_up.verified",
   authSessionOps: "osn.auth.session.operations",
   authEmailChangeAttempts: "osn.auth.account.email_change.attempts",
@@ -127,10 +141,10 @@ type RegisterAttrs = { step: RegisterStep; result: Result };
 type LoginAttrs = { method: AuthMethod; result: Result };
 type TokenRefreshAttrs = { result: Result };
 type HandleCheckAttrs = { result: "available" | "taken" | "invalid" };
-type OtpSentAttrs = { purpose: "registration" | "step_up" | "email_change" };
+type OtpSentAttrs = { purpose: "registration" | "step_up" | "email_change" | "recovery" };
 type AuthRateLimitAttrs = { endpoint: AuthRateLimitedEndpoint };
 /** Turnstile-gated endpoints. Bounded literal union — never a raw path. */
-type AuthTurnstileEndpoint = "register_begin" | "passkey_login_begin";
+type AuthTurnstileEndpoint = "register_begin" | "passkey_login_begin" | "recovery_email_begin";
 type AuthTurnstileRejectedAttrs = { endpoint: AuthTurnstileEndpoint };
 type GraphConnectionAttrs = { action: GraphConnectionAction; result: Result };
 type GraphBlockAttrs = { action: GraphBlockAction; result: Result };
@@ -275,11 +289,27 @@ const safeErrorSummary = (err: unknown): SafeErrorSummary => {
  * error taxonomy grows. Matches are best-effort and intentionally conservative
  * — unknown error shapes collapse to `"error"`.
  */
+const RESULT_SET: ReadonlySet<string> = new Set(RESULT_VALUES);
+const isResult = (v: unknown): v is Result => typeof v === "string" && RESULT_SET.has(v);
+
 export const classifyError = (err: unknown): Result => {
   if (!err || typeof err !== "object") return "error";
 
   // Effect tagged errors expose `_tag`.
   const tag = (err as { _tag?: unknown })._tag;
+
+  // An explicit override beats every inference below — set where the
+  // caller-facing message is deliberately vague and the true outcome would
+  // otherwise be unobservable (see AuthError.metricResult). Only error
+  // classes declared in this repo may steer a metric bucket, so the override
+  // is read off a known tag rather than off any object: an error rebuilt from
+  // an upstream JSON body must not be able to reclassify itself. Add a tag
+  // here when another class declares the field.
+  if (tag === "AuthError") {
+    const override = (err as { metricResult?: unknown }).metricResult;
+    if (isResult(override)) return override;
+  }
+
   if (typeof tag === "string") {
     if (tag === "NotFoundError" || tag === "EventNotFound") return "not_found";
     if (tag === "ValidationError") return "validation_error";
@@ -408,8 +438,9 @@ export const withGraphBlockOp =
 export const metricAuthHandleCheck = (result: "available" | "taken" | "invalid"): void =>
   authHandleCheck.inc({ result });
 
-export const metricAuthOtpSent = (purpose: "registration" | "step_up" | "email_change"): void =>
-  authOtpSent.inc({ purpose });
+export const metricAuthOtpSent = (
+  purpose: "registration" | "step_up" | "email_change" | "recovery",
+): void => authOtpSent.inc({ purpose });
 
 export const withOrgOp =
   (action: OrgAction) =>
@@ -636,6 +667,83 @@ const authRecoveryLockout = createCounter<RecoveryLockoutAttrs>({
 export const metricRecoveryLockout = (result: RecoveryLockoutAttrs["result"]): void =>
   authRecoveryLockout.inc({ result });
 
+/**
+ * Outcome of `POST /login/recovery/email/begin`.
+ *
+ * The endpoint answers an identical 202 on all three, by design — which is
+ * exactly why it needs a counter. Without one the per-account flood cap is
+ * invisible: nothing in a log or a status code distinguishes a capped request
+ * from a delivered one, so an inbox under attack looks the same as an idle
+ * endpoint.
+ *
+ * Aggregate counts only. The submitted identifier, the resolved account and the
+ * code itself appear nowhere near this.
+ *
+ * `capped` also covers a cap backend that could not be reached:
+ * `createRedisRateLimiter.check` returns `false` on a Redis error (fail-closed),
+ * and the limiter contract gives the caller no way to tell that from a real
+ * cap. A sustained `capped` rate with no matching inbox complaint is the tell;
+ * correlate with Redis health rather than reading this alone.
+ */
+type RecoveryEmailBeginAttrs = { result: "sent" | "capped" | "unknown_identifier" };
+
+const authRecoveryEmailBegin = createCounter<RecoveryEmailBeginAttrs>({
+  name: OSN_METRICS.authRecoveryEmailBegin,
+  description: "Email account-recovery begin attempts by outcome (all answer 202)",
+  unit: "{attempt}",
+});
+
+export const metricRecoveryEmailBegin = (result: RecoveryEmailBeginAttrs["result"]): void =>
+  authRecoveryEmailBegin.inc({ result });
+
+/**
+ * Every refusal by the post-recovery cooldown.
+ *
+ * Needed for the same reason `authRecoveryEmailBegin` is: the caller gets one
+ * generic message on all three branches, so a dashboard is the only place they
+ * are told apart — and "the provenance rule is firing on real users" and "an
+ * attacker is walking the register-then-assert pivot" look identical from a
+ * status code. Counts only; no account, credential or address.
+ */
+const authRecoveryCooldown = createCounter<{ outcome: RecoveryCooldownOutcome }>({
+  name: OSN_METRICS.authRecoveryCooldown,
+  description: "Actions refused by the post-recovery cooldown, by which rule refused them",
+  unit: "{refusal}",
+});
+
+export const metricRecoveryCooldown = (outcome: RecoveryCooldownOutcome): void =>
+  authRecoveryCooldown.inc({ outcome });
+
+/**
+ * Outcome of `POST /recovery/disown`. Every branch answers 202, so this is the
+ * only signal that separates a real revocation from a guessed token — and
+ * `store_error`, which revokes nothing, from either.
+ */
+const authRecoveryDisown = createCounter<{ result: RecoveryDisownResult }>({
+  name: OSN_METRICS.authRecoveryDisown,
+  description: "Recovery disown attempts by outcome (all answer 202)",
+  unit: "{attempt}",
+});
+
+export const metricRecoveryDisown = (result: RecoveryDisownResult): void =>
+  authRecoveryDisown.inc({ result });
+
+/**
+ * How a restricted recovery session's enrolment fared against the passkey
+ * ceiling. None of the three values is a refusal — a recovery is never refused
+ * for want of a slot. `ceiling_yielded` is the one to alert on: the account
+ * ended above the ceiling because it held nothing this episode had lent, and an
+ * account reaching it repeatedly is accumulating credentials nobody prunes.
+ */
+const authRecoveryPasskeyReclaim = createCounter<{ result: RecoveryPasskeyReclaimResult }>({
+  name: OSN_METRICS.authRecoveryPasskeyReclaim,
+  description: "Recovery-session passkey enrolments by how they met the ceiling",
+  unit: "{enrolment}",
+});
+
+export const metricRecoveryPasskeyReclaim = (result: RecoveryPasskeyReclaimResult): void =>
+  authRecoveryPasskeyReclaim.inc({ result });
+
 // ---------------------------------------------------------------------------
 // Recovery codes (Copenhagen Book M2)
 // ---------------------------------------------------------------------------
@@ -657,7 +765,7 @@ const authRecoveryCodeConsumed = createCounter<RecoveryConsumeAttrs>({
 
 const authRecoveryDuration = createHistogram<RecoveryStepAttrs>({
   name: OSN_METRICS.authRecoveryDuration,
-  description: "Recovery code generate/consume duration by step",
+  description: "Account-recovery duration by step (recovery code, email OTP, TOTP)",
   unit: "s",
   boundaries: LATENCY_BUCKETS_SECONDS,
 });
@@ -926,6 +1034,82 @@ export const withPasskeyOp =
 
 export const metricPasskeyLoginDiscoverable = (result: Result): void =>
   authPasskeyLoginDiscoverable.inc({ result });
+
+// ---------------------------------------------------------------------------
+// TOTP (RFC 6238)
+//
+// Nothing here is dimensioned by account, credential id, step counter or code.
+// `authTotpVerified` is the only place the reason for a rejection is recorded
+// at all: every failing path answers one generic error on the wire, so a
+// response that distinguished them would say whether an account has a second
+// factor. The dashboard gets the distinction; the caller does not.
+// ---------------------------------------------------------------------------
+
+type TotpOpAttrs = { op: TotpOp; result: Result };
+type TotpVerifiedAttrs = { result: TotpVerifyResult };
+/**
+ * `scope` separates the two surfaces that check TOTP codes. They keep separate
+ * counters (see `checkTotpCode`), and without this attribute a dashboard cannot
+ * tell a grinding attack on the UNAUTHENTICATED recovery route from one on the
+ * authenticated step-up. Two values, three results — six series.
+ */
+type TotpLockoutAttrs = {
+  result: "recorded" | "locked" | "reset";
+  scope: TotpLockoutScope;
+};
+
+/** Which ceremony a TOTP code check belongs to. */
+export type TotpLockoutScope = "step_up" | "recovery";
+
+const authTotpOps = createCounter<TotpOpAttrs>({
+  name: OSN_METRICS.authTotpOps,
+  description: "TOTP enrolment / disable / status / verify operations by outcome",
+  unit: "{operation}",
+});
+
+const authTotpDuration = createHistogram<TotpOpAttrs>({
+  name: OSN_METRICS.authTotpDuration,
+  description: "TOTP operation duration by op",
+  unit: "s",
+  boundaries: LATENCY_BUCKETS_SECONDS,
+});
+
+const authTotpVerified = createCounter<TotpVerifiedAttrs>({
+  name: OSN_METRICS.authTotpVerified,
+  description: "TOTP code verification outcomes, including replay and lockout rejections",
+  unit: "{verification}",
+});
+
+const authTotpLockout = createCounter<TotpLockoutAttrs>({
+  name: OSN_METRICS.authTotpLockout,
+  description: "TOTP per-account failed-code lockout events by outcome",
+  unit: "{event}",
+});
+
+export const metricTotpVerified = (result: TotpVerifyResult): void =>
+  authTotpVerified.inc({ result });
+
+export const metricTotpLockout = (
+  result: TotpLockoutAttrs["result"],
+  scope: TotpLockoutScope,
+): void => authTotpLockout.inc({ result, scope });
+
+export const withTotpOp =
+  (op: TotpOp) =>
+  <A, E, Ctx>(effect: Effect.Effect<A, E, Ctx>): Effect.Effect<A, E, Ctx> =>
+    effect.pipe(
+      measureSeconds((seconds, outcome) => {
+        authTotpDuration.record(seconds, { op, result: outcome === "ok" ? "ok" : "error" });
+      }),
+      Effect.withSpan(`auth.totp.${op}`),
+      Effect.tap(() => Effect.sync(() => authTotpOps.inc({ op, result: "ok" }))),
+      Effect.tapError((e) =>
+        Effect.all([
+          Effect.sync(() => authTotpOps.inc({ op, result: classifyError(e) })),
+          Effect.logError("auth.totp operation failed", { op, ...safeErrorSummary(e) }),
+        ]),
+      ),
+    );
 
 // ---------------------------------------------------------------------------
 // Cross-device login

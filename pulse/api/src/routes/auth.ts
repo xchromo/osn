@@ -44,6 +44,17 @@ import { webSessionService } from "../services/webSession";
 const PREFIX = "/api/auth";
 
 /**
+ * The slice of OpenAPI 3.1 schema syntax the hand-written responses below use.
+ * `type` takes an array for the nullable spelling (`["string", "null"]`).
+ */
+interface OpenApiSchemaNode {
+  readonly type: string | readonly string[];
+  readonly format?: string;
+  readonly properties?: { readonly [property: string]: OpenApiSchemaNode };
+  readonly required?: readonly string[];
+}
+
+/**
  * Hand-written OpenAPI responses for the four routes below.
  *
  * swift-openapi-generator refuses a document in which any operation carries no
@@ -58,17 +69,6 @@ const PREFIX = "/api/auth";
  * spelling swift-openapi-generator keeps (see `scripts/generate-openapi.ts`).
  * The cast in `docSchema` is what lets a 3.1 schema be written here.
  */
-/**
- * The slice of OpenAPI 3.1 schema syntax the hand-written responses below use.
- * `type` takes an array for the nullable spelling (`["string", "null"]`).
- */
-interface OpenApiSchemaNode {
-  readonly type: string | readonly string[];
-  readonly format?: string;
-  readonly properties?: { readonly [property: string]: OpenApiSchemaNode };
-  readonly required?: readonly string[];
-}
-
 const docSchema = (schema: OpenApiSchemaNode) => schema as never;
 
 const jsonResponse = (description: string, schema: OpenApiSchemaNode) => ({
@@ -155,7 +155,7 @@ export interface AuthRouteOptions {
   /** Per-IP limiter for the session probe + sign-out. */
   sessionLimiter?: RateLimiterBackend;
   /**
-   * Client-IP trust policy (S-M34), same value the events routes get. Defaults
+   * Client-IP trust policy, same value the events routes get. Defaults
    * to `{}` — direct mode, socket peer only, never a spoofable
    * `x-forwarded-for`.
    */
@@ -177,7 +177,7 @@ export const createAuthRoutes = (
   const runtime = ManagedRuntime.make(dbLayer);
 
   /**
-   * Resolve the trusted per-IP key under the configured policy (S-M34), the
+   * Resolve the trusted per-IP key under the configured policy, the
    * same helper pair the unauthenticated events surfaces use — Pulse limits
    * per-IP inline in the route factory rather than through a middleware.
    */

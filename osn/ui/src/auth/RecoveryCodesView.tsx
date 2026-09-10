@@ -1,4 +1,4 @@
-import type { RecoveryClient, StepUpClient, StepUpToken } from "@osn/client";
+import type { RecoveryClient, StepUpClient, StepUpToken, TotpClient } from "@osn/client";
 import { createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import { Button } from "../components/ui/button";
@@ -55,6 +55,12 @@ export interface RecoveryCodesViewProps {
    * no deliverable transactional email, so the user is never offered a code
    * that won't arrive.
    */
+  /**
+   * TOTP client. Supplied, the step-up dialog offers the authenticator-app
+   * factor wherever the ceremony and the account allow it. Omitted, it does
+   * not. See `StepUpDialog.totpClient`.
+   */
+  totpClient?: TotpClient;
   passkeyOnly?: boolean;
   /** Fires once the user has acknowledged saving the codes. */
   onSaved?: () => void;
@@ -135,7 +141,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
     }
   });
 
-  // P-W2: read `status.latest` rather than `status()` so the button label
+  // Read `status.latest` rather than `status()` so the button label
   // doesn't join the resource's Suspense boundary and blank the whole panel
   // on every refetch.
   const hasCodes = () => {
@@ -143,7 +149,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
     return s != null && s.total > 0;
   };
 
-  // S-L1: an unreadable status counts as "might have codes". Rotation is
+  // An unreadable status counts as "might have codes". Rotation is
   // destructive, so a failed count must not silently skip the warning.
   const mayHaveCodes = () => {
     const s = status.latest;
@@ -156,7 +162,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
   // a rotation and would warn a brand-new user about codes they don't have.
   const locked = () => busy() || pending() || status.loading;
 
-  // P-I1: the skeleton and the "Checking…" label are for the COLD read only.
+  // The skeleton and the "Checking…" label are for the COLD read only.
   // `status.loading` is also true on the refetch `acknowledge()` triggers, and
   // gating on it would withdraw an already-known count from the screen for a
   // round-trip — the same "don't blank a warm value" rule that put `hasCodes()`
@@ -356,6 +362,7 @@ export function RecoveryCodesView(props: RecoveryCodesViewProps) {
           onCancel={cancelStepUp}
           runPasskeyCeremony={props.runPasskeyCeremony}
           passkeyOnly={props.passkeyOnly}
+          totpClient={props.totpClient}
           reason="to generate recovery codes"
           purpose="recovery_generate"
         />

@@ -1,6 +1,6 @@
 {
   "name": "@shared/crypto",
-  "version": "0.10.8",
+  "version": "0.13.4",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,7 +8,8 @@
     "./jwk": "./src/jwk.ts",
     "./testing": "./src/testing.ts",
     "./timing-safe": "./src/timing-safe.ts",
-    "./tokens": "./src/tokens.ts"
+    "./tokens": "./src/tokens.ts",
+    "./totp": "./src/totp.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -19,12 +20,12 @@
     "@osn/db": "workspace:*",
     "@shared/observability": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "effect": "^3.22.0",
-    "jose": "^6.2.4"
+    "effect": "4.0.0-rc.112",
+    "jose": "^6.2.10"
   },
   "devDependencies": {
-    "@effect/vitest": "^0.30.0",
+    "@effect/vitest": "4.0.0-rc.112",
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

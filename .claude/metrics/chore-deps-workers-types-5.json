@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "pr": {
+    "number": 873,
+    "branch": "chore/deps-workers-types-5",
+    "base_sha": "650bb8b8dc6015c443f513a16c43981126a3ecfb",
+    "head_sha": "fca74814cbbdf0fe9646250dcfbef3fcb003bf5c",
+    "generated_at": "2026-09-09T06:24:29.029Z",
+    "merged_at": "2026-09-06T05:02:12Z",
+    "phase": "at-merge"
+  },
+  "issue": {
+    "number": null,
+    "type": null,
+    "labels": []
+  },
+  "complexity": {
+    "declared": null,
+    "method": "none"
+  },
+  "window": {
+    "sessions": 3,
+    "first_ts": "2026-09-02T06:46:48.386Z",
+    "last_ts": "2026-09-02T06:49:43.395Z",
+    "span_seconds": 175,
+    "active_seconds": 231,
+    "compactions": 0
+  },
+  "spend": {
+    "usd_equivalent": 3.4740269999999995,
+    "tokens": {
+      "input": 55,
+      "output": 9295,
+      "thinking": 710,
+      "cache_write_5m": 18608,
+      "cache_write_1h": 18801,
+      "cache_read": 5874134
+    },
+    "by_model": {
+      "claude-opus-4-7": {
+        "tokens": {
+          "input": 13,
+          "output": 2322,
+          "thinking": 0,
+          "cache_write_5m": 18608,
+          "cache_write_1h": 0,
+          "cache_read": 216901
+        },
+        "usd_equivalent": 0.2828655,
+        "messages": 8
+      },
+      "claude-opus-5": {
+        "tokens": {
+          "input": 42,
+          "output": 6973,
+          "thinking": 710,
+          "cache_write_5m": 0,
+          "cache_write_1h": 18801,
+          "cache_read": 5657233
+        },
+        "usd_equivalent": 3.1911614999999998,
+        "messages": 21
+      }
+    },
+    "by_actor": {
+      "main": {
+        "tokens": {
+          "input": 55,
+          "output": 9295,
+          "thinking": 710,
+          "cache_write_5m": 18608,
+          "cache_write_1h": 18801,
+          "cache_read": 5874134
+        },
+        "usd_equivalent": 3.4740269999999995,
+        "messages": 29
+      },
+      "subagent": {
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "thinking": 0,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_read": 0
+        },
+        "usd_equivalent": 0,
+        "messages": 0
+      }
+    },
+    "effort": {
+      "high": 21
+    },
+    "unpriced_models": []
+  },
+  "diff": {
+    "files": {
+      "generated": 3,
+      "test": 1,
+      "docs": 0,
+      "config": 8,
+      "source": 0
+    },
+    "loc": {
+      "generated": {
+        "added": 25,
+        "deleted": 9
+      },
+      "test": {
+        "added": 15,
+        "deleted": 1
+      },
+      "docs": {
+        "added": 0,
+        "deleted": 0
+      },
+      "config": {
+        "added": 8,
+        "deleted": 8
+      },
+      "source": {
+        "added": 0,
+        "deleted": 0
+      }
+    },
+    "packages": [
+      "cire/api",
+      "osn/api",
+      "osn/db",
+      "pulse/api",
+      "pulse/db",
+      "shared/db-utils",
+      "zap/api",
+      "zap/db"
+    ],
+    "touches_migration": false,
+    "commits": 1
+  },
+  "interaction": {
+    "user_turns": 1,
+    "corrective_turns": 0,
+    "tokens_before_first_edit": 1590099,
+    "sessions_with_observed_edit": 1,
+    "tool_calls": {
+      "Bash": 12,
+      "Read": 2,
+      "Write": 2,
+      "Edit": 1
+    },
+    "edit_churn": {
+      "files_edited_3plus": 0,
+      "max_edits_one_file": 1
+    },
+    "skills": {},
+    "subagents": {}
+  }
+}

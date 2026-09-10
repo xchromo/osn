@@ -5,61 +5,10 @@ import Testing
 @testable import MusubiFeature
 @testable import OSNAuth
 
-/// Intercepts requests for one `URLSession` at a time — mirrors
-/// `OSNAuthTests/PasskeyLoginClientTests.swift`'s `LoginMockURLProtocol`.
-/// Each test target needs its own copy since `URLProtocol` subclasses
-/// aren't shared across SPM targets (see the comment there).
-final class MusubiMockURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) async throws -> (Int, [String: String], Data))?
-    nonisolated(unsafe) static var cookieStorage: HTTPCookieStorage?
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let handler = Self.handler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-        Task {
-            do {
-                let (status, headers, data) = try await handler(request)
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: status,
-                    httpVersion: "HTTP/1.1",
-                    headerFields: headers
-                )!
-                if let url = request.url {
-                    let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: url)
-                    if !cookies.isEmpty {
-                        Self.cookieStorage?.setCookies(cookies, for: url, mainDocumentURL: nil)
-                    }
-                }
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: data)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch {
-                client?.urlProtocol(self, didFailWithError: error)
-            }
-        }
-    }
-
-    override func stopLoading() {}
-}
-
-private func makeMockSession() -> URLSession {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [MusubiMockURLProtocol.self]
-    configuration.httpShouldSetCookies = true
-    configuration.httpCookieAcceptPolicy = .always
-    MusubiMockURLProtocol.cookieStorage = configuration.httpCookieStorage
-    return URLSession(configuration: configuration)
-}
-
 @MainActor
 private func makeOSNSession(environment: Environment, session: URLSession, tokenRefresher: TokenRefresher) -> OSNSession {
     OSNSession(
+        environment: environment,
         urlSession: session,
         tokenRefresher: tokenRefresher,
         loginClient: PasskeyLoginClient(session: session, environment: environment)
@@ -112,7 +61,7 @@ struct FetchPasskeysTests {
         let session = makeMockSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
-        MusubiMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = """
             {"access_token":"at-fresh-1","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
             """
@@ -127,7 +76,7 @@ struct FetchPasskeysTests {
         await osnSession.restore()
         #expect(osnSession.state == .signedIn(nil))
 
-        MusubiMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = """
             {"passkeys":[{"id":"pk-1","label":"iPhone","aaguid":null,"transports":null,"backupEligible":null,"backupState":null,"createdAt":1,"lastUsedAt":null}]}
             """
@@ -150,7 +99,7 @@ struct FetchPasskeysTests {
         let session = makeMockSession()
         let tokenRefresher = TokenRefresher(session: session, environment: environment)
 
-        MusubiMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = """
             {"access_token":"at-fresh-2","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
             """
@@ -165,7 +114,7 @@ struct FetchPasskeysTests {
         await osnSession.restore()
         #expect(osnSession.state == .signedIn(nil))
 
-        MusubiMockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { _ in
             let body = #"{"error":"server_error","message":"boom"}"#
             return (500, ["Content-Type": "application/json"], Data(body.utf8))
         }
@@ -179,4 +128,68 @@ struct FetchPasskeysTests {
 
         try KeychainAccessTokenStore.delete()
     }
+
+    /// `fetchPasskeys` resolves a token twice — once in
+    /// `ensureFreshAccessToken()` for the S-H1 identity check, once inside
+    /// `AuthenticatedTransport` for the request itself. Both read the skew
+    /// allowance from `AccessTokenProvider`, so the second must find the
+    /// token the first just persisted and refresh nothing.
+    ///
+    /// Worth pinning because the failure is silent and expensive: if the two
+    /// ever disagree, this screen fires two `/token` grants back to back, and
+    /// every grant rotates the session cookie the whole App Group shares.
+    @Test func loadingTheScreenSpendsExactlyOneTokenGrant() async throws {
+        try KeychainAccessTokenStore.delete()
+        let environment = Environment.local
+        let session = makeMockSession()
+        let tokenRefresher = TokenRefresher(session: session, environment: environment)
+
+        let osnSession = makeOSNSession(environment: environment, session: session, tokenRefresher: tokenRefresher)
+
+        // Signed in with a token inside the skew allowance, so
+        // `ensureFreshAccessToken()` is forced down its refresh branch.
+        MockURLProtocol.handler = { _ in
+            let body = """
+            {"access_token":"at-restored","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
+            """
+            return (
+                200,
+                ["Content-Type": "application/json", "Set-Cookie": "osn_session=rotated-3; Path=/"],
+                Data(body.utf8)
+            )
+        }
+        await osnSession.restore()
+        #expect(osnSession.state == .signedIn(nil))
+        try KeychainAccessTokenStore.save("at-about-to-expire", expiresIn: 5)
+
+        let tokenGrants = Counter()
+        MockURLProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/token") == true {
+                await tokenGrants.increment()
+                let body = """
+                {"access_token":"at-refreshed","token_type":"Bearer","expires_in":300,"scope":"openid profile"}
+                """
+                return (
+                    200,
+                    ["Content-Type": "application/json", "Set-Cookie": "osn_session=rotated-4; Path=/"],
+                    Data(body.utf8)
+                )
+            }
+            let body = """
+            {"passkeys":[{"id":"pk-1","label":"iPhone","aaguid":null,"transports":null,"backupEligible":null,"backupState":null,"createdAt":1,"lastUsedAt":null}]}
+            """
+            return (200, ["Content-Type": "application/json"], Data(body.utf8))
+        }
+
+        _ = try await fetchPasskeys(session: osnSession)
+
+        #expect(await tokenGrants.value == 1)
+
+        try KeychainAccessTokenStore.delete()
+    }
+}
+
+private actor Counter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }

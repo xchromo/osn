@@ -39,11 +39,11 @@ semantics against stubbed geometry, because happy-dom computes no layout. Neithe
 can tell you whether a drag tracks the pointer, whether the rows shift aside to
 preview the drop, or whether a toast is legible on the surface it lands on. The
 lab's **light · dark** toggle matters for the toast in particular — it borrows
-`@osn/social`'s stylesheet, which is what maps the shadcn ramp onto the
+`@musubi/social`'s stylesheet, which is what maps the shadcn ramp onto the
 `--toast-*` contract, so the toggle re-themes toasts exactly as the app does.
 
 App-level components (`pulse/web/src/components`, `cire/invites`,
-`osn/social`) are not catalogued: they read from an API client, a router and an
+`musubi/social`) are not catalogued: they read from an API client, a router and an
 auth session, and standing those up means fixtures the repo deliberately keeps
 out of app source. A story for one of them belongs next to it, supplying real
 context — `pulse/web/src/components/Icon.story.tsx` is the pattern, and it is
@@ -98,6 +98,21 @@ export const meta = { title: "osn/ui/Button", layout: "centered" as const };
 `layout` is `centered` (default), `padded` (top-left, for layout work) or
 `fullscreen` (no padding, for canvases). Without `title`, the sidebar name comes
 from the file path.
+
+`meta.headless` is the one flag with a gate behind it. `tests/stories.test.tsx`
+imports every story file and renders every story, so a bench that has quietly
+stopped mounting fails the build instead of showing up as a sidebar error row
+nobody sees. Set `headless: false` when the file cannot render outside a real
+browser — a `WebGLRenderer` needs a GPU context happy-dom does not have — and
+the smoke test stops at importing it:
+
+```tsx
+export const meta = { title: "lab/three", layout: "fullscreen" as const, headless: false };
+```
+
+It defaults to `true`, so a new story is gated unless its author says why it
+cannot be. Opting out describes the story's dependencies, not how finished it
+is.
 
 ## Where stories live
 
@@ -188,7 +203,7 @@ not copy the pattern into app code.
 
 ## Styling
 
-`src/lab.css` imports `osn/social/src/App.css` wholesale rather than keeping its
+`src/lab.css` imports `musubi/social/src/App.css` wholesale rather than keeping its
 own copy of the design tokens. That file defines `--background`, the `.dark`
 block and the `base:` variant that every `@osn/ui` class is written against, so
 importing it is what makes those components render here exactly as they render

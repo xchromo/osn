@@ -9,10 +9,11 @@ cire/db/
 ├── src/schema.ts         # Drizzle schema — single source of truth
 ├── drizzle.config.ts     # Drizzle Kit pointer to schema + migrations dir
 ├── migrations/           # Forward-only D1 migrations (committed)
-│   ├── 0001_initial.sql
-│   ├── …                 # one file per change; wrangler applies in NAME order
-│   ├── 0054_event_timestamps.sql
-│   └── meta/             # drizzle-kit journal + latest snapshot (see below)
+│   ├── 0001_initial.sql  # THE BASELINE — the whole schema in one file
+│   ├── …                 # 0058 onwards; wrangler applies in NAME order
+│   └── meta/             # drizzle-kit journal + 0057_snapshot.json (see below)
+├── migrations-archive/   # 0001–0057 as they were, squashed 2026-09-10.
+│                         # Wrangler never reads this; four tests do.
 └── seed/
     ├── data/             # Canonical seed data (single source of truth)
     │   ├── events.ts     # keyed-by-slug sample events
@@ -38,9 +39,9 @@ Run from the repo root with `bun run --cwd cire/db <script>`. Wrangler reads
 | `db:migrate:dev`   | Apply pending migrations to the **dev** D1 (`cire-db-dev`, `--env dev`). CI runs this every merge |
 | `db:migrate:prod`  | Apply pending migrations to the **production** D1 (`--env production`). Coordinate with deploys.  |
 | `db:seed`          | Apply `seed/dev-seed.sql` to the local D1 (idempotent — uses `INSERT OR IGNORE`)                  |
-| `db:seed:dev`      | Same seed against `cire-db-dev`. Guarded — refuses any other remote database.                     |
+| `db:seed:dev`      | Same seed against `cire-db-dev`. Guarded — refuses any other remote database. Nightly, with the reset above |
 | `db:reset`         | Wipe local D1 state, re-run migrations + seed. Destructive — local only.                          |
-| `db:reset:dev`     | Drop every table in `cire-db-dev` incl. `d1_migrations`. Destructive — dev only, no prod flag.    |
+| `db:reset:dev`     | Drop every table in `cire-db-dev` incl. `d1_migrations`. Destructive — dev only, no prod flag. Run nightly by `cire-dev-db-rebuild.yml`, not on merge |
 | `db:studio`        | Launch Drizzle Studio for browsing the schema / writing one-off queries                           |
 | `seed:generate`    | Regenerate `seed/dev-seed.sql` and `seed/dev-reset.sql` from `seed/data/` + `src/schema.ts`       |
 | `test`             | Run the seed sync tests (`bun test`) — fail if either generated `.sql` is out of sync             |
@@ -49,7 +50,7 @@ Every remote script names its target database explicitly **and** passes `--env`.
 Neither is optional: without `--env`, wrangler resolves the name against the
 top-level config, so a script meant for dev silently hits production. The two
 destructive dev scripts also re-check `cire/api/wrangler.toml` at run time
-(`scripts/cire-dev-db-guard.sh`) and abort unless `[env.dev]` really is
+(`scripts/cire-dev-db-guard.ts`) and abort unless `[env.dev]` really is
 `cire-db-dev` with an id no other environment shares.
 
 Production is never reset and never seeded — no script here can do either.
@@ -67,12 +68,32 @@ bun run --cwd cire/api dev
 **After editing `schema.ts`**
 
 ```bash
-bun run --cwd cire/db db:generate   # emits cire/db/migrations/00NN_<desc>.sql
+bun run --cwd cire/db db:generate   # emits cire/db/migrations/00NN_<desc>.sql (0058+)
 # rename to a descriptive suffix, add a rationale header comment, review the SQL
 bun run --cwd cire/db db:push       # applies it locally
 # mirror the change in cire/api/src/db/setup.ts's DDL string — the
 # ddl-lockstep test fails until all three surfaces agree
 ```
+
+### The baseline, and why its filename matters
+
+`migrations/0001_initial.sql` is not the first migration any more — it is the
+**whole schema**, squashed out of the original 57 files on 2026-09-10
+(xchromo/osn#981). Building a database from the chain cost 8,007 D1 rows written
+and about 22,630 read, against a free-tier ceiling of 100,000 written a day
+across the account; almost all of it was SQLite rebuilding whole tables for
+`ALTER TABLE ... DROP COLUMN`, which D1 bills even when the table is empty.
+
+**Do not rename it.** `wrangler d1 migrations apply` skips any file already
+named in the target database's `d1_migrations` ledger. Production's ledger holds
+`0001_initial.sql`, so wrangler skips the baseline and runs nothing. Under any
+other name it would run the whole schema against the live wedding database and
+fail on the first `CREATE TABLE`. `ddl-lockstep.test.ts` pins the name.
+
+The originals live in `migrations-archive/`, outside `migrations_dir`, because
+four tests replay them to prove what they did to real rows (`migration-0033`,
+`-0041`, `-0044`, `-0052`, plus the `0031` and `0037` blocks in
+`ddl-lockstep.test.ts`). Nothing applies them. New migrations start at `0058`.
 
 ### How `meta/` relates to the hand-authored migrations
 
@@ -80,9 +101,15 @@ bun run --cwd cire/db db:push       # applies it locally
 them in D1's own `d1_migrations` table — it never reads `meta/_journal.json`.
 The journal + latest snapshot exist for **drizzle-kit only**, so `db:generate`
 can diff `schema.ts` against the current shape and number the next file
-correctly. Migrations `0009`–`0050` were hand-authored while the journal was
-frozen at `0008`; it was repaired (backfilled entries + a regenerated snapshot)
-in the 2026-07-30 data-layer review. Keep it working: `db:generate` refreshes
+correctly. The 2026-09-10 squash trimmed the journal to a single entry and replaced the six
+stale snapshots with one that actually matches `schema.ts`. That entry reads
+**`idx: 57`, `tag: 0001_initial`** — the tag names the baseline file, and the
+index says 57 migrations have happened, so `db:generate` numbers the next one
+`0058` rather than reusing a number the archive already spent. Its snapshot is
+`meta/0057_snapshot.json`, named for the index. Change one and you must change
+the other. `bunx drizzle-kit generate` on a clean tree prints "No schema
+changes, nothing to migrate", which is the check that the baseline and
+`schema.ts` still agree. Keep it working: `db:generate` refreshes
 the journal + snapshot itself, but a **hand-written** migration must be
 accompanied by re-syncing `meta/` — easiest is to make the matching `schema.ts`
 edit first and let `db:generate` produce the SQL skeleton, then edit the SQL
@@ -119,7 +146,7 @@ Use `TESTFOR-JOY-DD44` as the dev claim code (Eli is invited to every event).
 
 - Every schema change touches **three surfaces together**: the migration SQL,
   `src/schema.ts`, and the `DDL` string in `cire/api/src/db/setup.ts` —
-  `cire/api/src/db/ddl-lockstep.test.ts` diffs all three and fails on drift.
+  `cire/api/tests/db/ddl-lockstep.test.ts` diffs all three and fails on drift.
 - D1 migrations are **forward-only**. No `DOWN` blocks. To retire a column, copy data into a new table and add a `DROP TABLE` / `ALTER` migration that performs the swap.
 - After editing `schema.ts` AND any wrangler binding, regenerate types: `bunx wrangler --config cire/api/wrangler.toml types`.
 - The dev seed is **not** applied to remote D1. Production data flows in via the organiser spreadsheet import (`/api/organiser/import/{preview,apply}`).

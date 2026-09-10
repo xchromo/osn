@@ -1,10 +1,10 @@
 import { Effect, Logger } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DeploymentEnvironment } from "../src/config";
 import { loadConfig } from "../src/config";
 import { initObservability, makeObservabilityLayer } from "../src/index";
-import { makeLoggerLayer } from "../src/logger/layer";
+import { makeLoggerLayer, PrettyLoggerLive } from "../src/logger/layer";
 import { makeTracingLayer, otlpExporterUrl } from "../src/tracing/layer";
 import { NoopTracingLive } from "../src/tracing/noop";
 
@@ -33,51 +33,54 @@ describe("makeLoggerLayer", () => {
     expect(() => makeLoggerLayer(config)).not.toThrow();
   });
 
-  it("end-to-end: Effect.logInfo with secret annotations emits a redacted entry", async () => {
-    // Capture log entries by swapping Logger.jsonLogger-style output
-    // with a test sink that records every emitted entry. We verify
-    // that the sink receives redacted annotations.
-    const captured: Array<{ message: unknown; annotations: Map<string, unknown> }> = [];
-    const captureLogger = Logger.make<unknown, void>((options) => {
-      const annotations = new Map<string, unknown>();
-      for (const [k, v] of options.annotations as Iterable<[string, unknown]>) {
-        annotations.set(k, v);
-      }
-      captured.push({ message: options.message, annotations });
-    });
+  // The real end-to-end redaction test. The case this replaced was named for
+  // this behaviour but did not check it: it built `makeLoggerLayer` into an
+  // unused `_loggerLayer`, provided a RAW capture logger with no redaction in
+  // the chain, and then asserted the annotation came through unredacted. So
+  // redaction was covered by `redact.test.ts` at the pure-function level and by
+  // nothing at all at the layer level — which is how the per-value bug below
+  // survived.
+  //
+  // This runs the actual layer and reads what reached stdout.
+  it("end-to-end: secret annotations are redacted in the emitted entry", async () => {
+    const written: string[] = [];
+    const original = globalThis.console.log;
+    globalThis.console.log = (...args: unknown[]) => {
+      written.push(args.map((a) => String(a)).join(" "));
+    };
+    try {
+      const config = loadConfig({ serviceName: "test", env: "production" });
+      await Effect.runPromise(
+        Effect.logInfo("login attempt").pipe(
+          Effect.annotateLogs({
+            accessToken: "eyJsecret",
+            email: "alice@example.com",
+            profileId: "u_123",
+          }),
+          Effect.provide(makeLoggerLayer(config)),
+        ),
+      );
+    } finally {
+      globalThis.console.log = original;
+    }
 
-    // Build a production config so our layer uses `jsonLogger` under the
-    // hood — then replace it with the capture logger via a separate
-    // layer. `makeLoggerLayer` installs redaction via `Logger.map` on
-    // the base logger's input; to verify redaction end-to-end we need
-    // to call the redacted logger directly. Simpler: use the same
-    // `makeRedactingLogger` approach via the package's Layer.
-    const config = loadConfig({ serviceName: "test", env: "production" });
-    const _loggerLayer = makeLoggerLayer(config);
+    const entry = JSON.parse(written.join("\n")) as {
+      message: unknown;
+      annotations: Record<string, unknown>;
+    };
 
-    // Run a logInfo with annotated secrets, using the capture logger as
-    // the inner sink so we can inspect what the redaction layer
-    // actually forwarded.
-    await Effect.runPromise(
-      Effect.logInfo("login attempt").pipe(
-        Effect.annotateLogs({
-          profileId: "u_123",
-          email: "alice@example.com",
-          accessToken: "eyJsecret",
-          handle: "alice",
-        }),
-        Effect.provide(Logger.replace(Logger.defaultLogger, captureLogger)),
-      ),
-    );
+    // `accessToken` and `email` are both on the deny-list in redact.ts.
+    // Under v3 neither was redacted here: the redacting logger mapped over
+    // each annotation VALUE, and `redact` matches an object's KEYS, so a bare
+    // string reached it with no key attached and passed straight through.
+    expect(entry.annotations.accessToken).toBe("[REDACTED]");
+    expect(entry.annotations.email).toBe("[REDACTED]");
 
-    // The capture logger above is raw — NOT wrapped in the redaction
-    // layer (that path is covered by `redact.test.ts`). What we're
-    // asserting here is simpler: the loggerLayer construction succeeds
-    // and the overall pipeline runs without errors, and that the
-    // capture logger observed the call.
-    expect(captured.length).toBe(1);
-    expect(captured[0]?.message).toEqual(["login attempt"]);
-    expect(captured[0]?.annotations.get("profileId")).toBe("u_123");
+    // Not on the deny-list — proves this is the deny-list at work and not a
+    // blanket scrub of every annotation.
+    expect(entry.annotations.profileId).toBe("u_123");
+
+    expect(entry.message).toBe("login attempt");
   });
 });
 
@@ -128,6 +131,144 @@ describe("makeLoggerLayer output format", () => {
     const line = await emit("local");
     expect(() => JSON.parse(line) as unknown).toThrow(SyntaxError);
     expect(line).toContain("hello");
+  });
+});
+
+/**
+ * The pretty logger is redactable, and these tests are the proof.
+ *
+ * `Logger.consolePretty()` writes and returns `void`, so there is no output to
+ * map over — but v4 exposes both of its inputs: `options.message`, and the
+ * annotations it reads for itself as
+ * `options.fiber.getRef(References.CurrentLogAnnotations)`. `redactInput`
+ * shadows those two and delegates to an untouched pretty logger, which is why
+ * colour, spans and date formatting survive the scrub.
+ */
+describe("PrettyLoggerLive", () => {
+  /** Capture everything the pretty logger writes for one `Effect.log*` call. */
+  const capture = async (run: () => Promise<unknown>): Promise<string> => {
+    const lines: string[] = [];
+    const { log, error, group, groupEnd } = globalThis.console;
+    const sink = (...args: unknown[]) => {
+      // An `Error` argument is kept identifiable, since preserving it as a real
+      // Error (rather than a `{ name, message }` record) is the point.
+      lines.push(
+        args
+          .map((a) =>
+            typeof a === "string"
+              ? a
+              : a instanceof Error
+                ? `Error<${a.name}:${a.message}>${JSON.stringify(a)}`
+                : JSON.stringify(a),
+          )
+          .join(" "),
+      );
+    };
+    globalThis.console.log = sink;
+    globalThis.console.error = sink;
+    globalThis.console.group = () => undefined;
+    globalThis.console.groupEnd = () => undefined;
+    try {
+      await run();
+    } finally {
+      Object.assign(globalThis.console, { log, error, group, groupEnd });
+    }
+    return lines.join("\n");
+  };
+
+  it("redacts a deny-listed annotation key", async () => {
+    const out = await capture(() =>
+      Effect.runPromise(
+        Effect.logInfo("login attempt").pipe(
+          Effect.annotateLogs({ accessToken: "eyJ-secret", profileId: "u_123" }),
+          Effect.provide(PrettyLoggerLive),
+        ),
+      ),
+    );
+
+    expect(out).not.toContain("eyJ-secret");
+    expect(out).toContain("[REDACTED]");
+    // The deny-list at work, not a blanket scrub.
+    expect(out).toContain("u_123");
+    expect(out).toContain("login attempt");
+  });
+
+  it("redacts a deny-listed key inside a message argument", async () => {
+    const out = await capture(() =>
+      Effect.runPromise(
+        Effect.logInfo("inbound request", { email: "alice@example.com", profileId: "u_123" }).pipe(
+          Effect.provide(PrettyLoggerLive),
+        ),
+      ),
+    );
+
+    expect(out).not.toContain("alice@example.com");
+    expect(out).toContain("[REDACTED]");
+    expect(out).toContain("u_123");
+  });
+
+  it("scrubs an Error's fields while keeping it a real Error with its stack", async () => {
+    const err = new Error("registration failed") as Error & {
+      accessToken?: string;
+      profileId?: string;
+    };
+    err.accessToken = "eyJ-secret";
+    err.profileId = "u_123";
+
+    const out = await capture(() =>
+      Effect.runPromise(
+        Effect.logError("zap-api: failed to register", err).pipe(Effect.provide(PrettyLoggerLive)),
+      ),
+    );
+
+    // Still an Error when it reaches the console — a `{ name, message }` record
+    // would have no frames, and local stack traces are what this logger is for.
+    expect(out).toContain("Error<Error:registration failed>");
+    expect(out).not.toContain("eyJ-secret");
+    expect(out).toContain("[REDACTED]");
+    expect(out).toContain("u_123");
+  });
+
+  it("keeps Logger.tracerLogger in the active set", async () => {
+    // `Logger.layer` REPLACES the whole set, so dropping the tracer logger from
+    // the list costs log-to-span correlation with no error and no failing
+    // type-check. Both layers that ship a logger are checked.
+    const activeSet = (layer: typeof PrettyLoggerLive) =>
+      Effect.runPromise(
+        Effect.service(Logger.CurrentLoggers).pipe(
+          Effect.map((loggers) => loggers.has(Logger.tracerLogger)),
+          Effect.provide(layer),
+        ),
+      );
+
+    await expect(activeSet(PrettyLoggerLive)).resolves.toBe(true);
+    await expect(
+      activeSet(makeLoggerLayer(loadConfig({ serviceName: "test", env: "production" }))),
+    ).resolves.toBe(true);
+  });
+
+  it("still emits ANSI colour when stdout is a TTY", async () => {
+    // Colour was the cost the migration paid for redaction, on the belief that
+    // `consolePretty` had no seam to redact through. It has one, so there is no
+    // trade to make — but `consolePretty()` samples `process.stdout.isTTY` at
+    // CONSTRUCTION time, and layer.ts constructs it at module eval. Hence
+    // resetModules + a fresh import rather than a plain assertion.
+    const stdout = process.stdout as { isTTY?: boolean };
+    const prevIsTTY = stdout.isTTY;
+    stdout.isTTY = true;
+    vi.resetModules();
+    try {
+      const fresh = await import("../src/logger/layer");
+      const out = await capture(() =>
+        Effect.runPromise(Effect.logInfo("hello").pipe(Effect.provide(fresh.PrettyLoggerLive))),
+      );
+      // eslint-disable-next-line no-control-regex
+      expect(out).toMatch(/\[\d+m/);
+      expect(out).toContain("hello");
+    } finally {
+      stdout.isTTY = prevIsTTY;
+      vi.resetModules();
+    }
   });
 });
 

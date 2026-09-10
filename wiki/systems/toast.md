@@ -8,7 +8,7 @@ related:
   - "[[cire-invite-builder]]"
   - "[[browser-tests]]"
   - "[[component-lab]]"
-last-reviewed: 2026-08-21
+last-reviewed: 2026-09-09
 ---
 # Toasts — `@shared/toast` and the `--toast-*` contract
 
@@ -84,7 +84,7 @@ Three behaviours worth knowing, all of them bugs first:
 
 ## The `--toast-*` contract
 
-The package serves two token vocabularies — shadcn names in `@osn/social` and
+The package serves two token vocabularies — shadcn names in `@musubi/social` and
 `@pulse/web`, cire's own in `@cire/*` — so it hardcodes neither. It styles itself
 from its own custom properties, each with a neutral fallback, and every app maps
 its vocabulary onto them once:
@@ -99,7 +99,7 @@ its vocabulary onto them once:
 | `--toast-accent-success` / `-error` / `-warn` / `-info` | The tone glyph's colour |
 
 ```css
-/* osn/social, pulse/web — the shadcn ramp */
+/* musubi/social, pulse/web — the shadcn ramp */
 --toast-surface: var(--popover);
 --toast-ink: var(--popover-foreground);
 --toast-accent-error: var(--destructive);
@@ -109,7 +109,7 @@ its vocabulary onto them once:
 --toast-accent-error: var(--toast-error);      /* note the alias; see below */
 ```
 
-**Styled in plain CSS, not Tailwind.** Only `pulse/web` and `osn/social` declare
+**Styled in plain CSS, not Tailwind.** Only `pulse/web` and `musubi/social` declare
 `@custom-variant base (:where(&))`, and none of the three cire apps declares
 `@source` for a workspace package. Utilities in the package would mean threading
 Tailwind config into five apps across two vocabularies; a stylesheet keyed off
@@ -186,17 +186,17 @@ Current mounts:
 |---|---|---|
 | `@cire/invites` | `top-center` | Per design pack; `Z_CLASS.TOAST`, 4s dwell. The RSVP sheet's sticky bar owns the bottom edge |
 | `@cire/host`, `@cire/vendor` | `bottom-right` | — |
-| `@osn/social` | responsive | `top-center` on mobile with a `top` offset clearing the 3rem bar + `env(safe-area-inset-top)` |
+| `@musubi/social` | responsive | `top-center` on mobile with a `top` offset clearing the 3rem bar + `env(safe-area-inset-top)` |
 | `@pulse/web` | `bottom-right` | — |
 
 ## Testing
 
 Unit: mock `@shared/toast`. Two shared factories exist —
-`cire/host/src/test-support/mocks.ts` (`toastMock()`) and
+`cire/host/tests/test-support/mocks.ts` (`toastMock()`) and
 `pulse/web/tests/helpers/toast.ts` — see `[[testing-patterns]]`.
 
 **The DOM contract, which is easy to break.**
-`cire/invites/src/designs/InvitePage.browser.test.tsx` finds a toast with
+`cire/invites/tests/designs/InvitePage.browser.test.tsx` finds a toast with
 `[...document.querySelectorAll("div")].find(d => d.textContent === message)` and
 then walks parents until `position: fixed`. So the message must live in an
 element whose `textContent` is **exactly** the message — the tone glyph and its
@@ -225,7 +225,7 @@ bun run --cwd cire/invites test:browser     # the contrast + stacking assertions
 **By hand.** `bun run dev:lab` → **shared/toast** benches the half no assertion
 reaches: how a toast enters and leaves, whether the tone glyphs are tellable
 apart at a glance, how the stack behaves when five arrive at once, and what a
-three-line message does to the layout. The lab borrows `@osn/social`'s
+three-line message does to the layout. The lab borrows `@musubi/social`'s
 stylesheet — the one that maps the shadcn ramp onto `--toast-*` — so its
 **light · dark** toggle re-themes toasts exactly as the app does, which is where
 a too-dark accent shows up. See [[component-lab]].

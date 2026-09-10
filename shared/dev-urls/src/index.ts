@@ -44,9 +44,9 @@ export interface DevApp {
  * asserts the two agree.
  */
 export const DEV_APPS = {
-  "@osn/social": { name: "musubi", port: 1422 },
+  "@musubi/social": { name: "musubi", port: 1422 },
   "@osn/api": { name: "id.musubi", port: 4000 },
-  "@osn/landing": { name: "www.musubi", port: 4324 },
+  "@musubi/landing": { name: "www.musubi", port: 4324 },
   "@pulse/web": { name: "pulse", port: 1420 },
   "@pulse/api": { name: "api.pulse", port: 3001 },
   "@pulse/landing": { name: "www.pulse", port: 4325 },
@@ -60,6 +60,9 @@ export const DEV_APPS = {
   // here because it is a long-running dev server that portless has to name, not
   // because anything addresses it.
   "@tools/lab": { name: "lab", port: 4400 },
+  // Same story: the session-metrics dashboard (`bun run dev:metrics`) is a
+  // dev server portless has to name, and nothing addresses it.
+  "@tools/metrics": { name: "metrics", port: 4401 },
 } as const satisfies Record<string, DevApp>;
 
 export type DevAppId = keyof typeof DEV_APPS;
@@ -140,7 +143,7 @@ export function devUrl(target: DevAppId, self: DevAppId, env: DevEnv = process.e
  * The WebAuthn Relying Party ID for the local devloop.
  *
  * An rpId has to be the origin's host or a registrable suffix of it, and a
- * passkey created under one rpId is invisible under another. `@osn/social`
+ * passkey created under one rpId is invisible under another. `@musubi/social`
  * (`musubi.localhost`) creates the passkey and `@osn/api` (`id.musubi.localhost`)
  * verifies it, so the rpId must cover both: `musubi.localhost`, the shared
  * parent. This is exactly why the account apps nest under a common `musubi`
@@ -153,9 +156,9 @@ export function devUrl(target: DevAppId, self: DevAppId, env: DevEnv = process.e
 export function devRpId(self: DevAppId, env: DevEnv = process.env): string {
   const address = env.PORTLESS_URL ? splitHost(env.PORTLESS_URL, DEV_APPS[self].name) : null;
   if (!address) return "localhost";
-  // The root label of the account family — the last label of `@osn/social`'s
+  // The root label of the account family — the last label of `@musubi/social`'s
   // name, which every `*.musubi` app shares.
-  const root = DEV_APPS["@osn/social"].name.split(".").pop();
+  const root = DEV_APPS["@musubi/social"].name.split(".").pop();
   return `${root}.${address.tld}`;
 }
 

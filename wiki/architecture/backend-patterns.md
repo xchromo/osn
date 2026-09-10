@@ -11,6 +11,8 @@ tags:
   - effect
 status: current
 related:
+  - "[[effect-v4-api]]"
+  - "[[d1-limits]]"
   - "[[schema-layers]]"
   - "[[testing-patterns]]"
   - "[[observability/overview]]"
@@ -20,7 +22,7 @@ packages:
   - "@osn/api"
   - "@zap/api"
   - "@cire/api"
-last-reviewed: 2026-08-24
+last-reviewed: 2026-09-09
 ---
 
 # Backend Code Patterns
@@ -56,9 +58,26 @@ Key points:
 
 ### Build the layer graph ONCE — never re-provide expensive layers per request
 
-`Effect.provide(layer)` **rebuilds** the layer every time the effect runs. Layer memoisation is per-build, so calling `Effect.runPromise(eff.pipe(Effect.provide(someLayer)))` inside a request handler reconstructs `someLayer`'s entire resource graph on every request. For the observability layer this is severe: `makeObservabilityLayer` wraps `NodeSdk.layer` (a `BatchSpanProcessor`, OTLP trace + metric exporters, and a `PeriodicExportingMetricReader`), so each request **starts and tears down the whole OpenTelemetry SDK** — and the teardown blocks on an exporter flush (≈3s locally when no collector is listening). `DbLive` similarly opens a fresh, never-closed `bun:sqlite` connection per request.
+Build the graph once into a long-lived `ManagedRuntime` at boot and run every request against it. The reasons are **boot cost and lifecycle ownership**: one OTel SDK and one DB connection per process, owned by something that can close them, rather than a resource graph whose lifetime nobody names.
 
-In `@osn/api` this surfaced as multi-second stalls on the debounced username-availability check. The fix: build the graph once into a long-lived `ManagedRuntime` at boot and run every request against it.
+> [!note] What changed under Effect v4
+> Before v4, the reason given here was rebuild cost: layer memoisation was
+> per-`Effect.provide`, so two calls with overlapping layers built them twice
+> and a per-request `Effect.provide(observabilityLayer)` started and tore down
+> the whole OpenTelemetry SDK on every request — a teardown that blocks on an
+> exporter flush (≈3 s locally with no collector listening). In `@osn/api` that
+> surfaced as multi-second stalls on the debounced username-availability check.
+>
+> v4 shares the `MemoMap` across `Effect.provide` calls **within one run** —
+> but not across separate `runPromise` roots, and a per-request provide is a
+> new root every time. Measured against `effect@4.0.0-rc.112`: five
+> `Effect.provide` calls of a scoped layer produce **five acquires and five
+> releases**, where a `ManagedRuntime` produces one acquire and zero releases
+> until it is disposed.
+>
+> So the rebuild-cost argument is **not** weakened where it actually applies.
+> Both reasons stand. This correction replaces an earlier note here that said
+> the opposite.
 
 ```typescript
 // index.ts — build once
@@ -78,7 +97,20 @@ As of 2026-07-03, `pulse/api` and `zap/api` route factories comply too: each fac
 
 `cire/api` (`cire/api/src/observability.ts`) builds its `ManagedRuntime` at **module scope**, not per route factory: one `const cireRuntime = ManagedRuntime.make(cireLoggerLayer)` for the whole file, and both `runCire`/`runCireSync` delegate to it. The layer it wraps (`cireLoggerLayer`) stays behind `Layer.suspend` even though the runtime is now built eagerly at module load — `ManagedRuntime.make` only allocates a scope at construction (pure, no env access), it does not force the layer, so the suspended `loadConfig` still only runs on the first `runPromise`/`runSync`, inside a request or cron handler. That deferral is load-bearing on workerd: `nodejs_compat_populate_process_env` fills `process.env` from wrangler `[vars]`/secrets only on first access, so a config read during module evaluation would silently pin every deployed tier to `local` (pretty logs, debug level) with no error. Do not drop `Layer.suspend` to "simplify" this.
 
-**Catching errors from `runPromise`:** the promise rejects with a `FiberFailure` *wrapping* the typed failure — never the tagged error itself — so `catch (e) { if ("_tag" in e) … }` never matches. Unwrap with `Runtime.isFiberFailure(e)` → `Cause.failureOption(e[Runtime.FiberFailureCauseId])`, or use `makeSafeError` (`osn/api/src/lib/safe-error.ts`) when the goal is a client-safe error message. This bit the graph/organisation routes for weeks: every business-rule message collapsed to a generic "Request failed" — see [[social-graph]] §Error Handling.
+**Catching errors from `runPromise`:** v4 removed `FiberFailure`. The promise now rejects with `Cause.squash(cause)`, which for a typed failure is the tagged error itself — so `catch (e) { if ("_tag" in e) … }` does match. Use `makeSafeError` (`osn/api/src/lib/safe-error.ts`) anyway when the goal is a client-safe message; it is the allow-list, not just the unwrapper.
+
+The one thing `squash` changes for the worse: where v3's `Cause.failureOption` returned `None` for a **defect**, `squash` hands you the defect object, which can carry an internal message. `makeSafeError` still gates on the tag, so a defect is not a match and does not reach a client. Anywhere reading a rejection by hand must make the same check rather than assuming a rejection is a typed failure.
+
+Reading an error out of a `Cause` directly (in a test, say) is `Cause.findErrorOption` — v4's `Cause` is a flat list of reasons, so there is no `Fail` node to match on:
+
+```typescript
+// v3: exit.cause._tag === "Fail" && exit.cause.error instanceof VendorNotInWedding
+Option.getOrUndefined(Cause.findErrorOption(exit.cause)) instanceof VendorNotInWedding
+```
+
+`findErrorOption` returns `None` for a defect, so this refuses one exactly as the `Fail` check did.
+
+Before v4 this whole area bit the graph/organisation routes for weeks: every business-rule message collapsed to a generic "Request failed" — see [[social-graph]] §Error Handling.
 
 ## Service Layer -- Effect Schema for domain validation + transforms
 
@@ -100,13 +132,13 @@ const InsertEventSchema = Schema.Struct({
   title: Schema.NonEmptyString,
   startTime: DateFromISOString,                 // string → Date (validated)
   status: Schema.optional(
-    Schema.Literal("upcoming", "ongoing", "finished", "cancelled")
+    Schema.Literals(["upcoming", "ongoing", "finished", "cancelled"])
   ),
 });
 
 export const createEvent = (data: unknown) =>
   Effect.gen(function* () {
-    const validated = yield* Schema.decodeUnknown(InsertEventSchema)(data).pipe(
+    const validated = yield* Schema.decodeUnknownEffect(InsertEventSchema)(data).pipe(
       Effect.mapError((cause) => new ValidationError({ cause })),
     );
     // validated.startTime is now a Date
@@ -114,7 +146,7 @@ export const createEvent = (data: unknown) =>
 ```
 
 Key points:
-- `Schema.decodeUnknown` returns `Effect<A, ParseError>` -- integrates naturally with Effect pipelines
+- `Schema.decodeUnknownEffect` returns `Effect<A, SchemaError>` -- integrates naturally with Effect pipelines. The failure is tagged `"SchemaError"`, so that is what `Effect.catchTag` takes (v3's tag was `"ParseError"`)
 - Services map errors to domain-specific tagged errors (`ValidationError`, `EventNotFound`, etc.)
 - Services use `Effect.gen` + generator syntax for sequential Effect composition
 - Wrap every service function in `Effect.withSpan("<domain>.<operation>")` for tracing
@@ -252,6 +284,71 @@ Two values, chosen by what the response carries:
 First-statement placement is the rule, not a style choice. A 401, a 429, or a 500 is still a response with the caller's account tied to the request that produced it, and a proxy or browser cache does not know or care that the body was an error — it caches whatever `Cache-Control` allows on whatever status came back. An assignment placed after the auth guard or inside a `try` only reaches the 200 path; every rejection leaves the endpoint uncovered, which is exactly the gap tracker#469 found and fixed by moving the assignment up rather than adding a second one. A test that only checks the 200 case cannot see that gap, because the header still passes on the path it checks — assert the header on a 401 or 429, not only on success.
 
 This pattern started with `GET /account/security-events` (tracker#346) and now covers every authenticated route: tokens.ts, recovery.ts, sessions.ts, passkey-management.ts, profile-switch.ts, account-erasure.ts, graph.ts, recommendations.ts (tracker#466–470).
+
+## Background work must reach `waitUntil`
+
+Anything a handler starts and does not wait for — a security notice, a recovery
+code, any outbound send — must be dispatched with `forkBackground` from
+`osn/api/src/lib/background.ts`, never a bare `Effect.forkDetach`.
+
+> [!warning] A bare `Effect.forkDetach` is dropped on workerd, and only on workerd.
+> Once the `Response` is returned and no `waitUntil` promise is pending, the
+> request context is torn down. Work queued on a macrotask that then opens an
+> outbound subrequest is neither awaited nor cancelled — it is orphaned.
+> On the Bun dev server the same fibre completes, so **no unit test, no local
+> run and no `wrangler deploy --dry-run` can observe the difference.**
+
+```ts
+// Wrong — may never run on the deployed Worker.
+yield* Effect.forkDetach(notifyRecovery(email, kind).pipe(Effect.timeout("10 seconds")));
+
+// Right — same fork, plus a promise the entry hands to ctx.waitUntil.
+yield* forkBackground(notifyRecovery(email, kind).pipe(Effect.timeout("10 seconds")));
+```
+
+### How it fits together
+
+| Where | What happens |
+|---|---|
+| `index.ts` (Worker entry) | `withBackgroundSink(ctx, () => app.fetch(req))` opens a per-request sink, then hands everything it collected to `ctx.waitUntil`. With no `ctx` it is a pass-through, so `local.ts` and two-argument callers keep today's behaviour. |
+| `lib/route-runtime.ts` | `runThroughExit` reads the sink from `AsyncLocalStorage` **once, synchronously, at the `run` boundary** and carries it into the effect. |
+| `lib/background.ts` | `forkBackground` reads the sink from the effect's context, forks detached, and registers the fibre's completion with the sink. |
+
+### Three choices worth not re-litigating
+
+**A `Context.Reference`, not a `Context.Service`.** `Reference<S>` is a
+`Service<never, S>`, so its identifier is `never` and reading it contributes
+nothing to an effect's `R` channel. A plain service would add `BackgroundSink`
+to the requirements of every notification site and every test layer that
+provides them.
+
+**`AsyncLocalStorage` is read at the boundary, never inside a fiber.** Effect
+v4's scheduler batches fiber continuations into one drain, so a continuation
+can run under whichever ALS context scheduled the batch. Reading ALS from
+inside a fiber happens to work under Bun and is not sound.
+
+**Per-request, not a module-level "current `waitUntil`".** Several requests are
+in flight in one isolate, so a single mutable global would attribute one
+request's background work to another's context. `cire/api` uses a
+`WeakMap<Request, ctx>` instead (`cire/api/src/lib/execution-ctx.ts`); that
+works there because its *routes* dispatch background work and hold the
+`Request`. osn's sites are deep in services, which have no `Request` in scope.
+
+### Tests
+
+The two halves are pinned separately, because neither tier can see both:
+
+- `osn/api/tests/d1/waituntil.test.ts` (Miniflare/workerd) — that work handed to
+  `waitUntil` still runs after the response, and that `?mode=bypass` (a bare
+  `Effect.forkDetach`) both reaches `waitUntil` zero times and never completes.
+  The pre-fix behaviour is encoded there permanently.
+- `osn/api/tests/lib/background.test.ts` — that `runThroughExit` performs the
+  ALS-to-reference bridge. The workerd fixture cannot import `makeAppRunner`:
+  it pulls in `@osn/db` and `@shared/email`, whose bundles carry a dynamic
+  `import()` Miniflare refuses with `ERR_MODULE_DYNAMIC_SPEC`.
+- `osn/api/tests/services/background-dispatch.test.ts` — a source guard, since
+  a new detached send at a seventh site would otherwise be invisible at every
+  tier that runs in CI.
 
 ## Source Files
 

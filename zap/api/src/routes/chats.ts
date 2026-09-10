@@ -9,7 +9,7 @@ import { DbLive, type Db } from "@zap/db/service";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
-import { DEFAULT_JWKS_URL } from "../lib/jwks";
+import { DEFAULT_VERIFICATION, type OsnTokenVerification } from "../lib/jwks";
 import { MAX_CHAT_MEMBERS, MAX_CIPHERTEXT_LENGTH, MAX_NONCE_LENGTH } from "../lib/limits";
 import { metricAccessDenied } from "../metrics";
 import {
@@ -46,12 +46,16 @@ const ACCESS_AUDIENCE = "osn-access";
  */
 async function resolveProfileId(
   authHeader: string | undefined,
-  jwksUrl: string,
+  verification: OsnTokenVerification,
   testKey: CryptoKey | undefined,
 ): Promise<{ profileId: string } | null> {
-  const claims = await extractClaims(authHeader, jwksUrl, {
+  const claims = await extractClaims(authHeader, verification.jwksUrl, {
     testKey: testKey as CryptoKey,
     audience: ACCESS_AUDIENCE,
+    // Enforced, not optional. A token signed by a different OSN deployment
+    // verifies against its own JWKS perfectly well; `iss` is the only claim
+    // that says it was minted for this one.
+    issuer: verification.issuer,
   });
   if (!claims) return null;
   if (!claims.profileId.startsWith("usr_")) return null;
@@ -78,7 +82,7 @@ export function createDefaultZapRateLimiters(): ZapRateLimiters {
 
 export const createChatsRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
-  jwksUrl: string = DEFAULT_JWKS_URL,
+  verification: OsnTokenVerification = DEFAULT_VERIFICATION,
   _testKey?: CryptoKey,
   rateLimiters: ZapRateLimiters = createDefaultZapRateLimiters(),
 ) => {
@@ -90,7 +94,7 @@ export const createChatsRoutes = (
       .get(
         "/",
         async ({ query, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -109,7 +113,7 @@ export const createChatsRoutes = (
             ),
           );
           if ("error" in result) return result;
-          // P-I4: continuation metadata — clients stop without probing an
+          // Continuation metadata — clients stop without probing an
           // empty extra page.
           return { chats: result.chats, nextCursor: result.nextCursor, hasMore: result.hasMore };
         },
@@ -124,7 +128,7 @@ export const createChatsRoutes = (
       .get(
         "/:id",
         async ({ params, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -152,7 +156,7 @@ export const createChatsRoutes = (
       .post(
         "/",
         async ({ body, headers, set }) => {
-          // S-H1: Zap runs behind Cloudflare, so the only trustworthy client IP
+          // Zap runs behind Cloudflare, so the only trustworthy client IP
           // is `cf-connecting-ip` (W3 trust policy). A missing/malformed header
           // yields the UNRESOLVED sentinel — fail closed (429) rather than
           // bucket every header-less request together under a spoofable key.
@@ -161,7 +165,7 @@ export const createChatsRoutes = (
             set.status = 429;
             return { message: "Too many requests" } as const;
           }
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -205,7 +209,7 @@ export const createChatsRoutes = (
       .patch(
         "/:id",
         async ({ params, body, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -217,6 +221,15 @@ export const createChatsRoutes = (
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
               Effect.catchTag("NotChatMember", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("chat", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -247,7 +260,7 @@ export const createChatsRoutes = (
       .get(
         "/:id/members",
         async ({ params, query, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -258,7 +271,7 @@ export const createChatsRoutes = (
               return yield* getChatMembers(params.id, {
                 limit: query.limit ? Number(query.limit) : undefined,
                 offset: query.offset ? Number(query.offset) : undefined,
-                // P-I5: assertMember above proved the chat exists.
+                // assertMember above proved the chat exists.
                 assertedExists: true,
               });
             }).pipe(
@@ -270,7 +283,7 @@ export const createChatsRoutes = (
             set.status = 404;
             return { message: "Chat not found" };
           }
-          // P-I4: continuation metadata for offset paging.
+          // Continuation metadata for offset paging.
           return { members: result.members, hasMore: result.hasMore };
         },
         {
@@ -285,13 +298,13 @@ export const createChatsRoutes = (
       .post(
         "/:id/members",
         async ({ params, body, headers, set }) => {
-          // S-H1: Cloudflare-only client IP, fail closed when unresolved.
+          // Cloudflare-only client IP, fail closed when unresolved.
           const ip = getClientIp(headers, { trustCloudflare: true });
           if (isUnresolvedIp(ip) || !(await rateLimiters.addMember.check(ip))) {
             set.status = 429;
             return { message: "Too many requests" } as const;
           }
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -299,6 +312,15 @@ export const createChatsRoutes = (
           const result = await runtime.runPromise(
             addMember(params.id, body.profileId, claims.profileId).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("members", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -348,7 +370,7 @@ export const createChatsRoutes = (
       .delete(
         "/:id/members/:profileId",
         async ({ params, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -357,6 +379,15 @@ export const createChatsRoutes = (
             removeMember(params.id, params.profileId, claims.profileId).pipe(
               Effect.map(() => ({ ok: true }) as const),
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("members", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatAdmin", () =>
                 Effect.sync(() => {
                   set.status = 403;
@@ -391,13 +422,13 @@ export const createChatsRoutes = (
       .post(
         "/:id/messages",
         async ({ params, body, headers, set }) => {
-          // S-H1: Cloudflare-only client IP, fail closed when unresolved.
+          // Cloudflare-only client IP, fail closed when unresolved.
           const ip = getClientIp(headers, { trustCloudflare: true });
           if (isUnresolvedIp(ip) || !(await rateLimiters.sendMessage.check(ip))) {
             set.status = 429;
             return { message: "Too many requests" } as const;
           }
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -405,6 +436,19 @@ export const createChatsRoutes = (
           const result = await runtime.runPromise(
             sendMessage(params.id, claims.profileId, body).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // 409, matching how the internal route reports the same class
+              // mismatch the other way round. Not 403: the caller may well be
+              // a member, they are just using the wrong endpoint for this
+              // chat's class. Counted like the other denials on this route —
+              // an attempt to write ciphertext into a moderatable chat is the
+              // one worth being able to see.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("messages", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatMember", () =>
                 Effect.sync(() => {
                   metricAccessDenied("messages", "not_member");
@@ -440,7 +484,7 @@ export const createChatsRoutes = (
       .get(
         "/:id/messages",
         async ({ params, query, headers, set }) => {
-          const claims = await resolveProfileId(headers["authorization"], jwksUrl, _testKey);
+          const claims = await resolveProfileId(headers["authorization"], verification, _testKey);
           if (!claims) {
             set.status = 401;
             return { message: "Unauthorized" } as const;
@@ -451,6 +495,15 @@ export const createChatsRoutes = (
               cursor: query.cursor,
             }).pipe(
               Effect.catchTag("ChatNotFound", () => Effect.succeed(null)),
+              // The chat's `class` is not this API's to operate on. A c2b
+              // chat belongs to cire, through the ARC-gated internal routes.
+              Effect.catchTag("NotC2cChat", () =>
+                Effect.sync(() => {
+                  metricAccessDenied("messages", "wrong_class");
+                  set.status = 409;
+                  return { message: "Not a c2c chat" } as const;
+                }),
+              ),
               Effect.catchTag("NotChatMember", () =>
                 Effect.sync(() => {
                   metricAccessDenied("messages", "not_member");

@@ -24,7 +24,7 @@ export const DEV_ENV = {
     // Browsers that fetch this Worker with credentials. The same list feeds the
     // CSRF origin guard, so it stays as tight as the deployed one.
     const browsers = devOriginList(
-      ["@osn/social", "@pulse/web", "@cire/invites", "@cire/host", "@cire/vendor"],
+      ["@musubi/social", "@pulse/web", "@cire/invites", "@cire/host", "@cire/vendor"],
       self,
       env,
     );
@@ -38,7 +38,7 @@ export const DEV_ENV = {
       // Redirect targets for `GET /dev/login?return_to=…`. Its own list, kept
       // separate from the CORS one exactly as in `wrangler.toml`.
       DEV_LOGIN_RETURN_ORIGINS: devOriginList(
-        ["@osn/social", "@cire/host", "@cire/vendor", "@cire/invites"],
+        ["@musubi/social", "@cire/host", "@cire/vendor", "@cire/invites"],
         self,
         env,
       ),
@@ -71,14 +71,22 @@ export const DEV_ENV = {
   "@zap/api": (urls: Urls, self: DevAppId, env: DevEnv) => ({
     // Zap's graph bridge calls osn-api server-to-server.
     OSN_API_URL: urls["@osn/api"],
+    // Where the access-token keys are and who must have minted the token.
+    // Both were missing, so zap fell back to its `http://localhost:4000`
+    // defaults while osn-api under portless mints
+    // `https://<prefix>id.musubi.localhost` — every bearer-authenticated zap
+    // route 401'd in the devloop. The JWKS half was already wrong before the
+    // issuer was pinned; the pin is what made it visible.
+    OSN_ISSUER_URL: urls["@osn/api"],
+    OSN_JWKS_URL: `${urls["@osn/api"]}/.well-known/jwks.json`,
     // Browsers that reach zap directly: pulse event chats, and the account app.
-    ZAP_CORS_ORIGIN: devOriginList(["@pulse/web", "@osn/social"], self, env),
+    ZAP_CORS_ORIGIN: devOriginList(["@pulse/web", "@musubi/social"], self, env),
   }),
-  "@osn/social": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
+  "@musubi/social": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
     VITE_OSN_ISSUER_URL: urls["@osn/api"],
   }),
-  "@osn/landing": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
-    PUBLIC_APP_URL: urls["@osn/social"],
+  "@musubi/landing": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
+    PUBLIC_APP_URL: urls["@musubi/social"],
   }),
   "@pulse/web": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
     VITE_API_URL: urls["@pulse/api"],
@@ -96,12 +104,12 @@ export const DEV_ENV = {
     PUBLIC_API_URL: urls["@cire/api"],
     PUBLIC_CIRE_API_URL: urls["@cire/api"],
     PUBLIC_CIRE_WEB_URL: urls["@cire/invites"],
-    PUBLIC_OSN_ACCOUNT_URL: urls["@osn/social"],
+    PUBLIC_OSN_ACCOUNT_URL: urls["@musubi/social"],
   }),
   "@cire/vendor": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
     PUBLIC_API_URL: urls["@cire/api"],
     PUBLIC_CIRE_API_URL: urls["@cire/api"],
-    PUBLIC_OSN_ACCOUNT_URL: urls["@osn/social"],
+    PUBLIC_OSN_ACCOUNT_URL: urls["@musubi/social"],
   }),
   "@cire/landing": (urls: Urls, _self: DevAppId, _env: DevEnv) => ({
     PUBLIC_ORGANISER_URL: urls["@cire/host"],
@@ -112,6 +120,9 @@ export const DEV_ENV = {
   // `DEV_ENV` has to cover every `DEV_APPS` key — an entry it can forget is one
   // an app can forget too. A story that does need an origin adds it here.
   "@tools/lab": () => ({}),
+  // The metrics dashboard reads committed JSON off disk through Vite; no
+  // sibling to address either.
+  "@tools/metrics": () => ({}),
 } satisfies Record<DevAppId, (urls: Urls, self: DevAppId, env: DevEnv) => Record<string, string>>;
 
 /**

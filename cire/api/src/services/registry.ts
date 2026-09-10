@@ -525,20 +525,6 @@ function contributionsPrimaryTotal(weddingId: string): Effect.Effect<number, nev
 }
 
 /**
- * Does this R2 key name a REGISTRY object under this wedding? (S-H1, S-M1)
- *
- * `ImageKey` in the HTTP schema pins the SHAPE — `assets/<wedding>/registry-…` —
- * but shape alone lets an editor of wedding A point an item at wedding B's
- * upload, which the guest site would then serve. The middle segment IS the
- * wedding id, so ownership is a string compare, not a query.
- *
- * The slot prefix is checked here too, not only in the schema, because deleting
- * an item REAPS the object it names: a key of `assets/<own-wedding>/hero-<uuid>`
- * owns the same wedding, so ownership alone would let an editor destroy their
- * own invite hero through the registry. Both halves of the key have to be
- * earned.
- */
-/**
  * Whether a household belongs to a wedding.
  *
  * Its own function because THREE gates now depend on it and they must not
@@ -655,16 +641,6 @@ function contributionsOnAccount(
 }
 
 /**
- * The `where` that lets a session-less row adopt a session id without ever
- * risking the UNIQUE.
- *
- * `dbQuery` is `Effect.promise`, so a constraint violation is a DEFECT — a 500
- * inside a webhook Stripe will then retry for three days. So the check has to
- * live in the predicate rather than in a catch: the row still has no session,
- * and no other row has claimed this one. If either stopped being true between
- * the read and the write, the update matches nothing and the caller sees it.
- */
-/**
  * The columns a settle or an expiry writes.
  *
  * `stripeCheckoutSessionId` is optional because it is written ONLY while
@@ -679,6 +655,16 @@ interface ContributionPatch {
   stripePaymentIntentId?: string | null;
 }
 
+/**
+ * The `where` that lets a session-less row adopt a session id without ever
+ * risking the UNIQUE.
+ *
+ * `dbQuery` is `Effect.promise`, so a constraint violation is a DEFECT — a 500
+ * inside a webhook Stripe will then retry for three days. So the check has to
+ * live in the predicate rather than in a catch: the row still has no session,
+ * and no other row has claimed this one. If either stopped being true between
+ * the read and the write, the update matches nothing and the caller sees it.
+ */
 function sessionAdoptionGuard(contributionId: string, checkoutSessionId: string): SQL {
   return and(
     eq(registryContributions.id, contributionId),
@@ -695,6 +681,20 @@ function contributionOnAccount(
   return contributionsOnAccount(where, stripeAccountId, 1).pipe(Effect.map((rows) => rows[0]));
 }
 
+/**
+ * Does this R2 key name a REGISTRY object under this wedding? (S-H1, S-M1)
+ *
+ * `ImageKey` in the HTTP schema pins the SHAPE — `assets/<wedding>/registry-…` —
+ * but shape alone lets an editor of wedding A point an item at wedding B's
+ * upload, which the guest site would then serve. The middle segment IS the
+ * wedding id, so ownership is a string compare, not a query.
+ *
+ * The slot prefix is checked here too, not only in the schema, because deleting
+ * an item REAPS the object it names: a key of `assets/<own-wedding>/hero-<uuid>`
+ * owns the same wedding, so ownership alone would let an editor destroy their
+ * own invite hero through the registry. Both halves of the key have to be
+ * earned.
+ */
 function imageKeyBelongsTo(weddingId: string, key: string): boolean {
   const parts = key.split("/");
   return (

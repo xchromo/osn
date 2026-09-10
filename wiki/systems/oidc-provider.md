@@ -9,7 +9,7 @@ related:
   - "[[rate-limiting]]"
   - "[[cire-auth]]"
   - "[[musubi-identity-migration]]"
-last-reviewed: 2026-07-28
+last-reviewed: 2026-09-09
 ---
 
 # OIDC provider
@@ -107,7 +107,9 @@ Everything is `cache-control: no-store`. `GET /authorize` also sends `Referrer-P
 
 **A re-grant after revocation starts from zero.** Scope merging holds only for live consents (a narrower approval must not shrink an existing grant). Across a revocation boundary the old scope is a withdrawal record: re-approving grants exactly what the consent screen displayed, never the union with the withdrawn scopes.
 
-**Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. Self-serve registration cannot collide by construction (`client_id` is server-generated), so the lookup guard covers hand-seeded rows. OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
+**A restricted recovery session is not a signed-in session.** `/authorize` resolves the visitor from the HttpOnly **session cookie**, not from an access token — so the `osn-recovery` audience, which every access-token verifier rejects, does not reach this decision at all, and a recovery session sets that cookie because passkey enrolment needs it. `verifyRefreshToken` therefore refuses a restricted session unless the caller explicitly asks for one, and token refresh is the only caller that does. Without that default a user midway through account recovery — holding a session that may enrol a passkey and nothing else — could complete an authorization here and be signed into every relying party, which is full access at pulse, cire and zap from a session that has none at the issuer. A recovery cookie is treated exactly like no cookie: `reason=login`, or `login_required` under `prompt=none`. See [[sessions#The restricted recovery session]].
+
+**Reserved client ids do not exist.** `RESERVED_OIDC_CLIENT_IDS` (`osn-access`, `osn-recovery`, `osn-step-up`, and the ARC S2S audiences) is enforced in `findClient` — a row seeded under such a name reads as absent everywhere at once. Self-serve registration cannot collide by construction (`client_id` is server-generated), so the lookup guard covers hand-seeded rows. OIDC access tokens carry a `typ: "at+jwt"` header (RFC 9068), so no verifier can mistake one for an ID token or a first-party token even before checking `aud`. (S-M2 oidc.)
 
 ## `prompt` handling
 
@@ -193,6 +195,6 @@ The issuer string is an identifier, not branding. The provider moved to `id.musu
 
 - **`/userinfo`** — the ID token carries what clients need for now.
 - **`offline_access`** — third parties get no refresh token, so a long-lived integration must send the user through `/authorize` again.
-- **The apex well-knowns** — `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. The identity domain now exists (`musubi.social`), so this is unblocked; it needs `@osn/social` to serve those paths, or a Worker in front of the apex. That is layers 2 and 3; layer 0 works without it.
+- **The apex well-knowns** — `/.well-known/webauthn`, `apple-app-site-association` and `assetlinks.json`. The identity domain now exists (`musubi.social`), so this is unblocked; it needs `@musubi/social` to serve those paths, or a Worker in front of the apex. That is layers 2 and 3; layer 0 works without it.
 
-The consent screen is built (2026-07-26): `/authorize` in `@osn/social` — see [[authorize-ui]]. `@osn/social` deploys to the `osn-social` Pages project and is served from the apex `https://musubi.social`, the same registrable domain as the provider, so `OSN_AUTHORIZE_UI_URL = https://musubi.social/authorize`. The apex is also the WebAuthn RP ID, so it is the one surface that can run a ceremony — see [[musubi-identity-migration]].
+The consent screen is built (2026-07-26): `/authorize` in `@musubi/social` — see [[authorize-ui]]. `@musubi/social` deploys to the `osn-social` Pages project and is served from the apex `https://musubi.social`, the same registrable domain as the provider, so `OSN_AUTHORIZE_UI_URL = https://musubi.social/authorize`. The apex is also the WebAuthn RP ID, so it is the one surface that can run a ceremony — see [[musubi-identity-migration]].

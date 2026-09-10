@@ -13,6 +13,7 @@ import { timingSafeEqualString } from "@shared/crypto/timing-safe";
 import { EmailService } from "@shared/email";
 import { Effect } from "effect";
 
+import { forkBackground } from "../../lib/background";
 import { metricSecurityEventRecorded, withCrossDeviceOp } from "../../metrics";
 import { CDL_TTL_SECONDS } from "./constants";
 import type { AuthContext } from "./context";
@@ -40,6 +41,7 @@ export function createCrossDeviceModule(
       accountId,
       "cross_device_login",
       "cross-device-login",
+      {},
     );
 
   /**
@@ -52,8 +54,8 @@ export function createCrossDeviceModule(
     sessionMeta?: SessionMeta,
   ): Effect.Effect<{ requestId: string; cdlSecret: string; expiresAt: number }, AuthError, never> =>
     Effect.gen(function* () {
-      // O3: the store self-bounds (CEREMONY_STORE_MAX in-memory FIFO drop,
-      // native PX expiry on Redis), replacing the prior inline FIFO eviction.
+      // The store self-bounds (CEREMONY_STORE_MAX in-memory FIFO drop,
+      // native PX expiry on Redis).
       const requestId = genId("cdl_");
       const secretBytes = new Uint8Array(32);
       crypto.getRandomValues(secretBytes);
@@ -185,7 +187,7 @@ export function createCrossDeviceModule(
       );
 
       // Store the session + profile on the request for device B to pick up.
-      // O3: re-persist the mutated entry (the store returns a copy, not a live
+      // Re-persist the mutated entry (the store returns a copy, not a live
       // reference) carrying the remaining TTL so it still expires on schedule.
       const approvedEntry: CrossDeviceRequest = {
         ...entry,
@@ -220,10 +222,10 @@ export function createCrossDeviceModule(
       metricSecurityEventRecorded("cross_device_login");
 
       // Best-effort email notification (forked daemon, 10s timeout).
-      yield* Effect.forkDaemon(
+      yield* forkBackground(
         notifyCrossDeviceLoginByAccountId(accountId).pipe(
           Effect.timeout("10 seconds"),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }).pipe(withCrossDeviceOp("approve"));
@@ -251,7 +253,7 @@ export function createCrossDeviceModule(
         return yield* Effect.fail(new AuthError({ message: "Invalid secret" }));
       }
 
-      // O3: re-persist the rejected status (store returns a copy) with the
+      // Re-persist the rejected status (store returns a copy) with the
       // remaining TTL so a subsequent poll observes "rejected" then cleans up.
       yield* Effect.promise(() =>
         stores.crossDeviceRequests.set(

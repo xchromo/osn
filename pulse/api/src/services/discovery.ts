@@ -1,5 +1,6 @@
 import { eventRsvps, eventSeries, events, pulseUsers, type Event } from "@pulse/db/schema";
 import { Db } from "@pulse/db/service";
+import { jsonEachIn } from "@shared/db-utils";
 import { and, asc, eq, gt, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 
@@ -25,21 +26,19 @@ export class DiscoveryError extends Data.TaggedError("DiscoveryError")<{
 // Schema
 // ---------------------------------------------------------------------------
 
-const CategoryString = Schema.String.pipe(Schema.maxLength(100));
-const DateFromISOString = Schema.transform(
-  Schema.String.pipe(Schema.filter((s) => !Number.isNaN(new Date(s).getTime()))),
-  Schema.DateFromSelf,
-  { strict: true, decode: (s) => new Date(s), encode: (d) => d.toISOString() },
-);
-const Latitude = Schema.Number.pipe(Schema.between(-90, 90));
-const Longitude = Schema.Number.pipe(Schema.between(-180, 180));
+const CategoryString = Schema.String.check(Schema.isMaxLength(100));
+// v4's DateFromString rejects an Invalid Date, which is all the removed
+// validate-then-transform was for.
+const DateFromISOString = Schema.DateFromString;
+const Latitude = Schema.Number.check(Schema.isBetween({ minimum: -90, maximum: 90 }));
+const Longitude = Schema.Number.check(Schema.isBetween({ minimum: -180, maximum: 180 }));
 // 500 km is plenty for "events near me" — Earth's largest metros are
 // well inside this, and bigger radii stop being a discovery query and
 // become a full city-list query that's better served a different way.
-const RadiusKm = Schema.Number.pipe(Schema.between(0.1, 500));
+const RadiusKm = Schema.Number.check(Schema.isBetween({ minimum: 0.1, maximum: 500 }));
 // Shared cap across currencies; matches `MAX_PRICE_MAJOR` in lib/currency.
-const PriceMajor = Schema.Number.pipe(Schema.between(0, 99999.99));
-const CurrencySchema = Schema.Literal(...SUPPORTED_CURRENCIES);
+const PriceMajor = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 99999.99 }));
+const CurrencySchema = Schema.Literals(SUPPORTED_CURRENCIES);
 
 export const DiscoveryParamsSchema = Schema.Struct({
   category: Schema.optional(CategoryString),
@@ -54,9 +53,9 @@ export const DiscoveryParamsSchema = Schema.Struct({
   priceMax: Schema.optional(PriceMajor),
   cursorStartTime: Schema.optional(DateFromISOString),
   cursorId: Schema.optional(Schema.String),
-  limit: Schema.optional(Schema.Number.pipe(Schema.between(1, 50))),
-}).pipe(
-  Schema.filter((p) => {
+  limit: Schema.optional(Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
+}).check(
+  Schema.makeFilter((p) => {
     // Location triangle: lat/lng/radius must all be set together.
     const locBits = [p.lat != null, p.lng != null, p.radiusKm != null];
     const locCount = locBits.filter(Boolean).length;
@@ -158,7 +157,7 @@ export const discoverEvents = (
     const startedAt = performance.now();
     const { db } = yield* Db;
 
-    const params = yield* Schema.decodeUnknown(DiscoveryParamsSchema)(input).pipe(
+    const params = yield* Schema.decodeUnknownEffect(DiscoveryParamsSchema)(input).pipe(
       Effect.mapError((cause) => new DiscoveryValidationError({ cause })),
     );
 
@@ -265,18 +264,26 @@ export const discoverEvents = (
       //   - The viewer's own RSVP is excluded — it's not a *friend*
       //     signal.
       //   - Connection set is bounded by MAX_EVENT_GUESTS upstream in
-      //     `getConnectionIds`, capping the IN list size for the SQLite
-      //     prepared-statement cache.
+      //     `getConnectionIds`.
+      //
+      // `connectionIds` binds twice in this one predicate —
+      // once via `inArray`, once via the `sql.join` list inside the EXISTS.
+      // Each occurrence bound one parameter per id, so the pair broke D1's
+      // 100-parameter cap at ~50 connections even though `MAX_EVENT_GUESTS`
+      // (1000) suggested far more headroom. There's no connections table on
+      // the Pulse side to fall back to an `IN (<subquery>)` against — the
+      // set only exists as this JS array from `getConnectionIds` — so
+      // `json_each` is the fix, not a subquery. One `jsonEachIn` call
+      // spliced into both spots binds the same list as one JSON parameter
+      // each time it's referenced (2 total for the pair, not 2×N).
+      const connectionIdsJson = jsonEachIn(connectionIds);
       const friendsPredicate = or(
-        inArray(events.createdByProfileId, connectionIds),
+        inArray(events.createdByProfileId, connectionIdsJson),
         sql`EXISTS (
           SELECT 1 FROM ${eventRsvps}
           LEFT JOIN ${pulseUsers} ON ${eventRsvps.profileId} = ${pulseUsers.profileId}
           WHERE ${eventRsvps.eventId} = ${events.id}
-            AND ${eventRsvps.profileId} IN (${sql.join(
-              connectionIds.map((id) => sql`${id}`),
-              sql`, `,
-            )})
+            AND ${eventRsvps.profileId} IN ${connectionIdsJson}
             AND ${eventRsvps.profileId} != ${viewerId}
             AND ${eventRsvps.status} IN ('going', 'maybe')
             AND COALESCE(${pulseUsers.attendanceVisibility}, 'connections') != 'no_one'

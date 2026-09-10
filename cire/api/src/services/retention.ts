@@ -13,7 +13,7 @@ import {
 import { rowsChanged } from "@shared/db-utils";
 import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
-import { Cause, Data, Effect } from "effect";
+import { Cause, Data, Effect, Option } from "effect";
 
 import { commitGroupedBatches, DbService, dbQuery } from "../db";
 import { metricGuestDataSwept } from "../metrics";
@@ -315,7 +315,7 @@ export const retentionService = {
       if (notify && notices.length > 0) {
         yield* notify(notices).pipe(
           Effect.timeout("30 seconds"),
-          Effect.catchAllCause((cause) =>
+          Effect.catchCause((cause) =>
             Effect.logWarning("gift summary notices not delivered").pipe(
               // Fixed strings, never `String(cause)` (S-L1). `notify` is a
               // caller-supplied function type: whatever a future notifier puts
@@ -325,7 +325,7 @@ export const retentionService = {
               // notifier whose error channel says it has none — are worth
               // telling apart, and neither name carries data.
               Effect.annotateLogs({
-                reason: Cause.isFailure(cause) ? "timeout" : "defect",
+                reason: Option.isSome(Cause.findErrorOption(cause)) ? "timeout" : "defect",
                 weddings: notices.length,
               }),
             ),
@@ -648,7 +648,7 @@ function writeGiftSummaries(
       ];
     });
   }).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.logWarning("gift summaries not written").pipe(
         Effect.annotateLogs({ reason: String(cause) }),
         // No summary written, no summary mailed — telling a couple their record

@@ -178,6 +178,12 @@ export default function VendorEnquiryThread(props: VendorEnquiryThreadProps) {
             <Textarea
               {...field}
               rows={3}
+              // Inside VendorApp's createAutoSize() panel, same as
+              // ListingEditor's description box: the reflow guard keys off
+              // width alone, so a height-only resize reads as a content swap
+              // and restarts a transition per observer delivery. Keep this
+              // resize-none until that guard accounts for height too.
+              resize="none"
               placeholder="Write a reply…"
               value={draft()}
               onInput={(e) => setDraft(e.currentTarget.value)}

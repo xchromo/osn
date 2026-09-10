@@ -31,6 +31,54 @@ export function probeAccountId(): string {
   return genId("acc_probe_");
 }
 
+/**
+ * The two halves of a disown token, plus the joined form that goes in the mail.
+ * `lookupId` keys the store; `secret` is what is compared, in constant time,
+ * against the stored hash.
+ */
+export interface DisownToken {
+  readonly lookupId: string;
+  readonly secret: string;
+  readonly token: string;
+}
+
+/**
+ * Mint a "this wasn't me" token for the recovery notice: a public lookup id and
+ * a secret half, joined by a dot.
+ *
+ * Two halves rather than one opaque string because the store needs a key it can
+ * look up and a value it can compare in constant time. Hashing the whole token
+ * and keying on the hash would make the lookup itself the comparison, and a
+ * store's key equality is not constant-time.
+ *
+ * The lookup id carries no information about the account, the recovery or the
+ * secret — nothing in the email predicts either half.
+ */
+export function genDisownToken(secretBytes: number): DisownToken {
+  const lookupId = genId("rdt_");
+  const raw = new Uint8Array(secretBytes);
+  crypto.getRandomValues(raw);
+  const secret = Buffer.from(raw).toString("base64url");
+  return { lookupId, secret, token: `${lookupId}.${secret}` };
+}
+
+/**
+ * Split a presented disown token back into its halves.
+ *
+ * Returns `null` on anything that is not exactly one dot-separated pair with
+ * both halves non-empty. A malformed token must reach the store lookup as a
+ * miss rather than as a crash or a wildcard.
+ */
+export function parseDisownToken(
+  token: string,
+): { readonly lookupId: string; readonly secret: string } | null {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [lookupId, secret] = parts;
+  if (!lookupId || !secret) return null;
+  return { lookupId, secret };
+}
+
 export function now(): Date {
   return new Date();
 }
@@ -72,6 +120,21 @@ export type StepUpTokenClaims = {
   amr: string[];
   jti: string;
   purpose?: string;
+  /**
+   * The provenance of the passkey that was asserted to mint this token, and
+   * that credential's `created_at` in unix seconds. Present together or not at
+   * all, and only when the ceremony was a passkey assertion.
+   *
+   * `amr: ["webauthn"]` says a WebAuthn ceremony happened; it does not say
+   * whether the credential behind it was the user's own or one registered a
+   * minute ago under an emailed code. These two carry that difference to the
+   * gates that turn on it — passkey delete/rename and email change — which is
+   * why `verifyStepUpToken` refuses a `webauthn` token that omits them rather
+   * than reading the omission as "unrestricted".
+   */
+  pk_id?: string;
+  pk_provenance?: string;
+  pk_created_at?: number;
 };
 
 /**
@@ -133,6 +196,9 @@ export type VerifiedJwtClaims = {
   readonly scope?: unknown;
   readonly displayName?: unknown;
   readonly osn_sid?: unknown;
+  readonly pk_id?: unknown;
+  readonly pk_provenance?: unknown;
+  readonly pk_created_at?: unknown;
 };
 
 export async function signJwt(
@@ -324,16 +390,18 @@ export function sessionHandleFromHash(sessionHash: string): string {
 // Copenhagen Book M3: cap length at 255 (the practical RFC 5321 mailbox
 // ceiling) BEFORE the regex runs — rejects absurd payloads outright and
 // keeps the stored `accounts.email` column bounded.
-export const EmailSchema = Schema.String.pipe(
-  Schema.filter((s) => s.length <= 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s), {
-    message: () => "Invalid email",
-  }),
+export const EmailSchema = Schema.String.check(
+  Schema.makeFilter((s) =>
+    s.length <= 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? undefined : "Invalid email",
+  ),
 );
 
-export const HandleSchema = Schema.String.pipe(
-  Schema.filter((s) => /^[a-z0-9_]{1,30}$/.test(s), {
-    message: () => "Handle must be 1–30 characters: lowercase letters, numbers, underscores only",
-  }),
+export const HandleSchema = Schema.String.check(
+  Schema.makeFilter((s) =>
+    /^[a-z0-9_]{1,30}$/.test(s)
+      ? undefined
+      : "Handle must be 1–30 characters: lowercase letters, numbers, underscores only",
+  ),
 );
 
 /**
@@ -344,19 +412,17 @@ export const HandleSchema = Schema.String.pipe(
  * COPPA-specific 422 rather than a generic 400. The value is never persisted.
  * See [[compliance/coppa]].
  */
-export const BirthdateSchema = Schema.String.pipe(
-  Schema.filter(
-    (s) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-      const d = new Date(`${s}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime())) return false;
-      // Reject dates that don't round-trip (e.g. 2021-02-30 → 2021-03-02).
-      if (d.toISOString().slice(0, 10) !== s) return false;
-      // A birthdate in the future is nonsensical.
-      return d.getTime() <= Date.now();
-    },
-    { message: () => "Invalid birthdate" },
-  ),
+export const BirthdateSchema = Schema.String.check(
+  Schema.makeFilter((s) => {
+    const invalid = "Invalid birthdate";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return invalid;
+    const d = new Date(`${s}T00:00:00.000Z`);
+    if (Number.isNaN(d.getTime())) return invalid;
+    // Reject dates that don't round-trip (e.g. 2021-02-30 → 2021-03-02).
+    if (d.toISOString().slice(0, 10) !== s) return invalid;
+    // A birthdate in the future is nonsensical.
+    return d.getTime() <= Date.now() ? undefined : invalid;
+  }),
 );
 
 /**
@@ -381,10 +447,10 @@ export function ageInYears(birthdate: string, at: Date = new Date()): number {
  * settings-row display without having to `LIKE …%` truncate at read time.
  * Empty strings aren't valid — the caller should PATCH `null` to clear.
  */
-export const PasskeyLabelSchema = Schema.String.pipe(
-  Schema.filter((s) => s.trim().length > 0 && s.length <= 64, {
-    message: () => "Passkey label must be 1–64 characters",
-  }),
+export const PasskeyLabelSchema = Schema.String.check(
+  Schema.makeFilter((s) =>
+    s.trim().length > 0 && s.length <= 64 ? undefined : "Passkey label must be 1–64 characters",
+  ),
 );
 
 /**

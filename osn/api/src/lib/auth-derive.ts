@@ -6,7 +6,7 @@ import type { AuthService } from "../services/auth";
 /**
  * Resolves a Bearer access token from the Authorization header. Returns
  * the token claims on success, or null if the header is missing / invalid.
- * Used by profile and auth endpoints that authenticate via access token (S-H1).
+ * Used by profile and auth endpoints that authenticate via access token.
  */
 export async function resolveAccessTokenPrincipal(
   auth: AuthService,
@@ -21,8 +21,33 @@ export async function resolveAccessTokenPrincipal(
 } | null> {
   if (!authHeader || !/^Bearer\s+/i.test(authHeader)) return null;
   const token = authHeader.replace(/^Bearer\s+/i, "");
-  const result = await Effect.runPromise(Effect.either(auth.verifyAccessToken(token)));
-  if (result._tag === "Right") return result.right;
+  const result = await Effect.runPromise(Effect.result(auth.verifyAccessToken(token)));
+  if (result._tag === "Success") return result.success;
+  return null;
+}
+
+/**
+ * The same, for a **restricted recovery session's** access token
+ * (`aud: "osn-recovery"`). Returns null for an ordinary access token, so this
+ * never widens a caller that meant to accept only `osn-access`.
+ *
+ * One caller: `resolvePasskeyEnrollPrincipal`. Passkey enrolment is the only
+ * thing a restricted session may reach.
+ */
+export async function resolveRecoveryTokenPrincipal(
+  auth: AuthService,
+  authHeader: string | undefined,
+): Promise<{
+  profileId: string;
+  email: string;
+  handle: string;
+  displayName: string | null;
+  sessionBinding: string | null;
+} | null> {
+  if (!authHeader || !/^Bearer\s+/i.test(authHeader)) return null;
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  const result = await Effect.runPromise(Effect.result(auth.verifyRecoveryAccessToken(token)));
+  if (result._tag === "Success") return result.success;
   return null;
 }
 

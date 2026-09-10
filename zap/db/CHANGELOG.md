@@ -1,5 +1,124 @@
 # @zap/db
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [6474854]
+  - @shared/db-utils@0.7.1
+
+## 0.6.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @shared/db-utils@0.7.0
+
+## 0.5.14
+
+### Patch Changes
+
+- Updated dependencies [613c916]
+  - @shared/db-utils@0.6.6
+
+## 0.5.13
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- 01437b3: Take better-sqlite3 13.0.3 (from 12.11.1) and @types/better-sqlite3 9.6.0 (from 7.6.13). Nothing in `src/` imports either — the real consumer is drizzle-kit, which resolves better-sqlite3 dynamically to back `db:migrate`, `db:push`, `db:studio` and `db:reset`. Verified by running `drizzle-kit generate` against 13.0.3 in all three packages. The two packages move together because the type definitions had drifted two majors behind the runtime.
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [00ed19f]
+  - @shared/db-utils@0.6.5
+
+## 0.5.12
+
+### Patch Changes
+
+- 5c51a23: Enforce foreign keys on `bun:sqlite`, and fix the two erasure bugs that were hiding behind it.
+
+  SQLite defaults `PRAGMA foreign_keys` to **OFF** while D1 enforces them, so every local run and every test accepted writes production rejects. The cheap, fast environment was the permissive one, which is the worst way round: a statement that orphans a row, or deletes a parent before its children, passed the whole suite and would have failed on deploy.
+
+  Turning it on found `hardDeleteAccount` broken in two ways, both of which would make GDPR Art. 17 erasure throw rather than complete. It deletes the `accounts` row while deliberately keeping `security_events` and `email_changes` under Art. 6(1)(c) — but both declared a foreign key to `accounts`, so a column documented to outlive its parent referenced it. Those two constraints are dropped. It also deleted `users` before the `oauth_consents` and `oauth_authorization_codes` rows that carry a `profile_id` referencing them; those deletes now run first.
+
+  `dev-login`'s provisioning batch declared itself infallible through `Effect.promise` while being a chain of inserts that reference rows an earlier `onConflictDoNothing` may have skipped. With foreign keys on, that arrived as a defect and escaped the route's own error handling, answering 400 where the contract says 500 `provisioning_failed`.
+
+- Updated dependencies [5c51a23]
+  - @shared/db-utils@0.6.4
+
+## 0.5.11
+
+### Patch Changes
+
+- 673ca2b: Enforce the chat class on every public chat operation, and finish the returned-row conversion.
+
+  Four public operations never checked `chats.class`. `sendMessage` let a member of a `c2b` (consumer-to-business) chat write an encrypted message into it; `listMessages` served that chat's plaintext `body` column straight back, going round the ARC-gated reader that is supposed to be the only way to it; `removeMember` let a member leave a chat cire had authorised, which silently truncated their own DSAR export, because the export reaches c2b message bodies only through `chat_members`; and `updateChat`/`addMember` were closed to c2b chats only by accident, since such a chat has no admin for `assertAdmin` to reject. A `c2b` chat is defined as server-visible, moderatable and DSAR-exportable; a ciphertext row inside one is none of those — the account export filters on a non-null `body` so the row is dropped silently, and the internal reader renders it as an empty string with no signal that content was withheld. All of them now fail `NotC2cChat`, reported as 409, mirroring the check `sendC2bMessage` already made the other way round. On the two public message routes the class check runs _after_ the membership check — unlike its ARC-gated counterpart, because answering "not a c2c chat" to a stranger holding a chat id would tell them which ids are commercial.
+
+  `addMember` and `updateChat` were the last two write paths still re-reading the row they had just written. They now return what they wrote, through `storedNow()` — and `updateChat` keeps the stored title when a request sends none, which is what Drizzle's omit-undefined `SET` does and what the read-back used to get right by accident.
+
+  `zap/db`'s DDL lockstep test now also checks `drizzle/meta/`: `drizzle-kit generate` reads the journal and the latest snapshot rather than the `.sql` files, so a journal that has lost an entry makes the next generate re-emit a migration already applied to production.
+
+## 0.5.10
+
+### Patch Changes
+
+- 5d8417f: Drop a wasted read after every chat and message write, and stop `listC2bMessages` silently restarting at page 1 on an unknown cursor.
+
+  The four write paths (`createChat`, `provisionC2bChat`, `sendMessage`, `sendC2bMessage`) re-read the row they had just inserted before returning it. Every column was already known, so that was one more sequential D1 round-trip per write for nothing — three to four on the enquiry hot path. They now return the values they wrote. Timestamps go through a new `storedNow()` helper because Drizzle stores `timestamp` columns as whole seconds: an untruncated `Date` would make a write's response disagree with every later read of the same row by up to 999ms.
+
+  Both list paths now page with a composite `(createdAt, id)` keyset instead of a strict `createdAt <`. Second-resolution timestamps are not unique, so the old cursor silently skipped every message sharing the cursor's second — unreachable for ever once the page moved past it. `messages_chat_created_idx` gains `id` so the ordering stays index-satisfied. Within one second the display order is now unspecified rather than incidentally insertion-ordered; the fix for that needs millisecond storage and is tracked separately.
+
+  `listC2bMessages` now fails with a validation error on a `before` cursor it cannot find, matching `listMessages`; the route answers 400 rather than 200-with-page-1, which used to send a paginating caller round the same page for ever. `chats_class_idx` is dropped — `EXPLAIN QUERY PLAN` gives an identical plan with and without it, so it was write amplification only.
+
+## 0.5.9
+
+### Patch Changes
+
+- Updated dependencies [518bc7d]
+  - @shared/db-utils@0.6.3
+
 ## 0.5.8
 
 ### Patch Changes

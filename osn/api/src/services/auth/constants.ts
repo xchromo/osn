@@ -11,18 +11,18 @@ export const CDL_TTL_SECONDS = 300; // 5 min
 export const MAX_OTP_ATTEMPTS = 5;
 
 /**
- * COPPA hard age gate (C-H8). Registration rejects anyone under this age
+ * COPPA hard age gate. Registration rejects anyone under this age
  * before any personal information is collected (before the OTP is sent), so
  * OSN never gains "actual knowledge" of an under-13 user. The birthdate is
  * validated transiently and NEVER persisted. See [[compliance/coppa]].
  */
 export const MIN_AGE_YEARS = 13;
-// O3: short TTL for WebAuthn challenge entries (passkey register / login /
+// Short TTL for WebAuthn challenge entries (passkey register / login /
 // step-up). 120s matches the previous inline `Date.now() + 120_000`.
 export const CHALLENGE_TTL_MS = 120_000;
 
-// Per-account profile-switch rate limiting (S-M3). Fixed window:
-// max 20 switches per hour per account. O3: enforced via an injectable
+// Per-account profile-switch rate limiting. Fixed window:
+// max 20 switches per hour per account. Enforced via an injectable
 // per-account cap limiter (`profileSwitchCap`) so the window is shared across
 // pods; the default is an in-memory fixed-window limiter with these bounds.
 export const PROFILE_SWITCH_MAX = 20;
@@ -60,13 +60,47 @@ export const RESERVED_HANDLES = new Set([
 ]);
 
 /**
- * Hard cap on concurrent sessions per account (S-M1). An attacker who
+ * Hard cap on concurrent sessions per account. An attacker who
  * compromises an account cannot inflate the revocation / list surface
  * beyond this limit; new sessions LRU-evict the oldest rather than
  * rejecting the legitimate login. Typical users have <10 sessions
  * across all their devices, so 50 is conservative.
  */
 export const MAX_SESSIONS_PER_ACCOUNT = 50;
+
+/**
+ * `aud` on an ordinary user access token. Asserted in `verifyAccessToken`, so
+ * an ES256 token signed with the same key but minted for a different audience
+ * — a step-up token, an OIDC access token, a recovery token — cannot
+ * authenticate access-token routes.
+ */
+export const ACCESS_TOKEN_AUDIENCE = "osn-access";
+
+/**
+ * `aud` on the access token of a **restricted recovery session**.
+ *
+ * A distinct audience rather than a claim on an `osn-access` token, because
+ * there is no single guard to add a claim check to: four entry points in this
+ * service verify access tokens, and three services outside this repo verify the
+ * same token over JWKS with no access to our database. Every one of them
+ * already pins `osn-access`, so all seven reject this audience with no change
+ * to any of them — fail-closed by construction, and not dependent on three
+ * other services deploying anything.
+ *
+ * `resolvePasskeyEnrollPrincipal` is the only resolver that accepts it.
+ */
+export const RECOVERY_TOKEN_AUDIENCE = "osn-recovery";
+
+/**
+ * Absolute lifetime of a restricted recovery session, in seconds. It does not
+ * slide: the row is inserted with `expiresAt === restrictedUntil` and rotation
+ * copies that deadline forward rather than extending it.
+ *
+ * A credential that can do exactly one thing must not outlive the window in
+ * which that thing is plausible, and a 30-day session that can do nothing would
+ * still consume a slot against {@link MAX_SESSIONS_PER_ACCOUNT}.
+ */
+export const RECOVERY_SESSION_TTL_SEC = 900; // 15 min
 /**
  * Rotation-reuse grace window (refresh-token concurrency tolerance).
  *
@@ -89,12 +123,37 @@ export const MAX_SESSIONS_PER_ACCOUNT = 50;
  */
 export const ROTATION_GRACE_MS = 10_000;
 /**
- * Hard cap on passkeys per account (P-I10). An attacker with a stolen
+ * Hard cap on passkeys per account. An attacker with a stolen
  * access token (or a hijacked enrollment token) cannot add unlimited
  * credentials; 10 is comfortably above the real-world ceiling of one
  * passkey per device for a typical user.
  */
 export const MAX_PASSKEYS_PER_ACCOUNT = 10;
+
+/**
+ * The count above which an enrolment from a restricted recovery session starts
+ * reclaiming, one credential above {@link MAX_PASSKEYS_PER_ACCOUNT}.
+ *
+ * The headroom exists because without it an account at the cap that has lost
+ * every device is permanently unreachable: it cannot enrol past the cap, and it
+ * cannot delete to make room, since `passkeyDeleteAllowedAmr` is WebAuthn-only
+ * and a restricted session cannot mint a step-up at all.
+ *
+ * **This is a threshold, not a limit.** It decides when the reclaim runs, never
+ * whether the enrolment is admitted — a recovery enrolment is admitted at any
+ * count. What it may reclaim is only what its own recovery episode lent, and
+ * that set is usually empty by the time a second recovery is permitted, so the
+ * threshold gives way rather than the credential. An account that recovers and
+ * never prunes therefore gains one credential per recovery, and recoveries are
+ * {@link RECOVERY_COOLDOWN_MS} apart.
+ *
+ * `MAX_PASSKEYS_PER_ACCOUNT` alone still governs every ordinary enrolment, which
+ * is still refused at the cap.
+ *
+ * @see wiki/architecture/account-recovery-factors.md
+ */
+export const RECOVERY_ENROLMENT_PASSKEY_CEILING = MAX_PASSKEYS_PER_ACCOUNT + 1;
+
 /**
  * Coalesce window for `passkeys.last_used_at` writes (mirrors
  * LAST_USED_AT_COALESCE_MS for sessions). Sub-minute accuracy on the
@@ -103,19 +162,80 @@ export const MAX_PASSKEYS_PER_ACCOUNT = 10;
  */
 export const PASSKEY_LAST_USED_COALESCE_MS = 60_000;
 /**
- * Minimum gap between `last_used_at` writes on the hot-path (P-W4).
+ * Minimum gap between `last_used_at` writes on the hot-path.
  * The Sessions UI doesn't need sub-second accuracy; coalescing to 60s
  * cuts per-refresh DB writes by ~60× at typical 5-min refresh cadence.
  */
 export const LAST_USED_AT_COALESCE_MS = 60_000;
 /**
- * Per-account cap on `/account/email/begin` (S-H3). Complements the
+ * Per-account cap on `/account/email/begin`. Complements the
  * per-IP rate limit and prevents an authenticated attacker pooling
  * their allowance across rotating IPs to spam the OSN sending domain.
  * Window is 24h to match the 2-per-7-days hard cap on complete.
  */
 export const EMAIL_CHANGE_BEGIN_PER_ACCOUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const EMAIL_CHANGE_BEGIN_PER_ACCOUNT_MAX = 3;
+
+// ---------------------------------------------------------------------------
+// Email account recovery (`POST /login/recovery/email/{begin,complete}`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-account cap on `/login/recovery/email/begin`, keyed on the RESOLVED
+ * accountId and never on the submitted identifier.
+ *
+ * The endpoint is unauthenticated and the recipient is the account holder's own
+ * verified address, so an uncapped one floods a victim's inbox and — worse —
+ * trains them to expect unsolicited recovery mail, which is the state a phishing
+ * message wants them in. A per-IP limit alone does not reach this: a rotating
+ * fleet defeats per-IP keys, which is why the cap exists at all.
+ *
+ * Three in 24 hours is above any honest retry (the code lives ten minutes and a
+ * user who mistypes their address simply sends again) and far below anything
+ * that reads as a flood.
+ */
+export const RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_MAX = 3;
+
+/**
+ * How long an emailed recovery code stays valid. Matches the other OTP
+ * ceremonies: long enough to leave the page, find the message and come back;
+ * short enough that a code sitting in a compromised mailbox is not a standing
+ * key to the account.
+ */
+export const RECOVERY_OTP_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The post-recovery cooldown, and the window a weak-provenance passkey waits
+ * before it may act on an older credential. One constant for both because they
+ * are one promise to the user: "whatever just happened without your passkey,
+ * you have three days in which it cannot be made permanent."
+ *
+ * Long enough to cross a weekend or a holiday, which is when a notice email
+ * goes unread; short enough that a genuine owner who has lost a device is not
+ * meaningfully worse off than they already are.
+ *
+ * It is a property of the service, not a deployment's choice — there is no
+ * `AuthConfig` field, for the reason `emailChangeAllowedAmr` has none: a window
+ * a deployment can set to zero is not a guarantee.
+ */
+export const RECOVERY_COOLDOWN_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * How long the "this wasn't me" token in the recovery notice stays usable.
+ * Deliberately the same as {@link RECOVERY_COOLDOWN_MS}: the token exists to
+ * make that window survivable, so a token that expired first would leave the
+ * owner warned and unable to act for the remainder.
+ */
+export const RECOVERY_DISOWN_TTL_MS = RECOVERY_COOLDOWN_MS;
+
+/**
+ * Bytes of randomness in the secret half of a disown token. The public half is
+ * a lookup id; this is what is compared, in constant time, against a stored
+ * SHA-256. 32 bytes puts guessing out of reach of the per-IP limiter in front
+ * of the route rather than relying on it.
+ */
+export const RECOVERY_DISOWN_SECRET_BYTES = 32;
 
 // ---------------------------------------------------------------------------
 // OIDC provider
@@ -160,7 +280,7 @@ export const OIDC_PARAM_MAX_LENGTH = 512;
 export const OIDC_MAX_AGE_CEILING_SEC = 315_360_000;
 
 /**
- * Client identifiers no relying party may ever hold (S-M2 oidc). Each value is
+ * Client identifiers no relying party may ever hold. Each value is
  * (or is reserved to become) a first-party JWT audience or an ARC S2S
  * audience; a client registered under one of these names would mint OIDC
  * access tokens whose `aud` collides with an internal verifier's pin.
@@ -169,7 +289,11 @@ export const OIDC_MAX_AGE_CEILING_SEC = 315_360_000;
  * write time using {@link isReservedOidcClientId}.
  */
 export const RESERVED_OIDC_CLIENT_IDS: ReadonlySet<string> = new Set([
-  "osn-access",
+  // Referenced, not re-spelt: a literal here could drift from the audience the
+  // signer actually mints, and the deny-list would then guard a name nothing
+  // uses while the real audience stayed claimable.
+  ACCESS_TOKEN_AUDIENCE,
+  RECOVERY_TOKEN_AUDIENCE,
   "osn-step-up",
   "osn-api",
   "pulse-api",
@@ -223,3 +347,25 @@ export const RESERVED_OIDC_CLIENT_NAMES: readonly string[] = [
   "cire",
   "cireweddings",
 ];
+
+// ---------------------------------------------------------------------------
+// TOTP (RFC 6238)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long an unconfirmed enrolment secret stays in the ceremony store. Long
+ * enough to scan a QR code and read the next code off the app; short enough
+ * that an abandoned enrolment is not a secret sitting around.
+ */
+export const TOTP_ENROLL_TTL_MS = 10 * 60 * 1000;
+
+/** Wrong codes at `/totp/enroll/complete` before the pending secret is burnt. */
+export const TOTP_MAX_ENROLL_ATTEMPTS = 5;
+
+/**
+ * Per-account failed-code ceiling, and how long the lockout lasts. RFC 4226
+ * §7.3 requires a throttling parameter for exactly this: a per-IP limit alone
+ * does not stop a rotating fleet grinding a six-digit space.
+ */
+export const TOTP_LOCKOUT_THRESHOLD = 5;
+export const TOTP_LOCKOUT_MS = 15 * 60 * 1000;

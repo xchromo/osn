@@ -97,7 +97,7 @@ describe("recommendations routes", () => {
     expect(json.suggestions).toEqual([]);
   });
 
-  // tracker#468: per-user connection suggestions — never cached or stored.
+  // per-user connection suggestions — never cached or stored.
   it("GET /recommendations/connections sets cache-control: private, no-store", async () => {
     const alice = await registerAndGetToken("alice@example.com", "alice");
     const res = await recsApp.handle(
@@ -107,6 +107,24 @@ describe("recommendations routes", () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  // A list this endpoint never caches or stores otherwise gives the client
+  // no way to say how fresh it is.
+  it("GET /recommendations/connections returns a generatedAt timestamp", async () => {
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    const before = new Date();
+    const res = await recsApp.handle(
+      new Request("http://localhost/recommendations/connections", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    const after = new Date();
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { generatedAt: string };
+    const generatedAt = new Date(json.generatedAt);
+    expect(generatedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(generatedAt.getTime()).toBeLessThanOrEqual(after.getTime());
   });
 
   it("returns FOF suggestions with mutual counts", async () => {
@@ -144,8 +162,39 @@ describe("recommendations routes", () => {
     expect(json.suggestions[0]!.sharedOrganisation).toBeNull();
   });
 
+  // The hydrated organisation label is built after ranking and then has to
+  // survive the route's TypeBox `response` schema. Every other card in these
+  // tests carries `sharedOrganisation: null`, so a shape drift in the
+  // non-null branch would surface as a 500 in production rather than a red
+  // test.
+  it("serialises a non-null sharedOrganisation through the response schema", async () => {
+    const alice = await registerAndGetToken("a@e.com", "alice");
+    const bob = await registerAndGetToken("b@e.com", "bob");
+    const org = await runWithLayer(
+      createOrganisationService().createOrganisation(alice.profileId, "acme", "Acme Inc"),
+    );
+    await runWithLayer(
+      createOrganisationService().addMember(org.id, alice.profileId, bob.profileId, "member"),
+    );
+
+    const res = await recsApp.handle(
+      new Request("http://localhost/recommendations/connections", {
+        headers: { Authorization: `Bearer ${alice.token}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { suggestions: Array<Record<string, unknown>> };
+    expect(json.suggestions).toHaveLength(1);
+    expect(json.suggestions[0]!.handle).toBe("bob");
+    expect(json.suggestions[0]!.reason).toBe("shared_organisation");
+    expect(json.suggestions[0]!.sharedOrganisation).toEqual({
+      handle: "acme",
+      name: "Acme Inc",
+    });
+  });
+
   // -------------------------------------------------------------------------
-  // Limit parsing (T-S1)
+  // Limit parsing
   // -------------------------------------------------------------------------
 
   it("accepts a numeric ?limit query param", async () => {
@@ -182,7 +231,7 @@ describe("recommendations routes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Rate limiting (S-H1/P-C2)
+  // Rate limiting
   // -------------------------------------------------------------------------
 
   it("returns 429 when the rate limiter rejects", async () => {
@@ -308,7 +357,7 @@ describe("recommendations routes", () => {
       expect(json.people?.[0]!.connectionStatus).toBe("none");
     });
 
-    // tracker#468: per-user search results — never cached or stored.
+    // per-user search results — never cached or stored.
     it("sets cache-control: private, no-store", async () => {
       const alice = await registerAndGetToken("a@e.com", "alice");
       const res = await recsApp.handle(

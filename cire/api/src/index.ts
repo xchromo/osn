@@ -8,10 +8,11 @@ import { Effect, Layer } from "effect";
 
 import { type AppOptions, createApp } from "./app";
 import { createD1Db, DbService } from "./db";
+import { createSessionRoutedClient, runInD1Session } from "./db/d1-session";
 import { setExecutionCtx } from "./lib/execution-ctx";
 import { sendGiftSummaryEmails } from "./lib/gift-summary-email";
 import { CIRE_OIDC_TX_HMAC_INFO } from "./lib/oidc";
-import { runCire } from "./observability";
+import { flushCireTelemetry, runCire } from "./observability";
 import { assetReconcileService } from "./services/asset-reconcile";
 import { maintenanceSweeps } from "./services/maintenance-sweeps";
 import { organiserSessionService } from "./services/organiser-session";
@@ -58,6 +59,9 @@ export interface Env {
   WEB_ORIGIN: string;
   OSN_JWKS_URL: string;
   OSN_AUDIENCE: string;
+  // `OSN_ISSUER_URL` is both the expected `iss` on organiser access tokens
+  // and the OIDC issuer origin — one value, two uses, and it must equal
+  // osn-api's own `OSN_ISSUER_URL` byte for byte.
   // Organiser sign-in over OIDC. `OSN_ISSUER_URL` is the issuer origin
   // (`https://id.musubi.social`) and must equal the `iss` claim byte-for-byte;
   // `CIRE_API_ORIGIN` is this Worker's own public origin, used to build the
@@ -66,7 +70,7 @@ export interface Env {
   // the four missing ⇒ `/api/auth/oidc/*` answers 503 and nobody can sign in;
   // the guest invite site keeps working, so this is scoped to the routes that
   // genuinely cannot function, not the whole Worker.
-  OSN_ISSUER_URL?: string;
+  OSN_ISSUER_URL: string;
   CIRE_API_ORIGIN?: string;
   CIRE_OIDC_CLIENT_ID?: string;
   CIRE_OIDC_CLIENT_SECRET?: string;
@@ -198,6 +202,11 @@ const handler: ExportedHandler<Env> = {
       !env.DB && "DB",
       !env.WEB_ORIGIN && "WEB_ORIGIN",
       !env.OSN_JWKS_URL && "OSN_JWKS_URL",
+      // Required, not optional-with-a-default. The default is the localhost
+      // issuer, so an unset value in a deployed tier would expect
+      // `http://localhost:4000` and reject every real token — a total outage
+      // whose cause is invisible in the 401. Failing at startup names it.
+      !env.OSN_ISSUER_URL && "OSN_ISSUER_URL",
       !env.OSN_AUDIENCE && "OSN_AUDIENCE",
     ].filter(Boolean);
     if (missing.length > 0 || !env.DB) {
@@ -247,7 +256,11 @@ const handler: ExportedHandler<Env> = {
     }
 
     if (!cached || cached.dbBinding !== env.DB) {
-      const db = createD1Db(env.DB);
+      // Built over the session-routing shim, not the binding itself: the handle
+      // is baked into the cached app graph, so it must be stable for the life of
+      // the isolate, while the D1 session it queries through has to be per
+      // request. The shim is the seam between the two — see db/d1-session.ts.
+      const db = createD1Db(createSessionRoutedClient(env.DB));
       // Any authenticated OSN user is a first-class organiser: they sign in,
       // see their own weddings (an empty list for a new account — never a 503),
       // and create new ones via POST /api/organiser/weddings. There is no
@@ -421,6 +434,7 @@ const handler: ExportedHandler<Env> = {
         assets: env.ASSETS,
         images: env.IMAGES,
         osnJwksUrl: env.OSN_JWKS_URL,
+        osnIssuerUrl: env.OSN_ISSUER_URL,
         osnAudience: env.OSN_AUDIENCE,
         oidc,
         // Back-channel revoke endpoint: enabled only when the shared secret is
@@ -475,40 +489,84 @@ const handler: ExportedHandler<Env> = {
     // background after a transform. Keyed by this exact Request instance, which
     // Elysia passes straight through to the handler.
     setExecutionCtx(request, ctx);
-    return cached.app.fetch(request);
+    // One D1 session per request, so replicas can serve every query after the
+    // first (see db/d1-session.ts). Wraps the whole dispatch, which is what puts
+    // the session on the async context every handler inherits.
+    // Bound out of the mutable module-level cache before the closure, so the
+    // narrowing above survives into it.
+    const { app } = cached;
+    const response = await runInD1Session(env.DB, () => app.fetch(request));
+
+    // Drain this request's spans to the OTLP collector. Awaited-then-scheduled,
+    // in that order, for two reasons: every span the request opened has ended
+    // by the time `app.fetch` resolves, and `waitUntil` keeps the isolate alive
+    // for the POST without the guest waiting on it.
+    //
+    // This explicit drain is the ONLY reliable one on workerd — no fiber
+    // survives between requests, so the exporter's background interval either
+    // never fires or fires with no live context, and a failed background export
+    // disables the exporter (dropping spans) for 60 seconds. `flushCireTelemetry`
+    // is a no-op when no OTLP endpoint is configured and can never reject. See
+    // `shared/observability/src/tracing/otlp.ts`.
+    ctx.waitUntil(flushCireTelemetry());
+    return response;
   },
 
   // Cron-triggered daily maintenance (C-M2/C-M15 + retention). Configured by the
-  // single `[triggers] crons` entry in wrangler.toml — daily 04:00 UTC. Five
+  // single `[triggers] crons` entry in wrangler.toml — daily 04:00 UTC. Six
   // independent sweeps share the cron:
   //
   //  1. Expired-session sweep — guest logins leave session rows that are never
   //     deleted on the read path, so the table grows unbounded without this. The
   //     sweep deletes rows whose 30-day window has lapsed; `expiresAt` already
   //     encodes when a row becomes dead.
-  //  2. Guest-data retention sweep — enforces the published privacy promise
+  //  2. Expired organiser sessions — same growth problem, and each dead row
+  //     holds a login-time snapshot of an OSN profile, so it is a retention
+  //     question too.
+  //  3. Guest-data retention sweep — enforces the published privacy promise
   //     (cire/invites privacy.astro): guest PII (guests/families/rsvps incl. dietary
   //     + consent, plus imports bookkeeping) is deleted 1 year after a wedding's
   //     final event. Reaps the `cire-sheets` CSVs it orphans (env.SHEETS).
-  //  3. `cire-assets` orphan reconciliation (IB-S-L2) — best-effort deletes
+  //  4. `cire-assets` orphan reconciliation (IB-S-L2) — best-effort deletes
   //     invite-image objects under `assets/` referenced by NO live DB row and
   //     older than a 7-day grace window. Heavily guarded: aborts and deletes
   //     NOTHING if the referenced-key read fails or comes back empty against a
   //     non-empty bucket, and caps deletions per run. See asset-reconcile.ts.
-  //  4. Expired vendor-claim tokens + 5. abandoned `preview` change rows (with
+  //  5. Expired vendor-claim tokens + 6. abandoned `preview` change rows (with
   //     their uploaded-sheet CSVs) — see services/maintenance-sweeps.ts.
   //
   // Each is its own `waitUntil` + `catchAll`, so a failure in one never aborts
   // the other and the isolate stays alive until each delete settles.
   async scheduled(_event, env, ctx) {
     if (!env.DB) return;
-    const db = createD1Db(env.DB);
+    // Same session routing as `fetch`, for the same reason. The sweeps are
+    // write-heavy, so this buys little today — but it keeps one path through
+    // the D1 client rather than two, and the reads each sweep does to find its
+    // work can be served by a replica once the first query has run.
+    const db = createD1Db(createSessionRoutedClient(env.DB));
     const dbLayer = Layer.succeed(DbService, db);
 
-    ctx.waitUntil(
+    // One session PER SWEEP, not one shared by all six. `waitUntil` only
+    // registers a promise — what decides which session a query rides is where
+    // the promise was created — so each sweep gets its own `runInD1Session`
+    // wrapping its own `Effect.runPromise`. Sharing one would couple six
+    // unrelated, delete-heavy sweeps to a single bookmark that each of them
+    // keeps advancing, so every read would be forwarded to the primary anyway.
+    //
+    // The sweep to keep in mind here is the `cire-assets` reconciliation at the
+    // bottom: it deletes R2 objects no DB row references, so unlike the others
+    // a stale read there would destroy live data rather than merely skip a row.
+    // What bounds that is RECONCILE_GRACE_MS (7 days, services/asset-reconcile.ts)
+    // plus its two abort guards — orders of magnitude more than any replica lag.
+    // Shortening that window is the change that would make this paragraph matter.
+    const d1 = env.DB;
+    const runSweep = <Result>(body: () => Promise<Result>) =>
+      ctx.waitUntil(runInD1Session(d1, body));
+
+    runSweep(() =>
       Effect.runPromise(
         sessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled session sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -521,10 +579,10 @@ const handler: ExportedHandler<Env> = {
     // table grows for the life of the product, and every row holds a login-time
     // snapshot of an OSN profile (email, handle, display name), so keeping dead
     // ones is a data-retention problem as well as a size one.
-    ctx.waitUntil(
+    runSweep(() =>
       Effect.runPromise(
         organiserSessionService.sweepExpired().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled organiser session sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -568,12 +626,12 @@ const handler: ExportedHandler<Env> = {
             )
         : undefined;
 
-    ctx.waitUntil(
+    runSweep(() =>
       Effect.runPromise(
         retentionService
           .sweepExpiredGuestData(new Date(), { sheets: env.SHEETS }, giftSummaryNotifier)
           .pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.logError("scheduled guest-data retention sweep failed", {
                 reason: err.reason,
               }),
@@ -584,10 +642,10 @@ const handler: ExportedHandler<Env> = {
     );
 
     // Expired vendor-claim tokens: 7-day TTL, nothing else ever deleted them.
-    ctx.waitUntil(
+    runSweep(() =>
       Effect.runPromise(
         maintenanceSweeps.sweepExpiredVendorClaims().pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled vendor-claim sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -598,10 +656,10 @@ const handler: ExportedHandler<Env> = {
     // Abandoned `preview` change rows + their uploaded-sheet CSVs (guest PII
     // in `cire-sheets`) — previously only reclaimed when the whole wedding
     // aged out of retention, a year+ later.
-    ctx.waitUntil(
+    runSweep(() =>
       Effect.runPromise(
         maintenanceSweeps.sweepStalePreviews(new Date(), { sheets: env.SHEETS }).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.logError("scheduled stale-preview sweep failed", { reason: err.reason }),
           ),
           Effect.provide(dbLayer),
@@ -615,11 +673,13 @@ const handler: ExportedHandler<Env> = {
     // delete anything unless it can positively confirm the live set (abort on a
     // failed/empty referenced-key read) and only reaps objects past a 7-day
     // grace window — so a freshly uploaded image whose row write lags is safe.
-    ctx.waitUntil(
+    runSweep(() =>
       Effect.runPromise(
         assetReconcileService.reconcileOrphans(env.ASSETS).pipe(
-          Effect.catchAll((err) =>
-            Effect.logError("scheduled cire-assets reconciliation failed", { reason: err.reason }),
+          Effect.catch((err) =>
+            Effect.logError("scheduled cire-assets reconciliation failed", {
+              reason: err.reason,
+            }),
           ),
           Effect.provide(dbLayer),
         ),

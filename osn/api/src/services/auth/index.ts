@@ -9,7 +9,11 @@
  *   context → profiles → tokens ─┬→ registration / profile-switch / recovery
  *   sessions ─────────────────────┤
  *   step-up → security-events ────┴→ passkeys / passkey-management /
- *                                     email-change / cross-device
+ *                                     email-change / cross-device / totp
+ *
+ * `recovery-factors` sits last: it needs `totp` (for `checkTotpCode`) as well as
+ * profiles, tokens and security-events, and `totp` is itself the last of the
+ * others to be built.
  *
  * Everything previously importable from `services/auth` is re-exported
  * below, so external import paths are unchanged.
@@ -26,15 +30,19 @@ import { createPasskeysModule } from "./passkeys";
 import { createProfileSwitchModule } from "./profile-switch";
 import { createProfilesModule } from "./profiles";
 import { createRecoveryModule } from "./recovery";
+import { createRecoveryFactorsModule } from "./recovery-factors";
 import { createRegistrationModule } from "./registration";
 import { createSecurityEventsModule } from "./security-events";
 import { createSessionsModule } from "./sessions";
 import { createStepUpModule } from "./step-up";
 import { createTokensModule } from "./tokens";
+import { createTotpModule } from "./totp";
 
 export { AuthError, DatabaseError, OidcError, ValidationError } from "./errors";
 export type { OidcErrorCode } from "./errors";
 export type { AuthConfig } from "./config";
+export type { TotpStatus } from "./totp";
+export type { RecoveryEmailBeginResult } from "./recovery-factors";
 export type {
   AuthorizeOutcome,
   AuthorizeParams,
@@ -59,7 +67,11 @@ export type {
   CrossDeviceRequest,
   PendingAuthorizeRequest,
   PendingEmailChange,
+  PendingRecoveryOtp,
   PendingRegistration,
+  RecoveryDisownToken,
+  RegistrationChallengeEntry,
+  PendingTotpEnrollment,
   StepUpJtiStore,
   StepUpOtpEntry,
 } from "./stores";
@@ -90,6 +102,10 @@ export function createAuthService(config: AuthConfig) {
   const emailChange = createEmailChangeModule(ctx, stepUp);
   const crossDevice = createCrossDeviceModule(ctx, profiles, tokens, securityEvents);
   const oidc = createOidcModule(ctx, profiles);
+  const totp = createTotpModule(ctx, securityEvents, stepUp);
+  // Built last — it consumes `totp`, which is itself built after everything
+  // else it needs. Moving this above line 96 leaves `checkTotpCode` undefined.
+  const recoveryFactors = createRecoveryFactorsModule(ctx, profiles, tokens, totp, securityEvents);
 
   return {
     findProfileByEmail: profiles.findProfileByEmail,
@@ -104,9 +120,13 @@ export function createAuthService(config: AuthConfig) {
     completeRegistration: registration.completeRegistration,
     checkHandle: registration.checkHandle,
     issueTokens: tokens.issueTokens,
+    // The restricted-session primitive, minted by the two recovery-factor
+    // completers below and by nothing else.
+    issueRecoverySession: tokens.issueRecoverySession,
     refreshTokens: tokens.refreshTokens,
     verifyRefreshToken: tokens.verifyRefreshToken,
     verifyAccessToken: tokens.verifyAccessToken,
+    verifyRecoveryAccessToken: tokens.verifyRecoveryAccessToken,
     switchProfile: profileSwitch.switchProfile,
     listAccountProfiles: profileSwitch.listAccountProfiles,
     beginPasskeyRegistration: passkeys.beginPasskeyRegistration,
@@ -126,6 +146,10 @@ export function createAuthService(config: AuthConfig) {
     consumeRecoveryCode: recovery.consumeRecoveryCode,
     completeRecoveryLogin: recovery.completeRecoveryLogin,
     countActiveRecoveryCodes: recovery.countActiveRecoveryCodes,
+    beginEmailRecovery: recoveryFactors.beginEmailRecovery,
+    completeEmailRecovery: recoveryFactors.completeEmailRecovery,
+    completeTotpRecovery: recoveryFactors.completeTotpRecovery,
+    disownRecovery: recoveryFactors.disownRecovery,
     listUnacknowledgedSecurityEvents: securityEvents.listUnacknowledgedSecurityEvents,
     acknowledgeSecurityEvent: securityEvents.acknowledgeSecurityEvent,
     acknowledgeAllSecurityEvents: securityEvents.acknowledgeAllSecurityEvents,
@@ -145,7 +169,15 @@ export function createAuthService(config: AuthConfig) {
     completeStepUpOtp: stepUp.completeStepUpOtp,
     verifyStepUpForRecoveryGenerate: stepUp.verifyStepUpForRecoveryGenerate,
     verifyStepUpForPasskeyDelete: stepUp.verifyStepUpForPasskeyDelete,
+    verifyStepUpForEmailChange: stepUp.verifyStepUpForEmailChange,
     verifyStepUpForPasskeyRegister: stepUp.verifyStepUpForPasskeyRegister,
+    verifyStepUpForTotpEnroll: stepUp.verifyStepUpForTotpEnroll,
+    verifyStepUpForTotpDisable: stepUp.verifyStepUpForTotpDisable,
+    beginTotpEnrollment: totp.beginTotpEnrollment,
+    completeTotpEnrollment: totp.completeTotpEnrollment,
+    disableTotp: totp.disableTotp,
+    getTotpStatus: totp.getTotpStatus,
+    completeStepUpTotp: totp.completeStepUpTotp,
     verifyStepUpForAccountDelete: stepUp.verifyStepUpForAccountDelete,
     verifyStepUpForAccountExport: stepUp.verifyStepUpForAccountExport,
     verifyStepUpForExternalPurpose: stepUp.verifyStepUpForExternalPurpose,

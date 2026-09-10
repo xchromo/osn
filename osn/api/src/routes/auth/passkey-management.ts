@@ -22,7 +22,7 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
       .get(
         "/passkeys",
         async ({ headers, set, server, request }) => {
-          // Per-user credential inventory — never cached or stored (tracker#468).
+          // Per-user credential inventory — never cached or stored.
           set.headers["cache-control"] = "private, no-store";
 
           const rlErr = await rateLimit(
@@ -88,7 +88,7 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
               set.status = 401;
               return { error: "unauthorized" };
             }
-            // S-M2: rename is gated by step-up too. Otherwise an XSS-captured
+            // Rename is gated by step-up too. Otherwise an XSS-captured
             // access token could swap labels to mislead the user about which
             // credential they're confirming a delete on. Same AMR set as
             // delete (defaults to passkey-only via passkeyDeleteAllowedAmr).
@@ -98,7 +98,12 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
               set.status = 403;
               return { error: "step_up_required" };
             }
-            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
+            // The target is passed because the cooldown compares it against
+            // the credential that minted the token. Rename is gated on the same
+            // comparison as delete: a credential the rule would stop deleting
+            // an older one can otherwise relabel it, which is how a user is
+            // talked into confirming a delete on the wrong row.
+            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken, params.id));
             await run(auth.renamePasskey(profile.accountId, params.id, body.label));
             return { success: true };
           } catch (e) {
@@ -153,11 +158,11 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
               set.status = 403;
               return { error: "step_up_required" };
             }
-            // S-L4: passkey-delete uses its own AMR set (defaults to
+            // Passkey-delete uses its own AMR set (defaults to
             // passkey-only). The caller necessarily has a passkey by
             // construction (last-passkey guard), so requiring one for
             // deletion is the strongest available signal.
-            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken));
+            await run(auth.verifyStepUpForPasskeyDelete(profile.accountId, stepUpToken, params.id));
             // Identify the caller's own session so the sweep below spares
             // it. The cookie is the cheap path, but only when it names a live
             // row; otherwise (a cross-origin Bearer call, a proxy that strips
@@ -173,7 +178,7 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
                 sessionBinding: claims.sessionBinding,
               }),
             );
-            // S-M2: never let a presented-but-stale binding collapse into the
+            // Never let a presented-but-stale binding collapse into the
             // account-wide session wipe. Fail closed instead.
             if (caller._tag === "stale") {
               set.status = 409;
@@ -206,7 +211,7 @@ export function createPasskeyManagementRoutes(ctx: AuthRouteContext) {
             400: errorResponse,
             401: errorResponse,
             403: errorResponse,
-            // S-M2: a presented-but-stale session binding.
+            // 409 is returned for a presented-but-stale session binding.
             409: errorResponse,
             429: errorResponse,
             500: errorResponse,

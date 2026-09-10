@@ -1,5 +1,5 @@
 /**
- * CORS allowlist derivation for zap-api (S-M2 zap).
+ * CORS allowlist derivation for zap-api.
  *
  * Centralised + side-effect-free so the fallback list and the non-local
  * fail-closed invariant can be unit-tested without booting the app. Mirrors
@@ -15,7 +15,7 @@
  */
 export const LOCAL_DEV_CORS_ORIGINS = [
   "http://localhost:1420", // @pulse/web (event chats)
-  "http://localhost:1422", // @osn/social
+  "http://localhost:1422", // @musubi/social
 ] as const;
 
 export type CorsEnv = Readonly<Record<string, string | undefined>>;

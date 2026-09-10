@@ -1,5 +1,507 @@
 # @zap/api
 
+## 0.9.10
+
+### Patch Changes
+
+- Updated dependencies [f756993]
+  - @shared/observability@0.18.0
+  - @shared/crypto@0.13.4
+  - @shared/osn-auth-client@0.4.29
+
+## 0.9.9
+
+### Patch Changes
+
+- Updated dependencies [46023fa]
+  - @shared/observability@0.17.0
+  - @shared/crypto@0.13.3
+  - @shared/osn-auth-client@0.4.28
+
+## 0.9.8
+
+### Patch Changes
+
+- Updated dependencies [5e47301]
+  - @shared/observability@0.16.0
+  - @shared/crypto@0.13.2
+  - @shared/osn-auth-client@0.4.27
+
+## 0.9.7
+
+### Patch Changes
+
+- @shared/crypto@0.13.1
+  - @shared/osn-auth-client@0.4.26
+
+## 0.9.6
+
+### Patch Changes
+
+- Updated dependencies [d287d72]
+  - @shared/crypto@0.13.0
+  - @shared/observability@0.15.0
+  - @shared/osn-auth-client@0.4.25
+
+## 0.9.5
+
+### Patch Changes
+
+- 13d8ee3: Separate OSN, the system, from Musubi, our implementation of it.
+
+  OSN is now the headless core — identity, the social graph, authorisation and
+  the OpenID Connect issuer — with no user interface, runnable by anyone for
+  their own private social graph. Musubi is our implementation and the product
+  built on it: the social app, its marketing site, the brand, and the
+  `musubi.social` instance we host.
+
+  `@osn/social` becomes `@musubi/social` and `@osn/landing` becomes
+  `@musubi/landing`, both moving to a new top-level `musubi/` workspace
+  directory. The backend packages, `@osn/ui`, the shared packages and every
+  wire-level identifier — the `osn-access` and `osn-step-up` token audiences,
+  `/.well-known/jwks.json`, claim names, the pairwise subject derivation and the
+  ARC token format — keep the OSN name, because an independent implementation has
+  to match them to interoperate. That is the rule the split now runs on: if
+  another implementation must use the same string, it is OSN; otherwise it is
+  Musubi.
+
+  The remaining packages change only in the references they carry. Two of them
+  were resolving the moved package by filesystem path rather than by package name
+  — `tools/lab/src/lab.css` and `tools/metrics/src/metrics.css` both `@import`
+  the social app's stylesheet — and would have failed to build without the
+  update.
+
+  Two repository guards learned about the new directory: `fmt` and `fmt:check`
+  hardcode the list of workspace directories oxfmt walks, and
+  `scripts/validate-changesets.sh` builds its known-workspace-name set from a
+  hardcoded `find`. Neither would have reported anything unusual; the format
+  check would simply have stopped covering two packages.
+
+  Cloudflare Pages project names (`osn-social`, `osn-social-dev`, `osn-landing`)
+  are deliberately unchanged — renaming a Pages project attached to a live apex
+  is a deploy operation, not a rename.
+
+## 0.9.4
+
+### Patch Changes
+
+- Updated dependencies [3447d5b]
+  - @shared/crypto@0.12.0
+  - @shared/osn-auth-client@0.4.24
+
+## 0.9.3
+
+### Patch Changes
+
+- b2b6b70: Clean up the `house/no-tracker-ref-in-comment` mechanical majority (xchromo/osn#924).
+
+  Every finding-tag, phase-code, and narrative-phrase reference flagged by the rule in a short comment block is now gone from these packages: a bare parenthetical tag deleted, a leading label stripped and the remainder capitalized into its own sentence, or a "used to be" narration rewritten forward to state the current, still-true fact. No behavior changes anywhere — every edit is comment text.
+
+  A handful of leftover `osn-tracker#N` citations that predated both this batch and the separate tracker-number-refs cleanup (xchromo/osn#930) are also gone from `@osn/api` and `@pulse/api`, using the same treatment established there.
+
+- Updated dependencies [b2b6b70]
+  - @shared/crypto@0.11.3
+  - @shared/observability@0.14.3
+  - @shared/osn-auth-client@0.4.23
+
+## 0.9.2
+
+### Patch Changes
+
+- Updated dependencies [b78deb7]
+  - @shared/observability@0.14.2
+  - @shared/crypto@0.11.2
+  - @shared/osn-auth-client@0.4.22
+
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies [6474854]
+  - @shared/crypto@0.11.1
+  - @shared/db-utils@0.7.1
+  - @shared/observability@0.14.1
+  - @shared/osn-auth-client@0.4.21
+  - @zap/db@0.6.1
+
+## 0.9.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- d3af349: Apply the Effect v4 combinator renames and the Cause/Runtime rework.
+
+  Renames resolved from upstream's generated reference: `catchAllDefect` →
+  `catchDefect`, `catchAllCause` → `catchCause`, `catchAll` → `catch`, `either` →
+  `result`, `forkDaemon` → `forkDetach`, `zipRight` → `andThen`, `dieMessage` →
+  `die(new Error(…))`, `Layer.scoped` → `Layer.effect`, `Cause.failureOption` →
+  `Cause.findErrorOption`. The `Either` module became `Result`, whose variants are
+  tagged `Success`/`Failure` and carry `success`/`failure` rather than
+  `right`/`left`.
+
+  `Runtime.isFiberFailure` and `FiberFailureCauseId` are gone: v4's runner rejects
+  with `Cause.squash(cause)`, which is the typed failure itself, so the two
+  osn-api error-shaping helpers no longer unwrap anything. That changes one thing
+  on a security path — `Cause.squash` surfaces a _defect_ where v3's
+  `Cause.failureOption` returned `None` — and both helpers now document it.
+
+  Adds a test asserting the Redis layer's finalizer runs on scope close. The
+  `Layer.scoped` → `Layer.effect` rewrite would have leaked connections silently
+  if the scope had been dropped: it type-checks either way, and nothing covered it.
+
+  Second phase of the Effect v4 migration; the tree does not type-check until the
+  `Schema` work lands.
+
+- d3af349: Rebuild the logger for Effect v4, and fix a secret leak in annotation redaction.
+
+  `redact()` matches the deny-list against an object's **keys**, and the v3 logger
+  mapped over each annotation **value** — so it only ever saw a bare scalar with no
+  key attached and passed it through. `Effect.annotateLogs({ accessToken })`
+  reached the sink in clear, along with every other deny-listed key, on every tier.
+  The record is now passed whole.
+
+  v4 moved annotations off the logger's `Options` and onto the fiber, so redaction
+  moves to the output side, wrapping `Logger.formatStructured`. `Logger.layer`
+  replaces the whole active set, so `Logger.tracerLogger` is listed explicitly —
+  omitting it drops log-to-span correlation silently. `LogLevel` is now string
+  literals (`"Warn"`, not v3's `"Warning"`), and the minimum level is a
+  `References.MinimumLogLevel` service rather than `Logger.minimumLogLevel`.
+
+  Adds `PrettyLoggerLive` for the dev-server entrypoints, replacing v3's
+  `Logger.pretty`. It exists as one export rather than eleven inline
+  `Logger.layer([…])` arrays so `tracerLogger` has a single place to be got right.
+
+  Local output loses ANSI colour for an indented structured rendering:
+  `consolePretty` is opaque, so there is no seam to redact through it, and one
+  redaction point covering every tier is the better trade.
+
+  **The JSON severity field is now `level`, not `logLevel`.** Grafana queries,
+  panels and alerts filtering on the old name match nothing and must be updated in
+  Grafana Cloud by hand.
+
+- d3af349: Migrate the Effect Schema surface of the four service packages to v4.
+
+  v3's constraint combinators are v4 _checks_, applied through a schema's
+  `.check(...)` rather than `.pipe(...)`: `maxLength`/`minLength`/`minItems`/
+  `maxItems` collapse onto `isMaxLength`/`isMinLength`, `int` becomes `isInt`, and
+  `between(a, b)` becomes `isBetween({ minimum, maximum })` — still inclusive at
+  both ends, so no range moved. `Schema.filter` becomes
+  `Schema.check(Schema.makeFilter(…))`, and because a v4 filter carries its own
+  failure message in its return value, the `{ message: () => "…" }` option becomes
+  the predicate returning that string; every validator keeps its exact wording.
+  `Schema.Literal` takes a single literal, so enums (and the spreads over
+  `SUPPORTED_CURRENCIES`, `SHARE_SOURCES` and `INTEREST_CATEGORIES`) become
+  `Schema.Literals([…])`. `Schema.decodeUnknown` becomes
+  `Schema.decodeUnknownEffect`, and `Schema.Record` takes its key and value
+  positionally.
+
+  Three copies of a workaround are deleted rather than ported. `@pulse/api`'s
+  events, series and discovery services each carried a hand-rolled "validate the
+  string, then transform to a Date" pair because v3's `DateFromString` accepted a
+  string that parses to an Invalid Date. v4's rejects it, so all three are now
+  `Schema.DateFromString`.
+
+  `@osn/client`'s `isAuthExpiredError` keeps all three of its arms, but the
+  comments no longer claim a `FiberFailure` is what arrives: v4 removed the
+  wrapper and `runPromise` rejects with the squashed error itself, so `instanceof`
+  now carries the common path. The printout arm stays for a consumer bundle built
+  against v3, and for any boundary that strips both the prototype and the `_tag`.
+
+  Every migrated check was verified to still _reject_, not merely type-check.
+
+- d3af349: Drop five `Logger` imports left dead by the v4 logger rework, and finish the
+  Effect v4 migration: with `@cire/api` moved off v3 in the same change, the
+  whole monorepo type-checks and passes its tests under Effect v4.
+
+  The observability change is the test-only one: `Logger.layer` replaces the
+  whole active logger set, so the default logger that used to emit a separate
+  "Fiber terminated…" stack dump is gone, and a capture is now exactly the
+  entry under test.
+
+- d3af349: Redact the pretty logger, stop a deployed Worker from using it, and stop
+  `redact` from killing the fiber that logged.
+
+  `layer.ts` claimed `Logger.consolePretty()` was "opaque, so there is no seam to
+  redact through", and the v4 migration gave up ANSI colour on the `local` tier on
+  that basis. The claim was false. v4 exposes the entry on the **input** side:
+  `Logger.Options` carries `message`, and the pretty logger reads annotations as
+  `fiber.getRef(References.CurrentLogAnnotations)`. Shadowing both and delegating
+  to an untouched `consolePretty` redacts it while Effect keeps ownership of
+  colour, log spans, `LogToStderr`, `ConsoleRef` and the fiber id.
+
+  So `PrettyLoggerLive` is redacted now, and `local` gets colour back — the
+  colour-for-redaction trade was never a real trade. The unredacted-logger
+  category is gone from the codebase entirely, which is the point: no call site
+  can pick the wrong one.
+
+  `redact` gained an `Error` branch returning a real `Error` with scrubbed own
+  properties, so the stack traces the pretty logger exists for survive the scrub.
+  Nothing changes on the JSON path, where `formatStructured` has already flattened
+  values before `redact` sees them.
+
+  `redact` also no longer **throws** on cyclic input; it returns `[Circular]`. It
+  runs inside the logger on every deployed tier, so `Effect.logError("x", err)`
+  with a looping `cause` chain was killing the fiber that logged. A logger must
+  not be able to do that. The primitive fast path is untouched.
+
+  `zap/api/src/index.ts` is a deployed Worker (`main = "src/index.ts"`, route
+  `zap.cireweddings.com`) and was the only non-dev-server consumer of
+  `PrettyLoggerLive` — so its two registration log lines had no redaction, no
+  minimum log level, no span correlation, and emitted multi-line ANSI into Workers
+  Logs, which is exactly what the `dev` tier is denied the pretty logger for. It
+  now builds `makeLoggerLayer` from the workerd-safe subpaths, memoised per
+  isolate. No secret was reaching those lines today — all four reachable throw
+  sites in `registerWithOsnApi` are benign — the problem was the shape.
+
+  shared/observability: 92 -> 101. zap/api: 179, unchanged.
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @zap/db@0.6.0
+  - @shared/crypto@0.11.0
+  - @shared/db-utils@0.7.0
+  - @shared/observability@0.14.0
+  - @shared/osn-auth-client@0.4.20
+
+## 0.8.37
+
+### Patch Changes
+
+- Updated dependencies [8fca0c0]
+  - @shared/observability@0.13.8
+  - @shared/crypto@0.10.18
+  - @shared/osn-auth-client@0.4.19
+
+## 0.8.36
+
+### Patch Changes
+
+- Updated dependencies [613c916]
+  - @shared/db-utils@0.6.6
+  - @zap/db@0.5.14
+  - @shared/crypto@0.10.17
+  - @shared/osn-auth-client@0.4.18
+
+## 0.8.35
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [01437b3]
+- Updated dependencies [00ed19f]
+  - @shared/db-utils@0.6.5
+  - @zap/db@0.5.13
+  - @shared/crypto@0.10.16
+  - @shared/observability@0.13.7
+  - @shared/osn-auth-client@0.4.17
+  - @shared/rate-limit@0.3.3
+
+## 0.8.34
+
+### Patch Changes
+
+- 853367f: Take jose 6.2.10 (from 6.2.4). Releases 6.2.5 through 6.2.10 are all JOSE and JWT input-validation hardening: reject characters outside the Base64URL alphabet, reject invalid UTF-8 in JOSE headers and JWT claims sets, reject truncated ASN.1 key data, reject duplicate `crit` values, reject an unencoded payload in the JWS Compact Serialization, compare claim values correctly for falsy validation options, and enforce verification key metadata from a JWKS. jose sits under both the ARC service-to-service tokens and the five-minute osn-access JWTs, so this is parser hardening on the two token types where it matters most. No API change; the tightening only narrows what parses.
+- Updated dependencies [853367f]
+  - @shared/crypto@0.10.15
+  - @shared/osn-auth-client@0.4.16
+
+## 0.8.33
+
+### Patch Changes
+
+- 981ea54: Move every remaining colocated test file into its package's `tests/` tree, the
+  layout `wiki/conventions/testing-patterns.md` has documented all along.
+
+  `osn/landing` and `pulse/landing` kept their suites beside the source in `src/`
+  (and `pulse/landing` a third under `functions/`); those now mirror `src/` under
+  `tests/`. The three API packages' Miniflare-backed D1 suites move from
+  `src/d1-integration.test.ts` to `tests/d1/d1-integration.test.ts` — they used to
+  sit outside the vitest `include` glob by accident of living in `src/`, and are
+  now excluded from it explicitly by path, so `bun run test:d1` stays the only
+  thing that runs them. `tsconfig.json` gains `tests/**/*` wherever the tests were
+  previously type-checked only because they lived under `src/`.
+
+  No test bodies changed; only their location and the relative paths inside them.
+
+  - @shared/crypto@0.10.14
+  - @shared/osn-auth-client@0.4.15
+
+## 0.8.32
+
+### Patch Changes
+
+- 350c4d7: Fold Zap's per-chat write and membership paths from several round trips into one.
+
+  `sendMessage`, `listMessages` and `sendC2bMessage` each used to run a `SELECT`
+  for the chat row and then a separate `assertMember` query for membership,
+  paying two round trips before doing anything. All three now run a single
+  `LEFT JOIN` between `chats` and `chat_members` scoped to the caller's
+  `profileId`, reading chat existence and membership off one row (`memberId ===
+null` is the new non-member signal, in place of `assertMember`'s empty
+  result set).
+
+  `createChat`, `provisionC2bChat` and `sendC2bMessage` batch their multi-row
+  writes (`commitBatch` from `@shared/db-utils`) instead of several sequential
+  `Effect.tryPromise` awaits — atomic on D1's `db.batch`, sequential-but-safe on
+  bun:sqlite. Member-row inserts are chunked at `MAX_MEMBER_ROWS_PER_INSERT` (20
+  rows/statement, new in `zap/api/src/lib/limits.ts`) to stay under D1's
+  ~100-bound-parameter ceiling per query on a chat created at the
+  `MAX_CHAT_MEMBERS` (500) cap.
+
+  `addMember`'s cap-plus-duplicate check is folded into one query
+  (`count()` + a conditional `sum()` over `chat_members`, in place of a
+  `COUNT(*)` followed by a separate indexed duplicate lookup), and the
+  remaining concurrent-duplicate-add race — two adds of the same profile
+  both passing the check before either inserts — is closed by catching the
+  database's own unique-constraint failure on the follow-up INSERT and
+  resolving it to `AlreadyMember` (409) instead of `DatabaseError` (500). The
+  bounded `.cause`-chain walk this needs (`isUniqueConstraintFailure`, exported
+  for its own unit tests) accounts for D1 wrapping every failure in
+  `DrizzleQueryError` where bun:sqlite does not.
+
+  `createChat` and `provisionC2bChat` now cap `memberProfileIds` at
+  `MAX_CHAT_MEMBERS` — previously unbounded on `createChat`, so a caller could
+  build a batched INSERT arbitrarily larger than D1 can execute in one
+  invocation.
+
+  The ARC-gated DSAR account-export route (`POST /internal/account-export`)
+  gains an explicit cap: `profile_ids` over `MAX_EXPORT_PROFILE_IDS` (100, new
+  limit) now returns 400 rather than letting the loaders' `IN (...)` clauses
+  grow past D1's bound-parameter ceiling. Its c2b-message loader
+  (`loadC2bMessages`) also replaces a two-query pair — c2b chat ids for the
+  profiles, then messages by `inArray(messages.chatId, c2bChatIds)`, the second
+  query's `IN` list unbounded in parameters — with a single three-table join
+  scoped only by `profileIds`, and groups by `messages.id` rather than using
+  `DISTINCT`: the join can duplicate a message row when two exported profiles
+  share a chat, and the projection (`chatId`, `body`, `createdAt`) deliberately
+  carries no `messages.id`, so a naive `DISTINCT` on the projected columns would
+  collapse two genuinely different messages that share a body and the same
+  second-resolution `createdAt` into one row and silently drop a message from a
+  data subject's export.
+
+  - @shared/crypto@0.10.13
+  - @shared/osn-auth-client@0.4.14
+
+## 0.8.31
+
+### Patch Changes
+
+- Updated dependencies [5c51a23]
+  - @zap/db@0.5.12
+  - @shared/crypto@0.10.12
+  - @shared/osn-auth-client@0.4.13
+
+## 0.8.30
+
+### Patch Changes
+
+- Updated dependencies [965c2ee]
+  - @shared/observability@0.13.6
+  - @shared/crypto@0.10.11
+  - @shared/osn-auth-client@0.4.12
+
+## 0.8.29
+
+### Patch Changes
+
+- 673ca2b: Enforce the chat class on every public chat operation, and finish the returned-row conversion.
+
+  Four public operations never checked `chats.class`. `sendMessage` let a member of a `c2b` (consumer-to-business) chat write an encrypted message into it; `listMessages` served that chat's plaintext `body` column straight back, going round the ARC-gated reader that is supposed to be the only way to it; `removeMember` let a member leave a chat cire had authorised, which silently truncated their own DSAR export, because the export reaches c2b message bodies only through `chat_members`; and `updateChat`/`addMember` were closed to c2b chats only by accident, since such a chat has no admin for `assertAdmin` to reject. A `c2b` chat is defined as server-visible, moderatable and DSAR-exportable; a ciphertext row inside one is none of those — the account export filters on a non-null `body` so the row is dropped silently, and the internal reader renders it as an empty string with no signal that content was withheld. All of them now fail `NotC2cChat`, reported as 409, mirroring the check `sendC2bMessage` already made the other way round. On the two public message routes the class check runs _after_ the membership check — unlike its ARC-gated counterpart, because answering "not a c2c chat" to a stranger holding a chat id would tell them which ids are commercial.
+
+  `addMember` and `updateChat` were the last two write paths still re-reading the row they had just written. They now return what they wrote, through `storedNow()` — and `updateChat` keeps the stored title when a request sends none, which is what Drizzle's omit-undefined `SET` does and what the read-back used to get right by accident.
+
+  `zap/db`'s DDL lockstep test now also checks `drizzle/meta/`: `drizzle-kit generate` reads the journal and the latest snapshot rather than the `.sql` files, so a journal that has lost an entry makes the next generate re-emit a migration already applied to production.
+
+- Updated dependencies [673ca2b]
+  - @zap/db@0.5.11
+
+## 0.8.28
+
+### Patch Changes
+
+- e382c40: Enforce the access-token `issuer` claim in every downstream verifier.
+
+  `@shared/osn-auth-client` has always accepted an expected `iss`, but every consumer left it unset — deliberately, because a verifier that pins the issuer rejects every token minted before osn-api started stamping one, and the rollout had to be verifier-first. Access tokens live five minutes, so that window closed long ago: every live token carries `iss`, and leaving the check off means a token from any other OSN deployment verifies here as long as it is signed by a key that deployment's JWKS vouches for.
+
+  `cire/api`, `pulse/api` and `zap/api` now pass the expected issuer on every `extractClaims` call. In pulse and zap the JWKS URL and the issuer travel as one `OsnTokenVerification` value rather than two loose strings, so a call site cannot supply one and silently forget the other — which is the failure mode that left this unenforced, since an unset expected issuer is not an error, it is simply no check.
+
+  `OSN_ISSUER_URL` is now required in a deployed tier and must equal osn-api's own value byte for byte; a mismatch 401s every authenticated request, so the two flip in the same deploy. `zap/api` gains the var, which it did not read before. `@shared/crypto/testing`'s signer stamps the local issuer by default, so a suite that injects a test key mints tokens its routes accept; pass a different origin, or `null`, to exercise the rejection paths.
+
+  Three things fell out of reviewing it. `extractClaims` now treats an expected issuer that is present but **empty** as a configuration failure rather than as "no issuer check" — an unset env var reaching the verifier was the one way this could look configured while checking nothing. The comparison normalises a trailing slash on both sides, since six hand-maintained `wrangler.toml` values feed it and `jose` compares byte for byte. And `zap/api` gains `OSN_ISSUER_URL`/`OSN_JWKS_URL` in the portless devloop, which it never had — every bearer-authenticated zap route was 401ing locally, and pinning the issuer is what made that visible.
+
+- Updated dependencies [e382c40]
+  - @shared/crypto@0.10.10
+  - @shared/osn-auth-client@0.4.11
+
+## 0.8.27
+
+### Patch Changes
+
+- 5d8417f: Drop a wasted read after every chat and message write, and stop `listC2bMessages` silently restarting at page 1 on an unknown cursor.
+
+  The four write paths (`createChat`, `provisionC2bChat`, `sendMessage`, `sendC2bMessage`) re-read the row they had just inserted before returning it. Every column was already known, so that was one more sequential D1 round-trip per write for nothing — three to four on the enquiry hot path. They now return the values they wrote. Timestamps go through a new `storedNow()` helper because Drizzle stores `timestamp` columns as whole seconds: an untruncated `Date` would make a write's response disagree with every later read of the same row by up to 999ms.
+
+  Both list paths now page with a composite `(createdAt, id)` keyset instead of a strict `createdAt <`. Second-resolution timestamps are not unique, so the old cursor silently skipped every message sharing the cursor's second — unreachable for ever once the page moved past it. `messages_chat_created_idx` gains `id` so the ordering stays index-satisfied. Within one second the display order is now unspecified rather than incidentally insertion-ordered; the fix for that needs millisecond storage and is tracked separately.
+
+  `listC2bMessages` now fails with a validation error on a `before` cursor it cannot find, matching `listMessages`; the route answers 400 rather than 200-with-page-1, which used to send a paginating caller round the same page for ever. `chats_class_idx` is dropped — `EXPLAIN QUERY PLAN` gives an identical plan with and without it, so it was write amplification only.
+
+- Updated dependencies [5d8417f]
+  - @zap/db@0.5.10
+
+## 0.8.26
+
+### Patch Changes
+
+- @zap/db@0.5.9
+- @shared/crypto@0.10.9
+- @shared/osn-auth-client@0.4.10
+
 ## 0.8.25
 
 ### Patch Changes

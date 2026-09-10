@@ -9,7 +9,7 @@ related:
   - "[[cire-auth]]"
   - "[[oidc-provider]]"
   - "[[devloop-urls]]"
-last-reviewed: 2026-08-20
+last-reviewed: 2026-09-10
 ---
 
 # Dev environment (cire + OSN identity)
@@ -82,7 +82,7 @@ Backing resources:
 
 ### WebAuthn on dev
 
-Dev's RP ID is **`dev.musubi.social`** — the origin `@osn/social`'s dev
+Dev's RP ID is **`dev.musubi.social`** — the origin `@musubi/social`'s dev
 deployment is served from, because a ceremony may only run on an origin same-site
 with the RP ID. Deliberately **not** the `musubi.social` apex: an apex RP ID would
 make a dev-enrolled credential usable against production.
@@ -129,18 +129,48 @@ See [[musubi-identity-migration]] for why RP IDs behave this way.
 | `dev` | `CLOUDFLARE_API_TOKEN_DEV` | none |
 | `production` | `CLOUDFLARE_API_TOKEN` | required |
 
-The two secrets are deliberately named differently. A job that lands in the wrong
-Environment then fails on an empty token instead of quietly deploying with the
-other tier's rights. This is what closed the tracked finding **S-M
+The two secrets are deliberately named differently, so that a job landing in the
+wrong Environment fails on an empty token instead of quietly deploying with the
+other tier's rights. That is what closed the tracked finding **S-M
 (preview-ci-prod-token)**: no push-triggered job can reach a prod-scoped
 credential any more.
 
-Store both **only** on their Environment. A repository-level `CLOUDFLARE_API_TOKEN`
-is visible to every job in every workflow, gate or no gate — which hands the
-unattended dev job the production credential and undoes the split. Check with
-`gh secret list` (repo scope) and `gh secret list --env production`; if the token
-appears at repo scope, delete it there (`gh secret delete CLOUDFLARE_API_TOKEN`)
-after confirming the `production` Environment holds it.
+**That protection is worth exactly as much as the secrets' placement, so read
+the placement before trusting it.** Every dev job in `deploy.yml` reads
+
+```yaml
+CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_DEV || secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+and a `||` cannot tell a missing secret from a deliberate one. With
+`CLOUDFLARE_API_TOKEN_DEV` unset the fallback is taken silently, and a dev job
+runs on whatever `CLOUDFLARE_API_TOKEN` resolves to — including a
+repository-scope copy, which is visible to every job in every workflow, gate or
+no gate. The `Cloudflare credential scope` job in `deploy.yml` prints which of
+the two each run got; read its line rather than assuming.
+
+**Moving the token to its Environment is an ordered operation, and the order is
+the whole of it.** Do not start at step 3.
+
+1. `gh secret list --env production` and `gh secret list --env dev`. Note what
+   is actually there. An Environment with no rows is the state to fix, not a
+   formatting quirk.
+2. Put `CLOUDFLARE_API_TOKEN` on `production` and a real `CLOUDFLARE_API_TOKEN_DEV`
+   on `dev`. Both must exist before anything is removed.
+3. Re-run step 1 and confirm both. Then deploy once to each tier and confirm the
+   `Cloudflare credential scope` line names the Environment, not the fallback.
+4. Only now `gh secret delete CLOUDFLARE_API_TOKEN` at repository scope.
+5. Before you do, find every workflow that reads a `CLOUDFLARE_*` secret without
+   declaring an `environment:` — `grep -l CLOUDFLARE .github/workflows/*.yml` and
+   check each one. `free-tier-ceiling-alert.yml` is one by design: it is a
+   scheduled watcher, it cannot take `environment: production` because that gate
+   waits on a human and nobody approves a cron at 22:00 UTC, and it needs only
+   `d1 (read)` and `account (read)`. Give it a read-only credential of its own at
+   that point rather than a share of a deploy token.
+
+Deleting the repository-scope secret before step 3 breaks **every** deploy in the
+repository, dev and production alike, because that is the value the `||` has been
+resolving to.
 
 **What the split does not buy.** `Workers Scripts:Edit` and `D1:Edit` are
 account-level permissions — Cloudflare offers no per-script or per-database
@@ -159,16 +189,46 @@ deploy would queue behind that click. Each job takes a group named for its own
 surface **and** tier (`deploy-dev-cire-api`, `deploy-production-cire-api`), so two
 runs never deploy the same thing at once while unrelated surfaces stay parallel.
 
-### The dev database is rebuilt every deploy
+The dev cire job also sets **`cancel-in-progress: true`**. A burst of merges
+otherwise queues one dev deploy per merge, and each one only brings dev to the
+shape the last one would; superseding them is free. Cancelling mid-flight can
+leave dev's database one migration ahead of its Worker, which the next merge
+puts right — the tier is disposable, and the alternative was multiplying the D1
+bill by the size of the burst (xchromo/osn#980). **Production stays
+`cancel-in-progress: false`**: a half-deployed live wedding is not a trade worth
+making.
 
-`deploy-cire-api-dev` runs **reset → migrate → seed → deploy**:
+### The dev database is rebuilt nightly, not every deploy
+
+`deploy-cire-api-dev` runs **migrate → deploy**, applying migrations forward
+exactly as production does:
+
+```
+bun run --cwd cire/db db:migrate:dev  # apply anything not in d1_migrations yet
+bunx wrangler deploy --env dev        # from cire/api
+```
+
+The full rebuild — **reset → migrate → seed** — moved to its own workflow,
+`.github/workflows/cire-dev-db-rebuild.yml`, on a nightly schedule (14:00 UTC,
+01:00 in Sydney) and `workflow_dispatch`:
 
 ```
 bun run --cwd cire/db db:reset:dev    # drop every table INCLUDING d1_migrations
 bun run --cwd cire/db db:migrate:dev  # replay 0001.. against an empty database
 bun run --cwd cire/db db:seed:dev     # the sample wedding, at production scale
-bunx wrangler deploy --env dev        # from cire/api
 ```
+
+**Why it moved.** A rebuild costs **8,007 D1 rows written and about 22,630
+read**, and the free tier allows 100,000 written a day across every database on
+the account. Thirteen merges on 2026-09-09 spent 104,091 and went over the
+ceiling. Almost none of that is the seed: SQLite rebuilds the whole table for
+every `ALTER TABLE ... DROP COLUMN`, and D1 bills the schema churn even against
+empty tables. Of the 200 heaviest queries on `cire-db-dev` in a week, DDL
+accounted for 89% of rows written and 99.7% of rows read; the seed's `INSERT`s
+were 11% and 0.3%. See xchromo/osn#979.
+
+The rebuild also shares the deploy's `deploy-dev-cire-api` concurrency group, so
+a rebuild and a deploy never touch `cire-db-dev` at once.
 
 The seeded wedding matches a real live one in shape and size — 5 events, 199
 households, 494 guests, 1131 invitations, 168 replies, 3 co-hosts, all 4
@@ -194,12 +254,19 @@ are generated gradients, not photographs: the bucket is `cire-assets-dev`, pinne
 in `seed/assets.ts`, and no couple's photo is ever copied onto a tier this many
 people can reach. Re-run only after recreating the bucket.
 
-Two things fall out of that order. Dev data never drifts from the seed, and
-**every merge re-tests the whole migration chain** — a migration that only works
-as an increment from the current prod shape fails here, on a disposable database,
-instead of in production months later.
+**What still re-tests the migration chain.** The nightly rebuild replays it from
+zero against real D1, and that is the only place DDL which `bun:sqlite` accepts
+but D1 rejects gets caught. Most of the proof is cheaper and more frequent than
+that: `cire/api/tests/db/ddl-lockstep.test.ts` (T-S1) applies the whole chain to
+an in-memory database on every `bun test`, so on every pull request, and diffs a
+normalised snapshot of it against the DDL mirror in `cire/api/src/db/setup.ts`
+and the Drizzle schema. A migration that only works as an increment fails there
+first.
 
-Both destructive steps route through `scripts/cire-dev-db-guard.sh`, which
+Dev data now gets its clean floor once a night rather than once a merge, so a
+wedding a tester made by hand survives the working day.
+
+Both destructive steps route through `scripts/cire-dev-db-guard.ts`, which
 re-derives the target from `cire/api/wrangler.toml` at run time and aborts unless
 `[env.dev]` really is `cire-db-dev` with an id no other environment shares. There
 is no flag anywhere in `cire/db` that can reset or seed production.
@@ -295,6 +362,7 @@ dashboard-only.
    bunx wrangler secret put OSN_JWT_PRIVATE_KEY      --env dev   # own keypair
    bunx wrangler secret put OSN_JWT_PUBLIC_KEY       --env dev
    bunx wrangler secret put OSN_SESSION_IP_PEPPER    --env dev
+   bunx wrangler secret put OSN_TOTP_ENCRYPTION_KEY  --env dev   # openssl rand -base64 32
    bunx wrangler secret put UPSTASH_REDIS_REST_URL   --env dev
    bunx wrangler secret put UPSTASH_REDIS_REST_TOKEN --env dev
    bunx wrangler secret put RESEND_API_KEY           --env dev
@@ -485,7 +553,7 @@ A passkey is the only primary login factor, so a seeded account is unreachable:
 nobody can enrol a WebAuthn credential on behalf of a row a seed script wrote.
 `GET /dev/login` on `osn-api` mints a **real** OSN session for one fixed
 principal instead, so the OIDC chain, the organiser portal, the vendor portal and
-`@osn/social` all run untouched — there is no bypass anywhere else in the stack.
+`@musubi/social` all run untouched — there is no bypass anywhere else in the stack.
 
 The principal is fixed and provisioned on first use (idempotent, so it survives
 `osn-db-dev` never being reset):
@@ -620,7 +688,8 @@ ceremony spans two requests, so it is what catches Redis being misconfigured.
    `id.dev.musubi.social/.well-known/openid-configuration` still returns **200**.
    A 302 on either API host means Access was put on the wrong destination — pull
    it off before anything else.
-7. Re-run the dev deploy and confirm the reset replayed migrations from zero.
+7. Run the **Rebuild cire dev D1** workflow by hand (`workflow_dispatch`) and
+   confirm the reset replayed migrations from zero.
 
 ---
 

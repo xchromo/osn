@@ -13,7 +13,7 @@ import { _resetOutboundKeyForTests } from "../src/lib/outbound-arc";
  * they don't depend on a real (or miniflare) D1 binding.
  *
  * The happy-path `fetch` through a live D1 binding is exercised by the
- * Miniflare-backed `src/d1-integration.test.ts` (run under `bun test`); wiring
+ * Miniflare-backed `tests/d1/d1-integration.test.ts` (run under `bun test`); wiring
  * a full D1 round-trip into this synchronous vitest suite is impractical, so
  * the request-id echo/mint contract is covered directly in `request-id.test.ts`
  * via the `resolveRequestId` unit (T-S2).
@@ -79,7 +79,7 @@ describe("handler.fetch — fail-closed (T-R1)", () => {
  *
  * Drives the real exported `handler.scheduled(event, env, ctx)` with a fake
  * env + a `waitUntil` collector. The DB-backed sweeps run against a stub D1
- * binding and fail internally — they're wrapped in `Effect.catchAll`/`logError`
+ * binding and fail internally — they're wrapped in `Effect.catch`/`logError`
  * so they never throw out of `scheduled`; this test only asserts the
  * registration POSTs fired and are once-per-isolate.
  */

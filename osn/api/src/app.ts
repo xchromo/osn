@@ -104,10 +104,13 @@ export interface AppDeps {
    */
   ceremonyStores: RedisCeremonyWiring["ceremonyStores"];
   recoveryLockoutStore: RedisCeremonyWiring["recoveryLockoutStore"];
+  recoveryOtpLockoutStore: RedisCeremonyWiring["recoveryOtpLockoutStore"];
+  totpLockoutStore: RedisCeremonyWiring["totpLockoutStore"];
   profileSwitchCap: RedisCeremonyWiring["profileSwitchCap"];
   emailChangeBeginCap: RedisCeremonyWiring["emailChangeBeginCap"];
+  recoveryEmailBeginCap: RedisCeremonyWiring["recoveryEmailBeginCap"];
   /**
-   * Client-IP trust policy (S-M34). Derived from `TRUSTED_PROXY_COUNT`. Threaded
+   * Client-IP trust policy. Derived from `TRUSTED_PROXY_COUNT`. Threaded
    * into the auth + profile route factories so per-IP rate-limit keying + the
    * session-IP hash are spoofing-safe behind a known proxy topology.
    */
@@ -168,8 +171,11 @@ export function createApp(deps: AppDeps) {
     rotatedSessionStore,
     ceremonyStores,
     recoveryLockoutStore,
+    recoveryOtpLockoutStore,
+    totpLockoutStore,
     profileSwitchCap,
     emailChangeBeginCap,
+    recoveryEmailBeginCap,
     clientIpConfig,
     internalServiceSecret,
     turnstileVerifier,
@@ -240,8 +246,11 @@ export function createApp(deps: AppDeps) {
           rotatedSessionStore,
           ceremonyStores,
           recoveryLockoutStore,
+          recoveryOtpLockoutStore,
+          totpLockoutStore,
           profileSwitchCap,
           emailChangeBeginCap,
+          recoveryEmailBeginCap,
         },
         dbAndEmailLayer,
         observabilityLayer,

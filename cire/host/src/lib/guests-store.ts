@@ -60,9 +60,12 @@ export function guestsAccessor(weddingId: string): Accessor<OrganiserGuestRow[] 
 }
 
 /** Has this wedding's guest list already been fetched in this session? When true
- *  a remounting `GuestTable` can skip the network round-trip entirely. */
+ *  a remounting `GuestTable` can skip the network round-trip entirely.
+ *  Subscribes only when the entry already exists — a read from a cold cache
+ *  registers no dependency. Never use it for a value a view must track; use
+ *  the accessor for that. */
 export function hasCachedGuests(weddingId: string): boolean {
-  return cache.get(weddingId)?.guests() != null;
+  return !stale.has(weddingId) && cache.get(weddingId)?.guests() != null;
 }
 
 /** Replace the cached guest rows for a wedding (used after a successful fetch or
@@ -71,7 +74,10 @@ export function setCachedGuests(weddingId: string, guests: OrganiserGuestRow[]):
   entryFor(weddingId).setGuests(guests);
 }
 
-/** Read the current cached rows without subscribing (for an in-place patch). */
+/** Read the current cached rows for an in-place patch. Subscribes only when
+ *  the entry already exists — a read from a cold cache registers no
+ *  dependency. Never use it for a value a view must track; use the accessor
+ *  for that. */
 export function peekCachedGuests(weddingId: string): OrganiserGuestRow[] | null {
   return cache.get(weddingId)?.guests() ?? null;
 }
@@ -79,14 +85,24 @@ export function peekCachedGuests(weddingId: string): OrganiserGuestRow[] | null 
 /** Drop a wedding's cached guest list so the next read refetches. Call after a
  *  mutation that can change the roster — e.g. an import apply. */
 export function invalidateGuests(weddingId: string): void {
-  cache.delete(weddingId);
+  // A mounted GuestTable is still rendering the last-known rows, and pulling
+  // them out from under it for one round trip is the flicker this cache exists
+  // to avoid — so the signal is left alone and the wedding is marked `stale`
+  // instead. `hasCachedGuests` treats a stale id as a miss, which is what makes
+  // the next `ensureGuestsLoaded` actually refetch rather than short-circuiting
+  // on the (still-present) cached value.
+  stale.add(weddingId);
   // A load already in flight was issued against PRE-mutation state, so its rows
-  // are stale the moment this runs. Dropping the entry alone is not enough — the
-  // fetch's own `.then` would still write them into a fresh cache entry — so the
-  // wedding's GENERATION is bumped too, and a resolving fetch from an older
-  // generation discards its result instead of caching it. Without this, the
-  // editor's invalidate-then-reload after a successful save can re-cache exactly
-  // the rows the organiser just deleted.
+  // describe state that has since been mutated: the wedding's GENERATION is
+  // bumped too, and a resolving fetch from an older generation discards its
+  // result instead of caching it. Without this, the editor's invalidate-then-
+  // reload after a successful save can re-cache exactly the rows the organiser
+  // just deleted. Dropping the in-flight slot here (not just bumping the
+  // generation) means the next `ensureGuestsLoaded` does not join that doomed
+  // fetch — it starts a new one, at the cost of one extra request. That is
+  // the right trade: joining would await a promise whose result the
+  // generation guard is about to discard, leaving the caller with `false`
+  // and the view unrefreshed until whatever call comes next.
   inflight.delete(weddingId);
   generation.set(weddingId, generationOf(weddingId) + 1);
 }
@@ -95,10 +111,14 @@ export function invalidateGuests(weddingId: string): void {
 const generation = new Map<string, number>();
 const generationOf = (weddingId: string) => generation.get(weddingId) ?? 0;
 
+/** Wedding ids whose cached rows are known out of date but still worth showing
+ *  while the refetch is in flight. */
+const stale = new Set<string>();
+
 /** In-flight loads, keyed by weddingId, so two panels mounting in the same tick
  *  (e.g. GuestTable + Overview snapshot) share ONE fetch instead of racing two
  *  identical requests at the empty cache. */
-const inflight = new Map<string, Promise<void>>();
+const inflight = new Map<string, Promise<boolean>>();
 
 /**
  * Load a wedding's guest rows into the cache exactly once. A cache hit returns
@@ -109,18 +129,35 @@ const inflight = new Map<string, Promise<void>>();
 export function ensureGuestsLoaded(
   weddingId: string,
   fetcher: () => Promise<OrganiserGuestRow[]>,
-): Promise<void> {
-  if (hasCachedGuests(weddingId)) return Promise.resolve();
+): Promise<boolean> {
+  if (hasCachedGuests(weddingId)) return Promise.resolve(true);
   let pending = inflight.get(weddingId);
   if (!pending) {
     const startedAt = generationOf(weddingId);
     const load = fetcher()
-      .then((rows) => {
-        // A newer invalidation landed while this was in flight — its rows describe
-        // state that has since been mutated, so drop them rather than cache them.
-        if (generationOf(weddingId) !== startedAt) return;
-        setCachedGuests(weddingId, rows);
-      })
+      .then(
+        (rows) => {
+          // A newer invalidation landed while this was in flight — its rows describe
+          // state that has since been mutated, so drop them rather than cache them.
+          if (generationOf(weddingId) !== startedAt) return false;
+          setCachedGuests(weddingId, rows);
+          stale.delete(weddingId);
+          return true;
+        },
+        (err: unknown) => {
+          // The refetch was refused or failed. The rows still on screen were
+          // fetched under an authorisation this request could not confirm, so
+          // they stop being shown: a demoted organiser must not keep reading
+          // guest detail behind an error banner. Same generation guard — if a
+          // newer invalidation has landed, a newer load owns the entry and this
+          // one touches nothing.
+          if (generationOf(weddingId) === startedAt) {
+            entryFor(weddingId).setGuests(null);
+            stale.delete(weddingId);
+          }
+          throw err;
+        },
+      )
       .finally(() => {
         // Only clear the slot if it is still OURS: an invalidation may already
         // have replaced it with a newer load.
@@ -137,4 +174,5 @@ export function __resetGuestsCache(): void {
   cache.clear();
   inflight.clear();
   generation.clear();
+  stale.clear();
 }

@@ -1,5 +1,439 @@
 # @osn/api
 
+## 0.27.9
+
+### Patch Changes
+
+- Updated dependencies [f756993]
+  - @shared/observability@0.18.0
+  - @shared/crypto@0.13.4
+  - @shared/osn-auth-client@0.4.29
+
+## 0.27.8
+
+### Patch Changes
+
+- Updated dependencies [46023fa]
+  - @shared/observability@0.17.0
+  - @shared/redis@0.8.0
+  - @shared/crypto@0.13.3
+  - @shared/osn-auth-client@0.4.28
+
+## 0.27.7
+
+### Patch Changes
+
+- Updated dependencies [5e47301]
+  - @shared/observability@0.16.0
+  - @shared/redis@0.7.0
+  - @shared/crypto@0.13.2
+  - @shared/osn-auth-client@0.4.27
+
+## 0.27.6
+
+### Patch Changes
+
+- @shared/crypto@0.13.1
+  - @shared/osn-auth-client@0.4.26
+
+## 0.27.5
+
+### Patch Changes
+
+- Updated dependencies [d287d72]
+  - @shared/crypto@0.13.0
+  - @shared/observability@0.15.0
+  - @shared/redis@0.6.0
+  - @shared/osn-auth-client@0.4.25
+
+## 0.27.4
+
+### Patch Changes
+
+- Updated dependencies [3447d5b]
+  - @shared/crypto@0.12.0
+  - @shared/osn-auth-client@0.4.24
+
+## 0.27.3
+
+### Patch Changes
+
+- b2b6b70: Clean up the `house/no-tracker-ref-in-comment` mechanical majority (xchromo/osn#924).
+
+  Every finding-tag, phase-code, and narrative-phrase reference flagged by the rule in a short comment block is now gone from these packages: a bare parenthetical tag deleted, a leading label stripped and the remainder capitalized into its own sentence, or a "used to be" narration rewritten forward to state the current, still-true fact. No behavior changes anywhere — every edit is comment text.
+
+  A handful of leftover `osn-tracker#N` citations that predated both this batch and the separate tracker-number-refs cleanup (xchromo/osn#930) are also gone from `@osn/api` and `@pulse/api`, using the same treatment established there.
+
+- Updated dependencies [b2b6b70]
+  - @pulse/db@0.20.2
+  - @shared/crypto@0.11.3
+  - @shared/observability@0.14.3
+  - @shared/osn-auth-client@0.4.23
+  - @shared/redis@0.5.1
+
+## 0.27.2
+
+### Patch Changes
+
+- b78deb7: State four comment constraints directly instead of citing a tracker finding.
+
+  `recommendations.ts` carried D1's 100-bound-parameter cap as a tracker citation
+  three times over; each now states the constraint, and a claim the old text made
+  about the query binding `profileId` "once" is corrected — it binds a fixed
+  number of times, which is what the file's own measurement a few hundred lines
+  down already said. `d1ParamCounts.test.ts` loses five tracker numbers that its
+  own six-site index already covers, and `redact.ts` loses a finding tag from its
+  fast-path note. The deny-list's three-part admission test is untouched.
+
+  No behavior changes; every edit is comment text.
+
+- b78deb7: Rewrite every private-tracker comment reference in these packages to state the durable constraint directly (xchromo/osn#924's highest-priority batch).
+
+  A comment citing `osn-tracker#N` (or the shorter `tracker#N` spelling, also found live and now caught by `house/no-tracker-ref-in-comment` too) means nothing to a reader who cannot open the private tracker, and stops resolving once the finding closes — this repo is public, the tracker is not, so the number was a disclosure as well as a dead end. Every citation is now the fact it stood for: which D1 bind-parameter cap a query respects and why, which cookie-scoping attack a `__Host-` prefix defeats, which reflow guard a `resize-none` textarea keeps sound, why a response is never cached. One citation (`#130`) is to a finding that is still **open** — its replacement states the constraint as a live rule rather than implying a fix that hasn't happened, and links nothing.
+
+  Nineteen of the twenty tracker issues behind these citations are closed and fixed; none of that fix history is repeated here — only the fact that survives it. No behavior changed anywhere in this changeset: every edit is comment text.
+
+  Every rewrite was independently adversarially verified against the real diff and the current code (not the original finding's problem description) before being accepted; two of thirty-seven were caught wrong on the first pass — one a factual overstatement carried over from the finding's language rather than the code as implemented, one a bare `#N` left behind by an earlier pass — and both were corrected.
+
+- Updated dependencies [b78deb7]
+  - @shared/observability@0.14.2
+  - @shared/crypto@0.11.2
+  - @shared/osn-auth-client@0.4.22
+
+## 0.27.1
+
+### Patch Changes
+
+- 6474854: Fix every `house/no-stacked-doc-block` site in these packages (xchromo/osn#926).
+
+  A declaration with two or more leading doc blocks only has its last block attached — the earlier one silently documents nothing, and an editor hovering the declaration never shows it. Two shapes accounted for all 26 sites across these packages: a genuine module doc that had been placed after the file's `import` line rather than at line 1, which the rule's module-block exemption checks literally, and so read as stacked in front of whatever the doc block happened to precede — moved to line 1, restoring both blocks to their correct attachment; and two doc blocks that were both actually describing the same declaration, split apart for no good reason — merged into one, with content preserved and no duplication.
+
+  No prose was rewritten and no behavior changed. Every fix was spot-checked by an independent adversarial pass against the real diff before being applied, confirming no content was lost and every surviving block attaches to the declaration it actually describes.
+
+- Updated dependencies [6474854]
+  - @shared/crypto@0.11.1
+  - @shared/db-utils@0.7.1
+  - @shared/observability@0.14.1
+  - @shared/osn-auth-client@0.4.21
+  - @pulse/db@0.20.1
+  - @zap/db@0.6.1
+
+## 0.27.0
+
+### Minor Changes
+
+- d3af349: Move every Effect dependency to 4.0.0-rc.112 and convert the service keys.
+
+  `effect`, `@effect/vitest` and `@effect/opentelemetry` are pinned to one exact
+  version, because v4 releases the ecosystem under a single version number and is
+  still pre-GA — a caret range would let an install move the target mid-migration.
+  `@effect/platform` is dropped: v4 merged it into core, and nothing here imported
+  it.
+
+  `Context.Tag` no longer exists. Class declarations become
+  `Context.Service<Self, Shape>()(id)` — note the argument order flips — and the
+  `Context.Tag<any, A>` parameter types in `@shared/db-utils` become
+  `Context.Key<any, A>`. Every service identifier string is unchanged, since those
+  are the runtime lookup keys. Call sites are untouched: a v4 service key still
+  extends `Effect`, so `yield* Db` works as before.
+
+  This is the first phase of the Effect v4 migration and does not stand alone —
+  the tree does not type-check until the `Schema` work lands.
+
+### Patch Changes
+
+- d3af349: Apply the Effect v4 combinator renames and the Cause/Runtime rework.
+
+  Renames resolved from upstream's generated reference: `catchAllDefect` →
+  `catchDefect`, `catchAllCause` → `catchCause`, `catchAll` → `catch`, `either` →
+  `result`, `forkDaemon` → `forkDetach`, `zipRight` → `andThen`, `dieMessage` →
+  `die(new Error(…))`, `Layer.scoped` → `Layer.effect`, `Cause.failureOption` →
+  `Cause.findErrorOption`. The `Either` module became `Result`, whose variants are
+  tagged `Success`/`Failure` and carry `success`/`failure` rather than
+  `right`/`left`.
+
+  `Runtime.isFiberFailure` and `FiberFailureCauseId` are gone: v4's runner rejects
+  with `Cause.squash(cause)`, which is the typed failure itself, so the two
+  osn-api error-shaping helpers no longer unwrap anything. That changes one thing
+  on a security path — `Cause.squash` surfaces a _defect_ where v3's
+  `Cause.failureOption` returned `None` — and both helpers now document it.
+
+  Adds a test asserting the Redis layer's finalizer runs on scope close. The
+  `Layer.scoped` → `Layer.effect` rewrite would have leaked connections silently
+  if the scope had been dropped: it type-checks either way, and nothing covered it.
+
+  Second phase of the Effect v4 migration; the tree does not type-check until the
+  `Schema` work lands.
+
+- d3af349: Rebuild the logger for Effect v4, and fix a secret leak in annotation redaction.
+
+  `redact()` matches the deny-list against an object's **keys**, and the v3 logger
+  mapped over each annotation **value** — so it only ever saw a bare scalar with no
+  key attached and passed it through. `Effect.annotateLogs({ accessToken })`
+  reached the sink in clear, along with every other deny-listed key, on every tier.
+  The record is now passed whole.
+
+  v4 moved annotations off the logger's `Options` and onto the fiber, so redaction
+  moves to the output side, wrapping `Logger.formatStructured`. `Logger.layer`
+  replaces the whole active set, so `Logger.tracerLogger` is listed explicitly —
+  omitting it drops log-to-span correlation silently. `LogLevel` is now string
+  literals (`"Warn"`, not v3's `"Warning"`), and the minimum level is a
+  `References.MinimumLogLevel` service rather than `Logger.minimumLogLevel`.
+
+  Adds `PrettyLoggerLive` for the dev-server entrypoints, replacing v3's
+  `Logger.pretty`. It exists as one export rather than eleven inline
+  `Logger.layer([…])` arrays so `tracerLogger` has a single place to be got right.
+
+  Local output loses ANSI colour for an indented structured rendering:
+  `consolePretty` is opaque, so there is no seam to redact through it, and one
+  redaction point covering every tier is the better trade.
+
+  **The JSON severity field is now `level`, not `logLevel`.** Grafana queries,
+  panels and alerts filtering on the old name match nothing and must be updated in
+  Grafana Cloud by hand.
+
+- d3af349: Migrate the Effect Schema surface of the four service packages to v4.
+
+  v3's constraint combinators are v4 _checks_, applied through a schema's
+  `.check(...)` rather than `.pipe(...)`: `maxLength`/`minLength`/`minItems`/
+  `maxItems` collapse onto `isMaxLength`/`isMinLength`, `int` becomes `isInt`, and
+  `between(a, b)` becomes `isBetween({ minimum, maximum })` — still inclusive at
+  both ends, so no range moved. `Schema.filter` becomes
+  `Schema.check(Schema.makeFilter(…))`, and because a v4 filter carries its own
+  failure message in its return value, the `{ message: () => "…" }` option becomes
+  the predicate returning that string; every validator keeps its exact wording.
+  `Schema.Literal` takes a single literal, so enums (and the spreads over
+  `SUPPORTED_CURRENCIES`, `SHARE_SOURCES` and `INTEREST_CATEGORIES`) become
+  `Schema.Literals([…])`. `Schema.decodeUnknown` becomes
+  `Schema.decodeUnknownEffect`, and `Schema.Record` takes its key and value
+  positionally.
+
+  Three copies of a workaround are deleted rather than ported. `@pulse/api`'s
+  events, series and discovery services each carried a hand-rolled "validate the
+  string, then transform to a Date" pair because v3's `DateFromString` accepted a
+  string that parses to an Invalid Date. v4's rejects it, so all three are now
+  `Schema.DateFromString`.
+
+  `@osn/client`'s `isAuthExpiredError` keeps all three of its arms, but the
+  comments no longer claim a `FiberFailure` is what arrives: v4 removed the
+  wrapper and `runPromise` rejects with the squashed error itself, so `instanceof`
+  now carries the common path. The printout arm stays for a consumer bundle built
+  against v3, and for any boundary that strips both the prototype and the `_tag`.
+
+  Every migrated check was verified to still _reject_, not merely type-check.
+
+- d3af349: Drop five `Logger` imports left dead by the v4 logger rework, and finish the
+  Effect v4 migration: with `@cire/api` moved off v3 in the same change, the
+  whole monorepo type-checks and passes its tests under Effect v4.
+
+  The observability change is the test-only one: `Logger.layer` replaces the
+  whole active logger set, so the default logger that used to emit a separate
+  "Fiber terminated…" stack dump is gone, and a capture is now exactly the
+  entry under test.
+
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+- Updated dependencies [d3af349]
+  - @pulse/db@0.20.0
+  - @zap/db@0.6.0
+  - @shared/crypto@0.11.0
+  - @shared/db-utils@0.7.0
+  - @shared/observability@0.14.0
+  - @shared/redis@0.5.0
+  - @shared/osn-auth-client@0.4.20
+
+## 0.26.28
+
+### Patch Changes
+
+- Updated dependencies [8fca0c0]
+  - @shared/observability@0.13.8
+  - @shared/crypto@0.10.18
+  - @shared/osn-auth-client@0.4.19
+
+## 0.26.27
+
+### Patch Changes
+
+- 613c916: Stop six pulse queries binding one parameter per element against D1's cap.
+
+  D1 allows 100 bound parameters per query. A `SELECT` binding an id list broke
+  past 50-100 items; a multi-row `INSERT`, which binds one parameter per column
+  per row, broke an order of magnitude sooner. Six sites were affected, and three
+  were live: recurring series failed to materialise past three instances, the RSVP
+  list broke for every viewer of a well-attended event, and a GDPR erasure could
+  never complete for an account that had hosted more than a hundred events.
+
+  `@shared/db-utils` gains `jsonEachIn` and `insertManyViaJsonEach`, which bind the
+  whole array as one JSON parameter and unpack it inside SQLite with `json_each`.
+  Both are verified against real Miniflare-backed D1 rather than bun:sqlite, which
+  enforces no such cap and so passes against every one of these bugs.
+
+- Updated dependencies [613c916]
+  - @shared/db-utils@0.6.6
+  - @pulse/db@0.19.6
+  - @zap/db@0.5.14
+  - @shared/crypto@0.10.17
+  - @shared/osn-auth-client@0.4.18
+
+## 0.26.26
+
+### Patch Changes
+
+- 0312c9e: Take @cloudflare/workers-types 5.20260830.1 (from 4.20260702.1). This also fixes a peer range nobody had noticed: wrangler 4.127.1 declares an optional peer on `@cloudflare/workers-types` `^5.20260722.1`, which the old `^4.20260702.1` pin did not satisfy. Types only, no runtime change.
+- d96da64: Clear six new high advisories and refresh a lockfile that had drifted behind its own ranges.
+
+  `fast-uri` 3.1.5 → 3.1.7. Four high advisories against 3.1.5 landed on 2026-09-02 (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp — two SSRF, two host confusion) and the pre-push `bun audit` gate went red. Taking 3.1.6, which is what those four advisories name as fixed, would have left two more: 3.1.7 also fixes GHSA-qw65-cvwx-89v3 (authority injection via an unvalidated port in `serialize()`) and GHSA-58mr-gqgx-xq4g (host confusion via unbalanced IP-literal brackets), neither of which is in the public advisory database yet, so no audit tool reports them. Reachability is the Astro language server only — `ajv` appears once in the lockfile, under `@astrojs/check`, and no deployed Worker or shipped bundle contains it. `smol-toml` 1.6.1 → 1.8.0 is the same shape: 1.7.1 carries the fix for GHSA-7w5x-hrqm-74c2, also absent from the database.
+
+  The rest is lockfile lag. The dependency sweep in this stack raised every declared range, but `bun.lock` stayed behind versions those ranges already admitted: `esbuild` 0.28.2, `postcss` 8.5.26, `picomatch` 4.0.7, `sharp` 0.35.4 (libvips 1.3.3), `js-yaml` 4.3.2, `ws` 8.21.3, `devalue` 5.9.2, `happy-dom` 20.12.2, `@cloudflare/workers-types` 5.20260903.1. Two are worth knowing about rather than just taking: `ws` 8.21.1 **lowers the `maxBufferedChunks` and `maxFragments` defaults** and counts empty fragments toward the limit, which is a behaviour change inside a patch and touches Zap's WebSocket surface; `picomatch` 4.0.5–4.0.7 are all matching-semantics fixes, so glob-driven config can shift.
+
+  `astro` 7.2.9 → 7.2.10 is the one with deployed consequences. It fixes an SSR manifest placeholder not being replaced when the server build is minified, which caused a runtime `Invalid URL` crash at server boot. It is pinned to 7.2.10 rather than left to float: 7.3.0 and 7.3.1 clear the three-day soak but not the fourteen-day rule for a minor, so they wait.
+
+  Two overrides were correcting themselves in the wrong direction and are fixed here. `undici` was pinned `^7.29.0` while `jsdom` 30 declares `undici ^8.9.0` and `unifont` 0.7.5 declares `^8.0.0` — a floor being used as a ceiling, holding both consumers a whole major below what they were written for and cutting the tree off from undici 8 security fixes. Raised to `^8.9.0` (resolves 8.10.1). Because top-level `miniflare` 4 pins undici at exactly 7.28.0 and the wrangler-nested miniflare 5 alpha pins 7.29.0, this was verified rather than assumed: type check, the full test suite, the Miniflare D1 tier, all four Worker builds, and a real `wrangler dev --local` boot of `osn-api` on workerd, which serves 200 on `/health`, `/.well-known/jwks.json` and `/` with no errors. `postcss` and `picomatch` were likewise below what `vite` 8.2.2 asks for (`^8.5.26` and `^4.0.5`), a floor gap opened by raising vite earlier in this stack.
+
+  Also: the `protobufjs` override matched nothing in the lockfile and is removed, and `bunfig.toml`'s note on the removed `fast-uri` soak exclusion claimed the package "parses URIs on the request path via ajv", which is not true of this tree and would have mispriced exactly the decision this changeset had to make.
+
+  One source change, in `cire/api/tests/index.test.ts`: `@cloudflare/workers-types` 5.20260903.1 makes `recordException` a required member of `Span`, so the test's `StubSpan` gains it, typed off the interface rather than restated so the next daily types release cannot drift it.
+
+- afa5920: Take ioredis 6.0.0 (from 5.11.1). This is not a dev-only bump: `osn/api/src/index.ts` and `pulse/api/src/index.ts` both statically import `./redis`, which statically imports `@shared/redis/ioredis`, so ioredis is compiled into both deployed Worker bundles and its module body runs at isolate startup. v6 drops the `redis-parser` package for an in-tree RESP decoder — confirmed, `redis-parser` is gone from the lockfile.
+
+  Verified by booting the real built bundle on workerd (`wrangler dev --local`), not by a dry run: `osn-api` starts clean and serves 200 on `/health`, `/.well-known/jwks.json` and `/`, with no errors in the log. The Worker bundle grows 4594.90 KiB to 4716.41 KiB.
+
+  One thing the bundle growth understates, found while reviewing this bump and filed separately: the ioredis in these Worker bundles can never execute. `osn/api/src/index.ts` reaches it only through `initRedisClientFromEnv`, which on workerd selects Upstash-over-HTTP or the in-memory store; the socket-opening `createClientFromUrl` is reached solely from `osn/api/src/local.ts`. Stubbing that one import out and rebuilding puts ioredis at 449.58 KiB raw / 72.50 KiB gzip in `osn-api`, about 8.8% of the compressed script, parsed on every cold isolate start. That is pre-existing — it was 337.98 / 61.75 KiB gzip on ioredis 5 — and this bump adds 111.60 / 10.75 to it. The fix is a module split in `@shared/redis`, not a change to this bump.
+
+- 00ed19f: Take the latest in-range release of 28 dependencies, raising each declared floor to what the lockfile already resolves to. Runtime: effect 3.22.1, elysia 1.4.30, @effect/platform 0.97.1, solid-js 1.9.15, @solidjs/router 0.16.3, @solidjs/start 2.0.4, @kobalte/core 0.13.13, motion 12.43.0, astro 7.2.9, @astrojs/solid-js 7.0.2, @astrojs/cloudflare 14.2.5, @simplewebauthn/server 13.3.3, @upstash/redis 1.38.3, @growthbook/growthbook 1.7.0, cropperjs 2.2.0. Tooling and types: vite 8.2.2, vitest 4.1.11 (with @vitest/browser, @vitest/browser-playwright and @vitest/coverage-istanbul), wrangler 4.127.1, miniflare 4.20260730.0, happy-dom 20.12.0, turbo 2.10.12, lefthook 2.1.12, portless 0.15.6, @types/leaflet 1.9.22, @types/three 0.185.4.
+
+  No source change. Every gate passes unchanged, including the Miniflare D1 tier and the real-Chromium browser tier.
+
+  Two consequences of the wrangler bump that the version list does not show, recorded here so they are accepted rather than discovered. Wrangler 4.127.1 nests `miniflare@5.20260828.0-alpha` — an alpha build of the local Workers runtime — under both itself and `@cloudflare/vite-plugin`, so `wrangler dev` and the vite plugin now run on a prerelease. The top-level `miniflare` stays stable at 4.20260730.0, so the `test:d1` tier is untouched. The three-day `minimumReleaseAge` soak still applies to the alpha and `minimumReleaseAgeExcludes` is empty, so nothing here skips the gate. Separately, raising `vite` to 8.2.2 raises what vite requires: it now asks for `postcss ^8.5.26` and `picomatch ^4.0.5`, both above the floors the root overrides pin. Those floors are corrected in a later PR in this stack rather than here, because they need a lockfile refresh.
+
+- Updated dependencies [0312c9e]
+- Updated dependencies [d96da64]
+- Updated dependencies [afa5920]
+- Updated dependencies [01437b3]
+- Updated dependencies [00ed19f]
+  - @pulse/db@0.19.5
+  - @shared/db-utils@0.6.5
+  - @zap/db@0.5.13
+  - @shared/redis@0.4.7
+  - @shared/crypto@0.10.16
+  - @shared/observability@0.13.7
+  - @shared/openapi-tools@0.1.2
+  - @shared/osn-auth-client@0.4.17
+  - @shared/rate-limit@0.3.3
+
+## 0.26.25
+
+### Patch Changes
+
+- 853367f: Take jose 6.2.10 (from 6.2.4). Releases 6.2.5 through 6.2.10 are all JOSE and JWT input-validation hardening: reject characters outside the Base64URL alphabet, reject invalid UTF-8 in JOSE headers and JWT claims sets, reject truncated ASN.1 key data, reject duplicate `crit` values, reject an unencoded payload in the JWS Compact Serialization, compare claim values correctly for falsy validation options, and enforce verification key metadata from a JWKS. jose sits under both the ARC service-to-service tokens and the five-minute osn-access JWTs, so this is parser hardening on the two token types where it matters most. No API change; the tightening only narrows what parses.
+- Updated dependencies [853367f]
+  - @shared/crypto@0.10.15
+  - @shared/osn-auth-client@0.4.16
+
+## 0.26.24
+
+### Patch Changes
+
+- 981ea54: Move every remaining colocated test file into its package's `tests/` tree, the
+  layout `wiki/conventions/testing-patterns.md` has documented all along.
+
+  `osn/landing` and `pulse/landing` kept their suites beside the source in `src/`
+  (and `pulse/landing` a third under `functions/`); those now mirror `src/` under
+  `tests/`. The three API packages' Miniflare-backed D1 suites move from
+  `src/d1-integration.test.ts` to `tests/d1/d1-integration.test.ts` — they used to
+  sit outside the vitest `include` glob by accident of living in `src/`, and are
+  now excluded from it explicitly by path, so `bun run test:d1` stays the only
+  thing that runs them. `tsconfig.json` gains `tests/**/*` wherever the tests were
+  previously type-checked only because they lived under `src/`.
+
+  No test bodies changed; only their location and the relative paths inside them.
+
+  - @shared/crypto@0.10.14
+  - @shared/osn-auth-client@0.4.15
+
+## 0.26.23
+
+### Patch Changes
+
+- d7c8e5c: Cover the `/account` routes' session-cookie credential, and stop the auth-gate cases building a database they never touch.
+
+  `makeCallerResolver` accepts two credentials — a bearer access token and the `pulse_web_session` cookie — and every `/account` test used the bearer. Those are the DSAR-critical handlers (delete, restore, deletion-status) and the web app cannot present a bearer token, so if the routes stopped forwarding `headers["cookie"]`, or a handler read `headers.authorization` directly instead of going through `resolveCaller`, every web client would lose them with the suite still green. Three cases now exercise the cookie path, including a cookie that names no live session — without that negative, the positives would pass just as happily against a handler that authenticated nobody.
+
+  The auth-gate block also built a fresh schema-applied in-memory database and a `ManagedRuntime` per case, for requests rejected inside `resolveCaller` before any handler runs. Those share one app now; the one case in the block that does reach a handler keeps its own.
+
+- Updated dependencies [e9ba055]
+  - @shared/redis@0.4.6
+  - @shared/crypto@0.10.13
+  - @shared/osn-auth-client@0.4.14
+
+## 0.26.22
+
+### Patch Changes
+
+- Updated dependencies [5c51a23]
+  - @shared/db-utils@0.6.4
+  - @pulse/db@0.19.4
+  - @zap/db@0.5.12
+  - @shared/crypto@0.10.12
+  - @shared/osn-auth-client@0.4.13
+
+## 0.26.21
+
+### Patch Changes
+
+- Updated dependencies [965c2ee]
+  - @shared/observability@0.13.6
+  - @shared/crypto@0.10.11
+  - @shared/osn-auth-client@0.4.12
+
+## 0.26.20
+
+### Patch Changes
+
+- Updated dependencies [673ca2b]
+  - @zap/db@0.5.11
+
+## 0.26.19
+
+### Patch Changes
+
+- e382c40: Enforce the access-token `issuer` claim in every downstream verifier.
+
+  `@shared/osn-auth-client` has always accepted an expected `iss`, but every consumer left it unset — deliberately, because a verifier that pins the issuer rejects every token minted before osn-api started stamping one, and the rollout had to be verifier-first. Access tokens live five minutes, so that window closed long ago: every live token carries `iss`, and leaving the check off means a token from any other OSN deployment verifies here as long as it is signed by a key that deployment's JWKS vouches for.
+
+  `cire/api`, `pulse/api` and `zap/api` now pass the expected issuer on every `extractClaims` call. In pulse and zap the JWKS URL and the issuer travel as one `OsnTokenVerification` value rather than two loose strings, so a call site cannot supply one and silently forget the other — which is the failure mode that left this unenforced, since an unset expected issuer is not an error, it is simply no check.
+
+  `OSN_ISSUER_URL` is now required in a deployed tier and must equal osn-api's own value byte for byte; a mismatch 401s every authenticated request, so the two flip in the same deploy. `zap/api` gains the var, which it did not read before. `@shared/crypto/testing`'s signer stamps the local issuer by default, so a suite that injects a test key mints tokens its routes accept; pass a different origin, or `null`, to exercise the rejection paths.
+
+  Three things fell out of reviewing it. `extractClaims` now treats an expected issuer that is present but **empty** as a configuration failure rather than as "no issuer check" — an unset env var reaching the verifier was the one way this could look configured while checking nothing. The comparison normalises a trailing slash on both sides, since six hand-maintained `wrangler.toml` values feed it and `jose` compares byte for byte. And `zap/api` gains `OSN_ISSUER_URL`/`OSN_JWKS_URL` in the portless devloop, which it never had — every bearer-authenticated zap route was 401ing locally, and pinning the issuer is what made that visible.
+
+- Updated dependencies [e382c40]
+  - @shared/crypto@0.10.10
+  - @shared/osn-auth-client@0.4.11
+
+## 0.26.18
+
+### Patch Changes
+
+- Updated dependencies [5d8417f]
+  - @zap/db@0.5.10
+
+## 0.26.17
+
+### Patch Changes
+
+- Updated dependencies [518bc7d]
+  - @shared/db-utils@0.6.3
+  - @pulse/db@0.19.3
+  - @zap/db@0.5.9
+  - @shared/crypto@0.10.9
+  - @shared/osn-auth-client@0.4.10
+
 ## 0.26.16
 
 ### Patch Changes

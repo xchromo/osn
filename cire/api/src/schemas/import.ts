@@ -59,12 +59,14 @@ export const ParsedFamily = Schema.Struct({
   /** Non-blank, bounded (same 10k cell cap the CSV parser enforces). The CSV
    *  front door already guarantees both; this closes the DesiredState JSON
    *  front door, which previously accepted a blank or multi-hundred-KB name
-   *  straight onto rows the guest invite renders (S-L2). Validation only — no
+   *  straight onto rows the guest invite renders. Validation only — no
    *  trim transform, so the diff still compares the exact submitted value. */
-  familyName: Schema.String.pipe(
-    Schema.filter((s) => s.trim().length > 0 && s.length <= 10_000, {
-      message: () => "familyName must be non-blank and at most 10000 characters",
-    }),
+  familyName: Schema.String.check(
+    Schema.makeFilter((s) =>
+      s.trim().length > 0 && s.length <= 10_000
+        ? undefined
+        : "familyName must be non-blank and at most 10000 characters",
+    ),
   ),
   guests: Schema.Array(ParsedGuest),
 });
@@ -99,14 +101,14 @@ export type DesiredState = Schema.Schema.Type<typeof DesiredState>;
  * is untouched, NOT read as "everything is absent, remove it all".
  *
  *  - `"both"` — events + guests reconcile (the historical two-sheet import, and
- *    every editor DesiredState save, where the draft covers everything shown).
+ *    GuestsEditor's draft-save, which still covers everything shown).
  *  - `"events"` — only the schedule reconciles; households, guests and their
  *    attendance links are left exactly as they are.
  *  - `"guests"` — only households/guests/attendance reconcile; the schedule is
  *    left as it is, and the guest sheet's attendance columns are matched against
  *    the events that already exist.
  */
-export const ChangeScope = Schema.Literal("both", "events", "guests");
+export const ChangeScope = Schema.Literals(["both", "events", "guests"]);
 export type ChangeScope = Schema.Schema.Type<typeof ChangeScope>;
 
 // ── Diff plan ─────────────────────────────────────────────────────────────────
@@ -207,6 +209,16 @@ export const ImportPlan = Schema.Struct({
   eventLinkCreates: Schema.Array(EventLink),
   eventLinkRemoves: Schema.Array(EventLink),
   warnings: Schema.Array(Schema.String),
+  /**
+   * The wedding's guest-capacity ceiling, when `diffAgainstDb`'s preview
+   * warning already derived it from the entitlement set — lets
+   * `applyImport` enforce the cap without re-scanning the same rows in the
+   * SAME request. Absent whenever the preview never needed the real cap
+   * (the base-cap pre-check proved the import couldn't breach it, or `guestCreates`
+   * was empty); `applyImport` MUST keep enforcing the cap itself in that case,
+   * never treat absence as "no cap".
+   */
+  derivedCap: Schema.optional(Schema.Number),
 });
 export type ImportPlan = Schema.Schema.Type<typeof ImportPlan>;
 

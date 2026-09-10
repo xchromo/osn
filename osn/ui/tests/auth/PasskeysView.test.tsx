@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { PasskeysView } from "../../src/auth/PasskeysView";
 
 /**
- * Settings → Passkeys view (T-M1). Covers the orchestration logic that
+ * Settings → Passkeys view. Covers the orchestration logic that
  * isn't exercised at the service / HTTP layer: list rendering, inline
  * rename, confirm-gated delete, and step-up threading into the delete
  * call. The `PasskeysClient` + `StepUpClient` are stubbed so we assert
@@ -47,6 +47,42 @@ const asPasskeys = (s: PasskeysStub): PasskeysClient => s as unknown as Passkeys
 const asStepUp = (s: StepUpStub): StepUpClient => s as unknown as StepUpClient;
 
 const stepUpToken: StepUpToken = { token: "stpup_xxx", expiresIn: 300 };
+
+/**
+ * Rename and delete both mint `passkey_delete`, and `passkeyDeleteAllowedAmr`
+ * admits `webauthn` alone — so the step-up dialog offers no emailed code for
+ * either. These tests used to drive that path because it needed no ceremony
+ * runner; it minted a token the delete call would then have refused, so the
+ * shortcut was rehearsing a dead end. They drive the passkey factor instead.
+ *
+ * The add-passkey tests below still use the emailed code, correctly: they mint
+ * `passkey_register`, which admits `otp`.
+ */
+const assertion = {
+  id: "cred",
+  rawId: "cred",
+  response: {
+    clientDataJSON: "Y2xpZW50RGF0YQ",
+    authenticatorData: "YXV0aERhdGE",
+    signature: "c2ln",
+  },
+  clientExtensionResults: {},
+  type: "public-key" as const,
+};
+
+/** Arms the step-up stubs so the passkey factor completes with `stepUpToken`. */
+function armPasskeyStepUp(stub: StepUpStub) {
+  stub.passkeyBegin.mockResolvedValue({ options: { challenge: "abc" } });
+  stub.passkeyComplete.mockResolvedValue(stepUpToken);
+}
+
+const runPasskeyCeremony = () => Promise.resolve(assertion);
+
+/** Clicks through the step-up dialog's passkey factor. */
+async function useThePasskeyFactor() {
+  await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
+  fireEvent.click(screen.getByRole("button", { name: /Use passkey/i }));
+}
 
 const passkeyRows = [
   {
@@ -105,11 +141,15 @@ describe("PasskeysView", () => {
       passkeys: [{ ...passkeyRows[0]!, label: "Primary" }, passkeyRows[1]!],
     });
     pk.rename.mockResolvedValue({ success: true });
-    su.otpBegin.mockResolvedValue({ sent: true });
-    su.otpComplete.mockResolvedValue(stepUpToken);
+    armPasskeyStepUp(su);
 
     render(() => (
-      <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        runPasskeyCeremony={runPasskeyCeremony}
+      />
     ));
 
     await waitFor(() => screen.getAllByRole("button", { name: /^Rename$/ }));
@@ -118,12 +158,7 @@ describe("PasskeysView", () => {
     fireEvent.input(input, { target: { value: "  Primary  " } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
 
-    // Step-up dialog opens (S-M2). Use the OTP factor.
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
-    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
-    fireEvent.input(codeInput, { target: { value: "123456" } });
-    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
+    await useThePasskeyFactor();
 
     await waitFor(() =>
       expect(pk.rename).toHaveBeenCalledWith({
@@ -134,6 +169,26 @@ describe("PasskeysView", () => {
       }),
     );
     expect(pk.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no emailed code for rename or delete", async () => {
+    // Both mint `passkey_delete`, whose gate accepts `webauthn` alone. Offering
+    // the emailed code here used to send a real code for an action the server
+    // then refused — a dead end that looked like a working flow.
+    pk.list.mockResolvedValue({ passkeys: passkeyRows });
+    render(() => (
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        runPasskeyCeremony={runPasskeyCeremony}
+      />
+    ));
+
+    await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
+    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
+    expect(screen.queryByRole("button", { name: /Email me a code/i })).toBeNull();
   });
 
   it("disables save when the draft label is empty / whitespace-only", async () => {
@@ -155,24 +210,21 @@ describe("PasskeysView", () => {
     pk.list.mockResolvedValueOnce({ passkeys: passkeyRows });
     pk.list.mockResolvedValueOnce({ passkeys: [passkeyRows[1]!] });
     pk.delete.mockResolvedValue({ success: true, remaining: 1 });
-    su.otpBegin.mockResolvedValue({ sent: true });
-    su.otpComplete.mockResolvedValue(stepUpToken);
+    armPasskeyStepUp(su);
 
     render(() => (
-      <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        runPasskeyCeremony={runPasskeyCeremony}
+      />
     ));
 
     await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
     fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
 
-    // Dialog opens — use OTP factor so we don't need runPasskeyCeremony.
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
-
-    // Fill the code.
-    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
-    fireEvent.input(codeInput, { target: { value: "123456" } });
-    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
+    await useThePasskeyFactor();
 
     await waitFor(() =>
       expect(pk.delete).toHaveBeenCalledWith({
@@ -203,11 +255,15 @@ describe("PasskeysView", () => {
   it("surfaces rename errors in a destructive banner", async () => {
     pk.list.mockResolvedValue({ passkeys: passkeyRows });
     pk.rename.mockRejectedValue(new Error("Passkey not found"));
-    su.otpBegin.mockResolvedValue({ sent: true });
-    su.otpComplete.mockResolvedValue(stepUpToken);
+    armPasskeyStepUp(su);
 
     render(() => (
-      <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
+      <PasskeysView
+        client={asPasskeys(pk)}
+        stepUpClient={asStepUp(su)}
+        accessToken="acc"
+        runPasskeyCeremony={runPasskeyCeremony}
+      />
     ));
 
     await waitFor(() => screen.getAllByRole("button", { name: /^Rename$/ }));
@@ -216,11 +272,7 @@ describe("PasskeysView", () => {
     fireEvent.input(input, { target: { value: "New label" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     // Drive the step-up to actually fire the rename call.
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Email me a code/i }));
-    const codeInput = await waitFor(() => screen.getByLabelText(/code/i) as HTMLInputElement);
-    fireEvent.input(codeInput, { target: { value: "123456" } });
-    fireEvent.click(screen.getByRole("button", { name: /Confirm/i }));
+    await useThePasskeyFactor();
 
     await waitFor(() => expect(screen.getByText(/Passkey not found/)).toBeTruthy());
   });
@@ -323,7 +375,7 @@ describe("PasskeysView", () => {
     expect(pk.registerComplete).not.toHaveBeenCalled();
   });
 
-  // T-E2: most likely real-world failure shape — the user dismisses the
+  // Most likely real-world failure shape — the user dismisses the
   // browser's WebAuthn prompt. registerBegin already resolved, so we must
   // surface the error AND release the `busy` / `pending` lock so the Add
   // button is clickable again.
@@ -361,11 +413,10 @@ describe("PasskeysView", () => {
     await waitFor(() => expect(addButton.disabled).toBe(false));
   });
 
-  // T-S1: the S-L1 lock must cover the Add button too — a rename/delete
+  // The step-up lock must cover the Add button too — a rename/delete
   // step-up in flight must not allow a second ceremony to kick off.
   it("disables Add passkey while a rename/delete step-up is in flight (T-S1)", async () => {
     pk.list.mockResolvedValue({ passkeys: passkeyRows });
-    su.otpBegin.mockResolvedValue({ sent: true });
 
     render(() => (
       <PasskeysView
@@ -379,7 +430,9 @@ describe("PasskeysView", () => {
 
     await waitFor(() => screen.getAllByRole("button", { name: /^Delete$/ }));
     fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    // "Use passkey" is the dialog-is-open signal: it is the one factor every
+    // ceremony offers.
+    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
 
     const addButton = screen.getByRole("button", {
       name: /Add passkey/i,
@@ -438,11 +491,10 @@ describe("PasskeysView", () => {
     expect(screen.getByText(/Backed-up passkey/i)).toBeTruthy();
   });
 
-  // S-L1: while a step-up is in flight, every Rename / Delete button on the
+  // While a step-up is in flight, every Rename / Delete button on the
   // page is disabled to prevent a rapid double-click swapping the pending id.
   it("locks every Rename/Delete button while a step-up is in flight (S-L1)", async () => {
     pk.list.mockResolvedValue({ passkeys: passkeyRows });
-    su.otpBegin.mockResolvedValue({ sent: true });
 
     render(() => (
       <PasskeysView client={asPasskeys(pk)} stepUpClient={asStepUp(su)} accessToken="acc" />
@@ -452,7 +504,7 @@ describe("PasskeysView", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /^Delete$/ })[0]!);
     // Step-up dialog open — every Rename + Delete button on the list rows
     // must be disabled.
-    await waitFor(() => screen.getByRole("button", { name: /Email me a code/i }));
+    await waitFor(() => screen.getByRole("button", { name: /Use passkey/i }));
     const renameButtons = screen.getAllByRole("button", { name: /^Rename$/ });
     const deleteButtons = screen.getAllByRole("button", { name: /^Delete$/ });
     for (const b of [...renameButtons, ...deleteButtons]) {

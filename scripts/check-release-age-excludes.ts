@@ -29,7 +29,7 @@
 const MARKER = /^#\s*DROP AFTER\s+(\S+)\s+(\d{4}-\d{2}-\d{2})\s*$/;
 
 // The 3-day soak window `minimumReleaseAge` itself must never drop below —
-// see the S-M2 check below.
+// see the soak-window check below.
 const MIN_RELEASE_AGE_SECONDS = 259200;
 
 // Ten times the 3-day soak window an exclude suspends. A longer exception
@@ -86,7 +86,7 @@ export function checkReleaseAgeExcludes(toml: string, now: Date = new Date()): r
   const today = now.toISOString().slice(0, 10);
   const findings: Finding[] = [];
 
-  // S-M2: the excludes list is only a hole in the soak window if the soak
+  // The excludes list is only a hole in the soak window if the soak
   // window itself is intact. Checking the exception without checking the
   // rule lets `minimumReleaseAge` drop to 0 (or vanish) and this guard still
   // reports green. A deliberate change to the constant below is then a
@@ -112,7 +112,7 @@ export function checkReleaseAgeExcludes(toml: string, now: Date = new Date()): r
       continue;
     }
 
-    // S-M1: the marker was regex-matched, not parsed — "9999-99-99" matches
+    // The marker was regex-matched, not parsed — "9999-99-99" matches
     // \d{4}-\d{2}-\d{2} and then sorts above every real date as a string,
     // never getting flagged as expired. Round-trip it through `Date` instead.
     if (!isValidCalendarDate(dropDate)) {
@@ -133,7 +133,7 @@ export function checkReleaseAgeExcludes(toml: string, now: Date = new Date()): r
       continue;
     }
 
-    // S-M1: an unbounded marker lets "DROP AFTER left-pad 2999-01-01" pass
+    // An unbounded marker lets "DROP AFTER left-pad 2999-01-01" pass
     // forever. Cap it at ten times the 3-day soak window it suspends — a
     // longer exception needs a renewal commit, which is a review point.
     const daysOut = Math.round(
@@ -148,6 +148,20 @@ export function checkReleaseAgeExcludes(toml: string, now: Date = new Date()): r
   }
 
   return findings;
+}
+
+/**
+ * The repo has exactly one `bunfig.toml`, at the root, and the CLI below reads
+ * that one file — `new URL("../bunfig.toml", import.meta.url)`. Bun does not.
+ * It reads `bunfig.toml` relative to the working directory, and `deploy.yml`
+ * and several package scripts run with `--cwd`, so a second file further down
+ * the tree would set the install policy for those runs while this guard went
+ * on passing against the root one. Rather than glob for every copy and merge
+ * the results, refuse the second file outright: the repo has never wanted one,
+ * and a change that adds one is a decision that belongs in a reviewed PR.
+ */
+export function findStrayBunfigs(trackedPaths: readonly string[]): readonly string[] {
+  return trackedPaths.filter((path) => path.endsWith("/bunfig.toml"));
 }
 
 if (import.meta.main) {
@@ -178,6 +192,39 @@ if (import.meta.main) {
     );
     console.error("   reviewed PR, not a silent edit.");
     process.exit(1);
+  }
+
+  // `git ls-files`, not a filesystem glob: it reads the tracked set, which is
+  // what a reviewer sees and what CI checks out, and it does not walk
+  // `node_modules` — where a dependency's own `bunfig.toml` is nobody's
+  // business. A tree with no git (a copy of this script run against a fixture)
+  // has nothing to read, so the check says so rather than passing quietly.
+  const root = new URL("../", import.meta.url).pathname;
+  const tracked = Bun.spawnSync(["git", "ls-files", "--", "*bunfig.toml"], {
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (tracked.success) {
+    const strays = findStrayBunfigs(tracked.stdout.toString().split("\n").filter(Boolean));
+
+    if (strays.length > 0) {
+      console.error(
+        `❌ check-release-age-excludes: found ${strays.length > 1 ? "bunfig.toml files" : "a bunfig.toml"} outside the repository root.`,
+      );
+      for (const stray of strays) console.error(`   ${stray}`);
+      console.error("");
+      console.error("   Only the root bunfig.toml is checked by this guard, but Bun reads the one");
+      console.error("   nearest the working directory — so a second file silently sets the soak");
+      console.error("   policy for every command that runs with --cwd. Fold what it needs into");
+      console.error("   the root file and delete it.");
+      process.exit(1);
+    }
+  } else {
+    console.log(
+      "ℹ️  check-release-age-excludes: skipped the stray-bunfig.toml check — not a git checkout.",
+    );
   }
 
   console.log(`✅ check-release-age-excludes: ${path} passes the release-age guard.`);

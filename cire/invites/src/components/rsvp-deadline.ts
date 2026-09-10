@@ -1,5 +1,3 @@
-import type { RsvpDeadline } from "./types";
-
 /**
  * Guest-side rendering of the wedding's RSVP deadline.
  *
@@ -9,11 +7,12 @@ import type { RsvpDeadline } from "./types";
  * the server can't do — re-derive `closed` as the clock moves, since a guest
  * can sit on a claimed invite for hours and the payload was computed once.
  */
+import type { RsvpDeadline } from "./types";
 
 /**
  * DOM id of the events-section deadline notice. Shared by both design packs so
  * each card's closed Respond button can point `aria-describedby` at it and
- * announce WHEN RSVPs shut, not just that they did (C-M2). Exactly one notice
+ * announce WHEN RSVPs shut, not just that they did. Exactly one notice
  * renders per page, so a fixed id is safe — and keeping it here stops the two
  * packs and `EventCard` drifting onto three different strings, which would fail
  * silently (a dangling `aria-describedby` is simply ignored).
@@ -33,14 +32,9 @@ export function isRsvpClosed(deadline: RsvpDeadline | null | undefined, now: Dat
 }
 
 /**
- * The deadline day in words — "Sunday 1 September 2026" — read in the wedding's
- * OWN zone, so a guest in another country sees the date the couple wrote, not
- * the one their own clock would roll it to.
- */
-/**
  * Day formatters keyed by zone. Constructing one is the expensive part (~75µs)
  * while `format` on an existing instance is cheap, and this is called from a
- * reactive scope plus the modal's `closedOn` prop (P-I3). Only successful
+ * reactive scope plus the modal's `closedOn` prop. Only successful
  * lookups are cached, so an unknown zone costs a throwaway construction and
  * stores nothing; the keys that land come from the API payload and are already
  * validated, so the map is bounded by the real IANA set.
@@ -65,6 +59,11 @@ function dayFormatter(timezone: string): Intl.DateTimeFormat | null {
   }
 }
 
+/**
+ * The deadline day in words — "Sunday 1 September 2026" — read in the wedding's
+ * OWN zone, so a guest in another country sees the date the couple wrote, not
+ * the one their own clock would roll it to.
+ */
 export function formatDeadlineDay(deadline: RsvpDeadline): string {
   const at = Date.parse(`${deadline.date}T12:00:00Z`);
   if (Number.isNaN(at)) return deadline.date;

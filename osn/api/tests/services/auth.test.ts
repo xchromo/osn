@@ -2,13 +2,13 @@ import { it, expect, describe } from "@effect/vitest";
 import { passkeys } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
 import { EmailError, EmailService, makeLogEmailLive } from "@shared/email";
-import { Effect, Layer, Logger, LogLevel } from "effect";
+import { Effect, Layer, Logger, References } from "effect";
 import { beforeAll } from "vitest";
 
 import { createInMemoryRotatedSessionStore } from "../../src/lib/rotated-session-store";
 import { createAuthService } from "../../src/services/auth";
 import { makeTestAuthConfig } from "../helpers/auth-config";
-import { createTestLayer } from "../helpers/db";
+import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
 /**
  * Build a fresh auth service + OTP-capturing email recorder + merged
@@ -87,9 +87,8 @@ describe("registerProfile", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // T-S2: the P-W11 single OR-probe must preserve the email-first error
-  // priority of the old two sequential checks when BOTH fields collide —
-  // against two different existing accounts.
+  // The single OR-probe must preserve the email-first error priority when
+  // both fields collide against two different existing accounts.
   it.effect(
     "reports the email collision when email and handle collide with different accounts",
     () =>
@@ -437,6 +436,69 @@ describe("beginRegistration + completeRegistration", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  // #557: a non-uniqueness constraint failure at the write must surface as
+  // DatabaseError, never get folded into the generic "already registered"
+  // AuthError the genuine-conflict path returns. `completeRegistration`
+  // builds its own accounts+users insert with internally-consistent foreign
+  // keys, so a FK violation can't be induced through the service itself — a
+  // trigger stands in for "some other constraint failed", raising a
+  // constraint-worded message that does not contain "UNIQUE", which is
+  // exactly the string the old `/UNIQUE|constraint/i` pattern matched by
+  // mistake.
+  it.effect("surfaces a non-uniqueness constraint failure as DatabaseError", () => {
+    const email = makeLogEmailLive();
+    const { layer: dbLayer, sqlite } = createTestLayerWithSqlite();
+    const layer = Layer.merge(dbLayer, email.layer);
+    const svc = createAuthService(config);
+    const latestCode = (): string | undefined => {
+      const all = email.recorded();
+      for (let i = all.length - 1; i >= 0; i--) {
+        const m = all[i].text.match(/code is: (\d{6})/);
+        if (m) return m[1];
+      }
+      return undefined;
+    };
+    return Effect.gen(function* () {
+      yield* svc.beginRegistration("regfault@example.com", "regfaultuser", "1990-01-01");
+      const code = latestCode();
+      sqlite.run(`
+        CREATE TRIGGER reject_users_insert_regfault BEFORE INSERT ON users
+        BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: users'); END;
+      `);
+      const err = yield* Effect.flip(svc.completeRegistration("regfault@example.com", code!));
+      expect(err._tag).toBe("DatabaseError");
+    }).pipe(Effect.provide(layer));
+  });
+
+  // #557: pins the *direction* of the narrowed match — a genuine duplicate
+  // must still land on the caller-facing AuthError (not DatabaseError), and
+  // the pending entry must survive so a retry is possible (registration.ts
+  // :393-396). Distinct from the TOCTOU test above: that one only asserts the
+  // error class and message; this one proves survival by re-driving the
+  // exact same code and observing the same conflict again, rather than the
+  // "Invalid or expired code" a wiped pending entry would produce instead.
+  it.effect(
+    "a genuine duplicate email still resolves to AuthError, and the pending entry survives for retry",
+    () => {
+      const { svc, captured, layer } = makeAuth();
+      return Effect.gen(function* () {
+        yield* svc.beginRegistration("realdup@example.com", "realdupuser", "1990-01-01");
+        const code = captured.code;
+        // Someone else wins the race for the SAME email via the legacy path
+        // before our OTP is redeemed.
+        yield* svc.registerProfile("realdup@example.com", "otherhandle");
+        const first = yield* Effect.flip(svc.completeRegistration("realdup@example.com", code!));
+        expect(first._tag).toBe("AuthError");
+        expect(first.message).toContain("already registered");
+        // Retried with the same code: if the pending entry had been wiped,
+        // this would fail "Invalid or expired code" instead.
+        const retry = yield* Effect.flip(svc.completeRegistration("realdup@example.com", code!));
+        expect(retry._tag).toBe("AuthError");
+        expect(retry.message).toContain("already registered");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect(
     "T-M2: begin fails with AuthError (not EmailError) when email transport rejects",
     () => {
@@ -590,7 +652,7 @@ describe("passkey registration", () => {
       expect(result.options).toBeTruthy();
       expect(result.options.challenge).toBeTruthy();
       expect(result.options.user.name).toBe("@passkeyuser");
-      // P6: WebAuthn userID must be passkeyUserId (UUID), never accountId
+      // WebAuthn userID must be passkeyUserId (UUID), never accountId
       const decoded = new TextDecoder().decode(
         Uint8Array.from(atob(result.options.user.id), (c) => c.charCodeAt(0)),
       );
@@ -599,7 +661,7 @@ describe("passkey registration", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // Pins the WebAuthn-option posture (M-PK + S-H2):
+  // Pins the WebAuthn-option posture (M-PK):
   //   • `residentKey: "preferred"` — FIDO2 security keys without a resident-
   //     key slot still register (as non-discoverable), so identified login
   //     works for them.
@@ -657,8 +719,8 @@ describe("passkey login", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // T-U1: discoverable flow — beginPasskeyLogin(null) must return options
-  // plus a server-minted challengeId. The identifier-less path is how
+  // Discoverable flow — beginPasskeyLogin(null) must return options plus a
+  // server-minted challengeId. The identifier-less path is how
   // conditional-UI autofill drives sign-in.
   it.effect("beginPasskeyLogin(null) returns options + a UUID challengeId", () =>
     Effect.gen(function* () {
@@ -683,7 +745,7 @@ describe("passkey login", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // S-H2: identified login must match the verifier (`requireUserVerification:
+  // Identified login must match the verifier (`requireUserVerification:
   // true`), so options sets `userVerification: "required"`. The
   // identifier-less flow above is identical — the two must not diverge.
   it.effect("beginPasskeyLogin(identifier) uses userVerification 'required'", () =>
@@ -712,8 +774,8 @@ describe("passkey login", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // T-U1: the challengeId variant of completePasskeyLoginDirect must apply
-  // the same challenge guard as the identified flow — an unknown id fails
+  // The challengeId variant of completePasskeyLoginDirect must apply the
+  // same challenge guard as the identified flow — an unknown id fails
   // fast, before any DB / credential lookup.
   it.effect("completePasskeyLoginDirect rejects an unknown challengeId before DB work", () =>
     Effect.gen(function* () {
@@ -802,13 +864,13 @@ describe("verifyAccessToken", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // S-M2 regression pin: a JWT signed with the same key but lacking the
+  // Regression pin: a JWT signed with the same key but lacking the
   // `aud: "osn-access"` claim (e.g. a step-up token or any future token
   // type) must not authenticate access-token routes.
   it.effect("rejects a token without aud: 'osn-access' (S-M2)", () =>
     Effect.gen(function* () {
       const { SignJWT } = yield* Effect.tryPromise(() => import("jose"));
-      // O1: carry the correct `iss` so the token passes the issuer check and
+      // Carry the correct `iss` so the token passes the issuer check and
       // actually reaches the aud-pinning branch this test is pinning. (A
       // missing/wrong `iss` is rejected earlier — separately covered below.)
       const forged = yield* Effect.tryPromise(() =>
@@ -874,7 +936,7 @@ describe("LogEmailLive local-mode behaviour", () => {
         : String(options.message);
       captured.push(msg);
     });
-    const loggerLayer = Logger.replace(Logger.defaultLogger, sinkLogger);
+    const loggerLayer = Logger.layer([sinkLogger]);
     return { captured, loggerLayer };
   }
 
@@ -884,7 +946,10 @@ describe("LogEmailLive local-mode behaviour", () => {
     return Effect.gen(function* () {
       yield* svc
         .beginRegistration("dev@example.com", "devuser", "1990-01-01", "Dev User")
-        .pipe(Effect.provide(loggerLayer), Logger.withMinimumLogLevel(LogLevel.Debug));
+        .pipe(
+          Effect.provide(loggerLayer),
+          Effect.provideService(References.MinimumLogLevel, "Debug"),
+        );
 
       // Log line: template + subject + to, no OTP code.
       const emailLogs = logLines.filter((l) => l.includes("[email:log]"));
@@ -902,7 +967,7 @@ describe("LogEmailLive local-mode behaviour", () => {
 });
 
 // ---------------------------------------------------------------------------
-// P2: Two-tier token model
+// Two-tier token model
 // ---------------------------------------------------------------------------
 
 describe("two-tier token model (P2)", () => {
@@ -1015,7 +1080,7 @@ describe("two-tier token model (P2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// P2: Profile switching
+// Profile switching
 // ---------------------------------------------------------------------------
 
 describe("switchProfile (P2)", () => {
@@ -1064,7 +1129,7 @@ describe("switchProfile (P2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// P2: listAccountProfiles
+// listAccountProfiles
 // ---------------------------------------------------------------------------
 
 describe("listAccountProfiles (P2)", () => {
@@ -1241,7 +1306,7 @@ describe("server-side sessions (C1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// C2: Refresh token rotation + reuse detection
+// Refresh token rotation + reuse detection
 // ---------------------------------------------------------------------------
 
 describe("refresh token rotation (C2)", () => {
@@ -1346,7 +1411,7 @@ describe("refresh token rotation (C2)", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
-  // P-W1: the verifier carries the device metadata off the row it already
+  // The verifier carries the device metadata off the row it already
   // loaded, so `refreshTokens` no longer re-reads the same session by primary
   // key. If this stops being returned, the rotation path silently loses the
   // device's identity.
@@ -1403,7 +1468,7 @@ describe("refresh token rotation (C2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// H1: Session invalidation on security events
+// Session invalidation on security events
 // ---------------------------------------------------------------------------
 
 describe("invalidateOtherAccountSessions (H1)", () => {

@@ -39,7 +39,8 @@ name: Deploy
 # a separate Cloudflare account; tracked as `S-M` in xchromo/osn-tracker (#190).
 #
 # The dev tier is fully isolated — own Workers, own D1, own R2, own OSN identity
-# origin — and its database is wiped and re-seeded on every deploy. See
+# origin. Its database takes migrations forward on each deploy and is wiped and
+# re-seeded once a night by cire-dev-db-rebuild.yml, not on every merge. See
 # [[wiki/runbooks/dev-environment]].
 on:
   push:
@@ -138,7 +139,7 @@ jobs:
           emit cire_vendor  '^(cire/vendor/|cire/theme/)'
           emit cire_landing '^cire/landing/'
           emit osn_api      '^(osn/api/|osn/db/)'
-          emit osn_social   '^(osn/social/|osn/client/|osn/ui/)'
+          emit osn_social   '^(musubi/social/|osn/client/|osn/ui/)'
           emit zap_api      '^zap/'
 
   # ── Gate ─────────────────────────────────────────────────────────────────
@@ -175,6 +176,23 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for why this is keyed on the three
+      # astro.config.mjs files rather than bun.lock or github.sha — Astro's
+      # font-metadata cache is a function of which families each config
+      # asks for, and restoring it here turns this workflow's own `bun run
+      # build` into a cache hit against fonts.google.com too
+      # (xchromo/osn-tracker#128).
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: |
+            cire/vendor/node_modules/.astro
+            cire/host/node_modules/.astro
+            cire/landing/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs', 'cire/host/astro.config.mjs', 'cire/landing/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -191,18 +209,65 @@ jobs:
       - name: D1 integration tests
         run: bun run test:d1
 
+  # ═══ Which credential the dev jobs got ═════════════════════════════════════
+  #
+  # Every dev job resolves its Cloudflare token as
+  # `secrets.CLOUDFLARE_API_TOKEN_DEV || secrets.CLOUDFLARE_API_TOKEN`, and a
+  # `||` cannot tell a missing secret from a deliberate one. Unset, the fallback
+  # is taken in silence and a dev job runs on whatever the second name resolves
+  # to. This job prints which of the two the run got, so the placement is a line
+  # in the log rather than something to infer.
+  #
+  # It prints a NAME, never a value: `secrets.X && 'a' || 'b'` yields a literal,
+  # and the secret itself never reaches the step. Nothing depends on this job —
+  # no `needs:` edge — so it cannot delay or fail a deploy. It exists to be read
+  # on the day the dev credential appears, or the day it goes missing again.
+  # See [[wiki/runbooks/dev-environment]] §Two Environments, two tokens for the
+  # ordered move and why deleting the repository-scope secret early breaks
+  # every deploy in the repository.
+  credential-scope:
+    name: Cloudflare credential scope
+    needs: [changes]
+    # Only when a job that actually holds the credential is going to run. A
+    # docs-only push deploys nothing, so there is nothing to report on.
+    if: needs.changes.outputs.cire_api == 'true' || needs.changes.outputs.osn_api == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 2
+    steps:
+      - name: Report which Cloudflare credential the dev jobs hold
+        env:
+          SOURCE: ${{ secrets.CLOUDFLARE_API_TOKEN_DEV && 'CLOUDFLARE_API_TOKEN_DEV (dev Environment)' || 'CLOUDFLARE_API_TOKEN (fallback — the dev-only credential is unset)' }}
+        run: echo "Dev jobs in this run hold $SOURCE"
+
   # ═══ cire API + D1 ═════════════════════════════════════════════════════════
   #
   # ── dev ────────────────────────────────────────────────────────────────────
-  # The dev database is DISPOSABLE and is rebuilt from scratch here:
-  # reset (drop every table incl. the migration ledger) -> migrate (replay all
-  # migrations from 0001 against an empty DB) -> seed -> deploy. Two things fall
-  # out of that order: dev data never drifts, and every merge re-tests the whole
-  # migration chain, so a migration that only works as an increment fails here
-  # rather than in production months later.
+  # Migrations are applied INCREMENTALLY here, exactly as production applies
+  # them, then the Worker is deployed. No reset, no reseed.
   #
-  # Both destructive steps route through scripts/ guards that re-derive the
-  # target from cire/api/wrangler.toml and refuse anything but `cire-db-dev`.
+  # It used to reset (drop every table incl. the migration ledger) -> migrate
+  # (replay all 57 migrations from 0001 against an empty DB) -> seed on every
+  # merge. That cost 8,007 D1 rows written and ~22,630 read per run, against a
+  # free-tier ceiling of 100,000 written per day ACROSS THE WHOLE ACCOUNT: 13
+  # merges on 2026-09-09 spent 104,091 and went over. Almost none of it was the
+  # seed — SQLite rebuilds the whole table for every `ALTER TABLE ... DROP
+  # COLUMN`, and D1 bills that schema churn even against empty tables. See #979.
+  #
+  # The property that bought was: every merge re-tests the whole migration chain
+  # from zero, so a migration that only works as an increment fails on dev
+  # rather than in production months later. We keep it, twice over and for free:
+  #
+  #   - cire/api/tests/db/ddl-lockstep.test.ts (T-S1) applies the full chain to
+  #     an in-memory DB on every `bun test` — so every PR, not just merges to
+  #     main — and diffs it against the DDL mirror and the Drizzle schema.
+  #   - cire-dev-db-rebuild.yml does the real reset -> replay -> seed against
+  #     remote cire-db-dev nightly and on workflow_dispatch, which is what
+  #     catches the DDL that bun:sqlite accepts and D1 rejects.
+  #
+  # Dev data is still disposable; it just gets its clean floor once a day
+  # instead of once a merge. A wedding a tester made by hand now survives until
+  # the next nightly rather than dying on the next merge.
   deploy-cire-api-dev:
     name: Deploy cire/api — dev
     needs: [build, changes]
@@ -211,7 +276,13 @@ jobs:
     environment: dev
     concurrency:
       group: deploy-dev-cire-api
-      cancel-in-progress: false
+      # Supersede queued dev deploys — a burst of merges otherwise runs this
+      # job once per merge, and each run only rebuilds dev to the same shape
+      # the last one would (#980). Cancelling mid-flight can leave dev's DB one
+      # migration ahead of its Worker; both self-heal on the next merge, and
+      # the dev tier is disposable by design. Production has its own group and
+      # is deliberately NOT cancellable.
+      cancel-in-progress: true
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_DEV || secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -236,25 +307,8 @@ jobs:
       - name: Guard against placeholder D1 database_id
         run: bun run scripts/check-d1-database-id.ts
 
-      - name: Reset the dev D1 (drops every table)
-        run: bun run --cwd cire/db db:reset:dev
-
-      - name: Replay cire D1 migrations from zero (dev)
+      - name: Apply cire D1 migrations (remote dev)
         run: bun run --cwd cire/db db:migrate:dev
-
-      # CIRE_DEV_OWNER_PROFILE_ID repoints the seeded wedding at a real dev
-      # account. The seed owns it as `usr_dev_bootstrap_owner`, an id no account
-      # holds, so without this the sample wedding — its guests, its events and
-      # its comped entitlements (registry, vendors, AI) — is invisible to
-      # everyone signing in to test, and this job resets the tier on every
-      # cire_api change, wiping any wedding a tester made by hand. It is a
-      # VARIABLE, not a secret: an OSN profile id is not a credential, and a
-      # masked value would only make the seed log unreadable. Unset, the seed
-      # says so and carries on.
-      - name: Seed the dev D1
-        run: bun run --cwd cire/db db:seed:dev
-        env:
-          CIRE_DEV_OWNER_PROFILE_ID: ${{ vars.CIRE_DEV_OWNER_PROFILE_ID }}
 
       - name: Deploy cire/api Worker (dev)
         run: bunx wrangler deploy --env dev
@@ -380,6 +434,17 @@ jobs:
           PUBLIC_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
+      # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
+      # from two separate mistakes — the whole `motion` library in the SSR
+      # module graph with nothing there calling it, and three drift-guard tests
+      # routed as pages, dragging 119 KB gzip of vitest with them. The guard
+      # script holds the threshold and the full reasoning (tracker #619
+      # generalised it to scripts/guard-bundle-size.sh); it runs here and on
+      # every PR (`ci.yml`), so a regression is caught on the merge gate rather
+      # than after it lands on main.
+      - name: Guard cire/invites SSR bundle size
+        run: ./scripts/guard-bundle-size.sh cire/invites
+
       # Two edits to the adapter's generated config, in one pass:
       #
       #  1. drop `legacy_env` — @astrojs/cloudflare still writes it, wrangler
@@ -472,6 +537,17 @@ jobs:
           # Present ⇒ real Embed iframe; absent ⇒ CSS-card fallback (key-optional).
           PUBLIC_GOOGLE_MAPS_EMBED_KEY: ${{ vars.PUBLIC_GOOGLE_MAPS_EMBED_KEY }}
 
+      # Tracker #287: this Worker's SSR bundle reached 470 KB gzip unnoticed,
+      # from two separate mistakes — the whole `motion` library in the SSR
+      # module graph with nothing there calling it, and three drift-guard tests
+      # routed as pages, dragging 119 KB gzip of vitest with them. The guard
+      # script holds the threshold and the full reasoning (tracker #619
+      # generalised it to scripts/guard-bundle-size.sh); it runs here and on
+      # every PR (`ci.yml`), so a regression is caught on the merge gate rather
+      # than after it lands on main.
+      - name: Guard cire/invites SSR bundle size
+        run: ./scripts/guard-bundle-size.sh cire/invites
+
       # `@astrojs/cloudflare` writes a top-level `"legacy_env": true` into the
       # generated `dist/server/wrangler.json`. Wrangler 4.111+ REMOVED support for
       # that field and hard-errors on it ("legacy_env field is no longer
@@ -539,6 +615,21 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key.
+      # `PUBLIC_CIRE_API_URL` differs between this dev build and the
+      # production one below, and turbo.json's `build` task hashes
+      # `PUBLIC_*` env vars as inputs — so this job's `bun run build` is
+      # always a turbo cache MISS against the `build` job above and really
+      # runs `astro build` again, hitting fonts.google.com again unless this
+      # restores what that fetch produced (xchromo/osn-tracker#128).
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/host/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/host/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -551,6 +642,14 @@ jobs:
           # this must never deep-link to the production account surface.
           PUBLIC_OSN_ACCOUNT_URL: https://dev.musubi.social
           PUBLIC_CIRE_WEB_URL: https://invite.dev.cireweddings.com
+
+      # Tracker #619 (see scripts/guard-bundle-size.sh's own comment and
+      # wiki/conventions/bundle-size-guards.md). Chained onto the `build`
+      # script too, but this step is what still checks the artifact when
+      # Turborepo replays a cached `build` and the chained invocation never
+      # runs.
+      - name: Guard cire/host bundle size
+        run: ./scripts/guard-bundle-size.sh cire/host
 
       # Idempotent: creates the project on first run, no-ops after. The custom
       # domain (host.dev.cireweddings.com) is a dashboard step — wrangler cannot
@@ -606,6 +705,16 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key, and
+      # the dev job above for why this always misses turbo's own cache.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/host/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/host/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -620,6 +729,10 @@ jobs:
           # Domain reshuffle 2026-07-16: the guest site (this is the organiser's
           # "preview / view live invite" link) now lives on `invite.`.
           PUBLIC_CIRE_WEB_URL: https://invite.cireweddings.com
+
+      # See the dev job above for why this runs even though `build` chains it.
+      - name: Guard cire/host bundle size
+        run: ./scripts/guard-bundle-size.sh cire/host
 
       - name: Deploy cire/host to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-host
@@ -665,6 +778,17 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key, and
+      # the cire/host dev job above for why this always misses turbo's own
+      # cache.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/vendor/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -673,6 +797,14 @@ jobs:
         env:
           PUBLIC_CIRE_API_URL: https://api.dev.cireweddings.com
           PUBLIC_OSN_ACCOUNT_URL: https://dev.musubi.social
+
+      # Tracker #619 (see scripts/guard-bundle-size.sh's own comment and
+      # wiki/conventions/bundle-size-guards.md). Chained onto the `build`
+      # script too, but this step is what still checks the artifact when
+      # Turborepo replays a cached `build` and the chained invocation never
+      # runs.
+      - name: Guard cire/vendor bundle size
+        run: ./scripts/guard-bundle-size.sh cire/vendor
 
       - name: Ensure the cire-vendor-dev Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" cire-vendor-dev main
@@ -722,6 +854,17 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key, and
+      # the cire/host dev job above for why this always misses turbo's own
+      # cache.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/vendor/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -731,6 +874,10 @@ jobs:
           PUBLIC_CIRE_API_URL: https://api.cireweddings.com
           # Account management deep link (see the organiser build above).
           PUBLIC_OSN_ACCOUNT_URL: https://musubi.social
+
+      # See the dev job above for why this runs even though `build` chains it.
+      - name: Guard cire/vendor bundle size
+        run: ./scripts/guard-bundle-size.sh cire/vendor
 
       - name: Deploy cire/vendor to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-vendor
@@ -778,6 +925,17 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key, and
+      # the cire/host dev job above for why this always misses turbo's own
+      # cache.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/landing/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/landing/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -786,6 +944,14 @@ jobs:
         env:
           PUBLIC_ORGANISER_URL: https://host.dev.cireweddings.com
           SITE: https://dev.cireweddings.com
+
+      # Tracker #619 (see scripts/guard-bundle-size.sh's own comment and
+      # wiki/conventions/bundle-size-guards.md). Chained onto the `build`
+      # script too, but this step is what still checks the artifact when
+      # Turborepo replays a cached `build` and the chained invocation never
+      # runs.
+      - name: Guard cire/landing bundle size
+        run: ./scripts/guard-bundle-size.sh cire/landing
 
       - name: Ensure the cire-landing-dev Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" cire-landing-dev main
@@ -837,6 +1003,17 @@ jobs:
             ${{ runner.os }}-turbo-build-${{ hashFiles('bun.lock') }}-
             ${{ runner.os }}-turbo-build-
 
+      # See ci.yml's `build-test` job for the reasoning behind this key, and
+      # the cire/host dev job above for why this always misses turbo's own
+      # cache.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: cire/landing/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/landing/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -850,6 +1027,10 @@ jobs:
         env:
           PUBLIC_ORGANISER_URL: https://host.cireweddings.com
           SITE: https://cireweddings.com
+
+      # See the dev job above for why this runs even though `build` chains it.
+      - name: Guard cire/landing bundle size
+        run: ./scripts/guard-bundle-size.sh cire/landing
 
       - name: Deploy cire/landing to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name cire-landing
@@ -1012,7 +1193,7 @@ jobs:
         run: bunx wrangler deploy --env production
         working-directory: osn/api
 
-  # ═══ osn/social (Vite SPA → Cloudflare Pages) ══════════════════════════════
+  # ═══ musubi/social (Vite SPA → Cloudflare Pages) ══════════════════════════════
   # The identity web app: profile, connections, organisations, settings — and
   # `/authorize`, the OIDC consent screen osn-api redirects to. It must be
   # served under the SAME registrable domain as its osn-api, because the session
@@ -1023,7 +1204,7 @@ jobs:
   # The app's host is also the WebAuthn RP ID, so this is the one surface that
   # can run a passkey ceremony — per tier.
   #
-  # `osn/social/public/_redirects` rewrites every path to index.html (200) so
+  # `musubi/social/public/_redirects` rewrites every path to index.html (200) so
   # client-side routes deep-link; `_headers` ships the framing denial the
   # consent screen needs. Both are static files Pages serves as-is.
   #
@@ -1035,7 +1216,7 @@ jobs:
   #
   # ── dev ────────────────────────────────────────────────────────────────────
   deploy-osn-social-dev:
-    name: Deploy osn/social — dev
+    name: Deploy musubi/social — dev
     needs: [build, changes]
     if: needs.changes.outputs.osn_social == 'true'
     runs-on: ubuntu-latest
@@ -1077,26 +1258,26 @@ jobs:
       # depends on osn-api-dev holding TURNSTILE_SECRET_KEY, which is a
       # per-tier choice (key-optional, fail-closed only when the secret is set).
       # The prod job's gate is what protects the pairing that actually matters.
-      - name: Build osn/social (dev)
-        run: bun run build --filter=@osn/social
+      - name: Build musubi/social (dev)
+        run: bun run build --filter=@musubi/social
         env:
           VITE_OSN_ISSUER_URL: https://id.dev.musubi.social
           VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
 
       - name: Ensure the osn-social-dev Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" osn-social-dev main
-        working-directory: osn/social
+        working-directory: musubi/social
 
-      - name: Deploy osn/social to Cloudflare Pages (dev)
+      - name: Deploy musubi/social to Cloudflare Pages (dev)
         run: bunx wrangler pages deploy dist --project-name osn-social-dev --branch main --commit-dirty=true
-        working-directory: osn/social
+        working-directory: musubi/social
 
   # ── production ─────────────────────────────────────────────────────────────
   # The `osn-social` Pages project must exist in the account before first run,
   # and musubi.social is attached to it in the dashboard (a Pages custom domain,
   # not a wrangler route) — see the runbook.
   deploy-osn-social:
-    name: Deploy osn/social — production
+    name: Deploy musubi/social — production
     needs: [build, changes, deploy-osn-social-dev]
     if: needs.changes.outputs.osn_social == 'true'
     runs-on: ubuntu-latest
@@ -1166,8 +1347,8 @@ jobs:
         env:
           VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
 
-      - name: Build osn/social
-        run: bun run build --filter=@osn/social
+      - name: Build musubi/social
+        run: bun run build --filter=@musubi/social
         env:
           VITE_OSN_ISSUER_URL: https://id.musubi.social
           VITE_TURNSTILE_SITEKEY: ${{ vars.PUBLIC_TURNSTILE_SITEKEY }}
@@ -1180,11 +1361,11 @@ jobs:
       # dashboard step — wrangler cannot attach one.
       - name: Ensure the osn-social Pages project exists
         run: bash "$GITHUB_WORKSPACE/scripts/ensure-pages-project.sh" osn-social main
-        working-directory: osn/social
+        working-directory: musubi/social
 
-      - name: Deploy osn/social to Cloudflare Pages
+      - name: Deploy musubi/social to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name osn-social --branch main --commit-dirty=true
-        working-directory: osn/social
+        working-directory: musubi/social
 
   # ═══ zap/api (Worker + D1) ═════════════════════════════════════════════════
   # DORMANT: zap-api is not yet provisioned in prod (the D1 database doesn't

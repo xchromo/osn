@@ -42,10 +42,12 @@ function now(): Date {
   return new Date();
 }
 
-const HandleSchema = Schema.String.pipe(
-  Schema.filter((s) => /^[a-z0-9_]{1,30}$/.test(s), {
-    message: () => "Handle must be 1–30 characters: lowercase letters, numbers, underscores only",
-  }),
+const HandleSchema = Schema.String.check(
+  Schema.makeFilter((s) =>
+    /^[a-z0-9_]{1,30}$/.test(s)
+      ? undefined
+      : "Handle must be 1–30 characters: lowercase letters, numbers, underscores only",
+  ),
 );
 
 const RESERVED_HANDLES = new Set([
@@ -84,7 +86,7 @@ const RESERVED_HANDLES = new Set([
 export function createProfileService(authService: AuthService) {
   /**
    * Creates a new profile under the given account.
-   * Enforces `maxProfiles` limit (S-L1) and validates handle availability
+   * Enforces `maxProfiles` limit and validates handle availability
    * against both user and organisation handles (shared namespace).
    */
   const createProfile = (
@@ -93,7 +95,7 @@ export function createProfileService(authService: AuthService) {
     displayName?: string,
   ): Effect.Effect<PublicProfile, AuthError | ValidationError | DatabaseError, Db> =>
     Effect.gen(function* () {
-      yield* Schema.decodeUnknown(HandleSchema)(handle).pipe(
+      yield* Schema.decodeUnknownEffect(HandleSchema)(handle).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
       if (RESERVED_HANDLES.has(handle)) {
@@ -124,7 +126,7 @@ export function createProfileService(authService: AuthService) {
       // Check-and-insert. D1 has no interactive transaction, so the pre-checks
       // run as one read and the create as one write. The UNIQUE constraint on
       // users.handle (mirrored against organisations.handle) is the authoritative,
-      // race-safe guard (S-H1, S-M2) — a concurrent create racing the same handle
+      // race-safe guard — a concurrent create racing the same handle
       // hits the constraint and is mapped to "Handle already taken" below. The
       // maxProfiles count check is best-effort: a rare simultaneous double-create
       // could exceed the cap by one, which is not security-sensitive.
@@ -252,7 +254,7 @@ export function createProfileService(authService: AuthService) {
         promoteId = remaining[0]?.id;
       }
 
-      // Atomic cascade delete + default-promotion (S-H2, P-W1, P-W2). Child rows
+      // Atomic cascade delete + default-promotion. Child rows
       // are deleted before the profile row (FK safety); the promotion update (if
       // any) runs last. Atomic batch on D1, sequential on bun:sqlite.
       yield* Effect.tryPromise({

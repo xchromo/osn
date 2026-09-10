@@ -11,7 +11,7 @@ import {
 import { createAuthService } from "../../src/services/auth";
 import { makeTestAuthConfig } from "../helpers/auth-config";
 import { createTestLayer } from "../helpers/db";
-// S-M34: route factory wrapped to trust XFF + default a loopback IP under
+// Route factory wrapped to trust XFF + default a loopback IP under
 // `app.handle(...)`. See `../helpers/routes` for the rationale.
 import { createAuthRoutes } from "../helpers/routes";
 
@@ -107,7 +107,7 @@ async function mintStepUp(
   freshApp: ReturnType<typeof createAuthRoutes>,
   accessToken: string,
   latestCode: () => string | undefined,
-  /** Binds the token to one gate — required by `/recovery/generate` (S-M1). */
+  /** Binds the token to one gate — required by `/recovery/generate`. */
   purpose?: string,
 ): Promise<string> {
   await freshApp.handle(
@@ -221,7 +221,7 @@ describe("auth routes", () => {
       expect(json.handle).toBe("verifyme");
       expect(json.email).toBe("verify-me@example.com");
       expect(json.session.access_token.length).toBeGreaterThan(0);
-      // C3: refresh_token no longer in body — carried in HttpOnly cookie
+      // refresh_token is carried in the HttpOnly cookie, not the response body
       expect(json.session.refresh_token).toBeUndefined();
       expect(json.session.token_type).toBe("Bearer");
       expect(json.session.expires_in).toBeGreaterThan(0);
@@ -469,7 +469,7 @@ describe("auth routes", () => {
       expect(json.error).toBe("unsupported_grant_type");
     });
 
-    // tracker#466: RFC 6749 §5.1 / RFC 6750 §5.3 make no-store mandatory on
+    // RFC 6749 §5.1 / RFC 6750 §5.3 make no-store mandatory on
     // token-endpoint responses. Set first, so even this rejection carries it.
     it("sets cache-control: no-store, including on the unsupported_grant_type rejection", async () => {
       const res = await app.handle(
@@ -707,7 +707,7 @@ describe("auth routes", () => {
   });
 
   describe("POST /login/passkey/begin", () => {
-    // S-M1: begin is enumeration-safe. Unknown identifier, known-with-
+    // Begin is enumeration-safe. Unknown identifier, known-with-
     // zero-passkeys, and known-with-passkeys all return 200 with the same
     // envelope shape `{ options: { …, allowCredentials: [...] } }`. An
     // attacker cannot probe the handle / email namespace through this
@@ -790,7 +790,7 @@ describe("auth routes", () => {
       expect(res.status).toBe(400);
     });
 
-    // T-R1: identifier ⊕ challengeId — exactly one must be present.
+    // Identifier ⊕ challengeId — exactly one must be present.
     it("returns 400 invalid_request when both identifier and challengeId are present", async () => {
       const res = await app.handle(
         new Request("http://localhost/login/passkey/complete", {
@@ -824,7 +824,7 @@ describe("auth routes", () => {
     });
   });
 
-  // T-R2: identifier-less (discoverable) /login/passkey/begin — emits a
+  // Identifier-less (discoverable) /login/passkey/begin — emits a
   // challengeId the client must round-trip to /login/passkey/complete.
   describe("POST /login/passkey/begin (discoverable)", () => {
     it("returns { options, challengeId } with no identifier in the body", async () => {
@@ -872,7 +872,7 @@ describe("auth routes", () => {
       expect(json.code_challenge_methods_supported).toEqual(["S256"]);
       expect(json.subject_types_supported).toEqual(["pairwise"]);
       // Relying parties key off this list — auth_time in particular backs the
-      // S-H1 max_age/prompt=login behaviour and must stay advertised.
+      // max_age/prompt=login behaviour and must stay advertised.
       expect(json.claims_supported).toEqual(
         expect.arrayContaining(["sub", "auth_time", "email", "email_verified"]),
       );
@@ -1061,7 +1061,7 @@ describe("auth routes", () => {
       expect(res.status).toBe(401);
     });
 
-    // S-H1: begin requires a step-up token once the account has ≥1
+    // Begin requires a step-up token once the account has ≥1
     // passkey. A bare access token is insufficient — a stolen token
     // (XSS) cannot silently enroll a new authenticator.
     it("S-H1: rejects when account has ≥1 passkey and no step-up token", async () => {
@@ -1255,7 +1255,7 @@ describe("auth routes", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Rate limiting (S-H1)
+  // Rate limiting
   // -------------------------------------------------------------------------
   describe("rate limiting", () => {
     it("returns 429 after exceeding rate limit on /handle/:handle", async () => {
@@ -1368,7 +1368,7 @@ describe("auth routes", () => {
     });
 
     // -----------------------------------------------------------------------
-    // S-M34: client-IP hardening. These use the RAW factory (no default-XFF
+    // Client-IP hardening. These use the RAW factory (no default-XFF
     // wrapper) so they observe the production fail-closed behaviour.
     // -----------------------------------------------------------------------
     it("denies (429) a header-less request under a trusted-proxy policy (fail-closed)", async () => {
@@ -1557,7 +1557,7 @@ describe("auth routes", () => {
       expect(json.profiles[0]!.handle).toBe("profilelist");
     });
 
-    // tracker#468: per-user profile list — never cached or stored.
+    // per-user profile list — never cached or stored.
     it("sets cache-control: private, no-store", async () => {
       const { accessToken } = await getAccessToken();
       const res = await app.handle(
@@ -1783,7 +1783,7 @@ describe("auth routes", () => {
       }
     });
 
-    // tracker#467: the plaintext codes cross the wire here and only here —
+    // the plaintext codes cross the wire here and only here —
     // never cached or stored.
     it("POST /recovery/generate sets cache-control: no-store", async () => {
       const { accessToken, stepUpToken } = await registerForRecovery();
@@ -1887,7 +1887,7 @@ describe("auth routes", () => {
       expect(res.status).toBe(401);
     });
 
-    // tracker#469: the assignment used to run after the DB read, inside the
+    // the assignment used to run after the DB read, inside the
     // `try`, so the 401/429/500 paths never got it. Moved to the first
     // statement — this is the rejection path a 200-only test cannot see.
     it("GET /recovery/status sets cache-control: no-store even on the 401 rejection", async () => {
@@ -1992,7 +1992,7 @@ describe("auth routes", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Step-up (sudo) ceremonies — T-R1
+  // Step-up (sudo) ceremonies
   //
   // Service-layer behaviour is exercised in services/step-up.test.ts; these
   // tests pin the HTTP wire contract: Bearer-auth gate, rate-limiter wiring,
@@ -2109,7 +2109,7 @@ describe("auth routes", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Session introspection + revocation — T-R2
+  // Session introspection + revocation
   // ---------------------------------------------------------------------------
   describe("session routes", () => {
     async function setup(): Promise<{
@@ -2176,8 +2176,8 @@ describe("auth routes", () => {
       expect(json.sessions[0]!.id).toMatch(/^[0-9a-f]{16}$/);
     });
 
-    // tracker#468: per-user session metadata, direct sibling of
-    // GET /account/security-events (tracker#346).
+    // per-user session metadata, direct sibling of
+    // GET /account/security-events.
     it("GET /sessions sets cache-control: private, no-store", async () => {
       const { app: freshApp, accessToken, cookieHeader } = await setup();
       const res = await freshApp.handle(
@@ -2261,7 +2261,7 @@ describe("auth routes", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Email change — T-R3
+  // Email change
   // ---------------------------------------------------------------------------
   describe("email change routes", () => {
     async function setupWithStepUp(): Promise<{
@@ -2465,7 +2465,7 @@ describe("auth routes", () => {
     it("GET /account/security-events requires Bearer auth", async () => {
       const res = await app.handle(new Request("http://localhost/account/security-events"));
       expect(res.status).toBe(401);
-      // tracker#346: the header is set above the guards, so it lands on the
+      // the header is set above the guards, so it lands on the
       // rejections too — not only on the 200.
       expect(res.headers.get("cache-control")).toBe("private, no-store");
     });
@@ -2504,7 +2504,7 @@ describe("auth routes", () => {
       expect(typeof json.events[0]!.createdAt).toBe("number");
     });
 
-    // tracker#346: the list is per-user and names auth events — nothing may
+    // the list is per-user and names auth events — nothing may
     // cache or store it.
     it("GET /account/security-events sets cache-control: private, no-store", async () => {
       const { app: freshApp, accessToken } = await setupWithRecovery();
@@ -2516,7 +2516,7 @@ describe("auth routes", () => {
       expect(res.headers.get("cache-control")).toBe("private, no-store");
     });
 
-    // S-M1: an access-token-only ack would let an XSS silently dismiss the
+    // An access-token-only ack would let an XSS silently dismiss the
     // very banner that warns about its own compromise.
     it("POST /account/security-events/:id/ack without a step-up token returns 403", async () => {
       const { app: freshApp, accessToken, generatedEventId } = await setupWithRecovery();

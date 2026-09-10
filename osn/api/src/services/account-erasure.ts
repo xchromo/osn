@@ -12,6 +12,7 @@ import {
   recoveryCodes,
   securityEvents,
   sessions,
+  totpCredentials,
   users,
 } from "@osn/db/schema";
 import type { DeletionJob } from "@osn/db/schema";
@@ -203,8 +204,13 @@ export const requestErasure = (
 
           // 3. Nuke credentials immediately. A stolen session/access/recovery
           //    cannot be used to re-authenticate during the grace window.
+          //    TOTP belongs here with the rest: the foreign key cascades only
+          //    when the `accounts` row itself goes, which is 7 days away, so
+          //    without this a tombstoned account keeps a working second factor
+          //    for the whole grace window.
           db.delete(passkeys).where(eq(passkeys.accountId, accountId)),
           db.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId)),
+          db.delete(totpCredentials).where(eq(totpCredentials.accountId, accountId)),
 
           // 4. Revoke all sessions EXCEPT the cancellation handle. The
           //    requesting session stays alive as the only path to cancel
@@ -404,7 +410,7 @@ const markBridgeDone = (
  * forget after returning 202) and the retry sweeper (for any bridge that
  * came back without `*_done_at` set).
  *
- * Per-bridge result is captured via Effect.either so a failing bridge does
+ * Per-bridge result is captured via Effect.result so a failing bridge does
  * not abort the parent — sweeper picks up the unfinished half on its next
  * cycle.
  */
@@ -420,7 +426,7 @@ export const runFanOut = (
       tasks.push(
         dispatchBridge("pulse", pulse, "account:erase", body).pipe(
           Effect.flatMap(() => markBridgeDone("pulse", job.accountId)),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }
@@ -428,7 +434,7 @@ export const runFanOut = (
       tasks.push(
         dispatchBridge("zap", zap, "account:erase", body).pipe(
           Effect.flatMap(() => markBridgeDone("zap", job.accountId)),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }
@@ -546,6 +552,21 @@ const hardDeleteAccount = (accountId: string): Effect.Effect<void, AccountErasur
                 db
                   .delete(organisationMembers)
                   .where(inArray(organisationMembers.profileId, profileIds)),
+                // OIDC provider records (Art. 17). Both are account-scoped and
+                // PII-bearing: `oauth_consents` names every relying party the
+                // user linked, `oauth_authorization_codes` is a live grant in
+                // flight. A deletion mid-flow must take the pending code with
+                // it — leaving it would let an outstanding code redeem against
+                // a tombstoned account.
+                //
+                // Above the `users` delete, not below it: both carry a
+                // `profile_id` referencing `users.id`, so removing the profiles
+                // first orphans them and the whole batch fails on a database
+                // that enforces foreign keys.
+                db.delete(oauthConsents).where(eq(oauthConsents.accountId, accountId)),
+                db
+                  .delete(oauthAuthorizationCodes)
+                  .where(eq(oauthAuthorizationCodes.accountId, accountId)),
                 db.delete(users).where(eq(users.accountId, accountId)),
               ]
             : []),
@@ -553,16 +574,8 @@ const hardDeleteAccount = (accountId: string): Effect.Effect<void, AccountErasur
           db.delete(sessions).where(eq(sessions.accountId, accountId)),
           db.delete(passkeys).where(eq(passkeys.accountId, accountId)),
           db.delete(recoveryCodes).where(eq(recoveryCodes.accountId, accountId)),
+          db.delete(totpCredentials).where(eq(totpCredentials.accountId, accountId)),
           db.delete(deletionJobs).where(eq(deletionJobs.accountId, accountId)),
-          // OIDC provider records (Art. 17). Both are account-scoped and
-          // PII-bearing: `oauth_consents` names every relying party the user
-          // linked, `oauth_authorization_codes` is a live grant in flight. A
-          // deletion mid-flow must take the pending code with it — leaving it
-          // would let an outstanding code redeem against a tombstoned account.
-          db.delete(oauthConsents).where(eq(oauthConsents.accountId, accountId)),
-          db
-            .delete(oauthAuthorizationCodes)
-            .where(eq(oauthAuthorizationCodes.accountId, accountId)),
           // Clients the account REGISTERED (owner side): disable them and
           // sever the ownership link. The rows themselves stay — other users'
           // consents reference them by client_id, and once unlinked they hold
@@ -634,7 +647,7 @@ export const runFanOutRetrySweep = (
     // P-W3: bounded concurrency. Sequential `for ... yield*` would take
     // 100 × 20s = ~33 minutes per cycle worst-case (each row dispatches
     // two 10s-timeout HTTP calls). Per-row failures are already isolated
-    // inside `runFanOut` via `Effect.catchAll`, so concurrency is safe.
+    // inside `runFanOut` via `Effect.catch`, so concurrency is safe.
     yield* Effect.forEach(
       pending,
       (row) => {

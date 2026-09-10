@@ -5,7 +5,7 @@ tags: [convention, review]
 related:
   - "[[contributing]]"
   - "[[stacked-prs]]"
-last-reviewed: 2026-08-19
+last-reviewed: 2026-09-08
 ---
 
 # Review Finding IDs
@@ -54,6 +54,37 @@ Each finding uses a four-field format:
 | **Solution** | Concrete fix or mitigation |
 | **Rationale** | Why this solution is the right approach |
 
+## Critical and high findings are not deferrable
+
+> [!important] A `critical` or `high` finding is fixed on the branch that found
+> it, or in a pull request opened immediately after and linked before that
+> branch merges. Filing it and moving on is not one of the options.
+
+Everything below this line is about how a finding is *recorded*. This rule is
+about whether it is allowed to stay open, and it comes first because the
+recording convention exists to serve it rather than to substitute for it.
+
+The reasoning is the same one that makes the tracker private. A filed-and-open
+`critical` or `high` is a live, unpatched defect whose location is now written
+down; the issue is an attack map with a timer on it, and every day it stays
+open is a day that map exists for a defect nobody is fixing. A finding fixed in
+the same breath as it is found never becomes that.
+
+`medium` and below may be filed and scheduled. `info` records an observation
+and asks for no fix at all.
+
+Two consequences worth stating, because they are the ones people work around:
+
+- **"Out of scope for this branch" is not a deferral.** If the finding is real
+  and it is `high`, the follow-up pull request is opened now, not added to a
+  backlog. A tracked follow-up that exists as a link in the PR body satisfies
+  this; one that exists as an intention does not.
+- **Downgrading severity to avoid the rule is the failure mode.** Severity
+  comes from the tier letter in the finding ID, which the review assigns
+  before anyone knows what fixing it would cost. Re-rating it afterwards to
+  make it deferrable is the same contamination as re-rating an issue's
+  complexity once its token cost is on screen.
+
 ## Filing a finding
 
 Findings live in **`xchromo/osn-tracker`**, a private repo. `xchromo/osn` is public, and a finding names an unpatched route -- filing one there publishes an attack map. Route by *kind*, never by severity: an `S-`, `P-`, or `C-` ID goes to the tracker however minor it looks.
@@ -97,6 +128,34 @@ Rules:
 - Several findings from one piece of work go on **stacked PRs**, one fix per PR, base of each set to the one below it -- see [[stacked-prs]].
 
 `T-*` test findings are not filed. They are coverage gaps, not defects -- `/prep-pr` Step 4 raises them and they get closed in the branch or waved through.
+
+## When the fix needs a decision from the owner
+
+Some issues cannot be closed by anyone but the repo owner: the fix is a choice between two defensible designs, or it costs money, or it changes a public contract. An agent working the backlog must not guess at those, and must not stop on them either -- one open question is not a reason for the other hundred issues to sit still.
+
+Label it and move on:
+
+```bash
+gh issue edit <n> --repo xchromo/osn-tracker --add-label "needs:decision"
+```
+
+`needs:decision` exists on both repos. It is orthogonal to `product:`, `area:` and `severity:` -- it says the issue is parked on a person, not what kind of work it is.
+
+Before the label goes on, the body has to carry exactly two things, in this order:
+
+1. **What the issue actually is** -- the file and line, the current behaviour, and why it is wrong. The same standard as any other body: someone opens it months later with nothing checked out.
+2. **A proposed solution, with the trade-off named** -- the option you would take, what it costs, and what the alternative buys instead. "Needs a decision" without a proposal hands the owner the whole problem back; the point of the label is that the thinking is done and only the choice is left.
+
+A body that says no more than "blocked, needs input" is not an issue, it is an interruption. Write the proposal first, then apply the label, then pick up a different issue.
+
+Filter for them when the owner sits down to clear the queue:
+
+```bash
+gh issue list --repo xchromo/osn --label needs:decision --state open --limit 1000
+gh issue list --repo xchromo/osn-tracker --label needs:decision --state open --limit 1000
+```
+
+Remove the label once the decision is recorded in a comment; the issue then goes back to being ordinary work.
 
 ## Usage in PR Comments
 

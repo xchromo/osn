@@ -1,7 +1,7 @@
 import { it, expect, describe } from "@effect/vitest";
-import { accounts } from "@osn/db/schema";
+import { accounts, organisationMembers, organisations, users } from "@osn/db/schema";
 import { Db } from "@osn/db/service";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { beforeAll } from "vitest";
 
@@ -22,6 +22,29 @@ beforeAll(async () => {
   config = await makeTestAuthConfig();
   auth = createAuthService(config);
 });
+
+/**
+ * Deletes an `organisations` row while leaving its `organisation_members`
+ * rows in place — a state the service layer cannot produce, and one the
+ * database now refuses: `deleteOrganisation` removes the memberships and the
+ * organisation in one batch, and foreign keys are enforced.
+ *
+ * The tests below need it anyway, because the branch it exercises is real: the
+ * fan-out and the label hydration are two statements, so an organisation
+ * deleted between them lands exactly there. Dropping the pragma around this
+ * one statement is what lets a test reach a race that a single transaction
+ * cannot hold — and doing it here, in one named helper, keeps the exception
+ * visible rather than spread across three tests.
+ */
+const deleteOrganisationRowOnly = (organisationId: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Db;
+    yield* Effect.promise(async () => {
+      await db.run(sql`PRAGMA foreign_keys = OFF`);
+      await db.delete(organisations).where(eq(organisations.id, organisationId));
+      await db.run(sql`PRAGMA foreign_keys = ON`);
+    });
+  });
 
 // Connect two users bidirectionally (request + accept).
 const connect = (a: string, b: string) =>
@@ -279,6 +302,65 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // The hydration is a keyed lookup into a map built after ranking, which the
+  // old inner join could not get wrong. Two candidates in two different live
+  // organisations is the smallest case that tells a keyed lookup from an
+  // unkeyed one: with only one organisation in the map, returning "whatever is
+  // in there" and returning "the right one" are the same answer, and a card
+  // wearing another organisation's name would ship green.
+  it.effect("labels each candidate with the organisation it actually shares", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const cara = yield* auth.registerProfile("c@e.com", "cara");
+      const acme = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      const beta = yield* orgs.createOrganisation(alice.id, "beta", "Beta Ltd");
+      yield* orgs.addMember(acme.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, cara.id, "member");
+
+      const result = yield* recs.suggestConnections(alice.id);
+      const byHandle = new Map(result.map((x) => [x.handle, x.sharedOrganisation]));
+
+      expect(byHandle.get("bob")).toEqual({ handle: "acme", name: "Acme Inc" });
+      expect(byHandle.get("cara")).toEqual({ handle: "beta", name: "Beta Ltd" });
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The same lookup when the map is only partly populated: one label survives,
+  // one candidate loses its organisation but keeps its mutual connection, and
+  // a third loses the only basis it had.
+  it.effect("hydrates a partial map without borrowing another candidate's label", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const cara = yield* auth.registerProfile("c@e.com", "cara");
+      const dana = yield* auth.registerProfile("d@e.com", "dana");
+      const erin = yield* auth.registerProfile("e@e.com", "erin");
+
+      const acme = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      const beta = yield* orgs.createOrganisation(alice.id, "beta", "Beta Ltd");
+      yield* orgs.addMember(acme.id, alice.id, bob.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, cara.id, "member");
+      yield* orgs.addMember(beta.id, alice.id, erin.id, "member");
+      // dana is a friend-of-friend, so she survives losing her label.
+      yield* connect(alice.id, cara.id);
+      yield* connect(cara.id, dana.id);
+
+      yield* deleteOrganisationRowOnly(beta.id);
+
+      const result = yield* recs.suggestConnections(alice.id);
+      const byHandle = new Map(result.map((x) => [x.handle, x.sharedOrganisation]));
+
+      // bob keeps the organisation he actually shares — not beta's name, and
+      // not a label borrowed from the one entry left in the map.
+      expect(byHandle.get("bob")).toEqual({ handle: "acme", name: "Acme Inc" });
+      // dana stands on the mutual connection, with no label.
+      expect(byHandle.get("dana")).toBeNull();
+      // erin's only basis was beta, which is gone.
+      expect(byHandle.has("erin")).toBe(false);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("never suggests a friend-of-friend whose account is tombstoned", () =>
     Effect.gen(function* () {
       // Art. 17 erasure is pending on dana's account — she must not resurface
@@ -301,6 +383,60 @@ describe("suggestConnections", () => {
     }).pipe(Effect.provide(createTestLayer())),
   );
 
+  // Hydration happens after ranking, so an organisation can disappear between
+  // the fan-out reading its membership row and the lookup reading its name.
+  // The suggestion has to survive that with no label rather than vanish or
+  // carry a stale one.
+  //
+  // The state is reached by deleting the row directly. It cannot persist —
+  // `deleteOrganisation` removes the membership rows and the organisation in
+  // one batch, and D1 enforces the foreign key besides (this harness does not;
+  // see the pragma finding). What it can be is a read race: the fan-out and
+  // the hydration are two statements now rather than one join, so an
+  // organisation deleted between them lands exactly here.
+  it.effect("drops the label, not the suggestion, when the organisation is gone", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const dana = yield* auth.registerProfile("d@e.com", "dana");
+      // dana is a friend-of-friend as well as a co-member, so the suggestion
+      // still stands on its mutual connection once the label is gone.
+      yield* connect(alice.id, bob.id);
+      yield* connect(bob.id, dana.id);
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.addMember(org.id, alice.id, dana.id, "member");
+
+      yield* deleteOrganisationRowOnly(org.id);
+
+      const result = yield* recs.suggestConnections(alice.id);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.handle).toBe("dana");
+      expect(result[0]!.reason).toBe("mutual_connections");
+      expect(result[0]!.sharedOrganisation).toBeNull();
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The other side of the same branch: with no mutual connection, a shared
+  // organisation that no longer exists leaves the candidate with no basis at
+  // all. Asserting `shared_organisation` while naming nothing is worse than
+  // not suggesting them, and this is exactly what the fan-out's old inner
+  // join to `organisations` used to do.
+  it.effect("drops an organisation-only candidate whose organisation is gone", () =>
+    Effect.gen(function* () {
+      const alice = yield* auth.registerProfile("a@e.com", "alice");
+      const bob = yield* auth.registerProfile("b@e.com", "bob");
+      const org = yield* orgs.createOrganisation(alice.id, "acme", "Acme Inc");
+      yield* orgs.addMember(org.id, alice.id, bob.id, "member");
+
+      // bob is suggested while the organisation exists.
+      expect((yield* recs.suggestConnections(alice.id)).map((x) => x.handle)).toEqual(["bob"]);
+
+      yield* deleteOrganisationRowOnly(org.id);
+
+      expect(yield* recs.suggestConnections(alice.id)).toEqual([]);
+    }).pipe(Effect.provide(createTestLayer())),
+  );
+
   it.effect("never suggests an organisation co-member the caller has blocked", () =>
     Effect.gen(function* () {
       const alice = yield* auth.registerProfile("a@e.com", "alice");
@@ -312,6 +448,149 @@ describe("suggestConnections", () => {
       const result = yield* recs.suggestConnections(alice.id);
       expect(result).toEqual([]);
     }).pipe(Effect.provide(createTestLayer())),
+  );
+
+  // The co-member fan-out splits MAX_ORG_COMEMBER_ROWS evenly
+  // across ALL the caller's organisations, so no single organisation absorbs
+  // the whole budget and starves the others, regardless of organisation id
+  // order. This seeds exactly that shape: one organisation alone big enough
+  // to have exhausted an unsplit budget, and two small ones that would be
+  // starved without the split.
+  it.effect(
+    "every organisation the caller belongs to contributes candidates, not just the biggest one",
+    () =>
+      Effect.gen(function* () {
+        const alice = yield* auth.registerProfile("a@e.com", "alice");
+        const smallOneMember = yield* auth.registerProfile("s1@e.com", "smallone");
+        const smallTwoMember = yield* auth.registerProfile("s2@e.com", "smalltwo");
+
+        const { db } = yield* Db;
+        const now = new Date();
+
+        // The three organisations and alice's (+ the two real members')
+        // memberships are inserted directly, bypassing the org service, so
+        // their ids are controlled rather than random. `org_0_big` sorts
+        // before the other two — the exact shape that used to matter: under
+        // the old single global `ORDER BY organisation_id LIMIT
+        // MAX_ORG_COMEMBER_ROWS`, whichever organisation sorted first
+        // absorbed the budget before the query ever reached the others. With
+        // 2 001 members, `org_0_big` alone exceeds the entire 2 000-row
+        // budget, so the old query would return zero rows for `org_1_small`
+        // and `org_2_small` regardless of how few members they have.
+        yield* Effect.promise(async () => {
+          await db.insert(organisations).values([
+            {
+              id: "org_0_big",
+              handle: "big",
+              name: "Big Org",
+              ownerId: alice.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: "org_1_small",
+              handle: "small1",
+              name: "Small One",
+              ownerId: alice.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: "org_2_small",
+              handle: "small2",
+              name: "Small Two",
+              ownerId: alice.id,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ]);
+          await db.insert(organisationMembers).values([
+            {
+              id: "orgm_alice_big",
+              organisationId: "org_0_big",
+              profileId: alice.id,
+              role: "admin",
+              createdAt: now,
+            },
+            {
+              id: "orgm_alice_s1",
+              organisationId: "org_1_small",
+              profileId: alice.id,
+              role: "admin",
+              createdAt: now,
+            },
+            {
+              id: "orgm_alice_s2",
+              organisationId: "org_2_small",
+              profileId: alice.id,
+              role: "admin",
+              createdAt: now,
+            },
+            {
+              id: "orgm_s1_member",
+              organisationId: "org_1_small",
+              profileId: smallOneMember.id,
+              role: "member",
+              createdAt: now,
+            },
+            {
+              id: "orgm_s2_member",
+              organisationId: "org_2_small",
+              profileId: smallTwoMember.id,
+              role: "member",
+              createdAt: now,
+            },
+          ]);
+        });
+
+        // Bulk-inserted directly too: 2 001 rows is MAX_ORG_COMEMBER_ROWS
+        // (2 000) + 1, more than the entire old global budget on its own.
+        // Ids are chosen to sort AFTER any handle the auth service generates
+        // (`usr_` + lowercase hex) so they never crowd the two real members
+        // above out of the final ranking's id tiebreak — this test is about
+        // the fan-out reading from every organisation, not about which
+        // candidate wins ties.
+        const FILLER_COUNT = 2_001;
+        const fillerAccounts = Array.from({ length: FILLER_COUNT }, (_, i) => ({
+          id: `acc_zzz_filler_${String(i).padStart(5, "0")}`,
+          email: `filler${i}@example.com`,
+          passkeyUserId: crypto.randomUUID(),
+          createdAt: now,
+          updatedAt: now,
+        }));
+        const fillerUsers = fillerAccounts.map((a, i) => ({
+          id: `usr_zzz_filler_${String(i).padStart(5, "0")}`,
+          accountId: a.id,
+          handle: `zzzfiller${i}`,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        const fillerMemberships = fillerUsers.map((u, i) => ({
+          id: `orgm_zzz_filler_${String(i).padStart(5, "0")}`,
+          organisationId: "org_0_big",
+          profileId: u.id,
+          role: "member" as const,
+          createdAt: now,
+        }));
+        const CHUNK = 200;
+        yield* Effect.promise(async () => {
+          for (let i = 0; i < FILLER_COUNT; i += CHUNK) {
+            // eslint-disable-next-line no-await-in-loop -- sequential bulk
+            // seeding chunks; each chunk depends on nothing but must land
+            // before the assertions below run.
+            await db.insert(accounts).values(fillerAccounts.slice(i, i + CHUNK));
+            // eslint-disable-next-line no-await-in-loop
+            await db.insert(users).values(fillerUsers.slice(i, i + CHUNK));
+            // eslint-disable-next-line no-await-in-loop
+            await db.insert(organisationMembers).values(fillerMemberships.slice(i, i + CHUNK));
+          }
+        });
+
+        const result = yield* recs.suggestConnections(alice.id, 50);
+        const handles = new Set(result.map((s) => s.handle));
+        expect(handles.has("smallone")).toBe(true);
+        expect(handles.has("smalltwo")).toBe(true);
+      }).pipe(Effect.provide(createTestLayer())),
   );
 });
 

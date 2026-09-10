@@ -20,7 +20,7 @@ const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export interface ClaimRouteOptions {
   /** Primary origin (used for the session cookie's `secure` flag). */
   webOrigin: string;
-  /** Per-IP rate limiter (brute-force protection — S-C2). */
+  /** Per-IP rate limiter (brute-force protection). */
   limiter: RateLimiterBackend;
   /**
    * Turnstile verifier (KEY-OPTIONAL). `null` ⇒ gate skipped; configured ⇒
@@ -49,7 +49,7 @@ export const createClaimRoutes = (
 
       return runCire(
         Effect.gen(function* () {
-          const { publicId } = yield* Schema.decodeUnknown(ClaimBody)(raw);
+          const { publicId } = yield* Schema.decodeUnknownEffect(ClaimBody)(raw);
           const result = yield* claimService.lookup(publicId.trim().toUpperCase());
           // Session write may fail (DB transient error) — we still hand the user
           // their invite payload and skip Set-Cookie. Error is logged inside the
@@ -66,7 +66,7 @@ export const createClaimRoutes = (
           return result;
         }).pipe(
           Effect.provideService(DbService, db),
-          Effect.catchTag("ParseError", () =>
+          Effect.catchTag("SchemaError", () =>
             Effect.sync(() => {
               set.status = 400;
               return { error: "Missing or invalid fields" };
@@ -199,8 +199,8 @@ export const createClaimSessionRoutes = (
     // Cache directives, set BEFORE `sessionAuth` so they land on every outcome —
     // including the 401 that plugin short-circuits with, which never reaches the
     // handler below. The 200 body is selected ENTIRELY by the cookie and carries
-    // guest names, per-event dietary free text (Art. 9) and the S-H1-gated
-    // closing note: `no-store` keeps it out of every cache — browser,
+    // guest names, per-event dietary free text (Art. 9) and the closing
+    // note: `no-store` keeps it out of every cache — browser,
     // intermediary and CDN — whatever a future Cloudflare page rule says, and
     // `Vary: Cookie` is the backstop for a cache that ignores `no-store`, making
     // the cookie part of the key so one household's invite can never be replayed

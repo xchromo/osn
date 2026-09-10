@@ -23,7 +23,7 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
         async ({ body, set, headers }) => {
           // Token-endpoint response — never cached or stored (RFC 6749 §5.1,
           // RFC 6750 §5.3), and above the guards so every rejection carries
-          // it too (tracker#466).
+          // it too.
           set.headers["cache-control"] = "no-store";
 
           const { grant_type } = body as { grant_type: string };
@@ -33,10 +33,10 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
             return { error: "unsupported_grant_type" };
           }
 
-          // C3: session token lives exclusively in the HttpOnly cookie —
+          // Session token lives exclusively in the HttpOnly cookie —
           // body fallback was a defence-in-depth trap (rotated token never
           // returned in body, so cookieless clients broke on second refresh)
-          // and was removed to reduce the log-leak surface (S-M1).
+          // and was removed to reduce the log-leak surface.
           const refresh_token = readSessionCookie(headers.cookie, cookieConfig);
           if (!refresh_token) {
             set.status = 400;
@@ -56,7 +56,7 @@ export function createTokenRoutes(ctx: AuthRouteContext) {
             // dead. A storage blip and the benign concurrent-rotation race both
             // land here with a live cookie, and retracting on either would
             // strand a cold-start browser — the population the marker exists to
-            // serve — permanently signed out (S-M2). The session cookie itself
+            // serve — permanently signed out. The session cookie itself
             // is never cleared here for the same reason.
             if (!sessionStatusUnknown(e)) {
               set.headers["set-cookie"] = buildClearSessionMarkerCookie(cookieConfig);

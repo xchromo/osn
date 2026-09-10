@@ -1,5 +1,13 @@
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, index, unique } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  unique,
+  uniqueIndex,
+  blob,
+} from "drizzle-orm/sqlite-core";
 
 // ---------------------------------------------------------------------------
 // Accounts (authentication principal — invisible externally)
@@ -25,6 +33,31 @@ export const accounts = sqliteTable("accounts", {
    * but data is preserved.
    */
   processingRestrictedAt: integer("processing_restricted_at"),
+  /**
+   * Unix seconds of the most recent account recovery, written by all three
+   * recovery paths — the recovery code, the emailed code and the authenticator
+   * code. NULL on an account that has never been recovered.
+   *
+   * It opens a 72-hour window in which two things are refused: changing the
+   * email on a step-up whose factor was an emailed OTP, and completing a
+   * SECOND email or TOTP recovery. The first is the point — the reason
+   * `emailChangeAllowedAmr` admits `otp` at all is that an emailed code proves
+   * control of the CURRENT mailbox, and after a recovery that mailbox may be
+   * the attacker's. The second stops a mailbox holder simply running recovery
+   * again once the owner has cleaned up.
+   *
+   * The recovery-CODE path writes this column but is never refused by the
+   * window it opens. A recovery code is a 64-bit secret handed to the user
+   * once; capping that path would shut the owner's only unauthenticated door
+   * for three days, and it is the one door a mailbox holder cannot open.
+   *
+   * Cleared by an accepted `POST /recovery/disown`: "this wasn't me" is a
+   * statement that the recovery was illegitimate, which is by definition a
+   * request to be allowed to recover again. Without that, anyone who reads the
+   * mailbox turns one click into a 72-hour lockout of an owner who has just
+   * legitimately recovered.
+   */
+  lastRecoveredAt: integer("last_recovered_at"),
 });
 
 export type Account = typeof accounts.$inferSelect;
@@ -101,6 +134,37 @@ export const passkeys = sqliteTable(
      * cleaner than over-reading the hot last_used_at column.
      */
     updatedAt: integer("updated_at"),
+    /**
+     * How this credential came to exist — the **effective** strength of the
+     * ceremony chain behind it, not the raw AMR of one step. One of
+     * `webauthn`, `otp`, `totp`, `recovery`; NULL on rows written before this
+     * column existed, which read as `webauthn`.
+     *
+     * `recovery` means no ceremony of the account's own stood behind the
+     * enrolment: the restricted-recovery-session bypass, or a registration
+     * challenge parked by a deploy older than this column.
+     *
+     * It exists because a passkey registered a minute ago mints an
+     * `amr: ["webauthn"]` step-up indistinguishable from one the user has held
+     * for a year. Without this column, any factor `passkeyRegisterAllowedAmr`
+     * admits reaches passkey deletion and email change in two hops: step up
+     * with that factor, register a credential of your own, then assert IT.
+     * `verifyStepUpToken` refuses those two purposes to a credential whose
+     * provenance is weaker than the credential it would act on, inside 72
+     * hours of its own registration.
+     *
+     * **Inheritance is effective.** A credential registered under a `webauthn`
+     * step-up takes the asserting credential's provenance, so the pivot is not
+     * laundered by one more hop — but only while the asserting credential is
+     * still inside its own window. Past it the child is stamped `webauthn`,
+     * because a parent free to perform the deletion itself cannot be made
+     * safer by restricting its children. Raw inheritance would restrict every
+     * device in a lineage for the life of the account.
+     *
+     * @see wiki/systems/step-up.md
+     * @see wiki/architecture/account-recovery-factors.md
+     */
+    provenanceAmr: text("provenance_amr"),
   },
   (t) => [index("passkeys_account_id_idx").on(t.accountId)],
 );
@@ -265,6 +329,40 @@ export const sessions = sqliteTable(
     ipHash: text("ip_hash"),
     /** Unix seconds. Updated on every successful refresh/verify hit. */
     lastUsedAt: integer("last_used_at"),
+    /**
+     * Unix seconds, non-null only on a **restricted recovery session** — the
+     * session account recovery hands out, which may enrol a passkey and do
+     * nothing else.
+     *
+     * It is the source of truth for **rotation**, not for request-time
+     * authorisation. Request-time restriction is carried by the access token's
+     * `aud: "osn-recovery"`, which every verifier — including the three
+     * services outside this repo that check the token over JWKS — already
+     * rejects. This column exists because `refreshTokens` deletes the old row
+     * and inserts a new one: without it the restriction would die on the first
+     * silent refresh, five minutes in. `refreshTokens` copies it forward and
+     * re-mints with the recovery audience while it is set.
+     *
+     * It also pins the session's absolute expiry: a restricted row is inserted
+     * with `expiresAt === restrictedUntil` and never slides, so a credential
+     * with exactly one purpose cannot outlive the window in which that purpose
+     * is plausible. `completePasskeyRegistration` clears it, which is what
+     * lifts the restriction. NULL on every ordinary session.
+     */
+    restrictedUntil: integer("restricted_until"),
+    /**
+     * The RFC 8176 `amr` value of the factor that proved the user's identity
+     * before this restricted recovery session was minted — `otp`, `totp` or
+     * `webauthn`. NULL on every ordinary session, and cleared alongside
+     * `restrictedUntil` when the restriction lifts.
+     *
+     * A restricted session enrols a passkey **past the step-up gate**, and this
+     * column is what that bypass rests on: the enrolment path admits it only
+     * when the recorded factor is one `passkeyRegisterAllowedAmr` accepts, so
+     * the strength of the ceremony behind the session is checked rather than
+     * assumed. A restricted row with no recorded factor admits nothing.
+     */
+    restrictedAmr: text("restricted_amr"),
   },
   (t) => [
     index("sessions_account_idx").on(t.accountId),
@@ -309,6 +407,79 @@ export type RecoveryCode = typeof recoveryCodes.$inferSelect;
 export type NewRecoveryCode = typeof recoveryCodes.$inferInsert;
 
 // ---------------------------------------------------------------------------
+// TOTP credentials (RFC 6238)
+//
+// The one credential in this schema stored as recoverable ciphertext rather
+// than a hash. HMAC verification needs the raw key back, so "store only the
+// hash" — what `recovery_codes`, `sessions` and the OIDC codes all do — is not
+// available. The secret is therefore AES-GCM encrypted under
+// OSN_TOTP_ENCRYPTION_KEY, a Worker secret: the Worker's secrets and its
+// database are separate trust domains, so a database dump alone yields no
+// working second factor.
+//
+// See `[[wiki/systems/totp]]`.
+// ---------------------------------------------------------------------------
+
+export const totpCredentials = sqliteTable(
+  "totp_credentials",
+  {
+    id: text("id").primaryKey(), // "totp_" prefix
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    /**
+     * AES-GCM ciphertext of the raw 20-byte shared secret, with the accountId
+     * as additional authenticated data — so a row moved to another account
+     * fails to decrypt rather than authenticating the wrong person.
+     */
+    secretCiphertext: blob("secret_ciphertext", { mode: "buffer" }).notNull(),
+    /** The 96-bit nonce for the ciphertext above. Fresh per encryption. */
+    iv: blob("iv", { mode: "buffer" }).notNull(),
+    /**
+     * Which encryption key the ciphertext is under. Always 1: key rotation is
+     * not implemented, one key exists, and a row stamped with any other version
+     * is refused rather than decrypted. The column is here so that adding
+     * rotation later is a code change rather than a migration — xchromo/osn#968.
+     */
+    keyVersion: integer("key_version").notNull().default(1),
+    /** User-supplied name for the authenticator. Never used as a secret. */
+    label: text("label"),
+    /**
+     * Unix seconds. NULL until the user proves possession with a first code —
+     * an unconfirmed row is not a credential and every read filters on this.
+     */
+    confirmedAt: integer("confirmed_at"),
+    /** Unix seconds. */
+    lastUsedAt: integer("last_used_at"),
+    /**
+     * The RFC 6238 step counter of the last accepted code. §5.2 requires a code
+     * to be single use, and a stateless verifier cannot enforce that, so the
+     * step lives here: a code is accepted only when its step is strictly
+     * greater than this value, and the check and the write are one conditional
+     * UPDATE so two concurrent submissions of the same code cannot both pass.
+     * Set at enrolment too — the code typed into the enrolment form is a real
+     * code and would otherwise stay replayable for the rest of its window.
+     */
+    lastUsedStep: integer("last_used_step"),
+    /** Unix seconds. */
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [
+    index("totp_credentials_account_idx").on(t.accountId),
+    // One CONFIRMED credential per account, at the dialect level. Unconfirmed
+    // rows are not covered: an abandoned enrolment must not block a retry.
+    // The service checks first so the user meets a 409 rather than a
+    // constraint violation; this is what holds when two requests race.
+    uniqueIndex("totp_credentials_account_confirmed_idx")
+      .on(t.accountId)
+      .where(sql`${t.confirmedAt} is not null`),
+  ],
+);
+
+export type TotpCredential = typeof totpCredentials.$inferSelect;
+export type NewTotpCredential = typeof totpCredentials.$inferInsert;
+
+// ---------------------------------------------------------------------------
 // Email change audit log
 //
 // Captures completed email-address changes so we can enforce a "max 2 changes
@@ -322,16 +493,27 @@ export const emailChanges = sqliteTable(
   "email_changes",
   {
     id: text("id").primaryKey(), // "ech_" prefix
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id),
+    // No `.references(accounts.id)`, deliberately. `hardDeleteAccount`
+    // (`osn/api/src/services/account-erasure.ts`) removes the `accounts` row
+    // and KEEPS these under Art. 6(1)(c), so the column outlives its parent by
+    // design — and a column that must outlive its parent cannot have a foreign
+    // key to it. With the constraint in place the final `delete(accounts)`
+    // failed, taking the whole erasure batch with it, so Art. 17 deletion
+    // could never complete against a database that enforces foreign keys.
+    // Retention is enforced by the sweeper, not by a reference.
+    accountId: text("account_id").notNull(),
     previousEmail: text("previous_email").notNull(),
     newEmail: text("new_email").notNull(),
     /** Unix seconds */
     completedAt: integer("completed_at").notNull(),
   },
   (t) => [
-    index("email_changes_account_idx").on(t.accountId),
+    // Serves the 2-per-7-days cap predicate (accountId filter + completedAt
+    // range) as a single index scan instead of an accountId-only scan
+    // followed by a filter.
+    index("email_changes_account_completed_at_idx").on(t.accountId, t.completedAt),
+    // Kept for a future retention sweeper (not yet built) that will need to
+    // find rows past the retention window irrespective of account.
     index("email_changes_completed_at_idx").on(t.completedAt),
   ],
 );
@@ -360,9 +542,15 @@ export const securityEvents = sqliteTable(
   "security_events",
   {
     id: text("id").primaryKey(), // "sev_" prefix
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id),
+    // No `.references(accounts.id)`, deliberately. `hardDeleteAccount`
+    // (`osn/api/src/services/account-erasure.ts`) removes the `accounts` row
+    // and KEEPS these under Art. 6(1)(c), so the column outlives its parent by
+    // design — and a column that must outlive its parent cannot have a foreign
+    // key to it. With the constraint in place the final `delete(accounts)`
+    // failed, taking the whole erasure batch with it, so Art. 17 deletion
+    // could never complete against a database that enforces foreign keys.
+    // Retention is enforced by the sweeper, not by a reference.
+    accountId: text("account_id").notNull(),
     /**
      * Bounded kind enum — see SecurityEventKind in @shared/observability.
      * Enforced at the service boundary, not the column level, so adding

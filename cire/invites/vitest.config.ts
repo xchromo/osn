@@ -3,7 +3,20 @@ import { playwright } from "@vitest/browser-playwright";
 import solidPlugin from "vite-plugin-solid";
 import { defineConfig } from "vitest/config";
 
-import { emulateMedia } from "./src/test-support/browser-commands.ts";
+import { emulateMedia } from "./tests/test-support/browser-commands.ts";
+
+/** Shared by both projects — same compiler, and the same Tailwind build the app ships. */
+const plugins = () => [solidPlugin(), tailwindcss()];
+
+/**
+ * Escape hatch for environments that ship a prebuilt Chromium whose build
+ * number doesn't match the pinned Playwright (dev containers and this repo's
+ * cloud sessions both provide one under `$PLAYWRIGHT_BROWSERS_PATH` and set
+ * `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). Without this, Playwright insists on a
+ * build it cannot find and the tier is unrunnable there short of a ~300MB
+ * download. CI installs the matching browser and leaves this unset.
+ */
+const executablePath = process.env.VITEST_BROWSER_EXECUTABLE_PATH;
 
 /**
  * Two test projects, deliberately separated.
@@ -49,20 +62,6 @@ import { emulateMedia } from "./src/test-support/browser-commands.ts";
  * by that name, so every file lands in exactly one project and neither glob can
  * accidentally swallow the other's files.
  */
-
-/** Shared by both projects — same compiler, and the same Tailwind build the app ships. */
-const plugins = () => [solidPlugin(), tailwindcss()];
-
-/**
- * Escape hatch for environments that ship a prebuilt Chromium whose build
- * number doesn't match the pinned Playwright (dev containers and this repo's
- * cloud sessions both provide one under `$PLAYWRIGHT_BROWSERS_PATH` and set
- * `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). Without this, Playwright insists on a
- * build it cannot find and the tier is unrunnable there short of a ~300MB
- * download. CI installs the matching browser and leaves this unset.
- */
-const executablePath = process.env.VITEST_BROWSER_EXECUTABLE_PATH;
-
 export default defineConfig({
   test: {
     projects: [
@@ -74,13 +73,14 @@ export default defineConfig({
           transformMode: { web: [/\.[jt]sx?$/] },
           passWithNoTests: true,
           exclude: ["**/node_modules/**", "**/dist/**", "**/*.browser.test.{ts,tsx}"],
+          setupFiles: ["../../shared/test-config/no-jest-dom.ts"],
         },
       },
       {
         plugins: plugins(),
         test: {
           name: "browser",
-          include: ["src/**/*.browser.test.{ts,tsx}"],
+          include: ["tests/**/*.browser.test.{ts,tsx}"],
           passWithNoTests: true,
           browser: {
             enabled: true,

@@ -1,18 +1,3 @@
-import type { RateLimiterBackend } from "@shared/rate-limit";
-import { Effect } from "effect";
-import { Elysia } from "elysia";
-
-import { DbService } from "../db";
-import type { Db } from "../db";
-import { osnAuth } from "../middleware/osn-auth";
-import type { OsnAuthOptions } from "../middleware/osn-auth";
-import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
-import { weddingEntitlement } from "../middleware/wedding-entitlement";
-import { weddingOwner } from "../middleware/wedding-owner";
-import { runCire } from "../observability";
-import { registryService } from "../services/registry";
-import type { StripeClient, StripeError } from "../services/stripe";
-
 /**
  * CONNECTING A COUPLE'S BANK ACCOUNT — Stripe Connect onboarding, from the
  * organiser portal.
@@ -48,6 +33,21 @@ import type { StripeClient, StripeError } from "../services/stripe";
  * 404 this route's absence produces when a couple presses Connect (C-L1).
  */
 
+import type { RateLimiterBackend } from "@shared/rate-limit";
+import { Effect } from "effect";
+import { Elysia } from "elysia";
+
+import { DbService } from "../db";
+import type { Db } from "../db";
+import { osnAuth } from "../middleware/osn-auth";
+import type { OsnAuthOptions } from "../middleware/osn-auth";
+import { rateLimitMiddlewareByUser } from "../middleware/rate-limit";
+import { weddingEntitlement } from "../middleware/wedding-entitlement";
+import { weddingOwner } from "../middleware/wedding-owner";
+import { runCire } from "../observability";
+import { registryService } from "../services/registry";
+import type { StripeClient, StripeError } from "../services/stripe";
+
 /**
  * Stripe would not play. 502, and a log line naming WHICH — a revoked key, a
  * withdrawn Connect capability and a Stripe outage otherwise produce an
@@ -64,7 +64,7 @@ const badGateway = (set: { status?: number | string }, weddingId: string) => (er
       stripeStatus: error.status ?? "none",
       stripeCode: error.code ?? "none",
     }),
-    Effect.zipRight(
+    Effect.andThen(
       Effect.sync(() => {
         set.status = 502;
         return { error: "stripe_unavailable" };
@@ -190,7 +190,7 @@ export const createRegistryStripeRoutes = (
               // offer the button again rather than reporting a broken account.
               Effect.catchTag("StripeError", badGateway(set, weddingId)),
               Effect.tapDefect(logDefect(weddingId)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         })
@@ -224,7 +224,7 @@ export const createRegistryStripeRoutes = (
               Effect.provideService(DbService, db),
               Effect.catchTag("StripeError", badGateway(set, weddingId)),
               Effect.tapDefect(logDefect(weddingId)),
-              Effect.catchAllDefect(() => internal(set)),
+              Effect.catchDefect(() => internal(set)),
             ),
           );
         }),

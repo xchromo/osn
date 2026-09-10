@@ -4,7 +4,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { Elysia, t } from "elysia";
 
 import { makeCallerResolver } from "../lib/caller";
-import { DEFAULT_JWKS_URL } from "../lib/jwks";
+import { DEFAULT_VERIFICATION, type OsnTokenVerification } from "../lib/jwks";
 import {
   completeOnboarding,
   getOnboardingStatus,
@@ -39,7 +39,7 @@ export function createDefaultOnboardingCompleteRateLimiter(): RateLimiterBackend
  * legitimate boot-time fetches and React StrictMode double-invocation
  * aren't affected, but tight enough to deflect a malformed-token flood
  * paying the JWKS verify cost. Mirrors the discipline applied on POST and
- * matches `[[wiki/systems/rate-limiting]]`. Addresses S-M2.
+ * matches `[[wiki/systems/rate-limiting]]`.
  */
 const STATUS_RATE_LIMIT_MAX = 60;
 const STATUS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -115,19 +115,19 @@ const toWire = (status: OnboardingStatus): OnboardingStatusWire => ({
  */
 export const createOnboardingRoutes = (
   dbLayer: Layer.Layer<Db> = DbLive,
-  jwksUrl: string = DEFAULT_JWKS_URL,
+  verification: OsnTokenVerification = DEFAULT_VERIFICATION,
   _testKey?: CryptoKey,
   completeRateLimiter: RateLimiterBackend = createDefaultOnboardingCompleteRateLimiter(),
   statusRateLimiter: RateLimiterBackend = createDefaultOnboardingStatusRateLimiter(),
 ) => {
   // Layer graph built once per factory (convention: see osn/api/src/lib/route-runtime.ts) — not per request.
   const runtime = ManagedRuntime.make(dbLayer);
-  const resolveCaller = makeCallerResolver({ runtime, jwksUrl, testKey: _testKey });
+  const resolveCaller = makeCallerResolver({ runtime, verification, testKey: _testKey });
   return new Elysia({ prefix: "/me/onboarding" })
     .get(
       "/",
       async ({ headers, set }) => {
-        // S-M2: per-IP throttle. The GET path runs JWT verification and may
+        // Per-IP throttle. The GET path runs JWT verification and may
         // populate the profile→account cache via ARC; without throttling a
         // malformed-token flood pays the JWKS verify cost on every request.
         // Fail-closed mirrors the discovery posture in `routes/events.ts`.
@@ -149,7 +149,7 @@ export const createOnboardingRoutes = (
         }
         // Read-only and called once per session boot — short private cache
         // absorbs duplicate calls during navigation without staleness that
-        // matters in practice (P-W3, mirrors close-friends list).
+        // matters in practice (mirrors close-friends list).
         set.headers["cache-control"] = "private, max-age=30";
         const result = await runtime.runPromise(
           getOnboardingStatus(claims.profileId).pipe(

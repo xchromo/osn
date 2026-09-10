@@ -62,11 +62,19 @@ export async function createDrizzleClient<S extends DrizzleSchema>(
   const { Database } = (await import(bunSqlite)) as typeof import("bun:sqlite");
   const { drizzle } = (await import(bunSqliteDriver)) as typeof import("drizzle-orm/bun-sqlite");
   const sqlite = new Database(dbPath);
+  // SQLite defaults `foreign_keys` to OFF, so every reference declared in the
+  // schema is unenforced on Bun while D1 enforces them. That makes the cheap,
+  // fast environment the permissive one: a statement that orphans a row, or
+  // deletes a parent before its children, passes the whole suite and fails on
+  // deploy with `FOREIGN KEY constraint failed`. Turning it on here is what
+  // makes local runs and tests agree with production about what is a legal
+  // write.
+  sqlite.run("PRAGMA foreign_keys = ON");
   return drizzle(sqlite, { schema });
 }
 
 export function makeDbLive<S extends DrizzleSchema, A extends { readonly db: Db<S> }>(
-  tag: Context.Tag<any, A>,
+  tag: Context.Key<any, A>,
   // Accepts a thunk so a caller whose path derivation is Bun-only (e.g.
   // `fileURLToPath(import.meta.url)`, which throws on workerd where
   // `import.meta.url` is undefined) can defer it INTO the lazy Layer. On the
@@ -102,7 +110,7 @@ export function createD1Db<S extends DrizzleSchema>(d1: D1Database, schema: S): 
  * change (`makeDbLive(...)` → `makeD1DbLive(...)`).
  */
 export function makeD1DbLive<S extends DrizzleSchema>(
-  tag: Context.Tag<any, { readonly db: Db<S> }>,
+  tag: Context.Key<any, { readonly db: Db<S> }>,
   d1: D1Database,
   schema: S,
 ) {
@@ -165,9 +173,13 @@ export async function commitBatch<S extends DrizzleSchema>(
     await db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
     return;
   }
-  // Sequential FK order, in-process — bun:sqlite has no batch.
-  /* eslint-disable-next-line no-await-in-loop */
-  for (const stmt of statements) await stmt;
+  // Sequential FK order, in-process — bun:sqlite has no batch. Chained rather
+  // than gathered with `Promise.all`: the caller built the list children-first
+  // and running it together would drop a parent out from under a child.
+  await statements.reduce<Promise<unknown>>(
+    (chain, stmt) => chain.then(() => stmt),
+    Promise.resolve<unknown>(undefined),
+  );
 }
 
 /**
@@ -213,3 +225,11 @@ export {
   tokeniseQuery,
   tokensPrefixName,
 } from "./search";
+
+/**
+ * `json_each`-backed helpers that keep a variable-length `IN (...)` list or
+ * a multi-row `INSERT` under D1's 100-bound-parameter cap by binding the
+ * whole array as one JSON parameter instead of one parameter per element —
+ * see `jsonEach.ts` for the full rationale and the real-D1 measurements.
+ */
+export { insertManyViaJsonEach, jsonEachIn } from "./jsonEach";

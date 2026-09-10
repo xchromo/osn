@@ -1,6 +1,6 @@
 {
   "name": "@shared/redis",
-  "version": "0.4.5",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -17,13 +17,13 @@
     "test:run": "bunx --bun vitest run"
   },
   "dependencies": {
-    "@upstash/redis": "^1.38.0",
-    "effect": "^3.22.0",
-    "ioredis": "^5.11.1"
+    "@upstash/redis": "^1.38.3",
+    "effect": "4.0.0-rc.112",
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
-    "@effect/vitest": "^0.30.0",
+    "@effect/vitest": "4.0.0-rc.112",
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

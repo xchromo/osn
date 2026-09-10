@@ -6,14 +6,17 @@ related:
   - "[[backend-patterns]]"
   - "[[schema-layers]]"
   - "[[commands]]"
-last-reviewed: 2026-08-24
+last-reviewed: 2026-09-06
 ---
 
 # Testing Patterns
 
 ## Directory Layout
 
-Test files live in `tests/` at the package root and mirror the `src/` structure:
+Test files live in `tests/` at the package root and mirror the `src/` structure. **Every**
+package, without exception — `cire/*`, the three landing sites and `scripts/` all kept their
+tests beside the source until 2026-09-01, and no longer do. Test-only support code (mocks,
+fixtures, request harnesses) lives under `tests/` too, never in `src/`:
 
 ```
 pulse/api/
@@ -29,6 +32,21 @@ osn/api/
 pulse/db/
   tests/
     schema.test.ts                 # Schema smoke tests
+cire/api/
+  tests/
+    test-helpers.ts                # appRequest() -- Elysia request harness
+    test-helpers/osn-token.ts      # makeOsnTestAuth()
+    routes/rsvp.test.ts            # HTTP integration tests
+    db/d1-integration.test.ts      # Miniflare tier -- see The D1 integration lane
+cire/host/
+  tests/
+    test-support/mocks.ts          # shared Solid mocks for the organiser portal
+    components/Overview.test.tsx   # unit tier (happy-dom)
+    components/ImportPanel.browser.test.tsx  # browser tier (real Chromium)
+scripts/
+  tests/
+    check-astro-fonts.test.ts      # scripts/ is not a workspace; `bun test ./scripts/`
+    changeset-required.test.sh     # shell tests too
 osn/ui/
   tests/
     auth/Register.test.tsx          # Shared Register component (Solid + happy-dom)
@@ -71,6 +89,40 @@ it.effect("fails with EventNotFound", () =>
 );
 ```
 
+### Reading the error out of an `Exit` (Effect v4)
+
+`Effect.flip` is the first choice because it needs no unwrapping. When a test
+holds an `Exit` instead — from `runPromiseExit`, or a helper that returns one —
+read the error with `Cause.findErrorOption`. v4's `Cause` is a flat list of
+reasons, so there is no `Fail` node to match on and the v3 form does not
+type-check:
+
+```typescript
+// v3: exit.cause._tag === "Fail" && exit.cause.error instanceof VendorNotInWedding
+expect(
+  Option.getOrUndefined(Cause.findErrorOption(exit.cause)) instanceof VendorNotInWedding,
+).toBe(true);
+```
+
+`findErrorOption` returns `None` for a **defect**, so this refuses one exactly
+as the `_tag === "Fail"` check did — a test that should be catching a typed
+failure does not quietly start passing on a crash.
+
+Three more v4 facts that decide whether an assertion is real:
+
+- **`Effect.runPromise` rejects with `Cause.squash(cause)`**, which for a typed
+  failure is the error instance itself. v3 wrapped it in a `FiberFailure` whose
+  prototype was not the error class, so tests written then may assert
+  `instanceof` is `false`. Under v4 it is `true`.
+- **`Either` is `Result`**, and its tags are `"Success"`/`"Failure"`, not
+  `"Right"`/`"Left"`. `expect(x._tag).toBe("Right")` compiles fine against
+  `toBe`'s `any` and simply never matches, so it fails as a puzzling assertion
+  rather than a type error.
+- **`@effect/vitest`'s `assertFailure` changed meaning**: in v3 it asserted on
+  an `Exit`, in v4 it asserts a `Result.Failure`, and the v3 behaviour moved to
+  `assertExitFailure`. This repo uses neither, so nothing here is exposed — but
+  a helper added from a v3 example would be asserting something else.
+
 ## Route Test Pattern
 
 Route tests use plain vitest with a fresh app per test via `beforeEach`:
@@ -109,7 +161,9 @@ describe("events routes", () => {
 
 - **A test must fail for the reason it is named.** Before landing a test that asserts a side effect (a row written, a notice sent), break the code path and confirm the test goes red. `expect(true).toBe(true)` after an action asserts nothing.
 
-- **Never add a setup file just to register jest-dom.** `vite-plugin-solid` adds `@testing-library/jest-dom/vitest` to `setupFiles` on its own, so a node- or jsdom-tier project whose `vitest.config.ts` loads that plugin already has `toHaveAttribute` and friends in every test file. It **adds**, it does not replace: the plugin writes that entry onto the partial config its `config` hook returns, and Vite concatenates the arrays, so your own setup files still run. Two things turn the addition off, and only two — one of your own `setupFiles` paths matching the regex `/jest-dom/`, or a browser-mode project, which the plugin skips because Vitest's browser assertions already carry the matchers. `cire/host` and `cire/invites` each run one, which is why `cire/host/src/test-support/vitest-dom.d.ts` exists to pull in the *types* the browser tier does not supply. Vitest runs `setupFiles` once per **test file**, not once per worker, so a setup file that does nothing else is a second entry resolving a module the plugin already loaded. `pulse/web` carried one until 2026-08, across all 41 of its files. Measured, it cost nothing you can see — the suite runs in the same 2.7–3.0s either way, because the module comes from cache after the first hit. Drop it for the tidiness, not for a speed-up you will not get. Import the matchers in the handful of test files that assert with them instead; `tsconfig.json` already has `tests/**/*` in `include`, so the matcher types resolve across the package from any one import. One package still has the old shape — `cire/vendor/vitest.config.ts`, tracked in `xchromo/osn-tracker#500`.
+- **Every Solid Vitest config names `shared/test-config/no-jest-dom.ts` in `setupFiles`.** `vite-plugin-solid` prepends `@testing-library/jest-dom/vitest` to `setupFiles` for every run, and only two things stop it — one of your own `setupFiles` paths matching the regex `/jest-dom/` (`getJestDomExport` in the plugin's `dist/esm/index.mjs`), or a browser-mode project, which it skips because Vitest's browser assertions carry the matchers already. That file is a marker whose whole job is to match the regex. It exports nothing and must stay that way; a package that wants real shared setup adds a second entry of its own. Since 2026-08 all 13 configs that import the plugin carry it, and `bun run check:jest-dom-markers` (the `Scripts` CI job) fails the build if one loses it. The guard is per **file**, not per project: `cire/host`'s browser project has no `setupFiles` and still takes the injection, which is harmless there because that package imports the matchers in eighteen files anyway.
+
+- **Import the matchers where you assert with them, and declare the dependency only there.** A test that uses `toHaveAttribute` or `toBeInTheDocument` writes `import "@testing-library/jest-dom/vitest";` at the top of the file, and its package lists `@testing-library/jest-dom` in `devDependencies`. Three packages do — `cire/host`, `cire/vendor` and `pulse/web`. Ten others declared it while importing no matcher and were pruned. Bun's install layout is not hoisted, so an undeclared dependency is unresolvable rather than quietly satisfied: the failure is a red `Cannot find module`, not a green suite. `tsconfig.json` already has the test files in `include`, so the matcher types resolve across a package from any one import. `tools/lab` is the deliberate exception — it leaves the plugin out entirely, so nothing injects and it needs no marker; the guard matches the import statement rather than the plugin's name so its comment about the plugin does not trip it.
 
 ## Schema-derived test databases
 
@@ -124,7 +178,7 @@ applySchema(sqlite);
 
 Adding a column is then a one-file change in `src/schema/`. The emitter carries column-level `.unique()` (via `col.isUnique`), partial-index `WHERE` clauses, and foreign-key `ON DELETE`/`ON UPDATE` actions — all three were silently dropped before 2026-08, so tests ran on a shape production D1 rejects. The emitted array is memoised and frozen: the schema is a static module import, so reflecting it per test database was pure recomputation.
 
-`osn/db/tests/ddl-lockstep.test.ts` diffs a normalised structural snapshot of the emitted schema against the full `osn/db/drizzle/*.sql` migration chain. It compares columns, types, defaults, nullability, indexes (**including column order within an index** — SQLite serves only a leading prefix), partial predicates, foreign keys and their referential actions, and pins CHECK/trigger/view sets as empty. It fails when a migration lands without a schema change, when a schema change lands without a migration, or when the emitter loses a constraint. `zap/db` has the same test; `cire/api/src/db/ddl-lockstep.test.ts` covers cire's three-way mirror.
+`osn/db/tests/ddl-lockstep.test.ts` diffs a normalised structural snapshot of the emitted schema against the full `osn/db/drizzle/*.sql` migration chain. It compares columns, types, defaults, nullability, indexes (**including column order within an index** — SQLite serves only a leading prefix), partial predicates, foreign keys and their referential actions, and pins CHECK/trigger/view sets as empty. It fails when a migration lands without a schema change, when a schema change lands without a migration, or when the emitter loses a constraint. `zap/db` has the same test; `cire/api/tests/db/ddl-lockstep.test.ts` covers cire's three-way mirror.
 
 **If you extend one emitter, extend all three** — they are copies, and all three (`osn/db`, `pulse/db`, `zap/db`) now carry the lockstep test.
 
@@ -139,9 +193,9 @@ Reach for these before hand-rolling setup:
 | Harness | Use for |
 |---|---|
 | `@shared/crypto/testing` → `makeAccessTokenSigner()` | ES256 OSN access tokens (`aud: "osn-access"`, 5-minute `exp` matching production). Returns `{ privateKey, publicKey, sign(profileId, claims?) }`; `claims` covers `email`, `audience`, `expiresIn`, `issuer`, `kid` for negative tests. Used by the pulse, zap and cire route suites. |
-| `cire/api/src/test-helpers/osn-token.ts` → `makeOsnTestAuth()` | The cire-shaped `{ key, sign }` adapter over the above. |
-| `cire/api/src/test-helpers.ts` → `appRequest()` | Elysia requests with `cf-connecting-ip` + `Origin` pre-injected. |
-| `cire/host/src/test-support/mocks.ts` | The `@shared/rp-auth/solid` + `@shared/toast` + `lib/api` mock trio, their spies, and `resetOrganiserMocks()`. |
+| `cire/api/tests/test-helpers/osn-token.ts` → `makeOsnTestAuth()` | The cire-shaped `{ key, sign }` adapter over the above. |
+| `cire/api/tests/test-helpers.ts` → `appRequest()` | Elysia requests with `cf-connecting-ip` + `Origin` pre-injected. |
+| `cire/host/tests/test-support/mocks.ts` | The `@shared/rp-auth/solid` + `@shared/toast` + `lib/api` mock trio, their spies, and `resetOrganiserMocks()`. |
 | `pulse/web/tests/helpers/toast.ts` → `toastMock()` | Same idea for the Pulse app. |
 
 Call `makeAccessTokenSigner()` once per suite in `beforeAll` — there is no reason to re-key per test.
@@ -167,7 +221,14 @@ A suite that genuinely needs a different shape (an extra `useAuth` field, an `im
 
 ## The D1 integration lane
 
-Each API package has a `src/d1-integration.test.ts` that runs against a real workerd-backed D1 via Miniflare. These files sit **outside** the vitest `include` glob (`tests/**/*.test.ts`), so `bun run test` never reaches them — they are the only coverage of the **asynchronous** D1 driver that dev/staging/prod actually use, as opposed to the synchronous `bun:sqlite` every other suite runs on.
+Each API package has a `tests/d1/d1-integration.test.ts` (cire's is `tests/db/d1-integration.test.ts`) that runs against a real workerd-backed D1 via Miniflare. They are the only coverage of the **asynchronous** D1 driver that dev/staging/prod actually use, as opposed to the synchronous `bun:sqlite` every other suite runs on.
+
+How the fast tier avoids them differs by runner, and the difference is worth knowing before you read a CI log:
+
+| Package | Fast-tier runner | Does `bun run test` load the D1 file? |
+|---|---|---|
+| `osn/api`, `pulse/api`, `zap/api` | vitest | **No** — the configs `exclude: ["tests/d1/**"]`. Vitest cannot load these files at all: they import `bun:test`. |
+| `cire/api` | bare `bun test` | **Yes.** `bun test` discovers recursively and takes no exclude, so the Miniflare suite runs twice per CI run — once inside `@cire/api#test`, once under `test:d1`. Pre-existing and harmless, but it means a workerd failure reddens cire's fast tier too. |
 
 ```bash
 bun run test:d1            # all four packages, serially
@@ -175,6 +236,57 @@ bun run --cwd zap/api test:d1
 ```
 
 Run serially. Concurrent Miniflare workerd instances contend and fail spuriously, which is why the root script pins `--concurrency=1`. Both `ci.yml` and `deploy.yml` run this lane; before 2026-08 neither did, and zap's test sat failing on a stale fixture for as long as it took someone to run it by hand.
+
+## Testing an oxlint rule
+
+`tools/oxlint/house` holds the repo's own oxlint rules, and its tests are the odd
+one out: they run under `bun test`, not vitest, and they lint fixtures instead of
+calling a function.
+
+`@oxlint/plugins` ships no `RuleTester` — the package is four files and exports
+`definePlugin`, `defineRule` and `eslintCompatPlugin`, nothing else. So a rule
+test writes its fixtures to a temp directory along with a config that enables
+that one rule, runs the real `oxlint` binary over them, and asserts on the JSON:
+
+```jsonc
+{
+  "diagnostics": [
+    {
+      "message": "…",
+      "code": "house(no-in-operator-key-guard)",
+      "severity": "error",
+      "filename": "/abs/path/bad.ts",
+      "labels": [{ "span": { "offset": 118, "length": 12, "line": 4, "column": 9 } }]
+    }
+  ]
+}
+```
+
+Four things about that output are worth knowing before you write assertions:
+
+- **`code` is `plugin(rule)`**, not `plugin/rule` — the config key and the
+  diagnostic code are spelled differently.
+- **`filename` is absolute**, so match on the basename.
+- **oxlint exits non-zero when it finds anything.** Read stdout and ignore the
+  exit code; treating it as failure makes every red fixture look like a crashed
+  run.
+- **The plugin `specifier` in the temp config must be an absolute path.** The
+  `cwd` may be the temp directory: `@oxlint/plugins` resolves from the plugin
+  file's own location, not the config's.
+
+Turning the whole `correctness` category off in that config (`"categories":
+{"correctness": "off"}`, `"plugins": []`) is what keeps a fixture's other
+problems out of the result, so the assertion is about the rule under test.
+
+Fixtures earn their place by pinning a decision. `no-in-operator-key-guard`
+matches the parameter a type predicate narrows, not the literal
+`is keyof typeof MAP` syntax, so it carries a fixture for the aliased form the
+repo actually contains — and negative fixtures for `#brand in value` and for a
+string-literal discriminant, both of which are also `in` inside a predicate and
+both of which must stay silent.
+
+The rule itself is wired into `oxlintrc.json` as a second `jsPlugins` entry, so
+`bun run lint` runs it over the whole repo like any published rule.
 
 ## Running Tests
 

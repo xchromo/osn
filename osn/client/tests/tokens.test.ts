@@ -22,7 +22,7 @@ describe("parseTokenResponse", () => {
     it("parses a full token response (refresh_token is dropped: cookie-only)", () => {
       const session = parseTokenResponse(validFull);
       expect(session.accessToken).toBe("at_abc123");
-      // C3: refresh token is intentionally absent from the Session type —
+      // Refresh token is intentionally absent from the Session type —
       // it lives in the HttpOnly cookie, not in application JS.
       expect("refreshToken" in session).toBe(false);
       expect(session.idToken).toBe("id_tok_456");
@@ -63,16 +63,21 @@ describe("parseTokenResponse", () => {
     });
   });
 
+  // Each of these pins BOTH halves of the decode failure — which key, and why
+  // — so a schema change that starts rejecting the wrong field still fails
+  // here. Effect v4 renders that as a reason line and an `at [path]` line, and
+  // no longer echoes the offending value (v3 wrote `actual "not_a_number"`),
+  // so the assertions match the reason and the path rather than the input.
   describe("invalid input", () => {
     it("throws on missing access_token", () => {
       expect(() => parseTokenResponse({ expires_in: 3600, token_type: "Bearer" })).toThrow(
-        /\["access_token"\][\s\S]*is missing/,
+        /Missing key[\s\S]*\["access_token"\]/,
       );
     });
 
     it("throws on missing expires_in", () => {
       expect(() => parseTokenResponse({ access_token: "at_abc", token_type: "Bearer" })).toThrow(
-        /\["expires_in"\][\s\S]*is missing/,
+        /Missing key[\s\S]*\["expires_in"\]/,
       );
     });
 
@@ -83,15 +88,15 @@ describe("parseTokenResponse", () => {
           expires_in: "not_a_number",
           token_type: "Bearer",
         }),
-      ).toThrow(/Expected number, actual "not_a_number"/);
+      ).toThrow(/Expected number[\s\S]*\["expires_in"\]/);
     });
 
     it("throws on null input", () => {
-      expect(() => parseTokenResponse(null)).toThrow(/actual null/);
+      expect(() => parseTokenResponse(null)).toThrow(/Expected object/);
     });
 
     it("throws on empty object", () => {
-      expect(() => parseTokenResponse({})).toThrow(/\["access_token"\][\s\S]*is missing/);
+      expect(() => parseTokenResponse({})).toThrow(/Missing key[\s\S]*\["access_token"\]/);
     });
   });
 });

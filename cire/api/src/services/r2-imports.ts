@@ -29,7 +29,7 @@ export interface R2Bucket {
   delete(keys: string | string[]): Promise<void> | void;
 }
 
-export class R2Service extends Context.Tag("R2Service")<R2Service, R2Bucket>() {}
+export class R2Service extends Context.Service<R2Service, R2Bucket>()("R2Service") {}
 
 export class R2Error extends Data.TaggedError("R2Error")<{
   readonly reason: string;
@@ -76,8 +76,8 @@ export function storeBeforeImage(
 
     yield* Effect.tryPromise({
       try: async () => {
-        await r2.put(ek, eventsCsv);
-        await r2.put(gk, guestsCsv);
+        const results = await Promise.allSettled([r2.put(ek, eventsCsv), r2.put(gk, guestsCsv)]);
+        for (const r of results) if (r.status === "rejected") throw r.reason;
       },
       catch: (cause) => new R2Error({ reason: "before-image store failed", cause }),
     });
@@ -98,8 +98,8 @@ export function storeUpload(
 
     yield* Effect.tryPromise({
       try: async () => {
-        await r2.put(ek, eventsCsv);
-        await r2.put(gk, guestsCsv);
+        const results = await Promise.allSettled([r2.put(ek, eventsCsv), r2.put(gk, guestsCsv)]);
+        for (const r of results) if (r.status === "rejected") throw r.reason;
       },
       catch: (cause) => new R2Error({ reason: "store failed", cause }),
     });

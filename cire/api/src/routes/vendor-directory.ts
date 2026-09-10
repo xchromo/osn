@@ -69,7 +69,7 @@ export const createVendorDirectoryReadRoutes = (
     .use(osnAuth(osnAuthOptions))
     .group("/weddings/:weddingId", (group) =>
       group
-        .use(weddingMember(db))
+        .use(weddingMember(db, "vendors"))
         .use(weddingEntitlement(db, "vendors"))
         .use(rateLimitMiddlewareByUser(limiter))
         .get("/directory", async ({ weddingId, query, set }) => {
@@ -86,12 +86,12 @@ export const createVendorDirectoryReadRoutes = (
                 // OFFSET is O(offset) in SQLite — it walks and discards. The
                 // old 1e6 ceiling let a single request force a million-row
                 // walk; 10k (200 pages of 50) is far past any UI reach while
-                // the keyed-cursor rework (VD-P-I1) remains the real fix.
+                // the keyed-cursor rework remains the real fix.
                 offset: clampInt(q.offset, 0, 0, 10_000),
               })
               .pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchAllDefect(() => internal(set)),
+                Effect.catchDefect(() => internal(set)),
               ),
           );
         }),
@@ -106,7 +106,7 @@ export const createVendorDirectoryWriteRoutes = (
     .use(osnAuth(osnAuthOptions))
     .group("/weddings/:weddingId", (group) =>
       group
-        .use(weddingEditor(db))
+        .use(weddingEditor(db, "vendors"))
         .use(weddingEntitlement(db, "vendors"))
         .use(rateLimitMiddlewareByUser(limiter))
         .post(
@@ -116,7 +116,7 @@ export const createVendorDirectoryWriteRoutes = (
             const raw: unknown = await request.json().catch(() => null);
             return runCire(
               Effect.gen(function* () {
-                const body = yield* Schema.decodeUnknown(AddFromDirectoryBody)(raw);
+                const body = yield* Schema.decodeUnknownEffect(AddFromDirectoryBody)(raw);
                 const listing = yield* directoryService.getLiveListingById(
                   params.directoryVendorId,
                 );
@@ -143,10 +143,8 @@ export const createVendorDirectoryWriteRoutes = (
                 return { vendor };
               }).pipe(
                 Effect.provideService(DbService, db),
-                Effect.catchTag("ParseError", () => badRequest(set)),
-                Effect.catchAllDefect((d) =>
-                  isUniqueViolation(d) ? conflict(set) : internal(set),
-                ),
+                Effect.catchTag("SchemaError", () => badRequest(set)),
+                Effect.catchDefect((d) => (isUniqueViolation(d) ? conflict(set) : internal(set))),
               ),
             );
           },

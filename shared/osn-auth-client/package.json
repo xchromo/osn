@@ -1,6 +1,6 @@
 {
   "name": "@shared/osn-auth-client",
-  "version": "0.4.9",
+  "version": "0.4.29",
   "private": true,
   "type": "module",
   "exports": {
@@ -20,14 +20,14 @@
   },
   "dependencies": {
     "@shared/crypto": "workspace:*",
-    "jose": "^6.2.4"
+    "jose": "^6.2.10"
   },
   "peerDependencies": {
-    "elysia": "^1.4.29"
+    "elysia": "^1.4.30"
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.10",
-    "elysia": "^1.4.29"
+    "vitest": "^4.1.11",
+    "elysia": "^1.4.30"
   }
 }

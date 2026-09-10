@@ -5,7 +5,7 @@ import { createEffect, createMemo, createResource, createSignal, For, Show } fro
 import { friendlyError } from "../lib/api";
 import { haptic } from "../lib/haptics";
 import { categoryLabel, SERVICE_CATEGORIES } from "../lib/service-categories";
-import { fetchListing, putListing } from "../lib/vendor-store";
+import { fetchListing, putListing, takeSeededListing } from "../lib/vendor-store";
 import Button from "./ui/Button";
 import Card, { CardEyebrow } from "./ui/Card";
 import Chip from "./ui/Chip";
@@ -42,8 +42,15 @@ interface ListingEditorProps {
 export default function ListingEditor(props: ListingEditorProps) {
   const { authFetch } = useAuth();
 
-  // Load the listing (may be null for a brand-new org).
-  const [listing] = createResource(() => fetchListing(authFetch, props.orgId));
+  // Load the listing (may be null for a brand-new org). A claim that just
+  // redirected here may have left the listing seeded in sessionStorage —
+  // use it once instead of re-fetching what consumeClaim already
+  // returned.
+  const [listing] = createResource(async () => {
+    const seeded = takeSeededListing(props.orgId);
+    if (seeded !== undefined) return seeded;
+    return fetchListing(authFetch, props.orgId);
+  });
 
   // ── Form signals ─────────────────────────────────────────────────────────
   const [name, setName] = createSignal("");
@@ -57,9 +64,13 @@ export default function ListingEditor(props: ListingEditorProps) {
   // Money: displayed in major units (dollars); "" means null (no value set).
   const [priceMin, setPriceMin] = createSignal("");
   const [priceMax, setPriceMax] = createSignal("");
-  // Per-key checked state: Record<categoryKey, boolean>.
-  // Reading `checked()[key]` inside <For> is isolated to that row — toggling one key
-  // only re-runs the expression for that checkbox (VP-P-W1).
+  // Per-key checked state: Record<categoryKey, boolean>, held as one signal.
+  // `toggleCategory` below spreads a fresh object on every toggle, so every
+  // row's `checked()[key]` read re-runs on every toggle, not just the one
+  // that changed — this is a single signal, not one per key, and SolidJS has
+  // no way to see that only one property moved. That recomputes 14 boolean
+  // lookups per toggle (`SERVICE_CATEGORIES` has 14 entries), which costs
+  // nothing worth a per-key signal split.
   const [checked, setChecked] = createSignal<Record<string, boolean>>({});
 
   const [seeded, setSeeded] = createSignal(false);
@@ -104,7 +115,7 @@ export default function ListingEditor(props: ListingEditorProps) {
       .map(([k]) => k),
   );
 
-  // ── Save-button disable condition (VP-P-I3) ──────────────────────────────
+  // ── Save-button disable condition ────────────────────────────────────────
   // createMemo dedupes to signal-change boundaries rather than re-running on every
   // render pass of the button effect.
   const saveDisabled = createMemo(
@@ -234,6 +245,12 @@ export default function ListingEditor(props: ListingEditorProps) {
                 onInput={(e) => setDescription(e.currentTarget.value)}
                 rows={3}
                 maxLength={2000}
+                // This field sits inside `createAutoSize()`'s frame, whose
+                // reflow guard keys on width only. A `resize-y` textarea has
+                // its height-only drag misread as a content swap and forced
+                // into continuous relayout — any textarea inside an auto-sized
+                // panel must stay `resize="none"`.
+                resize="none"
               />
             )}
           </Field>

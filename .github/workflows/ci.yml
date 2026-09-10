@@ -8,6 +8,16 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Every job here reads the checkout and reports through the check run the
+# workflow already owns. Nothing writes an issue, a comment, a release or a
+# package, so the default token — which is write-all on a repository that has
+# not been switched over — is far more than the work needs, and a compromised
+# dependency running inside a job inherits whatever the token can do. The
+# deploy, release and secret workflows already declare their own; this one was
+# the gap.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Format
@@ -44,6 +54,15 @@ jobs:
 
       - name: Format check
         run: bun run fmt:check
+
+      # Tracker #619 — the general half of the tracker #287 finding. Astro
+      # routes every file under `src/pages`, so an un-prefixed `*.test.ts`
+      # there is built and deployed as a live route (which is exactly how
+      # cire/invites' Worker picked up 119 KB gzip of vitest). Needs no build
+      # and no per-app baseline, so it belongs in the fast job rather than
+      # `build-test`.
+      - name: Check for routable test files under src/pages
+        run: bun run scripts/check-astro-test-routes.ts
 
   typecheck:
     name: Type Check
@@ -89,6 +108,19 @@ jobs:
       - name: Type check
         run: bun run check
 
+      # `scripts/` is in no workspace, so `turbo check` never reaches it and a
+      # type error there ships. One did: `skill-evals.ts` read an optional
+      # `scenario.path` unguarded, which crashed `ready`, `compare` and `record`
+      # on a payload the API really returns, and inside the eval poll that reads
+      # as "the run was never scored" for a run that was.
+      #
+      # It lives here rather than in `script-tests` because that job does no
+      # `bun install` on purpose, and `scripts/tsconfig.json` inherits
+      # `types: ["bun-types"]` from the root — without the install, `tsc` fails
+      # on the type package rather than on the code.
+      - name: Type check the scripts
+        run: bunx --bun tsc -p scripts/tsconfig.json
+
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -123,6 +155,34 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-turbo-build-
 
+      # `@cire/vendor`, `@cire/host` and `@cire/landing` declare
+      # `provider: fontProviders.google()`, which makes `astro build` fetch
+      # `https://fonts.google.com/metadata/fonts` — Astro's own font
+      # metadata cache for that fetch lives at each package's default
+      # `cacheDir`, `node_modules/.astro` (xchromo/osn-tracker#128). None of
+      # this job's other caches cover it: the bun cache above only holds
+      # installed packages, and the turbo cache is keyed per-commit on
+      # purpose (see the `typecheck` job's comment on why) so it can't be
+      # the thing that survives across runs here. What decides whether this
+      # cache is still correct is which font families each config asks for,
+      # not the lockfile or the commit — so, following the same reasoning
+      # the other caches in this file use (key on whatever the cache's
+      # correctness actually depends on), this one is keyed on the three
+      # `astro.config.mjs` files. Restoring it turns most CI runs' font
+      # fetch into a cache hit, which is directly the fix for #128: a build
+      # that never has to call `fonts.google.com` can't be broken by that
+      # endpoint 403ing.
+      - name: Cache Astro font metadata
+        uses: actions/cache@v4
+        with:
+          path: |
+            cire/vendor/node_modules/.astro
+            cire/host/node_modules/.astro
+            cire/landing/node_modules/.astro
+          key: ${{ runner.os }}-astro-fonts-${{ hashFiles('bun.lock', 'cire/vendor/astro.config.mjs', 'cire/host/astro.config.mjs', 'cire/landing/astro.config.mjs') }}
+          restore-keys: |
+            ${{ runner.os }}-astro-fonts-
+
       - name: Install dependencies
         run: bun install
 
@@ -132,11 +192,47 @@ jobs:
       - name: Test
         run: bun run test
 
-      # The four d1-integration.test.ts files live outside the vitest `include`
-      # glob (`tests/**/*.test.ts`), so `bun run test` never reaches them. They
-      # are the only coverage of the ASYNCHRONOUS D1 driver that dev/staging/prod
-      # actually run on, and going unrun let zap's rot into a stale fixture that
-      # had been failing silently. Serial by necessity — concurrent Miniflare
+      # Tracker #287: the cire/invites SSR Worker bundle reached 470 KB gzip
+      # unnoticed — a whole animation library in the server module graph with
+      # nothing there calling it, and three drift-guard tests routed as pages.
+      # `bun run build` above already produced every app's `dist/`, so
+      # measuring it here costs a few seconds and puts the budget check on the
+      # merge gate. The deploy workflow runs the same script, but only after a
+      # merge to main — which is one merge too late to stop the regression.
+      #
+      # The three tests that were routed have since moved to `tests/pages/`,
+      # out of `src/pages` entirely, so Astro cannot route them at all — but
+      # the guard stays: it is what catches the NEXT library that wanders into
+      # the server graph, which is the half of #287 a file move does nothing
+      # about.
+      #
+      # Tracker #619 generalised the script per-app: cire/invites is the only
+      # `output: "server"` app (a Worker, `dist/server`); the other five are
+      # `output: "static"` (Cloudflare Pages, `dist/_astro/*.js` +
+      # `dist/_astro/*.css` only — see scripts/guard-bundle-size.sh's own
+      # comment for why static measures an allowlist rather than a directory).
+      # Every app's mode and threshold is a row in
+      # scripts/bundle-size-budgets.txt, not an argument here — that file is
+      # the single source of truth, and `--all` walks every row in it. See
+      # that file's own comment for the re-baselining steps, and
+      # wiki/conventions/bundle-size-guards.md for every app's reading.
+      #
+      # This reads the `dist/` each build step already made and takes well
+      # under a second per app, so it sits after Test deliberately: a size
+      # trip fails the job either way, and running it last means the author
+      # still gets the test result in the same round trip.
+      - name: Guard Astro app bundle sizes
+        run: ./scripts/guard-bundle-size.sh --all
+
+      # The four d1-integration.test.ts files live under `tests/d1/` (cire's
+      # under `tests/db/`). The three vitest packages EXCLUDE that path, so the
+      # step above never reaches them — they import `bun:test` and boot a real
+      # workerd, neither of which vitest can load. cire/api runs a bare
+      # `bun test`, which takes no exclude and discovers recursively, so its
+      # copy runs in both steps; that is pre-existing and harmless. They are
+      # the only coverage of the ASYNCHRONOUS D1 driver that dev/staging/prod
+      # actually run on, and going unrun let zap's rot into a stale fixture
+      # that had been failing silently. Serial by necessity — concurrent Miniflare
       # workerd instances contend and fail spuriously (the root script pins
       # --concurrency=1).
       - name: D1 integration tests
@@ -175,12 +271,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      # Both installs run from `cire/host`, and the working directory is the
+      # whole point. `playwright` is a devDependency of `cire/host` and
+      # `cire/invites`, not of the root, so `bunx playwright` at the repo root
+      # finds nothing local and fetches the latest release from npm — which
+      # then installs the browser revision *that* version wants, not ours.
+      #
+      # That was harmless right up until it wasn't. The workspace pins
+      # playwright 1.62.1, and 1.62.1 was npm's latest from 2026-07-30 until
+      # 1.63.0 shipped on 2026-09-04 — so for five weeks the wrong lookup
+      # returned the right answer. From 1.63.0 on it installs chromium 1243
+      # while the tests look for chromium_headless_shell 1234, and
+      # `test:browser` fails with "Executable doesn't exist" on a run whose
+      # install step just reported success and downloaded 186.8 MiB.
+      #
+      # Existing branches did not fail, which is the misleading part: GitHub
+      # Actions scopes a cache to the branch that wrote it plus the default
+      # branch, so every branch with a Chromium cache from before 2026-09-04
+      # still restores revision 1234 and passes. Only a branch with no cache
+      # of its own falls through to a fresh install and sees this. Those
+      # caches expire, so without this fix the failure arrives on every
+      # branch in turn, main included.
       - name: Install Chromium's system libraries
         timeout-minutes: 10
+        working-directory: cire/host
         run: bunx playwright install-deps chromium
 
       - name: Install Chromium for browser tests
         timeout-minutes: 10
+        working-directory: cire/host
         run: bunx playwright install chromium
 
       - name: Browser tests
@@ -203,8 +322,39 @@ jobs:
       # ordering (see the comment there). This one stays because `script-tests`
       # is the job that owns everything under scripts/, and a shasum costs
       # nothing.
+      #
+      # One script, two halves. Half 1 — the tree matches its own SHA256SUMS —
+      # always runs. Half 2 needs a base ref to diff against, so it only runs
+      # where there is one: it catches a change to vendored source with no
+      # matching move of the pinned upstream commit in that directory's
+      # README, which is either an edit to code the README says is never
+      # edited or a re-vendor that forgot the pin. Both are invisible to
+      # `shasum -c`, because regenerating the manifest certifies whatever the
+      # tree now holds.
       - name: Verify vendored anti-slop matches its checksums
+        if: github.event_name != 'pull_request'
         run: bash scripts/verify-vendored-anti-slop.sh
+
+      # `actions/checkout` clones at depth 1, so the base commit has to be
+      # fetched before the guard can read it. One `--depth=1` fetch of that
+      # single commit is enough: the guard diffs two trees, which needs no
+      # common ancestor between them.
+      - name: Verify vendored anti-slop matches its checksums and pin
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          bash scripts/verify-vendored-anti-slop.sh "$BASE_SHA"
+
+      # The guard's own tests, beside the run that uses it. They exercise it in
+      # throwaway git repos rather than this checkout — one case exports
+      # GIT_DIR the way git does for every hook, the state that once made the
+      # guard list the whole repo instead of the vendored subtree and blocked
+      # every local commit; others build a base and a head commit to drive the
+      # pin half. They run on every event, unlike the pin half itself.
+      - name: Test the vendored anti-slop guard
+        run: bash scripts/tests/verify-vendored-anti-slop.test.sh
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -228,7 +378,7 @@ jobs:
       #
       # The `./` in `bun test ./scripts/` is load-bearing. A bare `scripts/` is
       # a SUBSTRING filter on the test path, not a directory, so it also picks
-      # up `cire/api/src/scripts/remint-family-codes.test.ts` — which imports
+      # up `cire/api/tests/scripts/remint-family-codes.test.ts` — which imports
       # drizzle and effect and therefore needs an install this job does not do.
       # `./scripts/` anchors to the directory.
       #
@@ -237,6 +387,13 @@ jobs:
       # would be a minute spent on nothing.
       - name: Test the scripts
         run: bun run test:scripts
+
+      # The guard's own tests run in the step above; this step runs it against
+      # this repo's real vitest configs. Both halves are needed — a test suite
+      # over synthetic fixtures proves the guard works, not that the tree it is
+      # guarding still passes it.
+      - name: Check jest-dom suppression markers
+        run: bun run check:jest-dom-markers
 
       # A prior version of this job ran `checkReleaseAgeExcludes` only from
       # `bun test`, which imports the pure function and feeds it synthetic
@@ -248,6 +405,28 @@ jobs:
       # general, this step proves it against this repo's own bunfig.toml.
       - name: Check release-age excludes are marked and bounded
         run: bun run check:release-age-excludes
+
+      # The same split as the step above, for the same reason. The tests in the
+      # step further up feed the guard synthetic migration chains and prove it
+      # measures and fails correctly; this runs it against the chain the repo
+      # really ships, which is the thing a pull request changes.
+      #
+      # What it guards: a from-zero rebuild of the cire D1 costs rows in
+      # proportion to the number of schema statements in the chain, not to the
+      # amount of data, and that number only grows. Thirteen merges spent
+      # 104,091 rows written on 2026-09-09 against a free-tier ceiling of
+      # 100,000 a day account-wide, with no commit doing anything wrong
+      # (xchromo/osn#979). The budget is a row in
+      # scripts/d1-migration-cost-budgets.txt, not an argument here.
+      #
+      # It needs no install: the script imports bun:sqlite and Node built-ins
+      # and nothing else, which is why it belongs in this job rather than in
+      # build-test. Invoked by path, like guard-bundle-size.sh, rather than
+      # through a root package.json script — root package.json is off the
+      # changeset allowlist on purpose, and this change ships nothing any
+      # versioned package would name.
+      - name: Guard the D1 cost of the migration chains
+        run: bun run scripts/guard-d1-migration-cost.ts --all
 
   openapi-freshness:
     name: OpenAPI Freshness

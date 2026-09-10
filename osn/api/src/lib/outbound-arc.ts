@@ -1,7 +1,3 @@
-import { exportKeyToJwk, generateArcKeyPair, getOrCreateArcToken } from "@shared/crypto";
-import { instrumentedFetch } from "@shared/observability";
-import { Effect } from "effect";
-
 /**
  * Outbound ARC token issuer for osn-api.
  *
@@ -14,11 +10,14 @@ import { Effect } from "effect";
  * service on startup via the shared `INTERNAL_SERVICE_SECRET` (same flow
  * Pulse uses to register with osn-api). Rotated automatically.
  */
+import { exportKeyToJwk, generateArcKeyPair, getOrCreateArcToken } from "@shared/crypto";
+import { instrumentedFetch } from "@shared/observability";
+import { Effect } from "effect";
 
 /**
  * Comma-separated scopes osn-api registers with each downstream (Pulse + Zap)
- * when it uploads its ARC public key. `account:erase` drives the C-H2 delete
- * fan-out; `account:export` drives the C-H1 DSAR export fan-out. A downstream
+ * when it uploads its ARC public key. `account:erase` drives the delete
+ * fan-out; `account:export` drives the DSAR export fan-out. A downstream
  * only accepts an inbound token whose scope is in the key's registered set, so
  * both must be registered here for either fan-out to authenticate.
  */
@@ -221,18 +220,25 @@ export async function startOutboundKeyRotation(opts: {
     { url: opts.zapApiUrl, selfId: "osn-api" as const, scopes: DOWNSTREAM_SCOPES },
   ].filter((s): s is { url: string; selfId: "osn-api"; scopes: string } => Boolean(s.url));
 
-  for (const s of services) {
-    try {
-      // eslint-disable-next-line no-await-in-loop -- sequential so a configured-stack failure short-circuits before the next downstream
-      await registerWithDownstream(s.url, s.selfId, s.scopes, { internalServiceSecret, osnEnv });
-    } catch (err) {
-      // Local dev with a downstream that hasn't booted yet — fall through.
-      // Production / staging surfaces a fast-fail boot error via registerWithDownstream
-      // when INTERNAL_SERVICE_SECRET is missing; non-network failures on a
-      // configured stack still throw out of this loop.
-      if (osnEnv && osnEnv !== "local") throw err;
-    }
-  }
+  // The downstreams are independent of each other and registration is an
+  // idempotent upsert, so they go out together rather than one after the next.
+  await Promise.all(
+    services.map(async (s) => {
+      try {
+        await registerWithDownstream(s.url, s.selfId, s.scopes, {
+          internalServiceSecret,
+          osnEnv,
+        });
+      } catch (err) {
+        // Local dev with a downstream that hasn't booted yet — fall through.
+        // Production / staging surfaces a fast-fail boot error via
+        // registerWithDownstream when INTERNAL_SERVICE_SECRET is missing;
+        // non-network failures on a configured stack still throw, and rejecting
+        // here rejects the whole `Promise.all` and so aborts boot.
+        if (osnEnv && osnEnv !== "local") throw err;
+      }
+    }),
+  );
 
   const { expiresAt } = await initKeys();
   const rotateAt = expiresAt - KEY_ROTATION_BUFFER_MS;
@@ -294,10 +300,13 @@ export async function registerOutboundKeysOnce(opts: {
 
   if (services.length === 0) return false;
 
-  for (const s of services) {
-    // eslint-disable-next-line no-await-in-loop -- sequential so a configured-stack failure short-circuits before the next downstream (mirrors startOutboundKeyRotation)
-    await registerWithDownstream(s.url, s.selfId, s.scopes, { internalServiceSecret, osnEnv });
-  }
+  // Together, for the same reason as startOutboundKeyRotation: independent
+  // downstreams, idempotent upserts. Any rejection propagates.
+  await Promise.all(
+    services.map((s) =>
+      registerWithDownstream(s.url, s.selfId, s.scopes, { internalServiceSecret, osnEnv }),
+    ),
+  );
 
   // Only latch once every configured downstream accepted the key — a partial
   // failure throws above, leaving the flag false so the next tick retries.

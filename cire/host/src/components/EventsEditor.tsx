@@ -25,19 +25,8 @@ import {
   invalidateEvents,
 } from "../lib/events-store";
 import { createGuestEventDraft, type DraftEvent } from "../lib/guest-event-draft";
-import {
-  ensureGuestsLoaded,
-  guestsAccessor,
-  invalidateGuests,
-  type OrganiserGuestRow,
-} from "../lib/guests-store";
+import { invalidateGuests } from "../lib/guests-store";
 import { haptic } from "../lib/haptics";
-import {
-  ensureHouseholdsLoaded,
-  householdsAccessor,
-  invalidateHouseholds,
-  type OrganiserHouseholdRow,
-} from "../lib/households-store";
 import { describeTimeZone, timeZoneGroups, zoneOffset } from "../lib/timezones";
 import { registerUnsavedGuard } from "../lib/unsaved-guard";
 import ChangePreview, { type ChangePlan } from "./ChangePreview";
@@ -68,12 +57,15 @@ const UNNAMED_EVENT = "Untitled event";
  * via a drawer form (name, start/end + timezone, address, dress-code + palette
  * reusing {@link ColorPicker}, Pinterest/Maps URLs); delete with an impact
  * confirm; re-order by DRAGGING a row's grip handle (`@shared/sortable`), writing
- * `sortOrder`. Save posts the WHOLE draft (events + families) as DesiredState
- * JSON to `changes/preview` → the shared {@link ChangePreview} modal →
- * `changes/apply` on confirm → refetch + toast.
+ * `sortOrder`. Save posts only the events half of the draft as a DesiredState
+ * with `scope: "events"` to `changes/preview` → the shared {@link ChangePreview}
+ * modal → `changes/apply` on confirm → refetch + toast. The scope flag tells the
+ * diff to leave households/guests/attendance untouched, so this tab never has to
+ * load them just to avoid reading their absence as a delete.
  *
  * Field-invalid drafts can't be submitted — Save disables and the drawer shows
- * errors inline. Guests ride along unchanged (id-matched ⇒ no-op update).
+ * errors inline. Guests and households are outside this save's scope entirely,
+ * so they are neither loaded nor sent.
  *
  * Re-ordering has THREE input paths, and all three are load-bearing: dragging
  * the grip, Arrow Up/Down from the focused grip, and per-row `sr-only` move
@@ -128,47 +120,32 @@ export default function EventsEditor(props: { weddingId: string }) {
   const changesUrl = (op: string) =>
     apiUrl(`/api/organiser/weddings/${props.weddingId}/changes/${op}`);
 
-  /** Load events + guests through the shared caches, then seed the draft. Guests
-   *  are loaded even though this tab only edits events: the draft-save posts the
-   *  WHOLE DesiredState, so an unloaded guest slice would read as "delete every
-   *  household". */
+  /** Load events through the shared cache, then seed the draft. Guests and
+   *  households are NOT loaded here: the save posts `scope: "events"`, so the
+   *  server-side diff leaves households/guests/attendance alone regardless of
+   *  what the draft carries for them — passing empty arrays is safe.
+   *
+   *  The EVENTS slice is a different matter, because `scope: "events"` is
+   *  exactly what makes the server act on it. A load that resolves without
+   *  filling the cache — a generation-discarded one, e.g. an invalidate landing
+   *  mid-fetch — would fall through `?? []` and seed a draft saying the wedding
+   *  has no events, which reads as "delete every event". `ensureEventsLoaded`
+   *  resolving `false` is what the check below refuses. */
   async function loadInto() {
-    const [events, guests, households] = await Promise.all([
-      ensureEventsLoaded(props.weddingId, async () => {
-        const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/events`));
-        if (res.status === 401) {
-          redirectToLogin();
-          throw new Error("unauthenticated");
-        }
-        if (!res.ok) throw new Error("Failed to load events");
-        return (await res.json()) as EventRow[];
-      }).then(() => eventsAccessor(props.weddingId)() ?? []),
-      ensureGuestsLoaded(props.weddingId, async () => {
-        const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/guests`));
-        if (res.status === 401) {
-          redirectToLogin();
-          throw new Error("unauthenticated");
-        }
-        if (!res.ok) throw new Error("Failed to load guests");
-        return (await res.json()) as OrganiserGuestRow[];
-      }).then(() => guestsAccessor(props.weddingId)() ?? []),
-      // Households ride along for the same reason the guests do, one level down:
-      // the guest rows can't describe a household that holds no guests, so
-      // without this read a guest-less household is absent from the DesiredState
-      // and a schedule-only save deletes it (and its live claim code).
-      ensureHouseholdsLoaded(props.weddingId, async () => {
-        const res = await authFetch(
-          apiUrl(`/api/organiser/weddings/${props.weddingId}/households`),
-        );
-        if (res.status === 401) {
-          redirectToLogin();
-          throw new Error("unauthenticated");
-        }
-        if (!res.ok) throw new Error("Failed to load households");
-        return (await res.json()) as OrganiserHouseholdRow[];
-      }).then(() => householdsAccessor(props.weddingId)() ?? []),
-    ]);
-    store.load(events, guests, households);
+    const events = await ensureEventsLoaded(props.weddingId, async () => {
+      const res = await authFetch(apiUrl(`/api/organiser/weddings/${props.weddingId}/events`));
+      if (res.status === 401) {
+        redirectToLogin();
+        throw new Error("unauthenticated");
+      }
+      if (!res.ok) throw new Error("Failed to load events");
+      return (await res.json()) as EventRow[];
+    }).then((fresh) => {
+      const rows = eventsAccessor(props.weddingId)();
+      if (!fresh || rows == null) throw new Error("event slice unavailable");
+      return rows;
+    });
+    store.load(events, [], []);
   }
 
   onMount(async () => {
@@ -237,7 +214,7 @@ export default function EventsEditor(props: { weddingId: string }) {
       const res = await authFetch(changesUrl("preview"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ desiredState: store.toWire() }),
+        body: JSON.stringify({ desiredState: store.toWire(), scope: "events" }),
       });
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) {
@@ -268,15 +245,25 @@ export default function EventsEditor(props: { weddingId: string }) {
       if (res.status === 401) return redirectToLogin();
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        // 409 = a co-host applied in between; the previewed diff is stale.
+        // 409 is usually a co-host applying in between, which makes the previewed
+        // diff stale. It is no longer only that: the server also 409s a stored
+        // change whose scope it cannot read, and telling that organiser the
+        // schedule changed elsewhere would send them looking for an edit nobody
+        // made. The server's own sentence names the actual cause in each case, so
+        // prefer it and keep the co-host wording as the fallback.
         if (res.status === 409) {
-          throw new Error("The schedule changed elsewhere. Re-open Save to preview afresh.");
+          throw new Error(
+            body.error ?? "The schedule changed elsewhere. Re-open Save to preview afresh.",
+          );
         }
         throw new Error(body.error ?? `Apply failed (${res.status})`);
       }
       invalidateEvents(props.weddingId);
+      // Guests too, but NOT households: a `scope: "events"` save can remove an
+      // event, and that cascades the per-guest attendance rows for it. No path
+      // through this editor can touch a household, so invalidating that cache
+      // only costs every open consumer a refetch of rows it already has.
       invalidateGuests(props.weddingId);
-      invalidateHouseholds(props.weddingId);
       setPreview(null);
       setEditingKey(null);
       await loadInto();
@@ -616,7 +603,7 @@ function EventDrawer(props: {
 }) {
   // Memos, not plain accessors: the drawer reads each of these from several
   // places per render (the picker, the time input, `stamped`, the hint), and a
-  // plain accessor re-runs `splitIso`'s regex on every one of them (P-I1).
+  // plain accessor re-runs `splitIso`'s regex on every one of them.
   const start = createMemo(() => splitIso(props.event.startAt));
   const end = createMemo(() => splitIso(props.event.endAt));
 
@@ -662,7 +649,7 @@ function EventDrawer(props: {
    *
    *  Memoised because `Field` reads `props.hint` from four places — the
    *  `aria-describedby` id, the spread getter, the `<Show>` gate and the text
-   *  insert — and each read would otherwise redo an `Intl` lookup (P-I1). */
+   *  insert — and each read would otherwise redo an `Intl` lookup. */
   const zoneHint = createMemo(() => {
     const zone = props.event.timezone.trim();
     if (zone.length === 0) return "Pick the zone the event's times are in.";
@@ -670,7 +657,7 @@ function EventDrawer(props: {
   });
 
   /** The dropdown's option groups. Memoised so the ~900-node option list is not
-   *  rebuilt on every zone change (P-W1) — `timeZoneGroups` returns a stable
+   *  rebuilt on every zone change — `timeZoneGroups` returns a stable
    *  identity for a known zone, and this stops the `each` expression re-running
    *  for one anyway. */
   const zoneGroups = createMemo(() => timeZoneGroups(props.event.timezone));
@@ -842,6 +829,13 @@ function EventDrawer(props: {
                         e.currentTarget.value.length > 0 ? e.currentTarget.value : null,
                     })
                   }
+                  // This editor is a module view, and every module view
+                  // renders inside `ModuleShell`'s auto-sized frame, whose
+                  // reflow guard keys on width only. A vertically resizable
+                  // textarea holds its width steady while its height changes,
+                  // so the guard reads that as a content swap — keep textareas
+                  // in an auto-sized panel `resize-none`.
+                  resize="none"
                 />
               )}
             </Field>

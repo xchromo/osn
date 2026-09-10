@@ -4,7 +4,7 @@ tags: [runbooks, process, issues]
 related:
   - "[[review-findings]]"
   - "[[index]]"
-last-reviewed: 2026-08-18
+last-reviewed: 2026-08-31
 ---
 
 # GitHub Issues setup
@@ -62,12 +62,29 @@ gh api repos/xchromo/osn-tracker/contents/.github/ISSUE_TEMPLATE/review-finding.
 ./scripts/todo-to-issues/labels.sh
 ```
 
-18 labels per repo: 6 `product:`, 6 `area:`, 5 `severity:`, and `epic`. The
-script uses `--force`, so re-running it is how a colour or description is
-changed. Every issue carries exactly one `product:` and at most one `area:`;
-only a finding carries a `severity:`, taken from the tier letter in its ID.
-The migration enforced that with a gate over its manifest; now that issues are
-filed by hand, `/prep-pr` and `/new-feat` carry the rule.
+25 labels per repo: 6 `product:`, 6 `area:`, 5 `severity:`, 6 `complexity:`,
+`epic`, and `needs:decision`. The script uses `--force`, so re-running it is how a colour
+or description is changed. Every issue carries exactly one `product:` and at
+most one `area:`; only a finding carries a `severity:`, taken from the tier
+letter in its ID. The migration enforced that with a gate over its manifest;
+now that issues are filed by hand, `/prep-pr` and `/new-feat` carry the rule.
+
+A `complexity:` rating — `1`, `2`, `3`, `5` or `8` — is declared **before**
+work starts, by `/new-feat` through the `rate-complexity` skill, which proposes
+a number from the issue body alone and asks the owner to confirm or amend it.
+The timing carries the whole value: the rating is the denominator every
+session-metrics query divides spend by, and one made at pull-request time, with
+a token total on screen, gets talked into agreeing with whatever the work cost.
+`complexity:unconfirmed` marks a rating no human signed off on — an agent's
+guess standing alone, mostly from backfilling issues that predate the label.
+See `wiki/observability/session-metrics.md`.
+
+`needs:decision` is the one label that says nothing about what an issue *is*.
+It is a state: the next step needs a choice only the repo owner can make. It
+combines with any product, area or severity, and it is the mechanism that keeps
+one open question from stalling a backlog — see
+`wiki/conventions/review-findings.md` for what the body must say before the
+label goes on.
 
 **There is no `area:feature`.** An issue with no `area:` is ordinary product
 work, and its type already says `Feature` — a label repeating it would be a

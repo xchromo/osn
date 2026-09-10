@@ -22,6 +22,23 @@ export type AuthRateLimiters = Readonly<{
   recoveryStatus: RateLimiterBackend;
   /** Recovery code login — per-IP quota, stricter than normal login completers. */
   recoveryComplete: RateLimiterBackend;
+  /**
+   * Email account-recovery begin (unauthenticated, SENDS MAIL to the address on
+   * file). Hour window, so it stays on Redis. The per-IP budget is the coarse
+   * brake; the flood defence that matters is the per-ACCOUNT cap
+   * (`recoveryEmailBeginCap`), because a rotating fleet defeats per-IP keys.
+   */
+  recoveryEmailBegin: RateLimiterBackend;
+  /** Email account-recovery complete (unauthenticated, verifies a 6-digit code). */
+  recoveryEmailComplete: RateLimiterBackend;
+  /** TOTP account-recovery complete (unauthenticated, verifies a 6-digit code). */
+  recoveryTotpComplete: RateLimiterBackend;
+  /**
+   * Recovery disown (unauthenticated, presents a token from the notice email).
+   * The 256-bit secret is the real gate; this is the coarse brake that stops
+   * the endpoint being floodable.
+   */
+  recoveryDisown: RateLimiterBackend;
   /** Step-up passkey begin (authenticated, issues a challenge). */
   stepUpPasskeyBegin: RateLimiterBackend;
   /** Step-up passkey complete (authenticated, consumes assertion). */
@@ -30,6 +47,19 @@ export type AuthRateLimiters = Readonly<{
   stepUpOtpBegin: RateLimiterBackend;
   /** Step-up OTP complete (authenticated, verifies code). */
   stepUpOtpComplete: RateLimiterBackend;
+  /**
+   * Step-up TOTP complete (authenticated, verifies a code). There is no
+   * `begin` — TOTP is challenge-free, so the ceremony is one call.
+   */
+  stepUpTotpComplete: RateLimiterBackend;
+  /** TOTP enrolment begin (authenticated, step-up gated, mints a secret). */
+  totpEnrollBegin: RateLimiterBackend;
+  /** TOTP enrolment complete (authenticated, verifies the first code). */
+  totpEnrollComplete: RateLimiterBackend;
+  /** TOTP disable (authenticated, step-up gated). */
+  totpDisable: RateLimiterBackend;
+  /** TOTP status (authenticated, settings read — mirrors recoveryStatus). */
+  totpStatus: RateLimiterBackend;
   /** Session list (authenticated, per-user). */
   sessionList: RateLimiterBackend;
   /** Session revoke (authenticated, per-user). */
@@ -92,7 +122,7 @@ export type AuthRateLimiters = Readonly<{
 /**
  * Default in-memory rate limiter bundle used when callers don't pass an
  * explicit `rateLimiters` override. Limits match the values documented in
- * CLAUDE.md > Rate Limiting (S-H1): 5 req/IP/min on send endpoints, 10
+ * CLAUDE.md > Rate Limiting: 5 req/IP/min on send endpoints, 10
  * req/IP/min on verify/complete endpoints.
  */
 export function createDefaultAuthRateLimiters(): AuthRateLimiters {
@@ -110,9 +140,8 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     passkeyRegisterComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     profileSwitch: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     profileList: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
-    // Recovery generation: the step-up gate is now the primary defence
-    // against stolen-access-token abuse (superseding the per-day cap
-    // relied on previously for S-M1). Keep a coarse per-IP throttle in
+    // Recovery generation: the step-up gate is the primary defence
+    // against stolen-access-token abuse. Keep a coarse per-IP throttle in
     // place so the endpoint isn't trivially floodable.
     recoveryGenerate: createRateLimiter({ maxRequests: 10, windowMs: 3_600_000 }),
     // Read-only count, polled by the settings panel on mount and after every
@@ -122,6 +151,18 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     // is already constant-time, but per-IP throttling curbs online brute
     // force across different account identifiers.
     recoveryComplete: createRateLimiter({ maxRequests: 5, windowMs: 3_600_000 }),
+    // Mail-sending and unauthenticated: the same posture as emailChangeBegin,
+    // one hour rather than one minute. A locked-out user retrying honestly
+    // needs two or three; anything past that is not a person.
+    recoveryEmailBegin: createRateLimiter({ maxRequests: 5, windowMs: 3_600_000 }),
+    // Code entry. Mirrors the step-up OTP / TOTP completers — the real brake on
+    // guessing six digits is the per-account lockout, which no rotating fleet
+    // can spread across.
+    recoveryEmailComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    recoveryTotpComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    // A person clicks the link in the email once, maybe twice. Anything past
+    // that is a script guessing 256 bits, which this will not be what stops.
+    recoveryDisown: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     // Step-up ceremonies: treat like login completers. A misbehaving
     // browser that keeps retrying a bad OTP shouldn't be able to burn
     // through codes faster than a human.
@@ -129,6 +170,14 @@ export function createDefaultAuthRateLimiters(): AuthRateLimiters {
     stepUpPasskeyComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     stepUpOtpBegin: createRateLimiter({ maxRequests: 5, windowMs: 60_000 }),
     stepUpOtpComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    // TOTP. The per-IP budgets mirror the step-up OTP pair; the real brake on
+    // guessing a six-digit code is the per-account lockout, which no rotating
+    // fleet can spread across (`lib/recovery-lockout-store.ts`).
+    stepUpTotpComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    totpEnrollBegin: createRateLimiter({ maxRequests: 5, windowMs: 60_000 }),
+    totpEnrollComplete: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    totpDisable: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
+    totpStatus: createRateLimiter({ maxRequests: 30, windowMs: 60_000 }),
     sessionList: createRateLimiter({ maxRequests: 30, windowMs: 60_000 }),
     sessionRevoke: createRateLimiter({ maxRequests: 10, windowMs: 60_000 }),
     // Email change begin is tightly capped because each call sends mail

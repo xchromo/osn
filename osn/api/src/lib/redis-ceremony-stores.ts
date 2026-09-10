@@ -22,9 +22,19 @@ import type {
   CrossDeviceRequest,
   PendingAuthorizeRequest,
   PendingEmailChange,
+  PendingRecoveryOtp,
   PendingRegistration,
+  PendingTotpEnrollment,
+  RecoveryDisownToken,
+  RegistrationChallengeEntry,
   StepUpOtpEntry,
 } from "../services/auth";
+import {
+  RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_MAX,
+  RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_WINDOW_MS,
+  TOTP_LOCKOUT_MS,
+  TOTP_LOCKOUT_THRESHOLD,
+} from "../services/auth/constants";
 import {
   createRedisCeremonyStore,
   type CeremonyStore,
@@ -40,7 +50,7 @@ const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
 /** Caller hook for a caught Redis error inside any of these stores. */
 export type CeremonyStoreErrorHook = (
-  store: RedisNamespace | "recovery_lockout",
+  store: RedisNamespace | "recovery_lockout" | "totp_lockout" | "recovery_otp_lockout",
   op: string,
   cause: unknown,
 ) => void;
@@ -48,8 +58,11 @@ export type CeremonyStoreErrorHook = (
 export interface RedisCeremonyWiring {
   ceremonyStores: CeremonyStores;
   recoveryLockoutStore: RecoveryLockoutStore;
+  recoveryOtpLockoutStore: RecoveryLockoutStore;
+  totpLockoutStore: RecoveryLockoutStore;
   profileSwitchCap: AccountCapLimiter;
   emailChangeBeginCap: AccountCapLimiter;
+  recoveryEmailBeginCap: AccountCapLimiter;
 }
 
 export function createRedisCeremonyStores(
@@ -67,21 +80,49 @@ export function createRedisCeremonyStores(
     createRedisCeremonyStore<V>(client, namespace, { observer: observerFor(namespace) });
 
   const ceremonyStores: CeremonyStores = {
-    registrationChallenges: make<ChallengeEntry>("reg_challenge"),
+    // Carries the provenance the credential will be stamped with, decided at
+    // `begin` and written at `complete`. The Redis store round-trips its value
+    // through JSON, so the string survives the hop.
+    registrationChallenges: make<RegistrationChallengeEntry>("reg_challenge"),
     loginChallenges: make<ChallengeEntry>("login_challenge"),
     pendingRegistrations: make<PendingRegistration>("pending_registration"),
     stepUpPasskeyChallenges: make<ChallengeEntry>("step_up_challenge"),
     stepUpOtp: make<StepUpOtpEntry>("step_up_otp"),
+    pendingRecoveryOtp: make<PendingRecoveryOtp>("pending_recovery_otp"),
+    pendingTotpEnrollments: make<PendingTotpEnrollment>("pending_totp_enroll"),
     pendingEmailChanges: make<PendingEmailChange>("pending_email_change"),
     crossDeviceRequests: make<CrossDeviceRequest>("cross_device"),
     authorizeRequests: make<PendingAuthorizeRequest>("oidc_authorize_request"),
+    recoveryDisownTokens: make<RecoveryDisownToken>("recovery_disown"),
   };
 
   const recoveryLockoutStore = createRedisRecoveryLockoutStore(client, {
     onError: (op, cause) => onError?.("recovery_lockout", op, cause),
   });
 
-  // O3: the two per-account caps routed through the rate-limiter family. The
+  // The email-OTP recovery counter. Its own key prefix and fail-CLOSED, for the
+  // reason TOTP's is: there is no wide search space behind a six-digit code, so
+  // failing open removes the only effective defence rather than a redundant one.
+  // Separate from `recoveryLockoutStore` so an attacker grinding 64-bit recovery
+  // codes cannot deny the owner the email path, nor the reverse.
+  const recoveryOtpLockoutStore = createRedisRecoveryLockoutStore(client, {
+    keyPrefix: "osn:recovery-otp-lockout",
+    failClosed: true,
+    onError: (op, cause) => onError?.("recovery_otp_lockout", op, cause),
+  });
+
+  // The same counter shape, the OPPOSITE outage posture — see the fail-closed
+  // rationale in `recovery-lockout-store.ts`. Its own key prefix, so a TOTP
+  // failure never counts against a recovery-code attempt or vice versa.
+  const totpLockoutStore = createRedisRecoveryLockoutStore(client, {
+    keyPrefix: "osn:totp-lockout",
+    threshold: TOTP_LOCKOUT_THRESHOLD,
+    lockoutMs: TOTP_LOCKOUT_MS,
+    failClosed: true,
+    onError: (op, cause) => onError?.("totp_lockout", op, cause),
+  });
+
+  // The two per-account caps routed through the rate-limiter family. The
   // limiter `check(accountId)` returns `true` while under the cap.
   const profileSwitchCap: AccountCapLimiter = createRedisRateLimiter(client, {
     namespace: "auth:profile_switch_cap",
@@ -93,6 +134,21 @@ export function createRedisCeremonyStores(
     maxRequests: 3,
     windowMs: ONE_DAY_MS,
   });
+  // Keyed on the RESOLVED accountId by its one caller — never on the identifier
+  // a stranger submitted. See `beginEmailRecovery`.
+  const recoveryEmailBeginCap: AccountCapLimiter = createRedisRateLimiter(client, {
+    namespace: "auth:recovery_email_begin_cap",
+    maxRequests: RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_MAX,
+    windowMs: RECOVERY_EMAIL_BEGIN_PER_ACCOUNT_WINDOW_MS,
+  });
 
-  return { ceremonyStores, recoveryLockoutStore, profileSwitchCap, emailChangeBeginCap };
+  return {
+    ceremonyStores,
+    recoveryLockoutStore,
+    recoveryOtpLockoutStore,
+    totpLockoutStore,
+    profileSwitchCap,
+    emailChangeBeginCap,
+    recoveryEmailBeginCap,
+  };
 }

@@ -12,14 +12,14 @@ export function createProfileSwitchRoutes(ctx: AuthRouteContext) {
       // -------------------------------------------------------------------------
       // Profile switching (P2 — multi-account)
       //
-      // S-H1: these endpoints authenticate via Bearer access token (not
+      // These endpoints authenticate via Bearer access token (not
       // refresh token in body). The access token's `sub` is `profileId`;
       // we resolve `accountId` via DB lookup.
       // -------------------------------------------------------------------------
       .get(
         "/profiles/list",
         async ({ headers, set, server, request }) => {
-          // Per-user profile list — never cached or stored (tracker#468).
+          // Per-user profile list — never cached or stored.
           set.headers["cache-control"] = "private, no-store";
 
           const rlErr = await rateLimit(

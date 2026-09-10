@@ -1,5 +1,3 @@
-import { Context, Data, Effect } from "effect";
-
 /**
  * STRIPE CONNECT, as much of it as cire touches.
  *
@@ -29,6 +27,8 @@ import { Context, Data, Effect } from "effect";
  * fixed reason, the HTTP status and Stripe's own machine-readable `code`, and
  * nothing else.
  */
+
+import { Context, Data, Effect } from "effect";
 
 /** Stripe's live API origin. Overridable so tests never need the network. */
 export const STRIPE_API_BASE = "https://api.stripe.com";
@@ -155,7 +155,9 @@ export interface StripeClient {
   ): Effect.Effect<StripeCheckoutSession | null, StripeError>;
 }
 
-export class StripeService extends Context.Tag("StripeService")<StripeService, StripeClient>() {}
+export class StripeService extends Context.Service<StripeService, StripeClient>()(
+  "StripeService",
+) {}
 
 export interface StripeConfig {
   secretKey: string;
@@ -262,9 +264,9 @@ export function createStripeClient(config: StripeConfig): StripeClient {
         // full subrequest limit, which turns one slow Stripe into a queue of
         // stuck isolates. Ten seconds is far past Stripe's own p99 and far
         // short of anything a person waits through.
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: STRIPE_CALL_TIMEOUT,
-          onTimeout: () => new StripeError({ reason: "timeout" }),
+          orElse: () => Effect.fail(new StripeError({ reason: "timeout" })),
         }),
       );
 

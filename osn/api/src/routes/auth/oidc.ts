@@ -22,7 +22,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { OidcAuthorizeResult, OidcTokenResult } from "@shared/observability/metrics";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { Elysia, t } from "elysia";
 
 import { resolveAccessTokenPrincipal } from "../../lib/auth-derive";
@@ -96,7 +96,7 @@ const AUTHORIZE_ERROR_COPY = {
 const hasAuthorizeErrorCopy = (code: string): code is keyof typeof AUTHORIZE_ERROR_COPY =>
   Object.hasOwn(AUTHORIZE_ERROR_COPY, code);
 
-const renderAuthorizeErrorPage = (code: string): string => {
+export const renderAuthorizeErrorPage = (code: string): string => {
   const message = hasAuthorizeErrorCopy(code)
     ? AUTHORIZE_ERROR_COPY[code]
     : AUTHORIZE_ERROR_COPY.invalid_request;
@@ -130,7 +130,7 @@ code{font-size:.8125rem;opacity:.6}
 };
 
 /**
- * Pulls an `OidcError` out of an Effect failure. `Either` keeps the failure
+ * Pulls an `OidcError` out of an Effect failure. `Result` keeps the failure
  * typed, but the union also carries `DatabaseError`, and only the OIDC arm has
  * a wire code the relying party is allowed to see.
  */
@@ -186,8 +186,8 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
   };
 
   /**
-   * S-M1: does this browser hold the binding cookie for the parked request?
-   * Every parked request carries a binding hash (S-L4), so there is no
+   * Does this browser hold the binding cookie for the parked request?
+   * Every parked request carries a binding hash, so there is no
    * "no hash → accept" path — a missing or wrong cookie always fails.
    */
   const bindingMatches = (
@@ -195,7 +195,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
     cookieHeader: string | undefined,
     requestId: string,
   ): boolean => {
-    // S-L4: every parked request carries a binding hash now, so there is no
+    // Every parked request carries a binding hash now, so there is no
     // "no hash → accept" path that a future writer could trip into.
     const secret = readBindingCookie(cookieHeader, requestId, cookieConfig);
     if (secret === null) return false;
@@ -224,9 +224,9 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
   ): Promise<AuthorizeSession | null> => {
     const token = readSessionCookie(cookieHeader, cookieConfig);
     if (!token) return null;
-    const result = await run(Effect.either(auth.verifyRefreshToken(token)));
-    if (!Either.isRight(result)) return null;
-    return { accountId: result.right.accountId, authTime: result.right.authenticatedAt };
+    const result = await run(Effect.result(auth.verifyRefreshToken(token)));
+    if (!Result.isSuccess(result)) return null;
+    return { accountId: result.success.accountId, authTime: result.success.authenticatedAt };
   };
 
   return (
@@ -279,13 +279,13 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             maxAge: q["max_age"] ?? null,
           };
 
-          const validated = await run(Effect.either(auth.validateAuthorizeRequest(params)));
+          const validated = await run(Effect.result(auth.validateAuthorizeRequest(params)));
 
-          if (Either.isLeft(validated)) {
-            const oidc = asOidcError(validated.left);
+          if (Result.isFailure(validated)) {
+            const oidc = asOidcError(validated.failure);
             if (!oidc) {
               metricOidcAuthorize({ result: "server_error", clientKind: "third_party" });
-              const { status, body } = handleError(validated.left);
+              const { status, body } = handleError(validated.failure);
               set.status = status;
               return body;
             }
@@ -303,7 +303,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             return renderAuthorizeErrorPage(oidc.code);
           }
 
-          const outcome = validated.right;
+          const outcome = validated.success;
 
           if (outcome.kind === "error") {
             metricOidcAuthorize({
@@ -346,7 +346,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
           }
           if (prepared.kind === "interaction") {
             metricOidcAuthorize({ result: "interaction", clientKind });
-            // S-M1: bind the parked request to this browser. The consent screen's
+            // Bind the parked request to this browser. The consent screen's
             // context + decision calls must arrive with this cookie, so a leaked
             // or guessed request id approves nothing anywhere else.
             set.headers["set-cookie"] = buildBindingCookie(
@@ -423,7 +423,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
 
           try {
             const parked = await run(auth.loadAuthorizeRequest(query.request));
-            // S-M1: a context read without the binding cookie is answered
+            // A context read without the binding cookie is answered
             // exactly like an unknown id — an attacker holding a leaked
             // request id learns nothing, not even that it exists.
             if (!parked || !bindingMatches(parked.bindingHash, headers.cookie, query.request)) {
@@ -534,7 +534,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
           }
 
           const result = await run(
-            Effect.either(
+            Effect.result(
               auth.completeAuthorization({
                 requestId: body.requestId,
                 accountId: session.accountId,
@@ -546,10 +546,10 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             ),
           );
 
-          if (Either.isLeft(result)) {
-            const oidc = asOidcError(result.left);
+          if (Result.isFailure(result)) {
+            const oidc = asOidcError(result.failure);
             if (!oidc) {
-              const { status, body: errBody } = handleError(result.left);
+              const { status, body: errBody } = handleError(result.failure);
               set.status = status;
               return errBody;
             }
@@ -560,14 +560,14 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             return { error: oidc.code, error_description: oidc.description };
           }
 
-          if (result.right.isNewLink) {
-            metricOidcConsentGranted(result.right.isFirstParty ? "first_party" : "third_party");
+          if (result.success.isNewLink) {
+            metricOidcConsentGranted(result.success.isFirstParty ? "first_party" : "third_party");
           }
 
           // The request is consumed either way, so the binding cookie has
           // nothing left to bind — expire it rather than let it linger.
           set.headers["set-cookie"] = buildClearBindingCookie(body.requestId, cookieConfig);
-          return { redirectTo: result.right.redirectTo };
+          return { redirectTo: result.success.redirectTo };
         },
         {
           body: t.Object({
@@ -656,7 +656,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
           }
 
           const result = await run(
-            Effect.either(
+            Effect.result(
               auth.exchangeAuthorizationCode({
                 clientId,
                 clientSecret,
@@ -667,11 +667,11 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             ),
           );
 
-          if (Either.isLeft(result)) {
-            const oidc = asOidcError(result.left);
+          if (Result.isFailure(result)) {
+            const oidc = asOidcError(result.failure);
             if (!oidc) {
               metricOidcToken({ result: "invalid_request", clientKind: "third_party" });
-              const { status, body: errBody } = handleError(result.left);
+              const { status, body: errBody } = handleError(result.failure);
               set.status = status;
               return errBody;
             }
@@ -681,13 +681,13 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
             return fail(oidc.code === "invalid_client" ? 401 : 400, oidc.code, oidc.description);
           }
 
-          // P-W1: the exchange already read the client — no second lookup
+          // The exchange already read the client — no second lookup
           // just to label the counter.
           metricOidcToken({
             result: "ok",
-            clientKind: result.right.isFirstParty ? "first_party" : "third_party",
+            clientKind: result.success.isFirstParty ? "first_party" : "third_party",
           });
-          return result.right.response;
+          return result.success.response;
         },
         {
           body: t.Object({
@@ -715,7 +715,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
       // -----------------------------------------------------------------------
       // GET /oidc/connections — the apps this account has authorised.
       //
-      // The user-facing half of `oauth_consents` (S-M3 oidc): what the
+      // The user-facing half of `oauth_consents`: what the
       // settings surface lists, and the record Art. 15 says the person may
       // see. Access-token authed like every other settings read.
       // -----------------------------------------------------------------------
@@ -768,7 +768,7 @@ export function createOidcRoutes(ctx: AuthRouteContext) {
       // -----------------------------------------------------------------------
       // DELETE /oidc/connections/:clientId — withdraw an app's authorization.
       //
-      // Art. 7(3): revoking must be as easy as granting (C-M3 oidc). Revoking
+      // Art. 7(3): revoking must be as easy as granting. Revoking
       // marks the consent row and kills any authorization code in flight for
       // the pair; the relying party's next /authorize gets `consent_required`.
       // -----------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
   "name": "@shared/dev-urls",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "exports": {
@@ -16,6 +16,6 @@
   },
   "devDependencies": {
     "@shared/typescript-config": "workspace:*",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

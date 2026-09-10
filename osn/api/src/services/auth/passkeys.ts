@@ -28,12 +28,15 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { Effect } from "effect";
 
+import { forkBackground } from "../../lib/background";
 import {
   classifyError,
   metricPasskeyLoginDiscoverable,
+  metricRecoveryPasskeyReclaim,
   metricSecurityEventRecorded,
   metricSessionSecurityInvalidation,
   withAuthLogin,
@@ -42,6 +45,7 @@ import {
   CHALLENGE_TTL_MS,
   MAX_PASSKEYS_PER_ACCOUNT,
   PASSKEY_LAST_USED_COALESCE_MS,
+  RECOVERY_ENROLMENT_PASSKEY_CEILING,
 } from "./constants";
 import type { AuthContext } from "./context";
 import { AuthError, DatabaseError } from "./errors";
@@ -51,10 +55,16 @@ import type { SecurityEventsModule } from "./security-events";
 import type { SessionsModule } from "./sessions";
 import type { StepUpModule } from "./step-up";
 import type { TokensModule } from "./tokens";
-import type { ProfileWithEmail, PublicProfile, SessionMeta, TokenSet } from "./types";
+import type {
+  PasskeyProvenance,
+  ProfileWithEmail,
+  PublicProfile,
+  SessionMeta,
+  TokenSet,
+} from "./types";
 import { toPublicProfile } from "./types";
 
-// P-I2: hoisted — a TextEncoder is stateless, so one module-level instance
+// Hoisted — a TextEncoder is stateless, so one module-level instance
 // serves every registration ceremony instead of allocating per call.
 const textEncoder = new TextEncoder();
 
@@ -66,9 +76,9 @@ export function createPasskeysModule(
   stepUp: StepUpModule,
   securityEventsModule: SecurityEventsModule,
 ) {
-  const { config, stores, hashIp } = ctx;
+  const { config, stores, hashIp, passkeyRegisterAllowedAmr } = ctx;
   const { resolveIdentifier, findDefaultProfile } = profiles;
-  const { issueTokens } = tokens;
+  const { issueTokens, liftSessionRestriction } = tokens;
   const { invalidateOtherAccountSessions } = sessions_;
   const { verifyStepUpForPasskeyRegister } = stepUp;
   /** See {@link SecurityEventsModule.notifySecurityEventByAccountId}. */
@@ -77,17 +87,80 @@ export function createPasskeysModule(
       accountId,
       "passkey_register",
       "passkey-added",
+      {},
     );
+
+  /**
+   * Whether a restricted recovery session may enrol past the step-up gate.
+   *
+   * The bypass rests on the ceremony that minted the session — an email OTP or
+   * a TOTP code at a strength `passkeyRegisterAllowedAmr` admits — so it is
+   * decided by the factor recorded on the session row, never by the token's
+   * audience. Four ways to answer no, all of them fail-closed: the row is not
+   * this account's, is not restricted, records no factor, or records one
+   * outside the allow-list. The deadline is checked too, because
+   * `liveSessionIds` (which is how the route names this session) has no expiry
+   * term of its own.
+   */
+  const recoverySessionAdmitsEnrolment = (
+    accountId: string,
+    sessionHash: string,
+  ): Effect.Effect<boolean, DatabaseError, Db> =>
+    Effect.gen(function* () {
+      const { db } = yield* Db;
+      const rows = yield* Effect.tryPromise({
+        try: () =>
+          db
+            .select({
+              restrictedUntil: sessions.restrictedUntil,
+              restrictedAmr: sessions.restrictedAmr,
+            })
+            .from(sessions)
+            .where(and(eq(sessions.id, sessionHash), eq(sessions.accountId, accountId)))
+            .limit(1),
+        catch: (cause) => new DatabaseError({ cause }),
+      });
+      const row = rows[0];
+      if (!row || row.restrictedUntil === null || row.restrictedAmr === null) return false;
+      if (row.restrictedUntil <= Math.floor(Date.now() / 1000)) return false;
+      return passkeyRegisterAllowedAmr.has(row.restrictedAmr);
+    });
 
   const beginPasskeyRegistration = (
     accountId: string,
     /**
-     * S-H1: required when the account already has ≥1 passkey. First-
+     * Required when the account already has ≥1 passkey. First-
      * credential enrollment (bootstrap) bypasses the gate — no step-up
      * ceremony is reachable before the account has any authenticators.
      * Verified below after the existingPasskeys read.
      */
     stepUpToken?: string,
+    /**
+     * The hashed id of the caller's own **restricted recovery session**, set
+     * only when `resolvePasskeyEnrollPrincipal` accepted the `osn-recovery`
+     * audience and the route could name the session behind it (from the cookie
+     * or the token's `osn_sid`). It can take the caller past the step-up gate
+     * below, deliberately: losing a phone does not delete its passkey row, so
+     * the account almost always still has ≥1 credential and the gate would make
+     * recovery impossible in exactly the case recovery is for.
+     *
+     * A hash is a request, not a grant. `recoverySessionAdmitsEnrolment`
+     * decides, on the factor the session row records — so the bypass is worth
+     * exactly what the ceremony behind the session was worth, and an
+     * unresolvable or inadmissible session simply falls back to needing a
+     * step-up token.
+     *
+     * The alternative — letting a restricted session mint step-up tokens —
+     * would open `/recovery/generate`, `DELETE /account`, `GET /account/export`
+     * and `/account/email/complete` along with it.
+     *
+     * The per-account passkey cap does NOT refuse this enrolment — a refusal
+     * here is an account nobody can reach again. `complete` reclaims what this
+     * recovery episode itself lent instead, which is what keeps the count from
+     * ratcheting; see `RECOVERY_ENROLMENT_PASSKEY_CEILING`. Every other caller
+     * is refused at the cap unchanged.
+     */
+    caller?: { readonly recoverySessionHash: string },
   ): Effect.Effect<
     { options: PublicKeyCredentialCreationOptionsJSON },
     AuthError | DatabaseError,
@@ -119,23 +192,60 @@ export function createPasskeysModule(
         return yield* Effect.fail(new AuthError({ message: "Account not found" }));
       }
 
-      // P-I10: refuse to mint options past the per-account cap. Checked
+      // Whether the restricted-recovery-session bypass applies. Resolved BEFORE
+      // the cap check, because whether the cap applies at all depends on it —
+      // and resolving it costs one indexed read of the caller's own session row,
+      // never a single-use token, so hoisting it above the cap preserves the
+      // property the ordering exists for: a capped user must not burn a step-up
+      // for nothing.
+      const recoveryEnrolment =
+        caller && existingPasskeys.length > 0
+          ? yield* recoverySessionAdmitsEnrolment(accountId, caller.recoverySessionHash)
+          : false;
+
+      // Refuse to mint options past the per-account cap. Checked
       // BEFORE the step-up gate so a user who's already at the cap
       // doesn't burn a single-use step-up token for nothing.
-      if (existingPasskeys.length >= MAX_PASSKEYS_PER_ACCOUNT) {
+      //
+      // A recovery-session enrolment is not held to the cap at all, and is not
+      // refused at any count. An account that has lost every device cannot enrol
+      // past the cap and cannot delete to make room — `passkeyDeleteAllowedAmr`
+      // is WebAuthn-only and a restricted session cannot mint a step-up — so a
+      // count-based refusal here is an account nobody can reach again. What
+      // bounds the count instead is the reclaim in `complete`, which takes back
+      // the slots THIS recovery episode lent; and what bounds the growth when
+      // there is nothing of its own to take back is the recovery cooldown, one
+      // episode per RECOVERY_COOLDOWN_MS.
+      if (!recoveryEnrolment && existingPasskeys.length >= MAX_PASSKEYS_PER_ACCOUNT) {
         return yield* Effect.fail(
           new AuthError({ message: "Passkey limit reached for this account" }),
         );
       }
 
-      // S-H1: once the account has any passkey, adding another requires a
+      // Once the account has any passkey, adding another requires a
       // fresh step-up token. A stolen access token alone cannot bind a
-      // new authenticator.
+      // new authenticator. A restricted recovery session whose recorded factor
+      // the register allow-list admits is the one exception — see
+      // `caller.recoverySessionHash` above.
+      // What the credential this ceremony produces will be stamped with.
+      //
+      // A bootstrap enrolment is `webauthn`: it is the account's root of trust,
+      // and there is nothing older for it to be weaker than. Stamping it from
+      // the registration OTP would taint every credential the account ever
+      // derives from it, because provenance is inherited — ordinary rotation
+      // would never become possible.
+      let provenanceAmr: PasskeyProvenance = "webauthn";
       if (existingPasskeys.length > 0) {
-        if (!stepUpToken) {
-          return yield* Effect.fail(new AuthError({ message: "Step-up required" }));
+        if (recoveryEnrolment) {
+          // The restricted-recovery-session bypass: no step-up ran at all, so
+          // no ceremony of the account's own stands behind this credential.
+          provenanceAmr = "recovery";
+        } else {
+          if (!stepUpToken) {
+            return yield* Effect.fail(new AuthError({ message: "Step-up required" }));
+          }
+          provenanceAmr = yield* verifyStepUpForPasskeyRegister(accountId, stepUpToken);
         }
-        yield* verifyStepUpForPasskeyRegister(accountId, stepUpToken);
       }
 
       const options = yield* Effect.tryPromise({
@@ -159,8 +269,8 @@ export function createPasskeysModule(
             // keeps the factor strength at "something you have + something
             // you are/know" — obsolete UP-only U2F tokens cannot register,
             // which is intentional: they would subsequently fail the
-            // verifier's `requireUserVerification: true` anyway (S-H2 —
-            // options and verify must agree).
+            // verifier's `requireUserVerification: true` anyway (options
+            // and verify must agree).
             authenticatorSelection: {
               residentKey: "preferred",
               userVerification: "required",
@@ -172,7 +282,19 @@ export function createPasskeysModule(
       yield* Effect.promise(() =>
         stores.registrationChallenges.set(
           accountId,
-          { challenge: options.challenge, expiresAt: Date.now() + CHALLENGE_TTL_MS },
+          {
+            challenge: options.challenge,
+            expiresAt: Date.now() + CHALLENGE_TTL_MS,
+            // Decided here because this is where the step-up is verified and
+            // where the recovery bypass is granted; written at `complete`,
+            // where the row exists. The entry is how it travels.
+            provenanceAmr,
+            // Which cap `complete` holds the ceremony to. Trusted there without
+            // re-reading the session row, and bounded by the two deadlines that
+            // already bracket this ceremony: the challenge's own CHALLENGE_TTL_MS
+            // and the restricted session's 15-minute absolute expiry.
+            recoveryEnrolment,
+          },
           CHALLENGE_TTL_MS,
         ),
       );
@@ -194,10 +316,10 @@ export function createPasskeysModule(
      * when one names a live row, otherwise from the access token's
      * `osn_sid` binding. Either way it is server-derived, never
      * user-supplied body input, so an attacker holding only an access
-     * token cannot skip H1 invalidation by omitting a field (S-H1).
+     * token cannot skip H1 invalidation by omitting a field.
      */
     callerSessionHash: string | null,
-    /** IP + UA for the security_events row (S-H1). Best-effort; omitted in tests. */
+    /** IP + UA for the security_events row. Best-effort; omitted in tests. */
     eventMeta?: SessionMeta,
   ): Effect.Effect<{ passkeyId: string }, AuthError | DatabaseError, Db | EmailService> =>
     Effect.gen(function* () {
@@ -239,7 +361,7 @@ export function createPasskeysModule(
       const ts = now();
       const nowSec = Math.floor(ts.getTime() / 1000);
 
-      // S-H1: write the audit row in the SAME transaction as the passkey
+      // Write the audit row in the SAME transaction as the passkey
       // insert so a signed-out attacker who skips the notification path
       // still leaves a row in security_events for the user to discover.
       const securityEventRow: typeof securityEvents.$inferInsert = {
@@ -252,7 +374,11 @@ export function createPasskeysModule(
         uaLabel: eventMeta?.uaLabel ?? null,
       };
 
-      // P-W1 / P-I10: cap enforcement. `beginPasskeyRegistration` already refuses
+      // An entry parked by a deploy older than the flag carries no answer.
+      // Read it as `false` — the ordinary cap, which is the restrictive one.
+      const recoveryEnrolment = entry.recoveryEnrolment ?? false;
+
+      // Cap enforcement. `beginPasskeyRegistration` already refuses
       // past the limit; this is the belt-and-braces check. D1 has no interactive
       // transaction, so the count read runs first and the passkey + audit insert
       // commit as one atomic batch. A pair of completes racing the cap could
@@ -260,17 +386,130 @@ export function createPasskeysModule(
       // begin-side check is the primary guard).
       const passkeyCount = yield* Effect.tryPromise({
         try: () =>
-          db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.accountId, accountId)),
+          db
+            .select({
+              id: passkeys.id,
+              createdAt: passkeys.createdAt,
+              provenanceAmr: passkeys.provenanceAmr,
+            })
+            .from(passkeys)
+            .where(eq(passkeys.accountId, accountId)),
         catch: (cause) => new DatabaseError({ cause }),
       });
-      if (passkeyCount.length >= MAX_PASSKEYS_PER_ACCOUNT) {
+
+      // Which credentials, if any, this enrolment pays for its slot with.
+      //
+      // Decided HERE rather than replayed from `begin`: the two reads are up to
+      // CHALLENGE_TTL_MS apart, and in between the account can gain or lose
+      // credentials on paths this ceremony knows nothing about. The counter is
+      // emitted from this decision alone, so one ceremony counts once.
+      //
+      // A candidate is a credential THIS RECOVERY EPISODE lent: `recovery`
+      // provenance AND created at or after `accounts.last_recovered_at`, which
+      // the recovery that minted this session stamped. Nothing that predates the
+      // recovery is ever taken, and that is the whole rule.
+      //
+      // Provenance alone is not enough, and the difference is the security
+      // property. `provenance_amr` is stamped at insert and never updated, so a
+      // `recovery` row keeps that value for the life of the account — long after
+      // the restriction it names has expired and the credential has become the
+      // owner's real, daily device. Worse, the cooldown puts the earliest second
+      // recovery at the moment the first lent credential matures, so a
+      // provenance-only filter meets exactly one candidate in the case that
+      // actually occurs: the matured one. Deleting it hands a mailbox-only
+      // attacker the owner's last working credential, with no step-up presented
+      // anywhere. The episode bound is what refuses that, and it mirrors W2 in
+      // `step-up.ts`: a recovery may act on what it produced, not on what it
+      // found.
+      //
+      // A NULL `last_recovered_at` yields no candidates at all. That is the
+      // fail-closed answer: with no recorded recovery there is nothing this
+      // episode can prove it lent.
+      let reclaimIds: readonly string[] = [];
+      if (recoveryEnrolment) {
+        const surplus = passkeyCount.length + 1 - RECOVERY_ENROLMENT_PASSKEY_CEILING;
+        if (surplus > 0) {
+          const [account] = yield* Effect.tryPromise({
+            try: () =>
+              db
+                .select({ lastRecoveredAt: accounts.lastRecoveredAt })
+                .from(accounts)
+                .where(eq(accounts.id, accountId))
+                .limit(1),
+            catch: (cause) => new DatabaseError({ cause }),
+          });
+          const recoveredAt = account?.lastRecoveredAt ?? null;
+          const candidates =
+            recoveredAt === null
+              ? []
+              : passkeyCount
+                  .filter(
+                    (pk) =>
+                      pk.provenanceAmr === "recovery" &&
+                      Math.floor(pk.createdAt.getTime() / 1000) >= recoveredAt,
+                  )
+                  // `created_at` is unix seconds, so rows written in the same
+                  // second tie. `id` breaks the tie deterministically — it is
+                  // random, not monotonic, so it orders nothing by time; two tied
+                  // rows are from the same instant and either is equally safe to
+                  // take. Newest first among what is left, which are all rows
+                  // this one episode lent.
+                  .toSorted(
+                    (a, b) =>
+                      b.createdAt.getTime() - a.createdAt.getTime() ||
+                      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+                  );
+          reclaimIds = candidates.slice(0, surplus).map((pk) => pk.id);
+        }
+        // Never a refusal. Where the surplus cannot be paid for, the threshold
+        // gives way and the account ends above it — because the alternative is
+        // taking a credential that may be the only one the owner can still use,
+        // and the alternative to THAT is an account nobody can reach, which is
+        // the failure this whole path exists to remove. What bounds the growth
+        // is the cooldown: one episode, and so at most one unpaid credential,
+        // per RECOVERY_COOLDOWN_MS.
+        metricRecoveryPasskeyReclaim(
+          surplus <= 0
+            ? "headroom_used"
+            : reclaimIds.length === surplus
+              ? "reclaimed"
+              : "ceiling_yielded",
+        );
+      } else if (passkeyCount.length >= MAX_PASSKEYS_PER_ACCOUNT) {
         return yield* Effect.fail(
           new AuthError({ message: "Passkey limit reached for this account" }),
         );
       }
+
+      // The reclaim rides in the SAME batch as the insert that pays for it, so
+      // no interleaving leaves the account one credential down. No survivor-count
+      // guard is needed the way `revokeDisownedRecovery` needs one: this deletes
+      // n and inserts 1 together, n never exceeds the surplus over the ceiling,
+      // and it fires only when there IS a surplus — so the account lands on the
+      // ceiling at worst, and the "≥1 passkey" invariant holds by construction
+      // rather than by check.
+      const reclaimStatements: BatchItem<"sqlite">[] =
+        reclaimIds.length > 0
+          ? [
+              db
+                .delete(passkeys)
+                .where(and(eq(passkeys.accountId, accountId), inArray(passkeys.id, reclaimIds))),
+              db.insert(securityEvents).values({
+                id: genId("sev_"),
+                accountId,
+                kind: "passkey_reclaimed",
+                createdAt: nowSec,
+                acknowledgedAt: null,
+                ipHash: eventMeta?.ip ? hashIp(eventMeta.ip) : null,
+                uaLabel: eventMeta?.uaLabel ?? null,
+              }),
+            ]
+          : [];
+
       yield* Effect.tryPromise({
         try: () =>
           commitBatch(db, [
+            ...reclaimStatements,
             db.insert(passkeys).values({
               id,
               accountId,
@@ -282,6 +521,12 @@ export function createPasskeysModule(
                 : null,
               createdAt: ts,
               label: null,
+              // An entry parked before this column existed carries no
+              // provenance. Stamp the most restrictive value rather than
+              // failing a ceremony the user is halfway through: a credential
+              // that waits 72 hours is a nuisance, one that cannot be
+              // registered at all during a rolling deploy is an outage.
+              provenanceAmr: entry.provenanceAmr ?? "recovery",
               lastUsedAt: null,
               aaguid,
               backupEligible: eligible,
@@ -294,8 +539,11 @@ export function createPasskeysModule(
       });
 
       metricSecurityEventRecorded("passkey_register");
+      if (reclaimIds.length > 0) {
+        metricSecurityEventRecorded("passkey_reclaimed");
+      }
 
-      // H1: Invalidate all other sessions on passkey registration.
+      // Invalidate all other sessions on passkey registration.
       // An attacker who stole a session token cannot persist after the
       // legitimate user adds a passkey.
       //
@@ -303,10 +551,18 @@ export function createPasskeysModule(
       // row, and otherwise from the access token's `osn_sid` binding — a
       // cross-origin Bearer call, a cookie-stripping proxy or a native client
       // all land on the second path and must NOT be treated as sessionless.
+      // Enrolling a passkey is the one thing a restricted recovery session can
+      // do, and the user has just done it — so the restriction is lifted here
+      // and the caller's session becomes an ordinary one. A no-op on every
+      // other session, and on the branch below where there is no caller session
+      // to keep. From the next `/token` grant onward the access token carries
+      // the ordinary audience again.
+      yield* liftSessionRestriction(accountId, callerSessionHash);
+
       if (callerSessionHash) {
         yield* invalidateOtherAccountSessions(accountId, callerSessionHash);
       } else {
-        // O4: the caller has no identifiable session at all — no cookie, and
+        // The caller has no identifiable session at all — no cookie, and
         // either no `osn_sid` in the access token or one that matches no live
         // session row. Previously this branch was a silent no-op — H1
         // invalidation was skipped entirely, so a stolen session survived the
@@ -322,15 +578,32 @@ export function createPasskeysModule(
         metricSessionSecurityInvalidation("passkey_register");
       }
 
-      // S-H1: best-effort email notification. Forked daemon — failure
+      // Best-effort email notification. Forked daemon — failure
       // logged but never rolls back the enrolment. 10s timeout matches
       // passkey_delete / recovery_code_* paths.
-      yield* Effect.forkDaemon(
+      yield* forkBackground(
         notifyPasskeyRegisteredByAccountId(accountId).pipe(
           Effect.timeout("10 seconds"),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
+
+      // A credential vanished that the account holder never asked to lose, so
+      // they are told separately from the one that was added. The
+      // `passkey-removed` copy — "it was you, or investigate" — is the right
+      // words here rather than a reuse of convenience: whoever reads this did
+      // not perform the removal, and investigating is exactly what they should
+      // do if the recovery behind it was not theirs.
+      if (reclaimIds.length > 0) {
+        yield* forkBackground(
+          securityEventsModule
+            .notifySecurityEventByAccountId(accountId, "passkey_reclaimed", "passkey-removed", {})
+            .pipe(
+              Effect.timeout("10 seconds"),
+              Effect.catch(() => Effect.void),
+            ),
+        );
+      }
 
       return { passkeyId: id };
     });
@@ -383,9 +656,9 @@ export function createPasskeysModule(
             }),
           catch: (cause) => new AuthError({ message: String(cause) }),
         });
-        // O3: the store self-bounds (CEREMONY_STORE_MAX in-memory, native PX
-        // expiry on Redis) and sweeps expired entries on insert, so the prior
-        // explicit P-I2 size-cap check is folded into the store.
+        // The store self-bounds (CEREMONY_STORE_MAX in-memory, native PX
+        // expiry on Redis) and sweeps expired entries on insert, so no
+        // separate size-cap check is needed.
         const challengeId = crypto.randomUUID();
         yield* Effect.promise(() =>
           stores.loginChallenges.set(
@@ -402,7 +675,7 @@ export function createPasskeysModule(
 
       // Resolve passkeys for the account when the identifier is known, or
       // nothing when it isn't. Both branches run a DB SELECT so the query
-      // latency distribution is the same (S-M1: no timing oracle).
+      // latency distribution is the same (no timing oracle).
       const { db } = yield* Db;
       const profilePasskeys = profile
         ? yield* Effect.tryPromise({
@@ -412,12 +685,12 @@ export function createPasskeysModule(
         : yield* Effect.tryPromise({
             // Burn-in query: hit the table with a never-matching accountId
             // so an unknown identifier costs the same shape of work as a
-            // known one. O5: random per-request sentinel — see probeAccountId.
+            // known one. Random per-request sentinel — see probeAccountId.
             try: () => db.select().from(passkeys).where(eq(passkeys.accountId, probeAccountId())),
             catch: (cause) => new DatabaseError({ cause }),
           });
 
-      // S-M1: equalise the response envelope. Unknown identifier AND
+      // Equalise the response envelope. Unknown identifier AND
       // known-with-zero-passkeys return a single fabricated credentialId;
       // known-with-passkeys returns the real allowCredentials. The wire
       // shape — `{ options: { …, allowCredentials: [...], userVerification } }`
@@ -451,7 +724,7 @@ export function createPasskeysModule(
           generateAuthenticationOptions({
             rpID: config.rpId,
             allowCredentials,
-            // S-H2: `verifyAuthenticationResponse` sets
+            // `verifyAuthenticationResponse` sets
             // `requireUserVerification: true`, so options and verify must
             // agree. "required" here matches the verifier, matches the
             // identifier-less flow, and makes the ceremony phishing-
@@ -470,7 +743,7 @@ export function createPasskeysModule(
       // legitimate timeout — preserves the enumeration safety into
       // the complete step too.
       if (realCredentials) {
-        // O3: store self-bounds + self-sweeps (see discoverable branch above).
+        // Store self-bounds + self-sweeps (see discoverable branch above).
         yield* Effect.promise(() =>
           stores.loginChallenges.set(
             normalised,
@@ -554,7 +827,7 @@ export function createPasskeysModule(
         if (!account) {
           return yield* Effect.fail(new AuthError({ message: "Invalid request" }));
         }
-        // S-M3: discoverable flow — the credential row supplies the account.
+        // Discoverable flow — the credential row supplies the account.
         // Cross-check the assertion's `userHandle` against the account's
         // stored `passkeyUserId`. The signature already binds the assertion
         // to the credential, so this is defence-in-depth: if a future schema
@@ -578,7 +851,7 @@ export function createPasskeysModule(
         }
       }
 
-      // S-L5: never reflect the WebAuthn library's error text to the caller —
+      // Never reflect the WebAuthn library's error text to the caller —
       // it can pinpoint failure mode (challenge mismatch vs origin mismatch
       // vs counter regression) and lets an attacker probe the verifier. We
       // log the cause for operators (annotation goes through the redaction
@@ -614,7 +887,7 @@ export function createPasskeysModule(
         return yield* Effect.fail(new AuthError({ message: "Passkey verification failed" }));
       }
 
-      // Update counter + coalesced last_used_at (P-W4 parallel to sessions).
+      // Update counter + coalesced last_used_at (parallel to sessions).
       const nowSec = Math.floor(Date.now() / 1000);
       const shouldTouchLastUsed =
         !pk.lastUsedAt || Date.now() - pk.lastUsedAt * 1000 >= PASSKEY_LAST_USED_COALESCE_MS;

@@ -114,7 +114,7 @@ export const createRegistryGuestListRoutes = (db: Db) =>
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });
@@ -188,7 +188,7 @@ export const createRegistryGuestImageRoutes = (
           // row outlived its object (or never had one).
           Effect.catchTag("AssetR2Error", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     },
@@ -215,7 +215,7 @@ export const createRegistryGuestMineRoutes = (db: Db) =>
           Effect.provideService(DbService, db),
           Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });
@@ -307,7 +307,7 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
         const raw: unknown = await request.json().catch(() => null);
         return runCire(
           Effect.gen(function* () {
-            const body = yield* Schema.decodeUnknown(ContributeBody)(raw);
+            const body = yield* Schema.decodeUnknownEffect(ContributeBody)(raw);
             // The item check rides along with the household check inside the
             // context read, rather than waiting on its answer: two point reads
             // against the same wedding, one round trip.
@@ -430,7 +430,7 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
             return { url: session.url };
           }).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchTag("ParseError", () => badRequest(set)),
+            Effect.catchTag("SchemaError", () => badRequest(set)),
             Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
             Effect.catchTag("CashGiftsUnavailable", () =>
               Effect.sync(() => {
@@ -447,7 +447,7 @@ export const createRegistryContributeRoutes = (db: Db, deps: RegistryContributeD
               }),
             ),
             Effect.tapDefect(logDefect),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       },
@@ -513,7 +513,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
         const raw: unknown = await request.json().catch(() => null);
         return runCire(
           Effect.gen(function* () {
-            const body = yield* Schema.decodeUnknown(ClaimItemBody)(raw);
+            const body = yield* Schema.decodeUnknownEffect(ClaimItemBody)(raw);
             // Resolve the wedding from the SLUG and hand THAT id to the service.
             // The cookie names a household, not a wedding, so this is what stops
             // a family of wedding A acting on wedding B: `claim` proves the
@@ -532,7 +532,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
             return { ok: true };
           }).pipe(
             Effect.provideService(DbService, db),
-            Effect.catchTag("ParseError", () => badRequest(set)),
+            Effect.catchTag("SchemaError", () => badRequest(set)),
             Effect.catchTag("RegistryNotVisible", () => notVisible(set)),
             Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
             Effect.catchTag("FamilyNotInWedding", () => notVisible(set)),
@@ -552,7 +552,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
               }),
             ),
             Effect.tapDefect(logDefect),
-            Effect.catchAllDefect(() => internal(set)),
+            Effect.catchDefect(() => internal(set)),
           ),
         );
       },
@@ -574,7 +574,7 @@ export const createRegistryGuestClaimRoutes = (db: Db, deps: RegistryGuestClaimD
           Effect.catchTag("FamilyNotInWedding", () => notVisible(set)),
           Effect.catchTag("RegistryItemNotInWedding", () => itemNotFound(set)),
           Effect.tapDefect(logDefect),
-          Effect.catchAllDefect(() => internal(set)),
+          Effect.catchDefect(() => internal(set)),
         ),
       );
     });

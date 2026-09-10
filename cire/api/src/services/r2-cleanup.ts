@@ -2,33 +2,6 @@ import { Effect } from "effect";
 
 import { metricR2ObjectsSwept } from "../metrics";
 
-/**
- * Best-effort bulk R2 object reaper, shared by any flow that orphans R2 objects
- * when it deletes the D1 rows that referenced them (today: the guest-data
- * retention sweep; a future organiser wedding-delete flow would call it too).
- *
- * Why a separate helper: cire stores R2 **keys** in D1 (`imports.events_r2_key`
- * / `guests_r2_key` in the `cire-sheets` bucket; `wedding_invite_customisations`
- * hero/story keys + `events.event_image_key` in `cire-assets`). D1's
- * `ON DELETE cascade` fans out *within* D1 but NEVER reaches R2, so deleting a
- * wedding/import row silently orphans its objects (uploaded guest sheets +
- * wedding photos — personal data) forever. The caller collects the keys BEFORE
- * deleting the rows, then hands them here.
- *
- * Contract:
- *  - **Best-effort.** A failed object delete is logged (`Effect.logError`, keys
- *    are non-PII opaque paths — counts + chunk index only, never guest data) and
- *    NEVER aborts the caller's sweep. Orphaning a handful of objects is strictly
- *    better than a stuck retention sweep that leaves a whole cohort's PII in D1.
- *  - **Bounded.** Keys are deduped and chunked so a purge touching many objects
- *    respects the Worker CPU/subrequest budget; each chunk is one `delete([...])`
- *    multi-key call where the binding supports it (Cloudflare R2), falling back
- *    to per-key deletes (the in-memory test stub / any single-key binding).
- *  - **Metric.** Emits the bounded-cardinality `cire.r2.objects.swept` counter
- *    (`bucket` ∈ sheets|assets, `result` ∈ ok|error) — count is the number of
- *    keys in the request, so the sum tracks reclaimed objects per bucket.
- */
-
 /** The two cire R2 buckets, as a bounded label for the swept metric. */
 export type R2BucketLabel = "sheets" | "assets";
 
@@ -36,7 +9,10 @@ export type R2BucketLabel = "sheets" | "assets";
  * Minimal delete-only R2 surface. Cloudflare's `R2Bucket` satisfies this
  * structurally and additionally accepts `string[]` for a single multi-key
  * delete; the in-memory test stubs implement only the single-key form. We
- * feature-detect the array form at call time so both work.
+ * feature-detect the array form at call time so both work — but only a
+ * *synchronous* throw from `bucket.delete(batch)` is treated as "form not
+ * supported"; a rejected promise is a genuine delete failure and is not
+ * retried per-key.
  *
  * The result is `Promise<void> | void`, matching the real backend: R2's
  * `delete` resolves `Promise<void>` (the ambient `R2Bucket` from
@@ -61,10 +37,37 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
+ * Best-effort bulk R2 object reaper, shared by any flow that orphans R2 objects
+ * when it deletes the D1 rows that referenced them (today: the guest-data
+ * retention sweep; a future organiser wedding-delete flow would call it too).
+ *
+ * Why a separate helper: cire stores R2 **keys** in D1 (`imports.events_r2_key`
+ * / `guests_r2_key` in the `cire-sheets` bucket; `wedding_invite_customisations`
+ * hero/story keys + `events.event_image_key` in `cire-assets`). D1's
+ * `ON DELETE cascade` fans out *within* D1 but NEVER reaches R2, so deleting a
+ * wedding/import row silently orphans its objects (uploaded guest sheets +
+ * wedding photos — personal data) forever. The caller collects the keys BEFORE
+ * deleting the rows, then hands them here.
+ *
  * Delete `keys` from `bucket`, best-effort. Resolves successfully even if some
  * (or all) deletes fail — failures are logged and counted, never thrown. Empty
  * / all-null key list is a no-op (no metric, no log). Null/blank keys are
  * filtered out so an unset image column never produces a bogus delete.
+ *
+ * Contract:
+ *  - **Best-effort.** A failed object delete is logged (`Effect.logError`, keys
+ *    are non-PII opaque paths — counts + chunk index only, never guest data) and
+ *    NEVER aborts the caller's sweep. Orphaning a handful of objects is strictly
+ *    better than a stuck retention sweep that leaves a whole cohort's PII in D1.
+ *  - **Bounded.** Keys are deduped and chunked so a purge touching many objects
+ *    respects the Worker CPU/subrequest budget; each chunk is one `delete([...])`
+ *    multi-key call where the binding supports it (Cloudflare R2), falling back
+ *    to per-key deletes only when a binding rejects the array form
+ *    *synchronously* — an asynchronous rejection is a real delete failure, not
+ *    a feature gap, so it is counted as failed rather than retried per-key.
+ *  - **Metric.** Emits the bounded-cardinality `cire.r2.objects.swept` counter
+ *    (`bucket` ∈ sheets|assets, `result` ∈ ok|error) — count is the number of
+ *    keys in the request, so the sum tracks reclaimed objects per bucket.
  */
 export function reapR2Objects(
   bucket: DeletableBucket | undefined,
@@ -98,22 +101,29 @@ export function reapR2Objects(
         try: async () => {
           // Cloudflare R2's `delete` accepts `string[]` (one multi-key request);
           // the in-memory test stub / any single-key binding may not. Attempt the
-          // array form first, fall back to per-key deletes if it throws.
+          // array form first, fall back to per-key deletes only when the call
+          // throws synchronously — an async rejection is a real failure, not a
+          // feature gap, and must not be masked by a per-key retry.
+          let pending: Promise<void> | undefined;
           try {
-            await bucket.delete(batch);
-            return;
+            pending = Promise.resolve(bucket.delete(batch));
           } catch {
-            // Binding rejected the array form — fall through to per-key deletes.
+            // Binding rejected the array form synchronously — fall through to per-key.
+            pending = undefined;
           }
-          for (const key of batch) {
-            // eslint-disable-next-line no-await-in-loop
-            await bucket.delete(key);
+          if (pending) {
+            await pending;
+            return;
           }
+          // The per-key deletes are independent of one another and the chunk
+          // is already bounded by CHUNK_SIZE, so they go out together rather
+          // than one round-trip at a time.
+          await Promise.all(batch.map((key) => bucket.delete(key)));
         },
         catch: (cause) => cause,
       }).pipe(
         Effect.as("ok" as const),
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           // Best-effort: a failed chunk is logged (chunk index + size only, no
           // keys/PII) and swallowed so the sweep continues.
           Effect.logError("r2 cleanup chunk failed", {

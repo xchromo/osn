@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "pr": {
+    "number": 967,
+    "branch": "refactor/separate-osn-from-musubi",
+    "base_sha": "10e490c9aa8581cf5b4cf2f739e1f689370a0083",
+    "head_sha": "9b33d22a6e4b7520cf96a450e65a09f4434e9b59",
+    "generated_at": "2026-09-09T06:24:29.003Z",
+    "merged_at": "2026-09-09T02:56:45Z",
+    "phase": "at-merge"
+  },
+  "issue": {
+    "number": 954,
+    "type": null,
+    "labels": []
+  },
+  "complexity": {
+    "declared": null,
+    "method": "none"
+  },
+  "window": {
+    "sessions": 5,
+    "first_ts": "2026-09-08T14:34:45.201Z",
+    "last_ts": "2026-09-09T02:08:33.027Z",
+    "span_seconds": 41628,
+    "active_seconds": 5079,
+    "compactions": 0
+  },
+  "spend": {
+    "usd_equivalent": 37.491811049999995,
+    "tokens": {
+      "input": 1716,
+      "output": 127296,
+      "thinking": 30203,
+      "cache_write_5m": 760909,
+      "cache_write_1h": 334125,
+      "cache_read": 59931928
+    },
+    "by_model": {
+      "claude-opus-4-7": {
+        "tokens": {
+          "input": 44,
+          "output": 15440,
+          "thinking": 0,
+          "cache_write_5m": 135765,
+          "cache_write_1h": 0,
+          "cache_read": 992791
+        },
+        "usd_equivalent": 1.7311467500000002,
+        "messages": 24
+      },
+      "claude-opus-5": {
+        "tokens": {
+          "input": 332,
+          "output": 106143,
+          "thinking": 30186,
+          "cache_write_5m": 0,
+          "cache_write_1h": 334125,
+          "cache_read": 39259085
+        },
+        "usd_equivalent": 25.626027500000006,
+        "messages": 166
+      },
+      "<synthetic>": {
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "thinking": 0,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_read": 0
+        },
+        "usd_equivalent": 0,
+        "messages": 1
+      },
+      "claude-fable-5-1": {
+        "tokens": {
+          "input": 1026,
+          "output": 843,
+          "thinking": 0,
+          "cache_write_5m": 142799,
+          "cache_write_1h": 0,
+          "cache_read": 3882548
+        },
+        "usd_equivalent": 5.719945500000001,
+        "messages": 33
+      },
+      "claude-sonnet-5": {
+        "tokens": {
+          "input": 314,
+          "output": 4870,
+          "thinking": 17,
+          "cache_write_5m": 482345,
+          "cache_write_1h": 0,
+          "cache_read": 15797504
+        },
+        "usd_equivalent": 4.4146913,
+        "messages": 157
+      }
+    },
+    "by_actor": {
+      "main": {
+        "tokens": {
+          "input": 376,
+          "output": 121583,
+          "thinking": 30186,
+          "cache_write_5m": 135765,
+          "cache_write_1h": 334125,
+          "cache_read": 40251876
+        },
+        "usd_equivalent": 27.357174250000003,
+        "messages": 191
+      },
+      "subagent": {
+        "tokens": {
+          "input": 1340,
+          "output": 5713,
+          "thinking": 17,
+          "cache_write_5m": 625144,
+          "cache_write_1h": 0,
+          "cache_read": 19680052
+        },
+        "usd_equivalent": 10.134636800000003,
+        "messages": 190
+      }
+    },
+    "effort": {
+      "high": 356
+    },
+    "unpriced_models": []
+  },
+  "diff": {
+    "files": {
+      "generated": 3,
+      "test": 27,
+      "docs": 47,
+      "config": 12,
+      "source": 87
+    },
+    "loc": {
+      "generated": {
+        "added": 115,
+        "deleted": 60
+      },
+      "test": {
+        "added": 32,
+        "deleted": 11
+      },
+      "docs": {
+        "added": 311,
+        "deleted": 192
+      },
+      "config": {
+        "added": 235,
+        "deleted": 31
+      },
+      "source": {
+        "added": 78,
+        "deleted": 73
+      }
+    },
+    "packages": [
+      "cire/host",
+      "cire/vendor",
+      "osn/api",
+      "osn/client",
+      "osn/ios",
+      "osn/ui",
+      "pulse/ios",
+      "shared/dev-urls",
+      "shared/swift",
+      "shared/toast",
+      "tools/lab",
+      "tools/metrics",
+      "zap/api"
+    ],
+    "touches_migration": false,
+    "commits": 4
+  },
+  "interaction": {
+    "user_turns": 9,
+    "corrective_turns": 5,
+    "tokens_before_first_edit": 259301,
+    "sessions_with_observed_edit": 1,
+    "tool_calls": {
+      "Bash": 71,
+      "Edit": 13,
+      "Write": 3,
+      "Agent": 2,
+      "Read": 2,
+      "Monitor": 1
+    },
+    "edit_churn": {
+      "files_edited_3plus": 3,
+      "max_edits_one_file": 4
+    },
+    "skills": {},
+    "subagents": {
+      "general-purpose": 2
+    }
+  }
+}

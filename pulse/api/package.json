@@ -1,6 +1,6 @@
 {
   "name": "@pulse/api",
-  "version": "0.26.16",
+  "version": "0.27.9",
   "private": true,
   "type": "module",
   "exports": {
@@ -20,7 +20,7 @@
     "openapi:generate": "bun run scripts/generate-openapi.ts",
     "test": "bunx --bun vitest",
     "test:run": "bunx --bun vitest run",
-    "test:d1": "bun test src/d1-integration.test.ts"
+    "test:d1": "bun test tests/d1/d1-integration.test.ts"
   },
   "portless": {
     "name": "api.pulse",
@@ -40,17 +40,17 @@
     "@shared/redis": "workspace:*",
     "@zap/db": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "effect": "^3.22.0",
-    "elysia": "^1.4.29",
-    "jose": "^6.2.4"
+    "effect": "4.0.0-rc.112",
+    "elysia": "^1.4.30",
+    "jose": "^6.2.10"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260702.1",
-    "@effect/vitest": "^0.30.0",
+    "@cloudflare/workers-types": "^5.20260903.1",
+    "@effect/vitest": "4.0.0-rc.112",
     "@shared/dev-urls": "workspace:*",
     "@shared/typescript-config": "workspace:*",
-    "miniflare": "^4.20260722.0",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.114.0"
+    "miniflare": "^4.20260730.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.127.1"
   }
 }

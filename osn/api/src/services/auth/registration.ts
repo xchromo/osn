@@ -12,6 +12,7 @@ import { eq, sql } from "drizzle-orm";
 import { unionAll } from "drizzle-orm/sqlite-core";
 import { Effect, Schema } from "effect";
 
+import { UNIQUE_CONSTRAINT_ERROR } from "../../lib/unique-constraint";
 import { metricAuthHandleCheck, metricAuthOtpSent, withAuthRegister } from "../../metrics";
 import { MAX_OTP_ATTEMPTS, MIN_AGE_YEARS, RESERVED_HANDLES } from "./constants";
 import type { AuthContext } from "./context";
@@ -52,10 +53,10 @@ export function createRegistrationModule(
     displayName?: string,
   ): Effect.Effect<ProfileWithEmail, AuthError | ValidationError | DatabaseError, Db> =>
     Effect.gen(function* () {
-      yield* Schema.decodeUnknown(EmailSchema)(email).pipe(
+      yield* Schema.decodeUnknownEffect(EmailSchema)(email).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
-      yield* Schema.decodeUnknown(HandleSchema)(handle).pipe(
+      yield* Schema.decodeUnknownEffect(HandleSchema)(handle).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
 
@@ -135,6 +136,8 @@ export function createRegistrationModule(
         isDefault: true,
         createdAt: ts,
         updatedAt: ts,
+        // The account was created a statement ago; it has never been recovered.
+        lastRecoveredAt: null,
       };
     });
 
@@ -172,13 +175,13 @@ export function createRegistrationModule(
     Db | EmailService
   > =>
     Effect.gen(function* () {
-      yield* Schema.decodeUnknown(EmailSchema)(email).pipe(
+      yield* Schema.decodeUnknownEffect(EmailSchema)(email).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
-      yield* Schema.decodeUnknown(HandleSchema)(handle).pipe(
+      yield* Schema.decodeUnknownEffect(HandleSchema)(handle).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
-      yield* Schema.decodeUnknown(BirthdateSchema)(birthdate).pipe(
+      yield* Schema.decodeUnknownEffect(BirthdateSchema)(birthdate).pipe(
         Effect.mapError((cause) => new ValidationError({ cause })),
       );
 
@@ -299,8 +302,9 @@ export function createRegistrationModule(
    *    race against another insert (TOCTOU) leaves the pending entry intact
    *    so the user can retry without burning their OTP (S-H4).
    *  - Insert relies on the DB-level UNIQUE constraint on email/handle as
-   *    the source of truth, mapping constraint violations to a clean
-   *    AuthError instead of leaking driver text (S-H4 / S-H5).
+   *    the source of truth, mapping *uniqueness* violations to a clean
+   *    AuthError instead of leaking driver text (S-H4 / S-H5). Any other
+   *    constraint failure surfaces as DatabaseError.
    */
   const completeRegistration = (
     email: string,
@@ -352,9 +356,12 @@ export function createRegistrationModule(
 
       // Insert account + profile. The DB-level UNIQUE constraints on `email`
       // and `handle` are the source of truth for race-free uniqueness; a
-      // constraint violation here means another registration won the race
-      // (or the legacy `/register` endpoint was called concurrently). We
-      // surface that as a clean AuthError without leaking driver text.
+      // UNIQUE violation here means another registration won the race (or
+      // the legacy `/register` endpoint was called concurrently), and we
+      // surface that as a clean AuthError without leaking driver text. Any
+      // other constraint failure (NOT NULL / FOREIGN KEY / CHECK) is a DB
+      // fault, not a user race, and surfaces as DatabaseError instead — see
+      // `UNIQUE_CONSTRAINT_ERROR` for why the match is narrowed this way.
       const inserted = yield* Effect.tryPromise({
         try: async () => {
           try {
@@ -380,7 +387,7 @@ export function createRegistrationModule(
             return { ok: true as const };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            if (/UNIQUE|constraint/i.test(msg)) {
+            if (UNIQUE_CONSTRAINT_ERROR.test(msg)) {
               return { ok: false as const, reason: "conflict" };
             }
             throw e;
@@ -427,7 +434,7 @@ export function createRegistrationModule(
     handle: string,
   ): Effect.Effect<{ available: boolean }, ValidationError | DatabaseError, Db> =>
     Effect.gen(function* () {
-      yield* Schema.decodeUnknown(HandleSchema)(handle).pipe(
+      yield* Schema.decodeUnknownEffect(HandleSchema)(handle).pipe(
         Effect.tapError(() => Effect.sync(() => metricAuthHandleCheck("invalid"))),
         Effect.mapError((cause) => new ValidationError({ cause })),
       );

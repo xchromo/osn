@@ -56,7 +56,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                 return { error: "wedding_not_found" };
               }),
             ),
-            Effect.catchAllDefect(() =>
+            Effect.catchDefect(() =>
               Effect.sync(() => {
                 set.status = 500;
                 return { error: "Internal error" };
@@ -77,7 +77,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
           const raw: unknown = await request.json().catch(() => null);
           return runCire(
             Effect.gen(function* () {
-              const patch = yield* Schema.decodeUnknown(UpdateSettingsBody)(raw);
+              const patch = yield* Schema.decodeUnknownEffect(UpdateSettingsBody)(raw);
               // Shape first, then privilege: a malformed body is a 400 whoever
               // sent it, so a co-host debugging a typo isn't told "forbidden".
               const ownerOnly = weddingIsOwner ? [] : ownerOnlySettingsIn(patch);
@@ -101,7 +101,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
             }).pipe(
               Effect.provideService(DbService, db),
               Effect.catchTags({
-                ParseError: () =>
+                SchemaError: () =>
                   Effect.sync(() => {
                     set.status = 400;
                     return { error: "Missing or invalid fields" };
@@ -115,7 +115,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                 // moment it landed, and a guest turned away is never told the
                 // date moved. Refused for every caller, owner included — "today"
                 // stays available, since the deadline closes at the END of its
-                // day (S-L3).
+                // day.
                 RsvpDeadlineInPast: () =>
                   Effect.sync(() => {
                     set.status = 400;
@@ -127,7 +127,7 @@ export const createOrganiserSettingsRoutes = (db: Db, osnAuthOptions: OsnAuthOpt
                     return { error: "Could not save settings" };
                   }),
               }),
-              Effect.catchAllDefect(() =>
+              Effect.catchDefect(() =>
                 Effect.sync(() => {
                   set.status = 500;
                   return { error: "Internal error" };
