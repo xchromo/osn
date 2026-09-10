@@ -225,24 +225,51 @@ chain that no longer applies fails the guard instead of measuring cheap.
 
 `bun:sqlite` cannot report D1's rows-read/rows-written accounting, so the row
 figure is a **proxy priced by one constant**: 27 D1 rows written per schema
-write. A from-zero rebuild runs against empty tables, so its bill is nearly all
-schema churn — of the 200 heaviest queries on `cire-db-dev` in the week to
-2026-09-10, schema statements were 89% of rows written and the seed's inserts
-11% — and D1 bills a table rebuild whatever the table holds. Two remote
-measurements fix the constant, and one value fits both:
+write. A from-zero rebuild runs against empty tables, so nearly all of what it
+spends is schema churn — D1 bills a table rebuild whatever the table holds — and
+the constant asserts that each schema statement therefore has a roughly fixed
+price. One measurement fixes it; a second only bounds it.
 
-| Anchor | Measured on D1 | Guard's estimate |
-|---|---:|---:|
-| One `ALTER TABLE ... DROP COLUMN` on an empty `wedding_invite_customisations` | 54 rows written | 2 schema writes → **54** |
-| The 57-file chain squashed by xchromo/osn#984 (269 schema writes) | 8,007 rows written for the whole rebuild, of which the 89% schema share is 7,126 | **7,265**, 2.0% high |
+**The hard anchor.** One `ALTER TABLE ... DROP COLUMN` on
+`wedding_invite_customisations`, against a table with no rows in it, cost **54
+D1 rows written** — two schema writes at 27 apiece.
+<!-- measured 2026-09-10: bunx wrangler d1 insights cire-db-dev --time-period=7d --sort-by=writes --limit=200 -->
 
-> [!warning] Two anchors, one constant — not a regression
-> Both readings come from one database in one week. The model asserts that a
-> schema statement has a roughly fixed price; it does not reconstruct D1's
-> accounting, and nothing here proves it. Treat the printed row figure as good
-> to about ±10% and the schema-write count as the exact thing being guarded.
+**The soft anchor**, which agrees within about a fifth and no better. The
+57-file chain squashed by xchromo/osn#984 measures 269 schema writes here, and
+its rebuild cost **8,007 D1 rows written** in total — but that total covers
+drop, replay *and* seed, so it bounds the chain only once the seed is taken off,
+and the seed's cost is the part not known precisely.
+<!-- 8,007 is unverified here: taken from [[free-tier-limits]] and the xchromo/osn#979 investigation, not re-derived -->
+
+| Bound on the constant | Where it comes from |
+|---:|---|
+| **≤ 22.1** rows per schema write | `cire/db/seed/dev-seed.sql` inserts **2,063 tuples**, and D1 bills index entries as rows written too, so the seed cost at least that. The chain is then at most 8,007 − 2,063 = 5,944.<br><!-- measured 2026-09-10: replay cire/db/migrations/0001_initial.sql then cire/db/seed/dev-seed.sql into bun:sqlite and sum SQLite's `changes` --> |
+| **27** rows per schema write | The hard anchor above — the only figure measured directly. |
+
+> [!warning] The "89% schema, 11% seed" split does not settle this
+> That split is taken from the **200 heaviest queries** — 56,852 rows written
+> across those 200, against roughly 409,000 on the database over the week's
+> rebuild days — so it is a share of a sample, not a share of a rebuild.
+> Multiplying 8,007 by 0.89 is not sound: the seed cost it implies, 881 rows,
+> is below the seed's own floor of 2,063, which is the tell that the sample
+> over-represents schema statements. Neither sampling figure was re-derived
+> when this section was written.
+
+So the constant sits somewhere around **22 to 27**, and the guard uses 27: the
+top of the band, the only directly measured point, and the safe side, since
+over-stating a rebuild is the error that does not lose a day's quota.
+
+> [!important] What the uncertainty touches
+> The **schema-write count is exact** — counted, not modelled — and it is what
+> to trust. Every **row** figure on this page or in the guard's output, and
+> every "replays a day" derived from one, carries the 22–27 band: read them as
+> indicative, and as pessimistic by up to about a fifth rather than optimistic.
+> The guard prints its line in schema writes beside the row budget for that
+> reason, so the threshold can be read without the constant.
+>
 > Three things sit outside the number on purpose: the **seed** a full dev
-> rebuild runs after the replay (a further tenth or so), the per-file
+> rebuild runs after the replay (2,063 tuples, on top), the per-file
 > `d1_migrations` ledger insert (folded into the constant, which over-charges a
 > short chain slightly), and **rows read**, whose ceiling is 5,000,000 a day
 > against 100,000 written and has never been the binding one.
@@ -252,13 +279,21 @@ measurements fix the constant, and one value fits both:
 **This table is documentation, not enforcement.** The `.txt` file is what the
 guard reads; if the two disagree, it is right and this page is stale.
 
-| Chain | Measured (2026-09-10) | Budget | Replays a day |
-|---|---:|---:|---:|
-| `cire/db/migrations` | 1,836 rows (68 schema writes) | 3,700 rows | 54 now, 27 at the budget |
+| Chain | Schema writes now | Line | Priced at 27 | Replays a day (indicative) |
+|---|---:|---:|---:|---:|
+| `cire/db/migrations` | **68** | **137** | 1,836 → 3,700 rows | ~54 now, ~27 at the line |
 
-The pre-squash chain, for scale: 269 schema writes, ~7,265 rows, 13 replays a
-day. Point the guard at `cire/db/migrations-archive` and it goes red, which is
-the fastest way to see it fail.
+The left two columns are exact; the right two move with the constant. The
+pre-squash chain, for scale: 269 schema writes, about 7,265 rows, roughly 13
+replays a day. Point the guard at `cire/db/migrations-archive` and it goes red,
+which is the fastest way to see it fail.
+<!-- measured 2026-09-10: bun run scripts/guard-d1-migration-cost.ts --all -->
+
+**Note the arithmetic on the pre-squash chain does not reproduce 8,007.** At 27
+it prices at 7,265 and the seed floor is 2,063, which sums past the reported
+total — which is another way of saying the true constant is nearer the bottom
+of the band than the top, and that the guard is deliberately charging more than
+a rebuild probably costs.
 
 ### Why the headroom is a doubling, not a hair
 
@@ -266,11 +301,13 @@ The rule further up this page — headroom smaller than the smallest mistake —
 assumes a baseline that is not supposed to move. A migration chain is supposed
 to grow, and the mistake here is not one bad migration: nothing in the chain
 that went over the ceiling was wrong. So the line is drawn at a **doubling** of
-the per-rebuild bill, which is the smallest step that materially changes the
-answer to "how many rebuilds a day can we afford". A budget tight enough to
-trip on one ordinary feature migration — `0057_registry` was 405 rows on its own
-— would be raised on sight every few pull requests, which is the failure the
-second rule names.
+the chain — 68 schema writes now, tripping at 137 — which is the smallest step
+that materially changes the answer to "how many rebuilds a day can we afford".
+A budget tight enough to trip on one ordinary feature migration —
+`0057_registry` was 15 schema writes on its own — would be raised on sight every
+few pull requests, which is the failure the second rule names. The doubling is
+in the exact unit, so it holds wherever in the 22–27 band the constant really
+sits.
 
 The other half of that: **this guard has a remedy the bundle guards do not.**
 Squashing the chain into a fresh baseline puts the number back down instead of

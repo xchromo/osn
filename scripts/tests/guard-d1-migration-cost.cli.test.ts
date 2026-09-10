@@ -83,8 +83,31 @@ test("a chain inside its budget exits 0 and prints the cost, the ceiling and the
 
 test("the printed affordability is the daily ceiling divided by the cost", async () => {
   const { stdout } = await runCli("db/migrations 1000\n", { "db/migrations": ONE_TABLE });
-  // 100,000 / 54.
-  expect(stdout).toContain("that affords 1851 replay(s) a day");
+  // 100,000 / 54, hedged because the price per schema write is only pinned to
+  // a band.
+  expect(stdout).toContain("that affords roughly 1851 replay(s) a day");
+});
+
+// Every row figure the guard prints is priced by a constant the evidence pins
+// only to about 22-27, so the guard also states its line in the unit it counts
+// exactly. 1000 rows of budget is 37 schema writes at 27 apiece.
+test("the line is also printed in schema writes, which needs no constant", async () => {
+  const { stdout } = await runCli("db/migrations 1000\n", { "db/migrations": ONE_TABLE });
+  expect(stdout).toContain("exactly: 2 schema writes against a line at 37");
+});
+
+test("the schema-write line takes real data rows off the top first", async () => {
+  const { stdout } = await runCli("db/migrations 1000\n", {
+    "db/migrations": {
+      ...ONE_TABLE,
+      // Ten real rows, so 990 of the 1000 is left to spend on schema writes.
+      "0002_backfill.sql": `INSERT INTO \`a\` (\`id\`) VALUES ${Array.from(
+        { length: 10 },
+        (_, index) => `('r${index}')`,
+      ).join(", ")};`,
+    },
+  });
+  expect(stdout).toContain("exactly: 2 schema writes against a line at 36");
 });
 
 test("a chain over its budget exits non-zero and names the figure and the ceiling", async () => {
@@ -107,6 +130,8 @@ test("a chain over its budget exits non-zero and names the figure and the ceilin
   expect(exitCode).toBe(1);
   expect(stdout).toContain("8 table-rebuild statement(s)");
   expect(stderr).toContain("::error::");
+  // The exact count and line first, then the priced figures.
+  expect(stderr).toContain("26 schema writes, over the line at 3");
   expect(stderr).toContain("over the 100 row budget");
   expect(stderr).toContain("100000 rows/day free-tier ceiling");
   expect(stderr).toContain("squash it into a fresh baseline");

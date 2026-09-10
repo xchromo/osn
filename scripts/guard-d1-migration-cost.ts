@@ -29,45 +29,63 @@
  * SQLite's own `changes`.
  *
  * WHY THAT CORRELATES WITH D1's BILL. A from-zero rebuild runs against empty
- * tables, so the bill is almost all schema churn — of the 200 heaviest queries
- * on `cire-db-dev` in the week to 2026-09-10, schema statements were 89% of
- * rows written and the seed's inserts were 11%. SQLite rebuilds the whole
- * table for every dropped column and D1 bills that against no data at all, so
- * each schema statement costs a roughly fixed number of rows whatever the
- * table holds. Two remote measurements fix the constant, and one constant fits
- * both:
+ * tables, so nearly all of what it spends is schema churn: SQLite rebuilds the
+ * whole table for every dropped column, and D1 bills that against no data at
+ * all. Each schema statement therefore costs a roughly fixed number of rows
+ * whatever the table holds, which is the claim the constant rests on.
  *
- *   - one `ALTER TABLE ... DROP COLUMN` on `wedding_invite_customisations`,
- *     against a table with no rows in it, cost 54 rows written — two schema
- *     writes at 27 apiece, exactly;
- *   - the 57-file chain squashed by xchromo/osn#984 measures 269 schema
- *     writes here, which at 27 apiece predicts 7,265 rows. The rebuild that
- *     replayed it cost 8,007 rows written in total, of which the 89% schema
- *     share is 7,126. The prediction is 2.0% high.
+ * ONE HARD ANCHOR fixes it. One `ALTER TABLE ... DROP COLUMN` on
+ * `wedding_invite_customisations`, against a table with no rows in it, cost 54
+ * D1 rows written — two schema writes at 27 apiece.
+ *   measured 2026-09-10:
+ *   bunx wrangler d1 insights cire-db-dev --time-period=7d --sort-by=writes --limit=200
  *
- * High is the safe side, and the two together also reproduce the figure the
- * incident was reported with: 7,265 for the chain plus the seed's share is
- * 8,007, and 100,000 / 8,007 is the 12 full rebuilds a day that chain afforded.
+ * ONE SOFT ANCHOR agrees within about 20%, and no better than that. The 57-file
+ * chain squashed by xchromo/osn#984 measures 269 schema writes here. Its
+ * rebuild cost 8,007 D1 rows written in total (unverified here — taken from
+ * wiki/runbooks/free-tier-limits.md and the xchromo/osn#979 investigation, and
+ * not re-derived by this branch), but that total covers drop, replay AND seed,
+ * so it only bounds the chain once the seed is subtracted, and the seed's cost
+ * is what is not known precisely:
  *
- * HOW TIGHT THAT IS, HONESTLY. Two anchor points, both from one database in
- * one week, fitted with one constant. It is not a regression and it does not
- * model D1's accounting; it asserts that a schema statement has a roughly
- * fixed price, which those two points and the 89/11 split support and nothing
- * here proves. Treat the printed row count as an estimate good to about ±10%
- * and the schema-write count as the exact thing being guarded. The estimate
- * also folds in the per-file `d1_migrations` ledger insert that
- * `wrangler d1 migrations apply` makes, since the calibration chain paid for
- * 57 of those — which over-charges a short chain slightly, again on the safe
- * side.
+ *   - `cire/db/seed/dev-seed.sql` inserts 2,063 tuples, and D1 bills index
+ *     entries as rows written too, so the seed cost AT LEAST that. The chain
+ *     is then at most 8,007 - 2,063 = 5,944, or 22.1 rows per schema write.
+ *     measured 2026-09-10: replay cire/db/migrations/0001_initial.sql then
+ *     cire/db/seed/dev-seed.sql into bun:sqlite and sum SQLite's `changes`.
+ *   - The often-quoted "89% schema, 11% seed" split does NOT settle it. That
+ *     is the split within the 200 HEAVIEST queries — 56,852 rows written
+ *     across those 200, against roughly 409,000 on the database over the
+ *     week's rebuild days — not a share of one rebuild. The seed cost it
+ *     implies, 881 rows, is below the seed's own floor of 2,063, which is the
+ *     tell that the sample over-represents schema statements. Neither of those
+ *     two sampling figures was re-derived on this branch.
+ *
+ * So the constant sits somewhere around 22 to 27, and this guard uses 27: the
+ * top of the band, the only directly measured point, and the safe side, since
+ * over-stating what a rebuild costs is the error that does not lose a day's
+ * quota.
+ *
+ * WHAT THAT UNCERTAINTY DOES AND DOES NOT TOUCH. The schema-write count is
+ * exact — it is counted, not modelled — and it is what a reader should trust.
+ * Every ROW figure the guard prints, and every "replays a day" derived from
+ * one, carries the 22-27 band: read them as indicative, and as pessimistic by
+ * up to about a fifth rather than optimistic. The line the guard enforces is
+ * printed in schema writes beside the budget for exactly that reason, so the
+ * threshold can be read without trusting the constant at all.
  *
  * WHAT IS NOT IN THE NUMBER. The seed. This guard prices the chain, because
  * the chain is what a pull request changes; a full dev rebuild drops, replays
- * and then seeds, and the seed is a further tenth or so on top.
+ * and then seeds, and the seed's 2,063 tuples come on top. The per-file
+ * `d1_migrations` ledger insert that `wrangler d1 migrations apply` makes is
+ * inside the constant rather than modelled, since the calibration chain paid
+ * for 57 of them — which over-charges a short chain slightly, again on the
+ * safe side.
  *
  * The read ceiling is not guarded either. It is 5,000,000 a day against
- * 100,000 written, and the same rebuild that spent 8% of the write allowance
- * spent 0.5% of the read one, so writes are the binding constraint and a
- * second threshold would only be a second number to keep true.
+ * 100,000 written, and the rebuild that spent 8% of the write allowance spent
+ * 0.5% of the read one, so writes are the binding constraint and a second
+ * threshold would only be a second number to keep true.
  *
  * Usage:
  *   guard-d1-migration-cost.ts --all              every row in the budgets
@@ -85,10 +103,11 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
- * Rows written on D1 per schema write, calibrated against the two remote
- * measurements in this file's header. Changing it changes every printed
- * estimate and every headroom figure, so it is a re-baseline of the same
- * weight as a budget row.
+ * Rows written on D1 per schema write. The evidence puts it somewhere around
+ * 22 to 27 — see this file's header for both anchors and why the band is that
+ * wide — and 27 is the top of it, which is the safe side. Changing it changes
+ * every printed row figure and every headroom figure, so it is a re-baseline
+ * of the same weight as a budget row.
  */
 export const ROWS_WRITTEN_PER_SCHEMA_WRITE = 27;
 
@@ -382,6 +401,15 @@ function percentOfCeiling(rows: number): string {
   return `${((rows / DAILY_ROWS_WRITTEN_CEILING) * 100).toFixed(1)}%`;
 }
 
+/**
+ * The budget restated in the unit the guard counts exactly: the largest whole
+ * number of schema writes that still fits, once the chain's real data rows are
+ * taken off the top.
+ */
+function budgetInSchemaWrites(budget: number, dataRows: number): number {
+  return Math.max(0, Math.floor((budget - dataRows) / ROWS_WRITTEN_PER_SCHEMA_WRITE));
+}
+
 /** Runs one record. Returns true when the chain is inside its budget. */
 export function runGuard(chain: string, dir: string, budget: number, budgetsPath: string): boolean {
   const cost = measureChain(dir);
@@ -396,20 +424,30 @@ export function runGuard(chain: string, dir: string, budget: number, budgetsPath
     `  replaying the chain from zero costs about ${rows} D1 rows written ` +
       `(${percentOfCeiling(rows)} of the ${DAILY_ROWS_WRITTEN_CEILING}/day free-tier ceiling)`,
   );
-  console.log(`  that affords ${affordable} replay(s) a day, before the seed a full rebuild adds`);
+  console.log(
+    `  that affords roughly ${affordable} replay(s) a day, before the seed a full rebuild adds`,
+  );
   console.log(
     `  budget ${budget} rows written (${rebuildsPerDay(budget)} a day), ` +
       `${budget - rows} rows of headroom`,
   );
+  // Every row figure above is priced by a constant the evidence only pins to
+  // about 22-27 (see the file header). This line is the same threshold in the
+  // unit the guard counts exactly, so it can be read without that constant.
+  console.log(
+    `  exactly: ${cost.schemaWrites} schema writes against a line at ` +
+      `${budgetInSchemaWrites(budget, cost.dataRows)}`,
+  );
 
   if (rows > budget) {
     console.error(
-      `::error::${chain} costs about ${rows} D1 rows written to replay from zero, over the ` +
-        `${budget} row budget in ${budgetsPath}. That affords ${affordable} replays a day ` +
-        `against the ${DAILY_ROWS_WRITTEN_CEILING} rows/day free-tier ceiling, down from ` +
-        `${rebuildsPerDay(budget)} at the budget. The chain has grown, which is what this guard ` +
-        `watches: squash it into a fresh baseline the way xchromo/osn#984 did, or raise the ` +
-        `budget deliberately with the reason in the commit.`,
+      `::error::${chain} is ${cost.schemaWrites} schema writes, over the line at ` +
+        `${budgetInSchemaWrites(budget, cost.dataRows)}. That is about ${rows} D1 rows written to ` +
+        `replay from zero, over the ${budget} row budget in ${budgetsPath}, and affords roughly ` +
+        `${affordable} replays a day against the ${DAILY_ROWS_WRITTEN_CEILING} rows/day ` +
+        `free-tier ceiling, down from ${rebuildsPerDay(budget)} at the budget. The chain has ` +
+        `grown, which is what this guard watches: squash it into a fresh baseline the way ` +
+        `xchromo/osn#984 did, or raise the budget deliberately with the reason in the commit.`,
     );
     return false;
   }
