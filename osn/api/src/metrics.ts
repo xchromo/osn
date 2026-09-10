@@ -42,6 +42,7 @@ import type {
   RecoveryCodeStep,
   RecoveryCooldownOutcome,
   RecoveryDisownResult,
+  RecoveryPasskeyReclaimResult,
   RegisterStep,
   Result,
   RotatedStoreAction,
@@ -86,6 +87,7 @@ export const OSN_METRICS = {
   authRecoveryEmailBegin: "osn.auth.recovery.email_begin",
   authRecoveryCooldown: "osn.auth.recovery.cooldown",
   authRecoveryDisown: "osn.auth.recovery.disown",
+  authRecoveryPasskeyReclaim: "osn.auth.recovery.passkey_reclaim",
   authRecoveryCodesGenerated: "osn.auth.recovery.codes_generated",
   authRecoveryCodeConsumed: "osn.auth.recovery.code_consumed",
   authRecoveryDuration: "osn.auth.recovery.duration",
@@ -725,6 +727,20 @@ const authRecoveryDisown = createCounter<{ result: RecoveryDisownResult }>({
 
 export const metricRecoveryDisown = (result: RecoveryDisownResult): void =>
   authRecoveryDisown.inc({ result });
+
+/**
+ * How a restricted recovery session's enrolment fared against the passkey
+ * ceiling. `no_candidate` is the one to alert on: it is the account that is
+ * still unreachable, which is the whole failure this ceiling exists to remove.
+ */
+const authRecoveryPasskeyReclaim = createCounter<{ result: RecoveryPasskeyReclaimResult }>({
+  name: OSN_METRICS.authRecoveryPasskeyReclaim,
+  description: "Recovery-session passkey enrolments by how they met the ceiling",
+  unit: "{enrolment}",
+});
+
+export const metricRecoveryPasskeyReclaim = (result: RecoveryPasskeyReclaimResult): void =>
+  authRecoveryPasskeyReclaim.inc({ result });
 
 // ---------------------------------------------------------------------------
 // Recovery codes (Copenhagen Book M2)

@@ -216,6 +216,16 @@ already held inherits that credential's standing and is refused nothing. This is
 what closes the register-then-assert pivot that made `passkeyDeleteAllowedAmr`'s
 narrowness reachable in two hops. See [[step-up#Credential provenance]].
 
+The gate has a third outcome, and it is the only one that changes which cap
+applies. A caller on a **restricted recovery session** whose recorded factor
+`passkeyRegisterAllowedAmr` admits enrols past the step-up gate — losing a phone
+does not delete its passkey row, so the gate would otherwise block the common
+recovery case — and is held to `RECOVERY_ENROLMENT_PASSKEY_CEILING`, one
+credential above `MAX_PASSKEYS_PER_ACCOUNT`. At that ceiling the enrolment
+reclaims `recovery`-provenance credentials newest first to pay for its slot.
+Every other caller is refused at the cap unchanged. See
+[[account-recovery-factors#E. The passkey ceiling, and the slot it lends]].
+
 `/passkey/register/complete` additionally:
 - Inserts a `security_events{kind: "passkey_register"}` row in the same
   transaction as the passkey insert — the user sees the new-credential

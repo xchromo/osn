@@ -29,6 +29,11 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import {
+  MAX_PASSKEYS_PER_ACCOUNT,
+  RECOVERY_ENROLMENT_PASSKEY_CEILING,
+} from "../../src/services/auth/constants";
+
 /**
  * Every `metricRecoveryDisown` call, in order.
  *
@@ -1187,5 +1192,85 @@ describe("POST /recovery/disown — when the write fails", () => {
     expect((await post(h.app, "/recovery/disown", { token })).status).toBe(202);
     expect(disownOutcomes.slice(mark)).toEqual(["revoke_failed", "accepted"]);
     expect((await stateOf(h, profile.accountId)).window).toBeNull();
+  });
+});
+
+describe("the passkey ceiling, over the real recovery routes", () => {
+  // `xchromo/osn#970`. The service tests in `tests/services/recovery-session.test.ts`
+  // pin the rule; this one proves the whole path a locked-out user actually
+  // walks — `/login/recovery/email/begin`, `/complete`, then the two enrolment
+  // routes — reaches it. Its red is a 400 from `/passkey/register/begin`, which
+  // is exactly what this issue was.
+
+  /** Fills the account up to `MAX_PASSKEYS_PER_ACCOUNT` credentials. */
+  const seedToCap = async (h: ReturnType<typeof makeApp>, accountId: string, from: number) => {
+    for (let i = from; i < MAX_PASSKEYS_PER_ACCOUNT; i++) {
+      await h.svc(
+        Effect.promise(() =>
+          h.db.insert(passkeys).values({
+            id: `pk_ceil${i}`,
+            accountId,
+            credentialId: `ceiling-credential-${i}`,
+            publicKey: "AQIDBA==",
+            counter: 0,
+            transports: null,
+            createdAt: new Date(),
+            label: null,
+            provenanceAmr: "webauthn",
+            lastUsedAt: null,
+            aaguid: null,
+            backupEligible: false,
+            backupState: false,
+            updatedAt: Math.floor(Date.now() / 1000),
+          }),
+        ),
+      );
+    }
+  };
+
+  it("an account at the cap completes an email recovery and ends up enrolled", async () => {
+    const h = makeApp();
+    const email = "ceil-route@example.com";
+    const profile = await h.svc(h.auth.registerProfile(email, "ceilroute"));
+    // Bootstrap one real credential, then fill to the cap. This is the account
+    // that could not be recovered at all before this change.
+    await h.svc(h.auth.beginPasskeyRegistration(profile.accountId));
+    await h.svc(h.auth.completePasskeyRegistration(profile.accountId, fakeAttestation(), null));
+    await seedToCap(h, profile.accountId, 1);
+
+    const code = await requestCode(h.app, h.recorded, email);
+    const done = await post(h.app, "/login/recovery/email/complete", { identifier: email, code });
+    expect(done.status).toBe(200);
+    const body = (await done.json()) as { session: { access_token: string } };
+
+    const begun = await h.app.handle(
+      json("/passkey/register/begin", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id }),
+      }),
+    );
+    // The whole issue in one assertion: this was a 400 "Passkey limit reached".
+    expect(begun.status).toBe(200);
+
+    const completed = await h.app.handle(
+      json("/passkey/register/complete", {
+        method: "POST",
+        headers: { authorization: `Bearer ${body.session.access_token}` },
+        body: JSON.stringify({ profileId: profile.id, attestation: {} }),
+      }),
+    );
+    expect(completed.status).toBe(200);
+
+    const rows = await h.svc(
+      Effect.promise(() =>
+        h.db
+          .select({ id: passkeys.id, provenanceAmr: passkeys.provenanceAmr })
+          .from(passkeys)
+          .where(eq(passkeys.accountId, profile.accountId)),
+      ),
+    );
+    expect(rows).toHaveLength(RECOVERY_ENROLMENT_PASSKEY_CEILING);
+    expect(rows.filter((r) => r.provenanceAmr === "recovery")).toHaveLength(1);
   });
 });

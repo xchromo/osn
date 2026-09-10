@@ -219,6 +219,28 @@ Four details that are load-bearing rather than incidental:
   an older one could otherwise relabel it, which is how a user is talked into
   confirming a delete on the wrong row.
 
+### The passkey ceiling's reclaim is not a way around W1
+
+An enrolment from a restricted recovery session at
+`RECOVERY_ENROLMENT_PASSKEY_CEILING` deletes a `recovery`-provenance credential
+to pay for its slot, and that credential may well be inside its own W1 window.
+That is not a hole in the rule, because the two govern different things: W1
+decides what a caller may do *with a step-up token it holds*, and the reclaim
+mints and presents no token at all. It is a server-side consequence of an
+enrolment the account is entitled to make, on the narrowest possible set of rows.
+
+Three bounds keep it there, and all three are what stop it becoming a deletion
+primitive:
+
+- **Only `recovery` provenance is reclaimable.** Not `otp`, not `totp`, not
+  `webauthn`, not a NULL column. Nothing the account established for itself can
+  be taken.
+- **Newest first.** Provenance expires, so a matured `recovery` credential is the
+  owner acting — the oldest is the *least* safe row to take, not the most.
+- **Only at the ceiling.** Below it nothing is destroyed.
+
+See [[account-recovery-factors#E. The passkey ceiling, and the slot it lends]].
+
 What the rule deliberately does **not** cover: `recovery_generate`,
 `security_event_ack` and `totp_disable` sit outside both windows, so an attacker
 holding the mailbox can still burn the owner's recovery codes, dismiss the

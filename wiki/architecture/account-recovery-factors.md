@@ -95,11 +95,10 @@ The restriction is a **distinct token audience**, not a flag:
   and token refresh is the only caller that opts in. Found while building
   issue 3, closed there; a `/authorize` check alone would not have covered the
   next consumer of that function. See [[oidc-provider]].
-- The per-account passkey cap is **not** bypassed, and an account already at it
-  cannot recover: enrolment refuses before the step-up gate, and a restricted
-  session cannot mint the step-up a deletion needs. Tracked as
-  `xchromo/osn#970`, to be decided with the provenance work in issue 5, since
-  both turn on when a recovery-enrolled credential may remove an older one.
+- The per-account passkey cap is **raised by exactly one** for this enrolment,
+  and by nothing else — see §E. Without that an account already at the cap could
+  not recover at all: enrolment refuses before the step-up gate, and a restricted
+  session cannot mint the step-up a deletion would need.
 
 **The enrolment gate.** `beginPasskeyRegistration` refuses without a
 `passkey_register` step-up whenever the account has ≥1 passkey — which is the
@@ -254,6 +253,66 @@ for 72 hours, while whoever holds it can remove the newly enrolled one and
 change the email at once. A pre-recovery credential is the best evidence of
 ownership available, and here it is in the wrong hands. Irreducible without a
 signal we do not have.
+
+### E. The passkey ceiling, and the slot it lends
+
+Ten passkeys is uncommon, so an account at the cap is a rare case — but the
+outcome was a permanently unreachable account, which is the exact failure this
+whole design exists to remove. `xchromo/osn#970`.
+
+An enrolment from a restricted recovery session is held to
+`RECOVERY_ENROLMENT_PASSKEY_CEILING`, one credential above
+`MAX_PASSKEYS_PER_ACCOUNT`, instead of to the cap itself. Every other enrolment
+is refused at the cap exactly as before: the ceiling turns on the bypass having
+been granted, never on the token's audience and never on the credential's
+provenance.
+
+**The headroom is a loan, not a ratchet.** At the ceiling the enrolment is still
+admitted, and pays for its slot by reclaiming `recovery`-provenance credentials —
+deleted in the same batch as the insert. A bare "cap + 1" would refuse the second
+recovery on an account that reached 11 and never pruned, which moves the lockout
+out by one recovery rather than removing it.
+
+**Newest first, and that ordering is the security property.** `recovery`
+provenance is a restriction that *expires*: past its own 72-hour window such a
+credential may delete anything, and a credential registered by asserting it
+inherits `webauthn` (§D). A matured `recovery` credential is therefore the owner
+acting, very often their daily phone. Taking the oldest would let whoever holds
+the mailbox delete it with no ceremony at all. The newest is, by construction,
+the slot the *previous* recovery lent, and the ceiling is reachable only through
+such a loan — so at the ceiling a `recovery` row newer than any matured one
+always exists.
+
+| Bound | Value |
+|---|---|
+| Reclaimable provenance | `recovery` only — never `webauthn`, `otp`, `totp` or a NULL column |
+| Ordering | `created_at` descending; `id` breaks a same-second tie deterministically and orders nothing by time |
+| Fires when | Only at or above the ceiling. Below it nothing is destroyed |
+| With no candidate | Refused. Reclaiming a credential the account established for itself is never the answer |
+
+`otp` and `totp` rows are deliberately out of scope, which makes this strictly
+narrower than `revokeDisownedRecovery`: those were enrolled by somebody already
+signed in who passed a step-up, a stronger act than a recovery bypass.
+
+**What the user is left holding.** After a first recovery at the cap the account
+sits at eleven credentials for up to 72 hours: the new credential is stamped
+`recovery`, so W1 refuses it deleting anything older than itself until its own
+window elapses. That is accepted rather than worked around — the user is signed
+in, which is the point, and an ordinary enrolment is still refused at eleven so
+the excess cannot be built on.
+
+**The bound is `≤ MAX + 1`, self-healing rather than absolute.** Two `complete`
+calls racing can overshoot by one, which `completePasskeyRegistration` already
+documents as a benign over-count; the next recovery reclaims the whole surplus
+rather than a single row, so the account returns to the ceiling instead of
+staying above it.
+
+> [!warning] The recovery-code path is not covered
+> `POST /login/recovery/complete` issues an **ordinary** session, not a
+> restricted one, so the ceiling does not apply to it and an account at the cap
+> that recovers with a code is still unable to enrol. Raising the cap for an
+> ordinary session would drop the guarantee that a non-recovery enrolment at the
+> cap is refused, so it needs its own decision. Tracked as `xchromo/osn#983`.
 
 ## Shape of the change
 

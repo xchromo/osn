@@ -226,6 +226,24 @@ export type RecoveryDisownResult =
 export type RecoveryCodeConsumeResult = "success" | "invalid" | "used";
 
 /**
+ * How an enrolment from a restricted recovery session fared against the passkey
+ * ceiling. Emitted once per completed enrolment, from the `complete` side only —
+ * `begin` reaches the same decision on an older count read, and counting both
+ * would double every ceremony.
+ */
+export type RecoveryPasskeyReclaimResult =
+  // Below the ceiling: the headroom credential was simply added and nothing was
+  // reclaimed. The ordinary shape of a first recovery at the cap.
+  | "headroom_used"
+  // At or above the ceiling: one or more `recovery`-provenance credentials were
+  // deleted, newest first, to pay for the new one.
+  | "reclaimed"
+  // At the ceiling with no `recovery`-provenance credential to reclaim, so the
+  // enrolment was refused. This is the residual lockout, and the one worth an
+  // alert: the account is unreachable by this path.
+  | "no_candidate";
+
+/**
  * Out-of-band security event kinds (M-PK1b). Mirrors the `kind` column on
  * the `security_events` table; new entries here MUST be matched by the
  * service layer, otherwise the counter attribute will fall outside the
@@ -247,6 +265,11 @@ export type SecurityEventKind =
   | "recovery_otp_lockout"
   | "passkey_register"
   | "passkey_delete"
+  // A credential was deleted to pay for one a recovery session enrolled at the
+  // passkey ceiling. Distinct from `passkey_delete` because the account holder
+  // did not ask for it: the row is the only record that a credential vanished
+  // through a path nobody drove.
+  | "passkey_reclaimed"
   // A recovery was disowned from the notice email: the credentials it enrolled
   // and every session on the account were revoked.
   | "recovery_disowned"
