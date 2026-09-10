@@ -15,8 +15,10 @@ import {
   TOTP_KEY_VERSION,
   type TotpKeyRing,
 } from "../../src/lib/totp-secret-crypto";
+import * as metrics from "../../src/metrics";
 import { createAuthService, type AuthConfig } from "../../src/services/auth";
 import { TOTP_LOCKOUT_THRESHOLD } from "../../src/services/auth/constants";
+import { createDefaultCeremonyStores } from "../../src/services/auth/stores";
 import { makeTestAuthConfig } from "../helpers/auth-config";
 import { createTestLayer, createTestLayerWithSqlite } from "../helpers/db";
 
@@ -357,8 +359,9 @@ describe("TOTP encryption-key rotation", () => {
       return row;
     });
 
-  it.effect("a row written under the old key still verifies once that key is demoted", () =>
-    Effect.gen(function* () {
+  it.effect("a row written under the old key still verifies once that key is demoted", () => {
+    const rekeySpy = vi.spyOn(metrics, "metricTotpRekeyed");
+    return Effect.gen(function* () {
       // Issue #968's first two "done when" clauses, in the order an operator
       // meets them: enrol under one key; come back with that key demoted to
       // OSN_TOTP_ENCRYPTION_KEY_PREVIOUS and a new one installed; verify.
@@ -372,6 +375,7 @@ describe("TOTP encryption-key rotation", () => {
 
       const during = authWith(createTotpKeyRing(k2, k1));
       const code = yield* codeAtStep(secret, currentStep() + 1);
+      rekeySpy.mockClear();
       yield* during.completeStepUpTotp(profile.accountId, code);
 
       // Re-keyed: the stamp moved AND the ciphertext really changed. Asserting
@@ -384,6 +388,12 @@ describe("TOTP encryption-key rotation", () => {
         Buffer.from(rekeyed.secretCiphertext).equals(Buffer.from(original.secretCiphertext)),
       ).toBe(false);
 
+      // The runbook's §10.3 drain gate reads exactly this metric. A swapped
+      // literal here would make a healthy rotation look stuck, or a stuck one
+      // look healthy, and no other assertion in this file would catch it.
+      expect(rekeySpy).toHaveBeenCalledTimes(1);
+      expect(rekeySpy).toHaveBeenCalledWith("ok");
+
       // And now the old key can go, which is the point of the whole exercise.
       // The clock has to move: the step just spent is gone, and a code two
       // steps ahead is outside the +/-1 drift window and would be refused for a
@@ -392,8 +402,11 @@ describe("TOTP encryption-key rotation", () => {
       const after = authWith(createTotpKeyRing(k2));
       const next = yield* codeAtStep(secret, currentStep() + 1);
       yield* after.completeStepUpTotp(profile.accountId, next);
-    }).pipe(Effect.provide(makeLayer())),
-  );
+    }).pipe(
+      Effect.provide(makeLayer()),
+      Effect.ensuring(Effect.sync(() => rekeySpy.mockRestore())),
+    );
+  });
 
   it.effect("re-keys once and then leaves the row alone", () =>
     Effect.gen(function* () {
@@ -416,6 +429,117 @@ describe("TOTP encryption-key rotation", () => {
       );
       expect(after.keyVersion).toBe(before.keyVersion);
     }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect(
+    "a fresh enrolment born under a two-key ring is not rekeyed on its first verify",
+    () => {
+      const rekeySpy = vi.spyOn(metrics, "metricTotpRekeyed");
+      return Effect.gen(function* () {
+        // The "new enrolment during a draining rotation" case: a user who
+        // enrols WHILE a rotation is in progress does so directly under the
+        // two-key ring, so the fresh row is born at the CURRENT slot and never
+        // needed a rekey to reach it. `needsRekey` has to compare against the
+        // version that actually opened the row, not merely "is this ring
+        // mid-rotation" (`ring.size > 1`) — a drain window is however long the
+        // least active user takes, and every verify in it would otherwise
+        // rewrite ciphertext that was already correct.
+        const k1 = yield* Effect.promise(generateEphemeralTotpEncryptionKey);
+        const k2 = yield* Effect.promise(generateEphemeralTotpEncryptionKey);
+        const during = authWith(createTotpKeyRing(k2, k1));
+        const { profile, secret } = yield* enrolledWith(during, "rot-i@example.com", "roti");
+
+        const original = yield* credentialRow(profile.accountId);
+        expect(original.keyVersion).toBe(TOTP_KEY_VERSION + 1);
+
+        rekeySpy.mockClear();
+        const code = yield* codeAtStep(secret, currentStep() + 1);
+        yield* during.completeStepUpTotp(profile.accountId, code);
+
+        const after = yield* credentialRow(profile.accountId);
+        expect(after.keyVersion).toBe(original.keyVersion);
+        expect(
+          Buffer.from(after.secretCiphertext).equals(Buffer.from(original.secretCiphertext)),
+        ).toBe(true);
+        expect(Buffer.from(after.iv).equals(Buffer.from(original.iv))).toBe(true);
+        expect(rekeySpy).not.toHaveBeenCalled();
+      }).pipe(
+        Effect.provide(makeLayer()),
+        Effect.ensuring(Effect.sync(() => rekeySpy.mockRestore())),
+      );
+    },
+  );
+
+  it.effect(
+    "stamps a fresh enrolment with the version that OPENED its secret, not the one parked beside it",
+    () =>
+      Effect.gen(function* () {
+        // The parked number and the real answer can disagree when the
+        // rotation this credential was born into finishes while the
+        // enrolment is still parked. `beginTotpEnrollment` encrypts under
+        // whatever key is CURRENT at that moment: while paired with an
+        // outgoing key (a rotation still draining) that key sits at slot 2.
+        // `completeTotpEnrollment` must stamp the row with the version that
+        // OPENED the parked secret — never the parked number — because by
+        // the time it runs the operator may have finished that same
+        // rotation (§10.4: delete the outgoing key, redeploy), and a lone
+        // current key always renumbers to `TOTP_KEY_VERSION`. Ten minutes
+        // (the enrolment TTL) is ample time for both to happen. See the
+        // comment on `completeTotpEnrollment`'s insert in totp.ts.
+        //
+        // The store is shared explicitly (`ceremonyStores`) because it is
+        // Redis-backed in production: both requests reach the same pending
+        // enrolment regardless of which ring the isolate that served them
+        // was running. `authWith` does not share it — each call builds a
+        // config with no `ceremonyStores` override, so `createAuthContext`
+        // would hand each service its own in-memory store and `complete`
+        // would never see what `begin` parked.
+        const k1 = yield* Effect.promise(generateEphemeralTotpEncryptionKey); // the outgoing key
+        const k2 = yield* Effect.promise(generateEphemeralTotpEncryptionKey); // the key the row is really under, throughout
+        const ceremonyStores = createDefaultCeremonyStores();
+
+        // begin(): the rotation is still draining — k2 is CURRENT (slot 2),
+        // k1 is PREVIOUS (slot 1). The secret is encrypted under k2 and
+        // parked with keyVersion 2.
+        const before = createAuthService({
+          ...config,
+          totpEncryptionKeys: createTotpKeyRing(k2, k1),
+          ceremonyStores,
+        });
+        const profile = yield* before.registerProfile("rot-h@example.com", "roth");
+        const stepUpToken = yield* before.issueStepUpToken(
+          profile.accountId,
+          "passkey",
+          "totp_enroll",
+        );
+        const { totpSecret } = yield* before.beginTotpEnrollment(profile.accountId, stepUpToken);
+        const secret = base32Decode(totpSecret);
+
+        // complete(): the operator finished the rotation in between — k1 is
+        // deleted, and k2 is now the LONE key, renumbered to slot 1.
+        const during = createAuthService({
+          ...config,
+          totpEncryptionKeys: createTotpKeyRing(k2),
+          ceremonyStores,
+        });
+        const code = yield* codeAtStep(secret, currentStep());
+        yield* during.completeTotpEnrollment(profile.accountId, code, "Test phone");
+
+        const row = yield* credentialRow(profile.accountId);
+        // The version that actually opens the row under the ring it was born
+        // into — NOT `TOTP_KEY_VERSION + 1`, the number parked while k2 was
+        // still paired.
+        expect(row.keyVersion).toBe(TOTP_KEY_VERSION);
+
+        const opened = yield* Effect.promise(() =>
+          decryptTotpSecret(createTotpKeyRing(k2), profile.accountId, {
+            secretCiphertext: row.secretCiphertext,
+            iv: row.iv,
+            keyVersion: row.keyVersion,
+          }),
+        );
+        expect(opened.secret).toEqual(secret);
+      }).pipe(Effect.provide(makeLayer())),
   );
 
   it.effect("verifies a row whose stamp names no configured key", () =>
@@ -480,8 +604,9 @@ describe("TOTP encryption-key rotation", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it.effect("verifies even when the re-encryption itself fails", () =>
-    Effect.gen(function* () {
+  it.effect("verifies even when the re-encryption itself fails", () => {
+    const rekeySpy = vi.spyOn(metrics, "metricTotpRekeyed");
+    return Effect.gen(function* () {
       // A user who presented a correct code has authenticated. Turning that
       // into a rejection because a housekeeping re-encryption failed would be a
       // self-inflicted lockout during the very incident the drain exists for.
@@ -502,6 +627,7 @@ describe("TOTP encryption-key rotation", () => {
 
       const during = authWith(createTotpKeyRing(decryptOnly, k1));
       const code = yield* codeAtStep(secret, currentStep() + 1);
+      rekeySpy.mockClear();
       yield* during.completeStepUpTotp(profile.accountId, code);
 
       // Verified, and the row is untouched rather than half-written.
@@ -512,8 +638,16 @@ describe("TOTP encryption-key rotation", () => {
       ).toBe(true);
       // The step was still consumed, so single use is unaffected.
       expect(after.lastUsedStep).not.toBe(original.lastUsedStep);
-    }).pipe(Effect.provide(makeLayer())),
-  );
+
+      // The other half of the §10.3 drain gate: a stuck rotation must be
+      // reported as stuck, not silently swallowed into "ok".
+      expect(rekeySpy).toHaveBeenCalledTimes(1);
+      expect(rekeySpy).toHaveBeenCalledWith("failed");
+    }).pipe(
+      Effect.provide(makeLayer()),
+      Effect.ensuring(Effect.sync(() => rekeySpy.mockRestore())),
+    );
+  });
 
   it.effect("a rejected code never rewrites the credential", () =>
     Effect.gen(function* () {

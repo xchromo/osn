@@ -12,7 +12,7 @@ related:
   - "[[cire-vendors]]"
   - "[[musubi-identity-migration]]"
   - "[[dev-environment]]"
-last-reviewed: 2026-09-10
+last-reviewed: 2026-09-11
 ---
 
 # Production Deploy Runbook — osn + cire
@@ -1245,10 +1245,21 @@ mechanism — the two-key ring, the lazy re-encryption — is in
 Set `OSN_TOTP_ENCRYPTION_KEY_PREVIOUS` to the value **currently live** in
 `OSN_TOTP_ENCRYPTION_KEY`, then redeploy.
 
+> [!warning] The by-hand line below skips every guard the workflow gives you
+> Run straight from a laptop, `wrangler secret put` checks nothing: not the
+> required 32-byte length, not the `production` GitHub Environment's reviewer
+> (there is no Actions run here for one to gate), and it never lands on dev
+> first. A bad value still goes in clean — osn-api only checks length at boot —
+> so the tier looks fine until the next cold start, then every route on it
+> 503s, with no canary to have caught it first. Use the workflow. Keep the
+> by-hand line for when GitHub Actions itself will not run, and check the
+> length yourself before you paste the value in:
+> `printf '%s' "$OLD_KEY" | base64 -d | wc -c` must print `32`.
+
 ```bash
 gh secret set OSN_TOTP_ENCRYPTION_KEY_PREVIOUS --repo xchromo/osn --env production
 # then run the `set-osn-api-secret` workflow: secret=OSN_TOTP_ENCRYPTION_KEY_PREVIOUS, tier=production
-# or, by hand:
+# or, by hand — read the warning above first:
 cd osn/api && printf '%s' "$OLD_KEY" | bunx wrangler secret put OSN_TOTP_ENCRYPTION_KEY_PREVIOUS --env production
 bunx --bun wrangler deploy --env production
 ```
