@@ -244,7 +244,7 @@ about 22–27, so read the row figure as indicative and the schema-write count a
 exact. Method, calibration and how to re-baseline: [[bundle-size-guards]], which
 also sets out why the "89% / 11%" split above cannot be read as a share of one
 rebuild.
-<!-- measured 2026-09-10: bun run scripts/guard-d1-migration-cost.ts --all -->
+*Measured 2026-09-10 — `bun run scripts/guard-d1-migration-cost.ts --all`.*
 
 
 **User-visible symptom:** 503 / "service unavailable" across the app until the

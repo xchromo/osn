@@ -233,7 +233,7 @@ price. One measurement fixes it; a second only bounds it.
 **The hard anchor.** One `ALTER TABLE ... DROP COLUMN` on
 `wedding_invite_customisations`, against a table with no rows in it, cost **54
 D1 rows written** — two schema writes at 27 apiece.
-<!-- measured 2026-09-10: bunx wrangler d1 insights cire-db-dev --time-period=7d --sort-by=writes --limit=200 -->
+*Measured 2026-09-10 — `bunx wrangler d1 insights cire-db-dev --time-period=7d --sort-by=writes --limit=200`. The `--limit` is the point: it returns the 200 heaviest queries, not the week.*
 
 **The soft anchor**, which agrees within about a fifth and no better. The
 57-file chain squashed by xchromo/osn#984 measures 269 schema writes here, and
@@ -244,7 +244,7 @@ and the seed's cost is the part not known precisely.
 
 | Bound on the constant | Where it comes from |
 |---:|---|
-| **≤ 22.1** rows per schema write | `cire/db/seed/dev-seed.sql` inserts **2,063 tuples**, and D1 bills index entries as rows written too, so the seed cost at least that. The chain is then at most 8,007 − 2,063 = 5,944.<br><!-- measured 2026-09-10: replay cire/db/migrations/0001_initial.sql then cire/db/seed/dev-seed.sql into bun:sqlite and sum SQLite's `changes` --> |
+| **≤ 22.1** rows per schema write | `cire/db/seed/dev-seed.sql` inserts **2,063 tuples**, and D1 bills index entries as rows written too, so the seed cost at least that. The chain is then at most 8,007 − 2,063 = 5,944.<br>*Measured 2026-09-10 — replay `cire/db/migrations/0001_initial.sql` then `cire/db/seed/dev-seed.sql` into `bun:sqlite` and sum SQLite's `changes`.* |
 | **27** rows per schema write | The hard anchor above — the only figure measured directly. |
 
 > [!warning] The "89% schema, 11% seed" split does not settle this
@@ -287,7 +287,7 @@ The left two columns are exact; the right two move with the constant. The
 pre-squash chain, for scale: 269 schema writes, about 7,265 rows, roughly 13
 replays a day. Point the guard at `cire/db/migrations-archive` and it goes red,
 which is the fastest way to see it fail.
-<!-- measured 2026-09-10: bun run scripts/guard-d1-migration-cost.ts --all -->
+*Measured 2026-09-10 — `bun run scripts/guard-d1-migration-cost.ts --all`.*
 
 **Note the arithmetic on the pre-squash chain does not reproduce 8,007.** At 27
 it prices at 7,265 and the seed floor is 2,063, which sums past the reported
