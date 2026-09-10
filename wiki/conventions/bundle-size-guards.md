@@ -1,16 +1,18 @@
 ---
-title: Astro bundle-size guards
-description: scripts/guard-bundle-size.sh — measuring and gating each Astro app's deployed bundle, and the src/pages test-route check beside it
-tags: [convention, build, astro, performance]
+title: Guards that gate on a number
+description: The two rules any committed threshold obeys, and the guards that hold them — scripts/guard-bundle-size.sh over each Astro app's deployed bundle, the src/pages test-route check beside it, and scripts/guard-d1-migration-cost.ts over what a from-zero D1 rebuild spends against the free-tier ceiling
+tags: [convention, build, astro, performance, ops, d1]
 related:
   - "[[cire-development]]"
   - "[[frontend-patterns]]"
   - "[[testing-patterns]]"
   - "[[review-findings]]"
+  - "[[free-tier-limits]]"
+  - "[[dev-environment]]"
 last-reviewed: 2026-09-10
 ---
 
-# Astro bundle-size guards
+# Guards that gate on a number
 
 Tracker #287 found cire/invites' SSR Worker bundle at 470 KB gzip, unnoticed,
 from two mistakes: a whole animation library reachable from the server module
@@ -20,6 +22,11 @@ fix cire/invites got: both mistakes can happen in any of the repo's six Astro
 apps, and both are now checked on every one of them.
 
 Two separate scripts, because the two mistakes are different shapes.
+
+A third guard on this page measures nothing to do with bundles. `scripts/guard-d1-migration-cost.ts`
+gates what a from-zero D1 rebuild spends against a free-tier quota, and it is
+here because it obeys the same two rules and was built from this page. The page
+name still says bundles because the file has not moved.
 
 ## Two rules for any guard that gates on a number
 
@@ -188,8 +195,103 @@ cire/invites picked up 119 KB gzip of vitest. This check walks all six apps'
 It needs no build and no per-app baseline — a plain directory walk — so it runs
 in the fast `lint` job in `ci.yml`, not `build-test`.
 
+## `scripts/guard-d1-migration-cost.ts` — the D1 rebuild-cost guard
+
+Same shape, different number: what a **job** spends against a **quota**, rather
+than how big an artefact is.
+
+The cire dev deploy crossed a hard ceiling by growing. Every
+`ALTER TABLE ... DROP COLUMN` added to the migration chain made each from-zero
+rebuild a little dearer, and on 2026-09-09 thirteen merges spent 104,091 D1 rows
+written against a free-tier limit of 100,000 a day account-wide
+(xchromo/osn#979). No commit was wrong; no version of the job failed a test.
+[[free-tier-limits]] holds the ceiling itself; [[dev-environment]] holds what the
+rebuild now does.
+
+```
+bun run scripts/guard-d1-migration-cost.ts --all              # every chain — what ci.yml calls
+bun run scripts/guard-d1-migration-cost.ts <migrations-dir>   # one chain
+```
+
+### What it counts, and how tight the correlation is
+
+The measurement is local and offline — no D1 call. The guard replays every
+`.sql` file in the chain into an in-memory `bun:sqlite` database and counts
+**schema writes**: one per statement that changes the schema, two for a
+statement that makes SQLite rebuild a whole table (`ALTER TABLE ... DROP
+COLUMN`). Rows that a data statement in a migration really writes are counted
+exactly, from SQLite's own `changes`. Replaying rather than parsing means a
+chain that no longer applies fails the guard instead of measuring cheap.
+
+`bun:sqlite` cannot report D1's rows-read/rows-written accounting, so the row
+figure is a **proxy priced by one constant**: 27 D1 rows written per schema
+write. A from-zero rebuild runs against empty tables, so its bill is nearly all
+schema churn — of the 200 heaviest queries on `cire-db-dev` in the week to
+2026-09-10, schema statements were 89% of rows written and the seed's inserts
+11% — and D1 bills a table rebuild whatever the table holds. Two remote
+measurements fix the constant, and one value fits both:
+
+| Anchor | Measured on D1 | Guard's estimate |
+|---|---:|---:|
+| One `ALTER TABLE ... DROP COLUMN` on an empty `wedding_invite_customisations` | 54 rows written | 2 schema writes → **54** |
+| The 57-file chain squashed by xchromo/osn#984 (269 schema writes) | 8,007 rows written for the whole rebuild, of which the 89% schema share is 7,126 | **7,265**, 2.0% high |
+
+> [!warning] Two anchors, one constant — not a regression
+> Both readings come from one database in one week. The model asserts that a
+> schema statement has a roughly fixed price; it does not reconstruct D1's
+> accounting, and nothing here proves it. Treat the printed row figure as good
+> to about ±10% and the schema-write count as the exact thing being guarded.
+> Three things sit outside the number on purpose: the **seed** a full dev
+> rebuild runs after the replay (a further tenth or so), the per-file
+> `d1_migrations` ledger insert (folded into the constant, which over-charges a
+> short chain slightly), and **rows read**, whose ceiling is 5,000,000 a day
+> against 100,000 written and has never been the binding one.
+
+### The budget — mirrors `scripts/d1-migration-cost-budgets.txt`
+
+**This table is documentation, not enforcement.** The `.txt` file is what the
+guard reads; if the two disagree, it is right and this page is stale.
+
+| Chain | Measured (2026-09-10) | Budget | Replays a day |
+|---|---:|---:|---:|
+| `cire/db/migrations` | 1,836 rows (68 schema writes) | 3,700 rows | 54 now, 27 at the budget |
+
+The pre-squash chain, for scale: 269 schema writes, ~7,265 rows, 13 replays a
+day. Point the guard at `cire/db/migrations-archive` and it goes red, which is
+the fastest way to see it fail.
+
+### Why the headroom is a doubling, not a hair
+
+The rule further up this page — headroom smaller than the smallest mistake —
+assumes a baseline that is not supposed to move. A migration chain is supposed
+to grow, and the mistake here is not one bad migration: nothing in the chain
+that went over the ceiling was wrong. So the line is drawn at a **doubling** of
+the per-rebuild bill, which is the smallest step that materially changes the
+answer to "how many rebuilds a day can we afford". A budget tight enough to
+trip on one ordinary feature migration — `0057_registry` was 405 rows on its own
+— would be raised on sight every few pull requests, which is the failure the
+second rule names.
+
+The other half of that: **this guard has a remedy the bundle guards do not.**
+Squashing the chain into a fresh baseline puts the number back down instead of
+moving the line up, which is exactly what xchromo/osn#984 did — 269 schema
+writes to 68. Reach for that before raising the budget.
+
+### Where it runs
+
+One step in `ci.yml`'s `script-tests` job. That job does no `bun install` on
+purpose, and the script imports `bun:sqlite` and Node built-ins and nothing
+else, so it belongs there rather than in `build-test`. Its own tests
+(`scripts/tests/guard-d1-migration-cost.test.ts` for the measurement,
+`.cli.test.ts` for exit codes and messages) run in the same job under
+`bun run test:scripts`, and one of them re-asserts the committed budget against
+the committed chain — so a migration that busts it fails the tests as well as
+the guard step.
+
 ## Related
 
+- [[free-tier-limits]] — the D1 ceilings this guard is measured against
+- [[dev-environment]] — what the nightly cire dev rebuild does and costs
 - [[cire-development]] — cire/invites' own bundle history (#618 sessions off,
   #616 SSR minification, #617 why `zod` stays)
 - [[frontend-patterns]] — general Astro/Solid patterns

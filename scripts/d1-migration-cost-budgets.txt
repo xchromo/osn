@@ -1,0 +1,33 @@
+# D1 migration-cost budgets — read by scripts/guard-d1-migration-cost.ts, and
+# by nothing else. This file, not the script and not a workflow step, is where
+# the number lives.
+#
+#   <migrations-dir>  <budget, in estimated D1 rows written to replay it from zero>
+#
+# The guard replays the chain into an in-memory SQLite, counts schema writes,
+# and prices them at 27 D1 rows each. The script's own header carries the two
+# remote measurements that constant is calibrated against and how tight the fit
+# is.
+#
+# RE-BASELINING. Run `bun run scripts/guard-d1-migration-cost.ts --all`, read
+# the printed cost, and edit the row here. Two rules, from
+# wiki/conventions/bundle-size-guards.md:
+# a budget is a number somebody chose, with the reason in the commit; and a
+# guard that only ever gets raised is not a guard. This one has a remedy the
+# bundle guard does not — squashing the chain into a fresh baseline puts the
+# cost back down instead of moving the line up. Reach for that first.
+
+# 3700 is twice the 1836 rows the squashed baseline costs today. The mistake
+# this guard exists to catch is not one bad migration — nothing in the chain
+# that went over the ceiling was wrong — it is the chain regrowing until a
+# day's rebuilds no longer fit. So the line is drawn where the bill has
+# doubled: at 3700 a replay is 3.7% of the day's 100,000 rows written and 27
+# replays a day still fit, against the 13 merges that went over on 2026-09-09.
+#
+# That is 1864 rows of headroom, which is MORE than any single migration in the
+# 57-file chain this replaced would add — the heaviest, 0006_multi_tenant, is
+# 28 schema writes and 756 rows. Deliberate: a budget tight enough to trip on
+# one ordinary feature migration (0057_registry was 405 rows on its own) would
+# be raised on sight every few pull requests, which is the failure the second
+# rule names.
+cire/db/migrations 3700
