@@ -38,7 +38,7 @@
     "prepare": "lefthook install"
   },
   "devDependencies": {
-    "@changesets/cli": "^3.0.1",
+    "@changesets/cli": "^3.0.2",
     "@oxlint/plugins": "1.80.0",
     "bun-types": "^1.4.0",
     "lefthook": "^2.1.12",
