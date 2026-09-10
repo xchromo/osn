@@ -390,6 +390,22 @@ records persist for **7 days** and are viewable in the CF dashboard.
   - Recurring `exceededResources` / `exceededCpu` invocation statuses → a heavy
     request path (e.g. spreadsheet import) bumping the Free CPU/subrequest caps.
 
+**The first two of those are watched for you; the rest are read by eye.**
+`.github/workflows/free-tier-ceiling-alert.yml` runs
+`scripts/check-free-tier-ceilings.ts` at 22:00 UTC daily, and on demand through
+`workflow_dispatch` (with `end` and `days` inputs, so a past day can be
+replayed). It reads per-day totals per database and per Worker script from
+Cloudflare's GraphQL analytics API — rows written, rows read, requests, and
+storage against the 5 GB total — and files one issue, titled "Cloudflare free
+tier: a daily counter is near its ceiling", when any counter reaches **80%** of
+its line. It reopens and edits that one issue rather than opening another, so a
+week near the line is one thread, and the body names the database and the day.
+
+Two things to know before trusting it. The ceilings are the `CEILINGS` constant
+at the top of that script, and they have to move whenever the tables above do.
+And it fails loudly: a bad API response exits non-zero and fails the run, rather
+than reporting all-clear.
+
 ---
 
 ## Cloudflare security hardening (free, dashboard) — TODO
