@@ -255,7 +255,7 @@ export function RecoveryLoginForm(props: RecoveryLoginFormProps) {
     const current = held();
     if (mine !== epoch || !current) return;
     try {
-      const session = await serialise(refreshHeldSession);
+      const { session } = await serialise(refreshHeldSession);
       if (mine !== epoch) return;
       setHeld({ ...current, session });
       scheduleRefresh(session);
@@ -387,7 +387,7 @@ export function RecoveryLoginForm(props: RecoveryLoginFormProps) {
     }
     const mine = epoch;
     try {
-      const session = await serialise(refreshHeldSession);
+      const { session } = await serialise(refreshHeldSession);
       if (mine !== epoch) return null;
       setHeld({ ...current, session });
       scheduleRefresh(session);

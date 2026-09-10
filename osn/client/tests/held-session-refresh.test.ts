@@ -69,7 +69,7 @@ it.effect("redeems the refresh cookie and returns the new token set", () =>
     );
 
     const auth = yield* OsnAuth;
-    const session = yield* auth.refreshHeldSession();
+    const { session } = yield* auth.refreshHeldSession();
 
     expect(session.accessToken).toBe(RECOVERY_TOKEN);
     // Receipt-based, so the screen's countdown needs no clock agreement with
@@ -136,7 +136,7 @@ it.effect("does not adopt the session it returns", () =>
     const before = yield* auth.getSession();
     expect(before).toBeNull();
 
-    const session = yield* auth.refreshHeldSession();
+    const { session } = yield* auth.refreshHeldSession();
     expect(session.accessToken).not.toBe("");
 
     // Still nothing stored: the caller holds the token, the client does not.

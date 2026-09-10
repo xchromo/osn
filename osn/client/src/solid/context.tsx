@@ -12,7 +12,7 @@ import {
 
 import { OsnAuth, createOsnAuthLive, type OsnAuthConfig } from "../service";
 import { Storage, StorageLive } from "../storage";
-import type { PublicProfile, Session } from "../tokens";
+import type { HeldSession, PublicProfile, Session } from "../tokens";
 
 interface AuthContextValue {
   session: Resource<Session | null>;
@@ -34,8 +34,12 @@ interface AuthContextValue {
    * refresh every other screen relies on never runs. Post-recovery passkey
    * enrolment is the caller. Rejects when the issuer refuses the grant, which
    * for a restricted session means its absolute deadline has passed.
+   *
+   * Resolves to a `HeldSession`, not a `Session` — `adoptSession` doesn't
+   * accept one, so `adoptSession(await refreshHeldSession())` is a compile
+   * error rather than a way to publish a restricted `osn-recovery` token.
    */
-  refreshHeldSession: () => Promise<Session>;
+  refreshHeldSession: () => Promise<HeldSession>;
   switchProfile: (profileId: string) => Promise<{ session: Session; profile: PublicProfile }>;
   createProfile: (handle: string, displayName?: string) => Promise<PublicProfile>;
   deleteProfile: (profileId: string) => Promise<void>;

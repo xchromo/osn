@@ -23,6 +23,15 @@ a held-session refresh and a cold-start bootstrap still produce one request —
 two would replay a rotated cookie, which is what revokes a session family.
 `<RecoveryLoginForm>` refreshes 30 s before each token expires.
 
+`refreshHeldSession` resolves to a new exported `HeldSession` — `{ held: true;
+session: Session }` — rather than a bare `Session`. `adoptSession` and
+`setSession` still take a plain `Session`, so a caller cannot write
+`adoptSession(await refreshHeldSession())`: that is precisely the mistake
+holding rather than adopting exists to rule out, and it is now a compile error
+instead of a token minted for the recovery audience getting published as an
+ordinary session. Every caller unwraps `.session` once it has decided to keep
+holding it.
+
 `@osn/api` caps a restricted session's access token at the life its own row has
 left, at both issuance sites. Rotation carries the absolute deadline forward
 rather than extending it, so without the cap a grant late in the window minted a

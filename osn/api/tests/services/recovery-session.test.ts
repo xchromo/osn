@@ -541,6 +541,60 @@ describe("restricted recovery session — rotation and expiry", () => {
   });
 
   /**
+   * `sessionBoundTtl` floors at 1 for the sub-second TOCTOU between
+   * `verifyRefreshToken`'s clock read and `refreshTokens`' own later one: a row
+   * that is still alive at the first read can have crossed `restrictedUntil` by
+   * the second. Without the floor, `signJwt` would be called with `ttlSec <= 0`
+   * for a session caught in that race — surfacing only as an intermittent
+   * production failure under load, never in a test that reads the clock once.
+   *
+   * `Date.now` is mocked to move between reads within this single
+   * `refreshTokens` call — the only way to reach the floor without genuinely
+   * racing a clock, since `verifyRefreshToken` already rejects a row that has
+   * really expired by the time its own read happens.
+   *
+   * Red without the floor: `expiresIn` is `0` (or negative, one clock tick
+   * later), and `signJwt` mints a token whose `exp` is at or before its `iat`.
+   */
+  it.effect(
+    "the TOCTOU floor: the clock crosses the deadline between the two reads in one refresh",
+    () => {
+      const { layer, db } = makeHarness();
+      return Effect.gen(function* () {
+        const user = yield* auth.registerProfile("rs-toctou@example.com", "rstoctou");
+        const restricted = yield* auth.issueRecoverySession(
+          user.id,
+          user.accountId,
+          user.email,
+          user.handle,
+          user.displayName,
+          "otp",
+        );
+        const row = yield* sessionRow(db, restricted.refreshToken);
+        const restrictedUntilMs = row!.restrictedUntil! * 1000;
+
+        const dateNowSpy = vi.spyOn(Date, "now");
+        // `verifyRefreshToken`'s own clock read: a second before the deadline,
+        // so the row is still admitted.
+        dateNowSpy.mockReturnValueOnce(restrictedUntilMs - 1000);
+        // Every read after that — including `refreshTokens`' own, later one —
+        // lands exactly ON the deadline: `restrictedUntil - nowSec` is 0.
+        dateNowSpy.mockReturnValue(restrictedUntilMs);
+
+        const rotated = yield* auth.refreshTokens(restricted.refreshToken);
+        dateNowSpy.mockRestore();
+
+        expect(rotated.expiresIn).toBe(1);
+        const payload = payloadOf(rotated.accessToken);
+        expect((payload["exp"] as number) - (payload["iat"] as number)).toBe(1);
+        // Still restricted, and still rotated — the floor changes the TTL it
+        // mints with, not whether the grant succeeds.
+        expect(payload["aud"]).toBe(RECOVERY_TOKEN_AUDIENCE);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  /**
    * The same rule at mint, where it bites only if an operator sets
    * `OSN_ACCESS_TOKEN_TTL` above the recovery window. Both halves matter: the
    * restricted session is capped to its window, and an ordinary one from the

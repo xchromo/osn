@@ -16,7 +16,7 @@ import {
   extractJwtSub,
   parseTokenResponse,
 } from "./tokens";
-import type { AccountSession, PublicProfile, Session } from "./tokens";
+import type { AccountSession, HeldSession, PublicProfile, Session } from "./tokens";
 
 const ACCOUNT_SESSION_KEY = "@osn/client:account_session";
 
@@ -143,9 +143,13 @@ export interface OsnAuthService {
    * rotates the session server-side, and a second grant replaying the
    * rotated-out cookie is what reuse detection revokes a family for.
    *
+   * Returns a {@link HeldSession}, not a `Session` — `adoptSession`/
+   * `setSession` don't accept one, so the caller must unwrap `.session`
+   * explicitly rather than being able to hand the result straight to either.
+   *
    * @see wiki/architecture/account-recovery-factors.md — the restricted session.
    */
-  readonly refreshHeldSession: () => Effect.Effect<Session, TokenRefreshError>;
+  readonly refreshHeldSession: () => Effect.Effect<HeldSession, TokenRefreshError>;
 
   readonly logout: () => Effect.Effect<void, StorageError>;
 
@@ -501,8 +505,13 @@ export function createOsnAuthLive(config: OsnAuthConfig): Layer.Layer<OsnAuth, n
       // `restricted_until` is set, and carries that deadline forward rather
       // than extending it — so this can renew the token but can never buy the
       // session more life than it was granted.
+      //
+      // Wrapped as a `HeldSession` rather than returned as a bare `Session`
+      // so `adoptSession`/`setSession` refuse it at compile time — see
+      // `HeldSession` in `./tokens`.
       // -----------------------------------------------------------------------
-      const refreshHeldSession = () => sharedTokenGrant();
+      const refreshHeldSession = (): Effect.Effect<HeldSession, TokenRefreshError> =>
+        Effect.map(sharedTokenGrant(), (session): HeldSession => ({ held: true, session }));
 
       // -----------------------------------------------------------------------
       // Cold-start bootstrap (production login-loop fix).

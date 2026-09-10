@@ -471,13 +471,23 @@ describe("RecoveryLoginForm — keeping the restricted session alive", () => {
   }
 
   /**
+   * What `refreshHeldSession` actually resolves to — the session wrapped in
+   * `HeldSession`, never bare. Mirrors the real `@osn/client` contract, so a
+   * test that drives this mock exercises the same `{ session } = await …`
+   * destructuring shape the component reads.
+   */
+  function heldSessionExpiringIn(ms: number, token = ACCESS_TOKEN) {
+    return { held: true as const, session: sessionExpiringIn(ms, token) };
+  }
+
+  /**
    * A grant that mints its token when it is called, not when it is set up.
    * `mockResolvedValue` would freeze `expiresAt` at test-setup time, so after
    * the clock advanced the "fresh" token would arrive already stale — the
    * opposite of what the issuer does.
    */
   function grantsTokenExpiringIn(ms: number, token: string) {
-    return () => Promise.resolve(sessionExpiringIn(ms, token));
+    return () => Promise.resolve(heldSessionExpiringIn(ms, token));
   }
 
   /** A promise the test resolves by hand, for asserting on an in-flight grant. */
@@ -609,7 +619,7 @@ describe("RecoveryLoginForm — keeping the restricted session alive", () => {
     // continuation arms the next one. Without a generation guard this re-holds
     // a token from a family the new factor has already deleted, and rotates the
     // session for as long as the page is open.
-    const grant = deferred<ReturnType<typeof sessionExpiringIn>>();
+    const grant = deferred<ReturnType<typeof heldSessionExpiringIn>>();
     hoisted.refreshHeldSession.mockReturnValue(grant.promise);
     // A failed ceremony is what puts "Start again" on the enrolment screen.
     registration.passkeyRegisterBegin.mockRejectedValue(new Error("NotAllowedError"));
@@ -624,7 +634,7 @@ describe("RecoveryLoginForm — keeping the restricted session alive", () => {
     expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: /Start again/i }));
-    grant.settle(sessionExpiringIn(TTL_MS, "acc_stale"));
+    grant.settle(heldSessionExpiringIn(TTL_MS, "acc_stale"));
     await vi.advanceTimersByTimeAsync(TTL_MS * 3);
 
     expect(screen.getByRole("button", { name: /Use a recovery code/i })).toBeTruthy();
@@ -633,11 +643,53 @@ describe("RecoveryLoginForm — keeping the restricted session alive", () => {
     expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
   });
 
+  it("abandons a grant that resolves after enrolment succeeds", async () => {
+    // The highest-consequence transition: after a successful recovery the
+    // user holds an ORDINARY session, which the issuer never refuses — so a
+    // background grant that resolves after this epoch bump and is applied
+    // rather than discarded would re-arm a refresh loop with no stop
+    // condition at all.
+    //
+    // `passkeyRegisterComplete` is held open so a background refresh can
+    // queue up (and be genuinely dispatched) behind it: both of
+    // `enrolPasskey`'s own token reads are comfortably inside the lead here,
+    // so it never spends a grant of its own — the one call below is the
+    // background timer's, and it lands only once `/complete` has already
+    // resolved and epoch has already moved on.
+    const grant = deferred<ReturnType<typeof heldSessionExpiringIn>>();
+    hoisted.refreshHeldSession.mockReturnValue(grant.promise);
+    const complete = deferred<{ passkeyId: string }>();
+    registration.passkeyRegisterComplete.mockReturnValue(complete.promise);
+    await reachEnrolmentHolding(sessionExpiringIn(TTL_MS));
+
+    fireEvent.click(screen.getByRole("button", { name: /Add a passkey/i }));
+    await vi.waitFor(() => expect(registration.passkeyRegisterComplete).toHaveBeenCalled());
+
+    // The background timer fires while `/complete` is still on the wire. Its
+    // grant takes a place in the queue but isn't dispatched yet.
+    await vi.advanceTimersByTimeAsync(TTL_MS - LEAD_MS);
+    expect(hoisted.refreshHeldSession).not.toHaveBeenCalled();
+
+    // `/complete` resolves: enrolPasskey bumps epoch and clears `held`.
+    // Only then does the queued grant get dispatched — genuinely in flight
+    // against a session that, by the time it lands, no longer exists.
+    complete.settle({ passkeyId: "pk_new" });
+    await vi.waitFor(() => expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/You're back in/i)).toBeTruthy();
+
+    // Settling it now must be a no-op.
+    grant.settle(heldSessionExpiringIn(TTL_MS, "acc_late"));
+    await vi.advanceTimersByTimeAsync(TTL_MS * 3);
+
+    expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/You're back in/i)).toBeTruthy();
+  });
+
   it("abandons a grant that resolves after the screen unmounts", async () => {
     // The worst version: after enrolment the user signs in, so the cookie names
     // an ORDINARY session, which the issuer never refuses. A loop re-armed here
     // has no stop condition at all.
-    const grant = deferred<ReturnType<typeof sessionExpiringIn>>();
+    const grant = deferred<ReturnType<typeof heldSessionExpiringIn>>();
     hoisted.refreshHeldSession.mockReturnValue(grant.promise);
     await reachEnrolmentHolding(sessionExpiringIn(TTL_MS));
 
@@ -645,9 +697,36 @@ describe("RecoveryLoginForm — keeping the restricted session alive", () => {
     expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
 
     cleanup();
-    grant.settle(sessionExpiringIn(TTL_MS, "acc_orphan"));
+    grant.settle(heldSessionExpiringIn(TTL_MS, "acc_orphan"));
     await vi.advanceTimersByTimeAsync(TTL_MS * 3);
 
+    expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons a grant that resolves after unmount mid-ceremony", async () => {
+    // `freshToken()` has its own `if (mine !== epoch) return null;`, separate
+    // from `refreshHeld`'s — triggered on demand from the ceremony rather
+    // than the background timer, so it needs its own proof. Minting already
+    // inside the lead means `beginRestricted` arms an expiry timer, not a
+    // refresh one, so the one grant possible here is the one `freshToken()`
+    // requests when `enrolPasskey` clicks — isolating it from the background
+    // path the other two tests in this block cover.
+    const grant = deferred<ReturnType<typeof heldSessionExpiringIn>>();
+    hoisted.refreshHeldSession.mockReturnValue(grant.promise);
+    await reachEnrolmentHolding(sessionExpiringIn(LEAD_MS - 5_000));
+
+    fireEvent.click(screen.getByRole("button", { name: /Add a passkey/i }));
+    await vi.waitFor(() => expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1));
+    // Still waiting on the grant — the ceremony itself never started.
+    expect(registration.passkeyRegisterBegin).not.toHaveBeenCalled();
+
+    cleanup();
+    grant.settle(heldSessionExpiringIn(TTL_MS, "acc_orphan_ceremony"));
+    await vi.advanceTimersByTimeAsync(TTL_MS * 3);
+
+    // Discarded: `freshToken()` returns null, `enrolPasskey` never asks for
+    // a ceremony, and nothing re-requests a grant.
+    expect(registration.passkeyRegisterBegin).not.toHaveBeenCalled();
     expect(hoisted.refreshHeldSession).toHaveBeenCalledTimes(1);
   });
 });
