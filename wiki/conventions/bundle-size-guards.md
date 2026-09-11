@@ -335,7 +335,7 @@ Same shape again, a fourth time: `oxlintrc.json`'s categories put every
 non-`correctness` finding at `warn`, so `bun run lint` exits 0 whatever the
 warning count is — the CI step at `ci.yml`'s `lint` job proved only that no
 error-level rule fired. Over one recent epic the count drifted 1020 → 1035 →
-1037 → 1059 with no CI step noticing, and the only way to know was to read
+1037 → 1061 with no CI step noticing, and the only way to know was to read
 the number by hand on every branch (xchromo/osn#1008). Some of the rules
 sitting at `warn` are repo-specific and exist because the mistake they catch
 actually happened — `house/no-tracker-ref-in-comment`,
@@ -361,10 +361,12 @@ which is the exact failure this page's second rule warns against.
 
 oxlint's human-readable output (what `bun run lint` prints) has no summary
 line in the version this repo pins — a clean run ends on the last diagnostic,
-nothing after it. `bun run lint`'s own line count is not even safe to use as
-a proxy: `bun run <script>` prepends its own `$ oxlint -c oxlintrc.json .`
-echo line to the output, so a plain `wc -l` over it overcounts by exactly
-one.
+nothing after it. `bun run lint`'s own line count is not safe to use as a
+proxy either: `bun run <script>` prints its own `$ oxlint -c oxlintrc.json .`
+echo line, on **stderr**, so `wc -l` over it counts the diagnostics when the
+streams are separate and one more than that whenever anything merges them
+(`2>&1`, a CI log, a terminal). A line count that changes with redirection is
+not a measurement.
 
 The guard instead runs oxlint directly (bypassing the package.json script
 and its echo line) with `--format=json`, which gives one object per
@@ -382,9 +384,10 @@ with nothing after it, and `bun run lint | grep -c "Found \|Finished in "`
 returns 0: this pinned oxlint prints no summary line to grep for at all. The
 JSON count and the human-readable line count were cross-checked against each
 other, not just asserted: `oxlint -c oxlintrc.json . --format=json` filtered
-to `severity: "warning"` reports 1059, and `bun run lint | wc -l` reports
-1060 — the diagnostic count plus exactly the one `$ oxlint ...` echo line
-`bun run` prepends.*
+to `severity: "warning"` reports 1061, `bun run lint 2>/dev/null | wc -l`
+reports the same 1061, and `bun run lint 2>&1 | wc -l` reports 1062 — the
+diagnostic count plus the one `$ oxlint ...` echo line `bun run` writes to
+stderr.*
 
 ### Where it runs
 
