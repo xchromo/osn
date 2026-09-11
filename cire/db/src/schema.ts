@@ -606,6 +606,31 @@ export const registrySettings = sqliteTable("registry_settings", {
     .notNull()
     .default(false),
   stripeAccountUpdatedAt: integer("stripe_account_updated_at", { mode: "timestamp" }),
+  // A couple can revoke cire's access from their own Stripe dashboard, and
+  // Stripe says so once, in `account.application.deauthorized`. When that
+  // arrives `stripe_account_id` is cleared — the platform can no longer act on
+  // that account, and leaving the id would both keep the couple's contribute
+  // button armed against an account that will refuse the charge and block the
+  // reconnect (`attachStripeAccount` only ever fills a NULL id).
+  //
+  // The two columns below are what the cleared id leaves behind: WHEN it
+  // happened, and WHICH account it was. Nothing in the product reads them —
+  // they exist because this is the money path, and "which account did this
+  // wedding's gifts settle into before the couple disconnected" is a question
+  // somebody eventually asks with no other way to answer it.
+  stripeDeauthorizedAt: integer("stripe_deauthorized_at", { mode: "timestamp" }),
+  stripeDeauthorizedAccountId: text("stripe_deauthorized_account_id"),
+  // ── What survives the 1-year sweep ──────────────────────────────────────
+  // Gifts are guest data: `registry_claims` and `registry_contributions` both
+  // hang off `families`, so the retention sweep's family delete cascades them
+  // away a year after the wedding, and the couple's record of what arrived goes
+  // with it. This row is KEPT by that sweep (it carries no guest PII and the
+  // published invite depends on it), which makes it the right home for a
+  // parting summary: written just before the delete, aggregates only — counts
+  // and totals, never a household, a name or a note. See
+  // `wiki/compliance/retention.md`.
+  giftSummaryJson: text("gift_summary_json"),
+  giftSummaryAt: integer("gift_summary_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });
@@ -740,7 +765,11 @@ export const registryContributions = sqliteTable(
     familyId: text("family_id")
       .notNull()
       .references(() => families.id, { onDelete: "cascade" }),
-    status: text("status", { enum: ["pending", "succeeded", "failed", "refunded"] })
+    // `disputed` is a HOLD, not an ending: the guest's bank has pulled the money
+    // back while it decides, and the couple should see that rather than a gift
+    // that still reads as received. It resolves to `succeeded` (dispute won) or
+    // `refunded` (lost) when Stripe closes the case.
+    status: text("status", { enum: ["pending", "succeeded", "failed", "refunded", "disputed"] })
       .notNull()
       .default("pending"),
     // ── The money, both ways round ──────────────────────────────────────────
@@ -766,7 +795,13 @@ export const registryContributions = sqliteTable(
     // The webhook idempotency anchor — the same role `provider_ref` plays for
     // entitlement grants. A replayed `checkout.session.completed` conflicts here
     // instead of writing a second gift.
-    stripeCheckoutSessionId: text("stripe_checkout_session_id").notNull().unique(),
+    //
+    // NULLABLE, because the row is written BEFORE Stripe is asked for a page
+    // (0060): a NULL here is an attempt that never got a session, which the
+    // reuse lookup skips and the failure path closes. The UNIQUE is plain and
+    // not partial on purpose — SQLite counts NULLs as distinct, so every real
+    // session id is still claimed by exactly one row.
+    stripeCheckoutSessionId: text("stripe_checkout_session_id").unique(),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
     message: text("message"),
     displayName: text("display_name"),
@@ -778,6 +813,10 @@ export const registryContributions = sqliteTable(
   (t) => [
     index("registry_contributions_wedding_created_idx").on(t.weddingId, t.createdAt),
     index("registry_contributions_item_idx").on(t.itemId),
+    // A refund event names a payment intent and nothing else — no session id,
+    // and no metadata worth trusting — so this is the column the refund path
+    // reads by. Without the index that read scans every gift on the platform.
+    index("registry_contributions_payment_intent_idx").on(t.stripePaymentIntentId),
   ],
 );
 
