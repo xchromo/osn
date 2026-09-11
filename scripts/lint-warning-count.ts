@@ -2,20 +2,14 @@
 /**
  * Counts warning-severity diagnostics from an oxlint `--format=json` report.
  *
- * xchromo/osn#1008: `bun run lint`'s human-readable output has no summary
- * line in the oxlint version this repo pins (verified: a clean run ends on
- * the last diagnostic, nothing after it), so `grep -c " warning "` over that
- * output is the only text-based option — and it is fragile three ways: a
- * file path could itself contain the string, a rule's own message text can
- * say "warning" without being one line-per-diagnostic, and the format can
- * change under an oxlint upgrade with nothing here noticing. `--format=json`
- * instead gives one object per diagnostic with an explicit
+ * `--format=json` gives one object per diagnostic with an explicit
  * `"severity": "warning" | "error"` field, stamped by oxlint itself rather
  * than inferred from text — filtering on that field is exact regardless of
- * message wording or output layout. Verified against this repo's real
- * output before this script was written: a clean `oxlint -c oxlintrc.json .
- * --format=json` reports 1059 warning-severity diagnostics, matching the
- * line count of the human-readable form on the same run.
+ * message wording or output layout, unlike grepping the word "warning" over
+ * the human-readable output (which that format can itself contain inside a
+ * rule's own message or a file path). See scripts/guard-lint-warnings.sh's
+ * own comment for why the human-readable form has no summary line to count
+ * instead.
  *
  * scripts/guard-lint-warnings.sh runs oxlint itself (real invocation, real
  * config) and hands this script the resulting JSON file path — this module
@@ -64,7 +58,7 @@ export function countWarnings(report: OxlintReport): WarningCount {
 if (import.meta.main) {
   const jsonPath = process.argv[2];
   if (!jsonPath) {
-    console.error("usage: lint-warning-count.ts <oxlint-json-report-path>");
+    process.stderr.write("usage: lint-warning-count.ts <oxlint-json-report-path>\n");
     process.exit(1);
   }
 
@@ -72,7 +66,9 @@ if (import.meta.main) {
   try {
     raw = await Bun.file(jsonPath).text();
   } catch (err) {
-    console.error(`lint-warning-count.ts: could not read ${jsonPath}: ${(err as Error).message}`);
+    process.stderr.write(
+      `lint-warning-count.ts: could not read ${jsonPath}: ${(err as Error).message}\n`,
+    );
     process.exit(1);
   }
 
@@ -80,15 +76,15 @@ if (import.meta.main) {
   try {
     parsed = JSON.parse(raw) as OxlintReport;
   } catch (err) {
-    console.error(
-      `lint-warning-count.ts: ${jsonPath} was not valid JSON: ${(err as Error).message}`,
+    process.stderr.write(
+      `lint-warning-count.ts: ${jsonPath} was not valid JSON: ${(err as Error).message}\n`,
     );
     process.exit(1);
   }
 
   const { total, byRule } = countWarnings(parsed);
-  console.log(String(total));
+  process.stdout.write(`${total}\n`);
   for (const [code, n] of byRule) {
-    console.log(`${code} ${n}`);
+    process.stdout.write(`${code} ${n}\n`);
   }
 }

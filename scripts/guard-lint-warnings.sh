@@ -1,30 +1,13 @@
 #!/usr/bin/env bash
 # Guard the count of `bun run lint` warning-severity diagnostics across the
-# whole monorepo.
+# whole monorepo, so a branch that adds one can't stay green.
 #
-# xchromo/osn#1008: oxlintrc.json puts every non-`correctness` category at
-# `warn`, so `bun run lint` exits 0 whatever the warning count is — the CI
-# step at ci.yml's `lint` job proves only that no error-level rule fired.
-# Some of those warn-level rules are repo-specific and exist because the
-# mistake they catch actually happened (`house/no-tracker-ref-in-comment`,
-# `house/no-non-subscribing-store-read`), and with nothing enforcing the
-# total they are advisory notes nobody reads. Over one recent epic the count
-# drifted 1020 -> 1035 -> 1037 -> 1059 with no CI step noticing — the only
-# way to know was to read the number by hand on every branch.
-#
-# Mirrors scripts/guard-bundle-size.sh's two rules for a guard that gates on
-# a number (wiki/conventions/bundle-size-guards.md):
-#
-#   - the ceiling lives in ONE committed file this script reads
-#     (scripts/lint-warning-ceiling.txt), never a call-site argument and
-#     never typed into ci.yml. Missing or unparseable, this script refuses
-#     to run rather than passing with nothing to check against.
-#   - the headroom is smaller than the smallest mistake the guard exists to
-#     catch. The smallest mistake here is one new warning, so the headroom
-#     is ZERO: the ceiling is the exact current count. That makes this a
-#     ratchet in BOTH directions — a count BELOW the ceiling fails too, with
-#     a message to lower the file, because otherwise a cleanup's slack lets
-#     the count drift back to where it started with nothing noticing.
+# @see wiki/conventions/bundle-size-guards.md — the two rules this guard
+# follows (one committed file for the number; headroom smaller than the
+# smallest mistake it exists to catch) and why the headroom here is zero in
+# both directions, making this a ratchet rather than a one-way cap: a count
+# BELOW the ceiling fails too, with a message to lower the file, so a
+# cleanup's slack can't let the count drift back up unnoticed.
 #
 # Usage:
 #   guard-lint-warnings.sh          # what ci.yml's `lint` job calls, as its
@@ -33,26 +16,28 @@
 #                                     "the count moved" read as two different
 #                                     failures)
 #
-# Counting method: oxlint's human-readable output has no summary line to
-# grep for in the pinned version (verified: a clean run ends on the last
-# diagnostic, nothing printed after it), and grepping the word "warning"
-# over that output would also match it appearing inside a rule's own
-# message or a file path. `--format=json` instead gives one object per
-# diagnostic with an explicit `"severity": "warning" | "error"` field,
-# stamped by oxlint itself — filtering on that field is exact regardless of
-# message wording or output layout. scripts/lint-warning-count.ts does the
-# counting (unit-tested against a fixture report in
-# scripts/tests/lint-warning-count.test.ts); this script owns running the
-# real oxlint, reading the ceiling file, and the pass/fail decision.
+# Counting method: oxlint's human-readable output (what `bun run lint`
+# prints) has no summary line in the pinned version — confirmed by running
+# `bun run lint | tail` and `bun run lint | grep -c "Found \|Finished in "`
+# (zero matches) rather than inferred from the JSON output, which says
+# nothing about a separate code path. Grepping the word "warning" over that
+# output would also match it appearing inside a rule's own message or a file
+# path. `--format=json` instead gives one object per diagnostic with an
+# explicit `"severity": "warning" | "error"` field, stamped by oxlint itself
+# — filtering on that field is exact regardless of message wording or output
+# layout. scripts/lint-warning-count.ts does the counting (unit-tested
+# against a fixture report in scripts/tests/lint-warning-count.test.ts);
+# this script owns running the real oxlint, reading the ceiling file, and
+# the pass/fail decision.
 #
 # LINT_WARNING_CEILING_FILE overrides the ceiling file path, LINT_WARNING_ROOT
 # overrides the directory oxlint runs in (real usage: the repo root, matching
 # `bun run lint`'s own "."), and LINT_WARNING_OXLINT_BIN overrides the oxlint
 # binary path (default: LINT_WARNING_ROOT's own node_modules/.bin/oxlint —
-# the same binary `bun run lint` resolves to). scripts/tests/guard-lint-warnings.test.sh
-# uses all three to point this script at a small fixture project instead of
-# the real monorepo, while still running the REAL oxlint binary from this
-# checkout's own node_modules.
+# the same binary `bun run lint` resolves to on this checkout's PATH).
+# scripts/tests/guard-lint-warnings.test.sh uses all three to point this
+# script at a small fixture project instead of the real monorepo, while
+# still running the REAL oxlint binary from this checkout's own node_modules.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,6 +93,13 @@ fi
 result_file="$WORK_DIR/result.txt"
 bun "$SCRIPT_DIR/lint-warning-count.ts" "$WORK_DIR/oxlint.json" >"$result_file"
 
+# lint-warning-count.ts exits non-zero on every failure it can hit (unreadable
+# file, invalid JSON), and `set -e` above would already have stopped this
+# script before this line ran in that case — so this branch is unreachable
+# through either of this script's own call sites today. Left in as defence
+# in depth against a future change to that script that prints something
+# non-numeric on its first line while still exiting 0, the same shape as
+# guard-bundle-size.sh's own unreachable-mode arm.
 count="$(head -n1 "$result_file")"
 if ! [[ "$count" =~ ^[0-9]+$ ]]; then
   echo "::error::guard-lint-warnings.sh: could not determine a warning count from oxlint's output." >&2

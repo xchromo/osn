@@ -364,8 +364,7 @@ line in the version this repo pins — a clean run ends on the last diagnostic,
 nothing after it. `bun run lint`'s own line count is not even safe to use as
 a proxy: `bun run <script>` prepends its own `$ oxlint -c oxlintrc.json .`
 echo line to the output, so a plain `wc -l` over it overcounts by exactly
-one — this was caught by cross-checking the two counting methods against
-each other while building this guard, not by inspection.
+one.
 
 The guard instead runs oxlint directly (bypassing the package.json script
 and its echo line) with `--format=json`, which gives one object per
@@ -378,9 +377,14 @@ does the counting and the per-rule breakdown; `scripts/guard-lint-warnings.sh`
 owns running the real oxlint, reading the ceiling file, and the pass/fail
 decision.
 
-*Measured 2026-09-11 — `oxlint -c oxlintrc.json . --format=json` on this
-branch, filtered to `severity: "warning"`: 1064. Verified against `bun run
-lint`'s own line count (1065) minus the one echo line `bun run` prepends.*
+*Measured 2026-09-11 — `bun run lint | tail` ends on the last diagnostic line
+with nothing after it, and `bun run lint | grep -c "Found \|Finished in "`
+returns 0: this pinned oxlint prints no summary line to grep for at all. The
+JSON count and the human-readable line count were cross-checked against each
+other, not just asserted: `oxlint -c oxlintrc.json . --format=json` filtered
+to `severity: "warning"` reports 1059, and `bun run lint | wc -l` reports
+1060 — the diagnostic count plus exactly the one `$ oxlint ...` echo line
+`bun run` prepends.*
 
 ### Where it runs
 
@@ -407,9 +411,29 @@ Two test files, for the two things that can go wrong independently:
 
 Run `bun run lint` or `scripts/guard-lint-warnings.sh` (the second prints the
 new count on a failing run), then edit **only**
-`scripts/lint-warning-ceiling.txt` to that number. Nothing else names the
-ceiling — not `ci.yml`, not a script argument — so there is nowhere else to
-update.
+`scripts/lint-warning-ceiling.txt` to that number, including a fresh trailing
+comment naming the branch and date it was measured from. **If the file and
+this page ever disagree, the file is right** — the same rule the bundle table
+above states for itself. An `oxlint` version bump is expected to move the
+count (a rule can be added, removed or have its default severity change) and
+trip this guard until the file is re-baselined; that is not a defect, it is
+the same zero-headroom trade this page's second rule always makes.
+
+> [!warning] Zero headroom means two concurrent PRs can still leave `main` red
+> `main`'s branch protection does not require a PR to be up to date with
+> `main` before merging. Two PRs that each add one warning, cut from the same
+> base, each write their own correct edit to
+> `scripts/lint-warning-ceiling.txt` and each pass in isolation. If both land,
+> the ceiling on `main` reflects only whichever merged last, not the sum of
+> both — unless the merge itself conflicts. The one thing standing between
+> that and a silently wrong ceiling is the trailing comment convention above:
+> two PRs' ceiling lines differ in branch name and date even when they
+> coincidentally agree on the leading number, so git treats concurrent edits
+> to this file as a real merge conflict a human has to resolve, rather than
+> auto-merging two edits to the same line. This is the same shape of gap
+> zero-headroom accepts everywhere on this page — the fix, if `main` does go
+> red this way, is the same as any other regression: re-measure and
+> re-baseline.
 
 ## Related
 
