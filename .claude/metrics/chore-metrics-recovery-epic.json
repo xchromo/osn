@@ -1,67 +1,67 @@
 {
   "schema_version": 1,
   "pr": {
-    "number": 892,
-    "branch": "chore/house-rule-non-subscribing-read",
-    "base_sha": "bb5b11a229842de7193e5656dd0ec9349eb457e0",
-    "head_sha": "14a3d50a122d0b82bd2246ef87fac70002cd5e58",
-    "generated_at": "2026-09-11T06:24:24.044Z",
-    "merged_at": "2026-09-06T09:12:08Z",
+    "number": 1003,
+    "branch": "chore/metrics-recovery-epic",
+    "base_sha": "4df6b5ffb84f9ee64a71ccb792b7906b9c7bfc49",
+    "head_sha": "a336e6c4fa4e00f63b74afbb44293afd927517a3",
+    "generated_at": "2026-09-11T06:24:24.013Z",
+    "merged_at": "2026-09-11T02:05:47Z",
     "phase": "at-merge"
   },
   "issue": {
-    "number": 621,
+    "number": null,
     "type": null,
     "labels": []
   },
   "complexity": {
     "declared": null,
-    "method": "not-fetched"
+    "method": "none"
   },
   "window": {
     "sessions": 1,
-    "first_ts": "2026-09-06T08:10:48.315Z",
-    "last_ts": "2026-09-06T08:13:37.111Z",
-    "span_seconds": 169,
-    "active_seconds": 169,
+    "first_ts": "2026-09-11T02:03:48.444Z",
+    "last_ts": "2026-09-11T02:04:13.926Z",
+    "span_seconds": 25,
+    "active_seconds": 25,
     "compactions": 0
   },
   "spend": {
-    "usd_equivalent": 1.1956515,
+    "usd_equivalent": 0.2330535,
     "tokens": {
-      "input": 20,
-      "output": 9501,
+      "input": 10,
+      "output": 1205,
       "thinking": 0,
-      "cache_write_5m": 75100,
+      "cache_write_5m": 19400,
       "cache_write_1h": 0,
-      "cache_read": 977303
+      "cache_read": 163257
     },
     "by_model": {
       "claude-opus-4-7": {
         "tokens": {
-          "input": 20,
-          "output": 9501,
+          "input": 10,
+          "output": 1205,
           "thinking": 0,
-          "cache_write_5m": 75100,
+          "cache_write_5m": 19400,
           "cache_write_1h": 0,
-          "cache_read": 977303
+          "cache_read": 163257
         },
-        "usd_equivalent": 1.1956515,
-        "messages": 15
+        "usd_equivalent": 0.2330535,
+        "messages": 5
       }
     },
     "by_actor": {
       "main": {
         "tokens": {
-          "input": 20,
-          "output": 9501,
+          "input": 10,
+          "output": 1205,
           "thinking": 0,
-          "cache_write_5m": 75100,
+          "cache_write_5m": 19400,
           "cache_write_1h": 0,
-          "cache_read": 977303
+          "cache_read": 163257
         },
-        "usd_equivalent": 1.1956515,
-        "messages": 15
+        "usd_equivalent": 0.2330535,
+        "messages": 5
       },
       "subagent": {
         "tokens": {
@@ -81,39 +81,37 @@
   },
   "diff": {
     "files": {
-      "generated": 1,
-      "test": 1,
-      "docs": 1,
-      "config": 1,
-      "source": 2
+      "generated": 0,
+      "test": 0,
+      "docs": 0,
+      "config": 8,
+      "source": 0
     },
     "loc": {
       "generated": {
-        "added": 15,
+        "added": 0,
         "deleted": 0
       },
       "test": {
-        "added": 316,
+        "added": 0,
         "deleted": 0
       },
       "docs": {
-        "added": 1,
+        "added": 0,
         "deleted": 0
       },
       "config": {
-        "added": 31,
+        "added": 1220,
         "deleted": 0
       },
       "source": {
-        "added": 300,
-        "deleted": 1
+        "added": 0,
+        "deleted": 0
       }
     },
-    "packages": [
-      "tools/oxlint"
-    ],
+    "packages": [],
     "touches_migration": false,
-    "commits": 2
+    "commits": 1
   },
   "interaction": {
     "user_turns": 1,
@@ -121,9 +119,8 @@
     "tokens_before_first_edit": null,
     "sessions_with_observed_edit": 0,
     "tool_calls": {
-      "Read": 6,
-      "Bash": 1,
-      "Grep": 1
+      "Read": 1,
+      "Bash": 1
     },
     "edit_churn": {
       "files_edited_3plus": 0,
