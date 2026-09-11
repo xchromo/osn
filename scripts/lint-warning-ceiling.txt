@@ -1,0 +1,22 @@
+# Lint-warning ceiling for scripts/guard-lint-warnings.sh.
+#
+# The single source of truth for how many warning-severity diagnostics
+# `bun run lint` (oxlintrc.json's categories) may report across the whole
+# monorepo. Nothing else names this number — not `.github/workflows/ci.yml`,
+# not a script argument.
+#
+# xchromo/osn#1008: `bun run lint` exits 0 whatever the warning count is, so
+# the count drifted upward across a recent epic (1020 -> 1035 -> 1037 ->
+# 1059) with no CI step noticing. The headroom here is zero in both
+# directions — an INCREASE fails (a new warning was added), and a DECREASE
+# also fails, with a message to lower this file to match. A decrease means
+# warnings were fixed, which is good, but leaving the old, higher number in
+# place is slack that would let the count silently drift back up before
+# anything noticed.
+#
+# Re-baselining, in either direction: run `bun run lint` (or
+# scripts/guard-lint-warnings.sh, which prints the new count on a failing
+# run), and replace the number below with it. One value, alone on the first
+# non-comment, non-blank line — nothing else in this file is read.
+
+1064   # measured via scripts/guard-lint-warnings.sh (oxlint --format=json), feat/lint-warning-ceiling @ 2026-09-11
