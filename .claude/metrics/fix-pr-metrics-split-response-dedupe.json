@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "pr": {
-    "number": 888,
-    "branch": "fix/ci-playwright-workspace-version",
-    "base_sha": "42178e92200ef4a2e3dd2ec2d134641ca2282ab6",
-    "head_sha": "b485f54e96e6d30fde9c442e1ffc0ec666a0fa07",
-    "generated_at": "2026-09-11T07:19:12.039Z",
-    "merged_at": "2026-09-06T05:02:09Z",
-    "phase": "at-merge"
+    "number": null,
+    "branch": "fix/pr-metrics-split-response-dedupe",
+    "base_sha": "3f3a6120c1142489f5544bef830db560d2db02f3",
+    "head_sha": "3f3a6120c1142489f5544bef830db560d2db02f3",
+    "generated_at": "2026-09-11T07:16:51.963Z",
+    "merged_at": null,
+    "phase": "at-open"
   },
   "issue": {
     "number": null,
@@ -20,48 +20,48 @@
   },
   "window": {
     "sessions": 1,
-    "first_ts": "2026-09-06T04:09:27.226Z",
-    "last_ts": "2026-09-06T04:09:34.738Z",
-    "span_seconds": 8,
-    "active_seconds": 8,
-    "compactions": 0
+    "first_ts": "2026-09-11T06:32:59.984Z",
+    "last_ts": "2026-09-11T07:16:48.190Z",
+    "span_seconds": 2628,
+    "active_seconds": 658,
+    "compactions": 1
   },
   "spend": {
-    "usd_equivalent": 0.338594,
+    "usd_equivalent": 2.3463354999999995,
     "tokens": {
-      "input": 4,
-      "output": 555,
-      "thinking": 296,
+      "input": 58,
+      "output": 11478,
+      "thinking": 3292,
       "cache_write_5m": 0,
-      "cache_write_1h": 660,
-      "cache_read": 636198
+      "cache_write_1h": 68856,
+      "cache_read": 2741071
     },
     "by_model": {
       "claude-opus-5": {
         "tokens": {
-          "input": 4,
-          "output": 555,
-          "thinking": 296,
+          "input": 58,
+          "output": 11478,
+          "thinking": 3292,
           "cache_write_5m": 0,
-          "cache_write_1h": 660,
-          "cache_read": 636198
+          "cache_write_1h": 68856,
+          "cache_read": 2741071
         },
-        "usd_equivalent": 0.338594,
-        "messages": 2
+        "usd_equivalent": 2.3463354999999995,
+        "messages": 29
       }
     },
     "by_actor": {
       "main": {
         "tokens": {
-          "input": 4,
-          "output": 555,
-          "thinking": 296,
+          "input": 58,
+          "output": 11478,
+          "thinking": 3292,
           "cache_write_5m": 0,
-          "cache_write_1h": 660,
-          "cache_read": 636198
+          "cache_write_1h": 68856,
+          "cache_read": 2741071
         },
-        "usd_equivalent": 0.338594,
-        "messages": 2
+        "usd_equivalent": 2.3463354999999995,
+        "messages": 29
       },
       "subagent": {
         "tokens": {
@@ -77,7 +77,7 @@
       }
     },
     "effort": {
-      "high": 2
+      "high": 29
     },
     "unpriced_models": []
   },
@@ -86,7 +86,7 @@
       "generated": 0,
       "test": 0,
       "docs": 0,
-      "config": 1,
+      "config": 0,
       "source": 0
     },
     "loc": {
@@ -103,7 +103,7 @@
         "deleted": 0
       },
       "config": {
-        "added": 23,
+        "added": 0,
         "deleted": 0
       },
       "source": {
@@ -113,15 +113,16 @@
     },
     "packages": [],
     "touches_migration": false,
-    "commits": 1
+    "commits": 0
   },
   "interaction": {
-    "user_turns": 0,
-    "corrective_turns": 0,
-    "tokens_before_first_edit": null,
-    "sessions_with_observed_edit": 0,
+    "user_turns": 1,
+    "corrective_turns": 1,
+    "tokens_before_first_edit": 1957960,
+    "sessions_with_observed_edit": 1,
     "tool_calls": {
-      "Bash": 2
+      "Bash": 28,
+      "EnterWorktree": 1
     },
     "edit_churn": {
       "files_edited_3plus": 0,

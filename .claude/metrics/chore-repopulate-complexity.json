@@ -1,72 +1,72 @@
 {
   "schema_version": 1,
   "pr": {
-    "number": 982,
-    "branch": "fix/cire-dev-d1-cost",
-    "base_sha": "0e16137099a315501b2b9b902ba1aafb89640729",
-    "head_sha": "c1e1493d9a6af0f660e0dd054e3fbc48549f1acd",
-    "generated_at": "2026-09-11T07:19:12.007Z",
-    "merged_at": "2026-09-10T04:10:24Z",
+    "number": 1018,
+    "branch": "chore/repopulate-complexity",
+    "base_sha": "1d1d9a039a6247303a45da92f371f0548e419da2",
+    "head_sha": "059e689822ae73939a47e8ccbe3826a29b095d48",
+    "generated_at": "2026-09-11T07:19:11.984Z",
+    "merged_at": "2026-09-11T06:31:57Z",
     "phase": "at-merge"
   },
   "issue": {
-    "number": 979,
+    "number": 1004,
     "type": null,
     "labels": [
-      "product:cire",
+      "product:shared",
       "area:ops",
-      "complexity:3",
+      "complexity:2",
       "complexity:unconfirmed"
     ]
   },
   "complexity": {
-    "declared": 3,
+    "declared": 2,
     "method": "unconfirmed"
   },
   "window": {
     "sessions": 2,
-    "first_ts": "2026-09-10T03:36:39.237Z",
-    "last_ts": "2026-09-10T03:39:01.129Z",
-    "span_seconds": 142,
-    "active_seconds": 188,
+    "first_ts": "2026-09-11T06:28:04.237Z",
+    "last_ts": "2026-09-11T06:29:21.537Z",
+    "span_seconds": 77,
+    "active_seconds": 142,
     "compactions": 0
   },
   "spend": {
-    "usd_equivalent": 1.23577025,
+    "usd_equivalent": 1.0485742499999997,
     "tokens": {
-      "input": 24,
-      "output": 12399,
+      "input": 27,
+      "output": 7987,
       "thinking": 0,
-      "cache_write_5m": 105279,
+      "cache_write_5m": 75729,
       "cache_write_1h": 0,
-      "cache_read": 535363
+      "cache_read": 750916
     },
     "by_model": {
       "claude-opus-4-7": {
         "tokens": {
-          "input": 24,
-          "output": 12399,
+          "input": 27,
+          "output": 7987,
           "thinking": 0,
-          "cache_write_5m": 105279,
+          "cache_write_5m": 75729,
           "cache_write_1h": 0,
-          "cache_read": 535363
+          "cache_read": 750916
         },
-        "usd_equivalent": 1.23577025,
-        "messages": 14
+        "usd_equivalent": 1.0485742499999997,
+        "messages": 17
       }
     },
     "by_actor": {
       "main": {
         "tokens": {
-          "input": 24,
-          "output": 12399,
+          "input": 27,
+          "output": 7987,
           "thinking": 0,
-          "cache_write_5m": 105279,
+          "cache_write_5m": 75729,
           "cache_write_1h": 0,
-          "cache_read": 535363
+          "cache_read": 750916
         },
-        "usd_equivalent": 1.23577025,
-        "messages": 14
+        "usd_equivalent": 1.0485742499999997,
+        "messages": 17
       },
       "subagent": {
         "tokens": {
@@ -87,38 +87,38 @@
   "diff": {
     "files": {
       "generated": 1,
-      "test": 0,
-      "docs": 3,
-      "config": 2,
-      "source": 2
+      "test": 3,
+      "docs": 2,
+      "config": 52,
+      "source": 3
     },
     "loc": {
       "generated": {
-        "added": 20,
+        "added": 10,
         "deleted": 0
       },
       "test": {
-        "added": 0,
-        "deleted": 0
+        "added": 118,
+        "deleted": 37
       },
       "docs": {
-        "added": 89,
-        "deleted": 18
+        "added": 11,
+        "deleted": 2
       },
       "config": {
-        "added": 123,
-        "deleted": 27
+        "added": 854,
+        "deleted": 134
       },
       "source": {
-        "added": 10,
-        "deleted": 5
+        "added": 63,
+        "deleted": 12
       }
     },
     "packages": [
-      "cire/db"
+      "tools/pr-metrics"
     ],
     "touches_migration": false,
-    "commits": 1
+    "commits": 2
   },
   "interaction": {
     "user_turns": 2,
@@ -126,9 +126,10 @@
     "tokens_before_first_edit": null,
     "sessions_with_observed_edit": 0,
     "tool_calls": {
-      "Read": 13,
-      "Bash": 2,
-      "StructuredOutput": 2
+      "Read": 9,
+      "Bash": 3,
+      "StructuredOutput": 2,
+      "Grep": 1
     },
     "edit_churn": {
       "files_edited_3plus": 0,
