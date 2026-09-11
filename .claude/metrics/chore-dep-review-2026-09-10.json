@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "pr": {
+    "number": 1002,
+    "branch": "chore/dep-review-2026-09-10",
+    "base_sha": "73a8454bcc12d26c17a44df547b48cbb8896d400",
+    "head_sha": "4440f73ef127bb34e606f43de2f48b49c1dab1fc",
+    "generated_at": "2026-09-11T01:58:10.620Z",
+    "merged_at": null,
+    "phase": "at-open"
+  },
+  "issue": {
+    "number": null,
+    "type": null,
+    "labels": []
+  },
+  "complexity": {
+    "declared": null,
+    "method": "none"
+  },
+  "window": {
+    "sessions": 7,
+    "first_ts": "2026-09-10T13:59:01.813Z",
+    "last_ts": "2026-09-11T01:58:08.920Z",
+    "span_seconds": 43147,
+    "active_seconds": 3278,
+    "compactions": 0
+  },
+  "spend": {
+    "usd_equivalent": 40.31869524999999,
+    "tokens": {
+      "input": 800,
+      "output": 120070,
+      "thinking": 25708,
+      "cache_write_5m": 529127,
+      "cache_write_1h": 632001,
+      "cache_read": 55371783
+    },
+    "by_model": {
+      "claude-opus-4-7": {
+        "tokens": {
+          "input": 48,
+          "output": 5357,
+          "thinking": 0,
+          "cache_write_5m": 97530,
+          "cache_write_1h": 0,
+          "cache_read": 375521
+        },
+        "usd_equivalent": 0.931488,
+        "messages": 18
+      },
+      "claude-opus-5": {
+        "tokens": {
+          "input": 752,
+          "output": 114713,
+          "thinking": 25708,
+          "cache_write_5m": 431597,
+          "cache_write_1h": 632001,
+          "cache_read": 54996262
+        },
+        "usd_equivalent": 39.38720724999998,
+        "messages": 376
+      },
+      "<synthetic>": {
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "thinking": 0,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_read": 0
+        },
+        "usd_equivalent": 0,
+        "messages": 4
+      }
+    },
+    "by_actor": {
+      "main": {
+        "tokens": {
+          "input": 368,
+          "output": 89279,
+          "thinking": 25708,
+          "cache_write_5m": 97530,
+          "cache_write_1h": 632001,
+          "cache_read": 29085854
+        },
+        "usd_equivalent": 23.706314499999987,
+        "messages": 181
+      },
+      "subagent": {
+        "tokens": {
+          "input": 432,
+          "output": 30791,
+          "thinking": 0,
+          "cache_write_5m": 431597,
+          "cache_write_1h": 0,
+          "cache_read": 26285929
+        },
+        "usd_equivalent": 16.612380749999996,
+        "messages": 217
+      }
+    },
+    "effort": {
+      "high": 376
+    },
+    "unpriced_models": []
+  },
+  "diff": {
+    "files": {
+      "generated": 3,
+      "test": 2,
+      "docs": 1,
+      "config": 13,
+      "source": 4
+    },
+    "loc": {
+      "generated": {
+        "added": 95,
+        "deleted": 48
+      },
+      "test": {
+        "added": 93,
+        "deleted": 0
+      },
+      "docs": {
+        "added": 16,
+        "deleted": 1
+      },
+      "config": {
+        "added": 24,
+        "deleted": 35
+      },
+      "source": {
+        "added": 14,
+        "deleted": 10
+      }
+    },
+    "packages": [
+      "cire/api",
+      "cire/host",
+      "cire/vendor",
+      "osn/api",
+      "osn/ui",
+      "pulse/api",
+      "shared/crypto",
+      "shared/openapi",
+      "shared/openapi-tools",
+      "shared/osn-auth-client",
+      "shared/redis",
+      "zap/api"
+    ],
+    "touches_migration": false,
+    "commits": 3
+  },
+  "interaction": {
+    "user_turns": 11,
+    "corrective_turns": 5,
+    "tokens_before_first_edit": 95160,
+    "sessions_with_observed_edit": 1,
+    "tool_calls": {
+      "Bash": 103,
+      "Edit": 21,
+      "Write": 6,
+      "Read": 4,
+      "Skill": 1
+    },
+    "edit_churn": {
+      "files_edited_3plus": 4,
+      "max_edits_one_file": 7
+    },
+    "skills": {
+      "obsidian:obsidian-markdown": 1
+    },
+    "subagents": {}
+  }
+}
